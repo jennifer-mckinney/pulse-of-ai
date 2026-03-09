@@ -99,6 +99,7 @@ router.get('/posts/aggregated-by-location', async (req, res) => {
 
         const whereClause = conditions.map(c => `(${c})`).join(' AND ');
 
+        // Main query: sentiment totals per city
         const rows = await dbAll(
             `SELECT
                 rp.location                                                AS city,
@@ -117,7 +118,41 @@ router.get('/posts/aggregated-by-location', async (req, res) => {
             params,
         );
 
-        // Attach lat/lng from lookup; add dominant indicator
+        // Per-source breakdown query: same WHERE clause, additionally grouped by source
+        // Powers the stacked source bar in the 3D map visualization
+        const sourceRows = await dbAll(
+            `SELECT
+                rp.location                                                AS city,
+                ds.name                                                    AS source_name,
+                ds.category                                                AS source_category,
+                COUNT(*) FILTER (WHERE sr.indicator = 'positive')::int    AS positive,
+                COUNT(*) FILTER (WHERE sr.indicator = 'neutral')::int     AS neutral,
+                COUNT(*) FILTER (WHERE sr.indicator = 'negative')::int    AS negative,
+                COUNT(*)::int                                              AS total
+             FROM raw_posts rp
+             JOIN sentiment_results sr ON sr.raw_post_id = rp.id
+             JOIN data_sources ds      ON ds.id = rp.source_id
+             WHERE ${whereClause}
+             GROUP BY rp.location, ds.name, ds.category
+             ORDER BY rp.location, total DESC`,
+            params,
+        );
+
+        // Group source rows by city name for O(1) lookup when building response
+        const sourcesByCity = {};
+        for (const row of sourceRows) {
+            if (!sourcesByCity[row.city]) sourcesByCity[row.city] = [];
+            sourcesByCity[row.city].push({
+                source_name:     row.source_name,
+                source_category: row.source_category,
+                positive:        row.positive,
+                neutral:         row.neutral,
+                negative:        row.negative,
+                total:           row.total,
+            });
+        }
+
+        // Attach lat/lng, dominant indicator, and per-source breakdown
         const cities = rows.map(r => ({
             city:         r.city,
             lat:          CITY_COORDS[r.city]?.lat  ?? null,
@@ -128,6 +163,7 @@ router.get('/posts/aggregated-by-location', async (req, res) => {
             total:        r.total,
             dominant:     getDominant(r),
             last_updated: r.last_updated,
+            sources:      sourcesByCity[r.city] || [],   // per-source breakdown for stacked bar
         }));
 
         return res.json(cities);
