@@ -51,6 +51,10 @@ const CITY_COORDS = {
     'Nairobi':       { lat: -1.2921,  lng:   36.8219 },
     'São Paulo':     { lat: -23.5505, lng:  -46.6333 },
     'Buenos Aires':  { lat: -34.6037, lng:  -58.3816 },
+    'Cairo':         { lat: 30.0444,  lng:   31.2357 },
+    'Moscow':        { lat: 55.7558,  lng:   37.6173 },
+    'Dublin':        { lat: 53.3498,  lng:   -6.2603 },
+    'Jakarta':       { lat: -6.2088,  lng:  106.8456 },
 };
 
 /**

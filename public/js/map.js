@@ -116,30 +116,38 @@ map.on('style.load', async () => {
     const res = await fetch('/api/posts/aggregated-by-location');
     const cities = await res.json();
 
-    // Add sentiment markers FIRST
-    const sentimentMarkers = cities.map(city => {
-      const max = Math.max(city.positive, city.neutral, city.negative);
-      let dominant = 'neutral', color = SEABORN_COLORS.neutral;
-      if (max === city.positive) { dominant = 'positive'; color = SEABORN_COLORS.positive; }
-      if (max === city.negative) { dominant = 'negative'; color = SEABORN_COLORS.negative; }
-      return { 
-        type: 'Feature', 
-        geometry: { type: 'Point', coordinates: [city.lng, city.lat] }, 
-        properties: { city: city.city, dominant, color, positive: city.positive, neutral: city.neutral, negative: city.negative, total: city.total } 
-      };
-    });
+    // Add sentiment markers FIRST (skip cities without geocoordinates)
+    const sentimentMarkers = cities
+      .filter(city => city.lat != null && city.lng != null)
+      .map(city => {
+        const max = Math.max(city.positive, city.neutral, city.negative);
+        let dominant = 'neutral', color = SEABORN_COLORS.neutral;
+        if (max === city.positive) { dominant = 'positive'; color = SEABORN_COLORS.positive; }
+        if (max === city.negative) { dominant = 'negative'; color = SEABORN_COLORS.negative; }
+        return {
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [city.lng, city.lat] },
+          properties: { city: city.city, dominant, color, positive: city.positive, neutral: city.neutral, negative: city.negative, total: city.total }
+        };
+      });
     map.addSource('sentiment-markers', { type: 'geojson', data: { type: 'FeatureCollection', features: sentimentMarkers } });
-    map.addLayer({ 
-      id: 'sentiment-indicators', 
-      type: 'circle', 
-      source: 'sentiment-markers', 
-      paint: { 
-        'circle-radius': 16, 
-        'circle-color': ['get','color'], 
-        'circle-opacity': 0.9, 
-        'circle-stroke-color': '#fff', 
-        'circle-stroke-width': 2 
-      } 
+    map.addLayer({
+      id: 'sentiment-indicators',
+      type: 'circle',
+      source: 'sentiment-markers',
+      paint: {
+        // Scale dots: prominent at globe view, smaller when zoomed into streets
+        'circle-radius': ['interpolate', ['linear'], ['zoom'],
+          1,  10,
+          2,  14,
+          4,  16,
+          10,  8,
+        ],
+        'circle-color': ['get', 'color'],
+        'circle-opacity': 0.92,
+        'circle-stroke-color': 'rgba(255,255,255,0.85)',
+        'circle-stroke-width': ['interpolate', ['linear'], ['zoom'], 1, 1.5, 4, 2.5],
+      }
     });
 
     // OFFICIAL MAPBOX 3D BUILDINGS CODE (exact copy from docs)
