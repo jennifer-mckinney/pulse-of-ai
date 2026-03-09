@@ -10,53 +10,92 @@ const map = new mapboxgl.Map({
   hash: true,
 });
 
-// Touch gestures — built into Mapbox GL JS; explicitly enabled for clarity
-map.dragRotate.enable();       // click+drag rotates globe (bearing)
-map.dragPan.enable();          // click+drag pans globe (moves center)
-map.scrollZoom.enable();       // vertical two-finger scroll = zoom
-map.doubleClickZoom.enable();  // double-tap to zoom in on mobile
-map.touchZoomRotate.enable();  // pinch open = zoom in, two-finger twist = rotate
+// ── Gesture configuration ────────────────────────────────────────────────────
+// dragRotate disabled: in globe projection it intercepts left-click+drag for
+// bearing-only rotation, preventing true 2D pan. Bearing rotation still works
+// via two-finger twist (touchZoomRotate) on trackpad and mobile.
+// dragPan disabled: replaced by custom handler below for true lat/lng panning.
+map.dragRotate.disable();
+map.dragPan.disable();
+map.scrollZoom.enable();       // mouse scroll wheel = zoom
+map.doubleClickZoom.enable();  // double-click / double-tap = zoom in
+map.touchZoomRotate.enable();  // mobile: pinch = zoom, two-finger twist = rotate
 
-// ── MacBook trackpad swipe-to-pan (globe mode) ──────────────────────────────
-// On macOS, finger slides fire WheelEvents — Mapbox routes these to scrollZoom
-// (zoom only, no pan). At globe zoom levels we intercept ALL wheel deltas and
-// convert them to lat/lng movement so the globe pans in any direction:
-//   horizontal swipe → spin (longitude)
-//   vertical swipe   → tilt view (latitude)
-//   pinch            → zoom (touchZoomRotate, untouched)
+// ── Custom left-click drag: pan globe in any direction ───────────────────────
+// Mapbox's built-in dragPan in globe projection rotates bearing (east-west spin)
+// instead of changing center lat/lng. This handler converts pixel delta to
+// geographic offset so dragging up/down/left/right all work as expected.
 //
-// Above zoom 4 the globe curvature is minimal and scroll-to-zoom feels natural
-// again, so we hand control back to Mapbox at that threshold.
+// Formula: pixelsPerDegree = (256 × 2^zoom) / 360
+//   drag right (dx+) → lng decreases (content moves east into view)
+//   drag up   (dy-) → lat increases (content moves north into view)
 const GLOBE_PAN_MAX_ZOOM = 4;
 
 map.on('load', () => {
   const canvas = map.getCanvas();
+
+  // ── Click+drag pan ──────────────────────────────────────────────────────────
+  let isDragging = false;
+  let dragLastX = 0, dragLastY = 0;
+
+  canvas.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;  // left button only
+    isDragging = true;
+    dragLastX  = e.clientX;
+    dragLastY  = e.clientY;
+    canvas.style.cursor = 'grabbing';
+  });
+
+  canvas.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+
+    const dx = e.clientX - dragLastX;
+    const dy = e.clientY - dragLastY;
+    dragLastX = e.clientX;
+    dragLastY = e.clientY;
+
+    // Geographic degrees per CSS pixel at current zoom
+    const pixelsPerDegree = (256 * Math.pow(2, map.getZoom())) / 360;
+    const center = map.getCenter();
+
+    map.setCenter([
+      center.lng - dx / pixelsPerDegree,
+      Math.max(-85, Math.min(85, center.lat - dy / pixelsPerDegree)),
+    ]);
+  });
+
+  // Stop drag on mouseup or if cursor leaves the window
+  const stopDrag = () => { isDragging = false; canvas.style.cursor = ''; };
+  canvas.addEventListener('mouseup', stopDrag);
+  window.addEventListener('mouseup', stopDrag);
+
+  // ── Trackpad swipe-to-pan (WheelEvent) ─────────────────────────────────────
+  // macOS trackpad slides fire WheelEvents. Mapbox routes all of these to
+  // scrollZoom (zoom only). Below GLOBE_PAN_MAX_ZOOM we classify the event and
+  // either let Mapbox zoom or convert the delta to a center shift:
+  //   ctrlKey=true             → pinch gesture      → Mapbox zoom
+  //   deltaMode ≠ PIXEL        → mouse scroll wheel → Mapbox zoom
+  //   |deltaY| > 30, no X      → fast scroll/swipe  → Mapbox zoom
+  //   otherwise                → trackpad swipe     → pan lat/lng
   canvas.addEventListener('wheel', (e) => {
     if (map.getZoom() > GLOBE_PAN_MAX_ZOOM) return;  // zoomed in — let Mapbox zoom
 
-    // ── Gesture classification ───────────────────────────────────────────────
-    // 1. Pinch-to-zoom (trackpad): macOS sets ctrlKey=true → let Mapbox zoom
-    if (e.ctrlKey) return;
+    if (e.ctrlKey) return;                                   // pinch → zoom
+    if (e.deltaMode !== WheelEvent.DOM_DELTA_PIXEL) return;  // mouse scroll → zoom
 
-    // 2. Traditional mouse scroll wheel (deltaMode=1 line, =2 page) → zoom
-    if (e.deltaMode !== WheelEvent.DOM_DELTA_PIXEL) return;
-
-    // 3. Large pure-vertical pixel scroll (fast trackpad scroll or momentum)
-    //    → treat as scroll-to-zoom, not a directional swipe
     const hasMeaningfulX = Math.abs(e.deltaX) > 1;
-    if (!hasMeaningfulX && Math.abs(e.deltaY) > 30) return;
+    if (!hasMeaningfulX && Math.abs(e.deltaY) > 30) return; // fast scroll → zoom
 
-    // 4. Remaining: small/mixed trackpad swipe → pan the globe
+    // Trackpad directional swipe → pan the globe
     e.preventDefault();
     e.stopPropagation();
 
-    // Sensitivity scales with zoom level: wide sweeps at z1.5, fine at z4
+    // Sensitivity scales with zoom: wide sweeps at z1.5, fine at z4
     const sensitivity = Math.max(0.02, 0.4 / Math.pow(2, map.getZoom() - 1));
     const center = map.getCenter();
 
     map.setCenter([
       center.lng + e.deltaX * sensitivity,
-      // clamp lat to ±85° — beyond that the projection breaks
       Math.max(-85, Math.min(85, center.lat - e.deltaY * sensitivity)),
     ]);
   }, { passive: false });
