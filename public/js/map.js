@@ -11,11 +11,32 @@ const map = new mapboxgl.Map({
 });
 
 // Touch gestures — built into Mapbox GL JS; explicitly enabled for clarity
-map.dragRotate.enable();       // swipe (touch or mouse drag) spins the globe
-map.dragPan.enable();          // pan when zoomed in past globe threshold (~z3)
-map.scrollZoom.enable();       // scroll-wheel zoom on desktop
+map.dragRotate.enable();       // click+drag rotates globe (bearing)
+map.dragPan.enable();          // click+drag pans globe (moves center)
+map.scrollZoom.enable();       // vertical two-finger scroll = zoom
 map.doubleClickZoom.enable();  // double-tap to zoom in on mobile
 map.touchZoomRotate.enable();  // pinch open = zoom in, two-finger twist = rotate
+
+// ── MacBook trackpad swipe-to-spin ──────────────────────────────────────────
+// On macOS, finger slides without clicking fire WheelEvents, not pointer events.
+// Mapbox routes ALL wheel events to scrollZoom (zoom only — no spin).
+// This handler intercepts predominantly-horizontal wheel deltas and converts
+// them to longitude movement (globe spin), leaving vertical scroll for zoom.
+map.on('load', () => {
+  const canvas = map.getCanvas();
+  canvas.addEventListener('wheel', (e) => {
+    const isHorizontalSwipe = Math.abs(e.deltaX) > Math.abs(e.deltaY);
+    if (!isHorizontalSwipe) return;   // vertical scroll → Mapbox zoom as normal
+
+    e.preventDefault();               // stop Mapbox from also treating this as zoom
+    e.stopPropagation();
+
+    // Sensitivity scales with zoom: globe view needs large moves, street view small
+    const sensitivity = Math.max(0.02, 0.4 / Math.pow(2, map.getZoom() - 1));
+    const center = map.getCenter();
+    map.setCenter([center.lng + e.deltaX * sensitivity, center.lat]);
+  }, { passive: false });
+});
 
 map.on('style.load', async () => {
   // Atmosphere effect — only renders in globe projection
