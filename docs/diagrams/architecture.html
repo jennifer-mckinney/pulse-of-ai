@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Pulse of AI — System Architecture</title>
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      background: #0d1117;
+      color: #f0f6fc;
+      padding: 48px 56px;
+    }
+    .container { max-width: 1500px; margin: 0 auto; }
+
+    h1 {
+      font-size: 28px;
+      font-weight: 700;
+      color: #58a6ff;
+      margin-bottom: 4px;
+      letter-spacing: -0.5px;
+    }
+    .subtitle {
+      font-size: 13px;
+      color: #7d8590;
+      margin-bottom: 40px;
+    }
+
+    .section-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: #7d8590;
+      font-weight: 600;
+      margin-bottom: 14px;
+    }
+
+    .diagram-section {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 10px;
+      padding: 32px;
+      margin-bottom: 36px;
+    }
+
+    /* Force Mermaid to render on dark background */
+    .mermaid svg { width: 100%; height: auto; }
+
+    .table-section {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 10px;
+      padding: 32px;
+    }
+
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      font-size: 13px;
+    }
+    thead tr {
+      background: linear-gradient(135deg, #1f6feb 0%, #1158c7 100%);
+    }
+    thead th {
+      color: #fff;
+      font-weight: 600;
+      padding: 12px 16px;
+      text-align: left;
+      font-size: 12px;
+      letter-spacing: 0.3px;
+    }
+    tbody tr { border-bottom: 1px solid #21262d; }
+    tbody tr:nth-child(even) { background: #0d1117; }
+    tbody tr:nth-child(odd)  { background: #161b22; }
+    tbody td {
+      padding: 10px 16px;
+      color: #c9d1d9;
+      vertical-align: top;
+      line-height: 1.5;
+    }
+    tbody td:first-child { color: #7d8590; font-size: 11px; font-weight: 700; width: 60px; }
+    tbody td:nth-child(2) { color: #58a6ff; font-weight: 600; width: 200px; }
+    tbody td:nth-child(3) { color: #8b949e; font-size: 11px; width: 120px; }
+
+    /* Row category highlights */
+    tr.cat-ingest  td { background: rgba(31, 111, 235, 0.08) !important; }
+    tr.cat-pipeline td { background: rgba(56, 139, 253, 0.06) !important; }
+    tr.cat-storage td { background: rgba(163, 113, 247, 0.07) !important; }
+    tr.cat-api     td { background: rgba(35, 134, 54, 0.07) !important; }
+    tr.cat-frontend td { background: rgba(245, 200, 66, 0.06) !important; }
+    tr.cat-gov     td { background: rgba(188, 58, 40, 0.07) !important; }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.3px;
+    }
+    .badge-blue   { background: rgba(31,111,235,0.2); color: #58a6ff; border: 1px solid rgba(31,111,235,0.3); }
+    .badge-green  { background: rgba(35,134,54,0.2);  color: #3fb950; border: 1px solid rgba(35,134,54,0.3); }
+    .badge-purple { background: rgba(163,113,247,0.2); color: #bc8cff; border: 1px solid rgba(163,113,247,0.3); }
+    .badge-yellow { background: rgba(245,200,66,0.15); color: #e3b341; border: 1px solid rgba(245,200,66,0.3); }
+    .badge-red    { background: rgba(188,58,40,0.2);  color: #f85149; border: 1px solid rgba(188,58,40,0.3); }
+  </style>
+</head>
+<body>
+<div class="container">
+
+  <h1>The Pulse of AI — System Architecture</h1>
+  <div class="subtitle">Real-time AI discourse monitoring · PostgreSQL 16 + pgvector · Node.js + Python · Phase A–C complete</div>
+
+  <!-- ── Diagram ── -->
+  <div class="diagram-section">
+    <div class="section-label">Data Flow Architecture</div>
+    <div class="mermaid">
+%%{init: {'theme': 'dark', 'themeVariables': {'primaryColor':'#1f6feb','primaryTextColor':'#f0f6fc','primaryBorderColor':'#30363d','lineColor':'#58a6ff','secondaryColor':'#161b22','tertiaryColor':'#0d1117','background':'#0d1117','mainBkg':'#161b22','nodeBorder':'#30363d','clusterBkg':'#161b22','titleColor':'#58a6ff','edgeLabelBackground':'#0d1117','fontSize':'14px'}}}%%
+flowchart TD
+
+  subgraph SOURCES["① DATA SOURCES  ·  50 sources across 7 categories"]
+    direction LR
+    S1["Reddit\nPushshift"]
+    S2["arXiv\nAPI"]
+    S3["RSS Feeds\nNews / Policy"]
+    S4["Playwright\nScraper  P2"]
+    S5["Twitter/X\nBearer"]
+  end
+
+  subgraph INGEST["② INGEST PIPELINE  ·  BullMQ workers · 2–3 min refresh"]
+    direction LR
+    I1["collectors/\nreddit.js"]
+    I2["collectors/\narxiv.js"]
+    I3["collectors/\nrss.js"]
+    I4["collectors/\nscraper.js"]
+    INX["pipeline/\ningest.js\nPII strip · dedup\nSHA-256 hash"]
+  end
+
+  subgraph DB["③ POSTGRESQL 16 + pgvector  ·  6 migrations"]
+    direction TB
+    DB1[("raw_posts\nexternal_id · content_hash\nraw_payload JSONB")]
+    DB2[("sentiment_results\nrelevance_results\ndiscourse_scores")]
+    DB3[("decision_audit_log\nmethodology_versions")]
+    DB4[("post_embeddings\nVECTOR 384")]
+    DB5[("bias_assessments\nalert_events")]
+    DB6[("pseudonymous_users\nuser_platform_sightings")]
+  end
+
+  subgraph PIPELINE["④ PROCESSING PIPELINE  ·  TDD · audit log every step"]
+    direction LR
+    P1["sentiment.js\nAFINN · v1.0.0"]
+    P2["relevance.js\nkeyword hybrid"]
+    P3["discourse.js\nDQI scoring"]
+    P4["embeddings.js\nall-MiniLM-L6-v2\n384-dim"]
+    P5["correlation.js\nverb-noun ID\n≥0.85 conf"]
+  end
+
+  subgraph PYTHON["⑤ PYTHON SERVICE  ·  FastAPI + Infinity"]
+    PY["embeddings_service.py\nInfinity embed\nport 8000"]
+  end
+
+  subgraph API["⑥ EXPRESS API  ·  port 3000"]
+    direction LR
+    A1["GET /api/posts\n/aggregated-by-location"]
+    A2["GET /api/sentiment\n/latest"]
+    A3["GET /api/audit\n/:post_id"]
+    A4["GET /api/health\nbias alerts"]
+    A5["GET /api/config\nMapbox token"]
+  end
+
+  subgraph FRONTEND["⑦ FRONTEND  ·  Mapbox GL JS · globe projection"]
+    F1["map.js\n3D fill-extrusion bars\nsentiment + source stack"]
+    F2["main.js\nhealth status\nrefresh"]
+  end
+
+  S1 --> I1
+  S2 --> I2
+  S3 --> I3
+  S4 --> I4
+  I1 & I2 & I3 & I4 --> INX
+  INX --> DB1
+  DB1 --> P1 & P2 & P3
+  P1 & P2 & P3 --> DB2
+  P1 & P2 & P3 --> DB3
+  DB1 --> P4
+  P4 <--> PY
+  P4 --> DB4
+  DB1 --> P5
+  P5 --> DB6
+  P1 --> DB5
+  DB2 --> A1 & A2
+  DB3 --> A3
+  DB5 --> A4
+  A1 --> F1
+  A2 & A4 & A5 --> F2
+
+  style SOURCES  fill:#0d1117,stroke:#1f6feb,stroke-width:2px,color:#58a6ff
+  style INGEST   fill:#0d1117,stroke:#1f6feb,stroke-width:2px,color:#58a6ff
+  style DB       fill:#0d1117,stroke:#bc8cff,stroke-width:2px,color:#bc8cff
+  style PIPELINE fill:#0d1117,stroke:#388bfd,stroke-width:2px,color:#79c0ff
+  style PYTHON   fill:#0d1117,stroke:#388bfd,stroke-width:1px,color:#79c0ff
+  style API      fill:#0d1117,stroke:#3fb950,stroke-width:2px,color:#56d364
+  style FRONTEND fill:#0d1117,stroke:#e3b341,stroke-width:2px,color:#e3b341
+    </div>
+  </div>
+
+  <!-- ── Reference Table ── -->
+  <div class="table-section">
+    <div class="section-label">Component Reference</div>
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Component</th>
+          <th>Layer</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="cat-ingest">
+          <td>①</td>
+          <td>collectors/reddit.js</td>
+          <td><span class="badge badge-blue">Ingest</span></td>
+          <td>Reddit Pushshift API collector; falls back to mock generator when credentials absent</td>
+        </tr>
+        <tr class="cat-ingest">
+          <td>①</td>
+          <td>collectors/arxiv.js</td>
+          <td><span class="badge badge-blue">Ingest</span></td>
+          <td>arXiv query API — no auth required; collects AI-domain papers</td>
+        </tr>
+        <tr class="cat-ingest">
+          <td>①</td>
+          <td>collectors/rss.js</td>
+          <td><span class="badge badge-blue">Ingest</span></td>
+          <td>rss-parser feeds for news, policy, and blog sources across 7 categories</td>
+        </tr>
+        <tr class="cat-ingest">
+          <td>①</td>
+          <td>collectors/scraper.js</td>
+          <td><span class="badge badge-blue">Ingest</span></td>
+          <td>Playwright headless scraper for P2 sources (LinkedIn, Threads, etc.)</td>
+        </tr>
+        <tr class="cat-ingest">
+          <td>②</td>
+          <td>pipeline/ingest.js</td>
+          <td><span class="badge badge-blue">Ingest</span></td>
+          <td>Orchestrator: collect → strip PII → SHA-256 dedup → store raw_posts. BullMQ worker, 2–3 min staggered refresh</td>
+        </tr>
+        <tr class="cat-pipeline">
+          <td>④</td>
+          <td>pipeline/sentiment.js</td>
+          <td><span class="badge badge-blue">Pipeline</span></td>
+          <td>AFINN lexicon v5.0.2. Writes sentiment_results + decision_audit_log. Methodology version 1.0.0</td>
+        </tr>
+        <tr class="cat-pipeline">
+          <td>④</td>
+          <td>pipeline/relevance.js</td>
+          <td><span class="badge badge-blue">Pipeline</span></td>
+          <td>15-keyword AI-domain hybrid scorer. Score = matched/total capped at 1.0</td>
+        </tr>
+        <tr class="cat-pipeline">
+          <td>④</td>
+          <td>pipeline/discourse.js</td>
+          <td><span class="badge badge-blue">Pipeline</span></td>
+          <td>Deliberative Quality Index (DQI) + semantic improvements per §18 of TECHNICAL_SPEC.md</td>
+        </tr>
+        <tr class="cat-pipeline">
+          <td>⑤</td>
+          <td>pipeline/embeddings.js</td>
+          <td><span class="badge badge-blue">Pipeline</span></td>
+          <td>Sends content to Python Infinity service; stores VECTOR(384) in post_embeddings. Model: all-MiniLM-L6-v2</td>
+        </tr>
+        <tr class="cat-pipeline">
+          <td>④</td>
+          <td>pipeline/correlation.js</td>
+          <td><span class="badge badge-blue">Pipeline</span></td>
+          <td>Cross-platform verb-noun pseudonymous IDs (e.g. running-tiger). Assigns ID only at ≥0.85 confidence</td>
+        </tr>
+        <tr class="cat-storage">
+          <td>③</td>
+          <td>raw_posts</td>
+          <td><span class="badge badge-purple">Storage</span></td>
+          <td>Immutable source records. content_hash prevents duplicates. raw_payload JSONB strips PII on ingest</td>
+        </tr>
+        <tr class="cat-storage">
+          <td>③</td>
+          <td>decision_audit_log</td>
+          <td><span class="badge badge-purple">Storage</span></td>
+          <td>Every inference written here: model name, version, input_hash, output JSONB, confidence. Explainability backbone</td>
+        </tr>
+        <tr class="cat-storage">
+          <td>③</td>
+          <td>methodology_versions</td>
+          <td><span class="badge badge-purple">Storage</span></td>
+          <td>Versioned algorithm configs with plain-English justification field for regulators and journalists</td>
+        </tr>
+        <tr class="cat-storage">
+          <td>③</td>
+          <td>post_embeddings</td>
+          <td><span class="badge badge-purple">Storage</span></td>
+          <td>384-dim vectors. IVFFlat cosine index (lists=100) for ANN search. Powers semantic similarity queries</td>
+        </tr>
+        <tr class="cat-storage">
+          <td>③</td>
+          <td>bias_assessments</td>
+          <td><span class="badge badge-purple">Storage</span></td>
+          <td>Per-job bias metrics. is_violation=TRUE triggers alert_events. Thresholds documented in methodology_versions</td>
+        </tr>
+        <tr class="cat-gov">
+          <td>③</td>
+          <td>data_retention_log</td>
+          <td><span class="badge badge-red">Governance</span></td>
+          <td>GDPR lifecycle tracking: collected → anonymized → deleted. Legal basis field per GDPR Article</td>
+        </tr>
+        <tr class="cat-gov">
+          <td>③</td>
+          <td>compaction_log</td>
+          <td><span class="badge badge-red">Governance</span></td>
+          <td>Monthly Tier 1 → Tier 2 compaction audit trail. 3-tier retention: 90-day detail → monthly rollups → permanent</td>
+        </tr>
+        <tr class="cat-api">
+          <td>⑥</td>
+          <td>GET /api/posts/aggregated-by-location</td>
+          <td><span class="badge badge-green">API</span></td>
+          <td>Sentiment totals + per-source breakdown by city. Powers Mapbox 3D bar chart markers</td>
+        </tr>
+        <tr class="cat-api">
+          <td>⑥</td>
+          <td>GET /api/audit/:post_id</td>
+          <td><span class="badge badge-green">API</span></td>
+          <td>Full decision trail for any post: sentiment, relevance, discourse scores + model + methodology justification</td>
+        </tr>
+        <tr class="cat-api">
+          <td>⑥</td>
+          <td>GET /api/config</td>
+          <td><span class="badge badge-green">API</span></td>
+          <td>Serves MAPBOX_ACCESS_TOKEN to browser at runtime. Token lives in .env only, never in client JS source</td>
+        </tr>
+        <tr class="cat-api">
+          <td>⑥</td>
+          <td>GET /api/health</td>
+          <td><span class="badge badge-green">API</span></td>
+          <td>DB connectivity + last job status + active bias alert_events. Dashboard health indicator source</td>
+        </tr>
+        <tr class="cat-frontend">
+          <td>⑦</td>
+          <td>public/js/map.js</td>
+          <td><span class="badge badge-yellow">Frontend</span></td>
+          <td>Mapbox GL JS globe projection. 3D fill-extrusion sentiment bars (green/yellow/red) + stacked source column. Rich hover tooltips. All gestures custom-implemented</td>
+        </tr>
+        <tr class="cat-frontend">
+          <td>⑦</td>
+          <td>public/js/main.js</td>
+          <td><span class="badge badge-yellow">Frontend</span></td>
+          <td>Health status indicator and manual refresh button wired to /api/health</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+</div>
+<script>mermaid.initialize({ startOnLoad: true, theme: 'dark' });</script>
+</body>
+</html>
