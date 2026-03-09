@@ -1,0 +1,52 @@
+{
+  "name": "pulse-of-ai",
+  "version": "1.1.0",
+  "description": "Global real-time AI discourse dashboard with ethical monitoring, audit trail, and bias detection",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node src/server.js",
+    "migrate": "node scripts/migrate.js",
+    "seed": "node scripts/seed.js",
+    "compact": "node scripts/compact.js",
+    "db:reset": "node scripts/migrate.js --fresh && node scripts/seed.js",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "test": "jest",
+    "test:unit": "jest tests/unit",
+    "test:int": "jest tests/integration",
+    "test:cov": "jest --coverage",
+    "test:watch": "jest --watch"
+  },
+  "keywords": [
+    "ai",
+    "sentiment-analysis",
+    "data-visualization",
+    "ethics",
+    "bias-monitoring",
+    "discourse-analysis",
+    "audit-trail",
+    "gdpr"
+  ],
+  "author": "Jennifer McKinney",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.4.0",
+    "cheerio": "^1.1.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "natural": "^8.1.0",
+    "node-cron": "^4.2.1",
+    "node-fetch": "^3.3.2",
+    "pg": "^8.11.3",
+    "pgvector": "^0.2.0",
+    "rss-parser": "^3.13.0",
+    "sentiment": "^5.0.2",
+    "ws": "^8.13.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "supertest": "^6.3.4"
+  }
+}

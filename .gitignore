@@ -1,0 +1,41 @@
+# Environment — never commit secrets
+.env
+.env.local
+.env.*.local
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Test coverage output
+coverage/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+python/.venv/
+python/venv/
+*.egg-info/
+
+# Database files (legacy SQLite — replaced by PostgreSQL)
+data/*.db
+data/*.sqlite
+data/latest_posts.json
+
+# OS
+.DS_Store
+Thumbs.db
+*.textClipping
+
+# macOS artifact directories and vendor bundles (not source-controlled)
+exported-assets/
+exported-assets.textClipping
+scrollama-main/
+js/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
