@@ -1,0 +1,10 @@
+# pyproject.toml
+# Python project configuration for Pulse of AI.
+# Pytest and pytest-asyncio settings live here so they apply when running
+# python -m pytest python/tests/... from the project root.
+
+[tool.pytest.ini_options]
+# AUTO mode: all async test functions and async fixtures are handled by
+# pytest-asyncio automatically — no @pytest.mark.asyncio or
+# @pytest_asyncio.fixture decorators required.
+asyncio_mode = "auto"
