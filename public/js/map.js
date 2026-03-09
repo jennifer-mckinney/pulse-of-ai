@@ -34,6 +34,19 @@ map.on('load', () => {
   canvas.addEventListener('wheel', (e) => {
     if (map.getZoom() > GLOBE_PAN_MAX_ZOOM) return;  // zoomed in — let Mapbox zoom
 
+    // ── Gesture classification ───────────────────────────────────────────────
+    // 1. Pinch-to-zoom (trackpad): macOS sets ctrlKey=true → let Mapbox zoom
+    if (e.ctrlKey) return;
+
+    // 2. Traditional mouse scroll wheel (deltaMode=1 line, =2 page) → zoom
+    if (e.deltaMode !== WheelEvent.DOM_DELTA_PIXEL) return;
+
+    // 3. Large pure-vertical pixel scroll (fast trackpad scroll or momentum)
+    //    → treat as scroll-to-zoom, not a directional swipe
+    const hasMeaningfulX = Math.abs(e.deltaX) > 1;
+    if (!hasMeaningfulX && Math.abs(e.deltaY) > 30) return;
+
+    // 4. Remaining: small/mixed trackpad swipe → pan the globe
     e.preventDefault();
     e.stopPropagation();
 
