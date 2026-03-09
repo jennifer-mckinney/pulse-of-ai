@@ -17,24 +17,35 @@ map.scrollZoom.enable();       // vertical two-finger scroll = zoom
 map.doubleClickZoom.enable();  // double-tap to zoom in on mobile
 map.touchZoomRotate.enable();  // pinch open = zoom in, two-finger twist = rotate
 
-// ── MacBook trackpad swipe-to-spin ──────────────────────────────────────────
-// On macOS, finger slides without clicking fire WheelEvents, not pointer events.
-// Mapbox routes ALL wheel events to scrollZoom (zoom only — no spin).
-// This handler intercepts predominantly-horizontal wheel deltas and converts
-// them to longitude movement (globe spin), leaving vertical scroll for zoom.
+// ── MacBook trackpad swipe-to-pan (globe mode) ──────────────────────────────
+// On macOS, finger slides fire WheelEvents — Mapbox routes these to scrollZoom
+// (zoom only, no pan). At globe zoom levels we intercept ALL wheel deltas and
+// convert them to lat/lng movement so the globe pans in any direction:
+//   horizontal swipe → spin (longitude)
+//   vertical swipe   → tilt view (latitude)
+//   pinch            → zoom (touchZoomRotate, untouched)
+//
+// Above zoom 4 the globe curvature is minimal and scroll-to-zoom feels natural
+// again, so we hand control back to Mapbox at that threshold.
+const GLOBE_PAN_MAX_ZOOM = 4;
+
 map.on('load', () => {
   const canvas = map.getCanvas();
   canvas.addEventListener('wheel', (e) => {
-    const isHorizontalSwipe = Math.abs(e.deltaX) > Math.abs(e.deltaY);
-    if (!isHorizontalSwipe) return;   // vertical scroll → Mapbox zoom as normal
+    if (map.getZoom() > GLOBE_PAN_MAX_ZOOM) return;  // zoomed in — let Mapbox zoom
 
-    e.preventDefault();               // stop Mapbox from also treating this as zoom
+    e.preventDefault();
     e.stopPropagation();
 
-    // Sensitivity scales with zoom: globe view needs large moves, street view small
+    // Sensitivity scales with zoom level: wide sweeps at z1.5, fine at z4
     const sensitivity = Math.max(0.02, 0.4 / Math.pow(2, map.getZoom() - 1));
     const center = map.getCenter();
-    map.setCenter([center.lng + e.deltaX * sensitivity, center.lat]);
+
+    map.setCenter([
+      center.lng + e.deltaX * sensitivity,
+      // clamp lat to ±85° — beyond that the projection breaks
+      Math.max(-85, Math.min(85, center.lat - e.deltaY * sensitivity)),
+    ]);
   }, { passive: false });
 });
 
