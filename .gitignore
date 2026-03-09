@@ -32,7 +32,7 @@ Thumbs.db
 exported-assets/
 exported-assets.textClipping
 scrollama-main/
-js/
+/js/
 
 # Editor
 .vscode/
