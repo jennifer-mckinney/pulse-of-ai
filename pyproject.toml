@@ -3,6 +3,11 @@
 # Pytest and pytest-asyncio settings live here so they apply when running
 # python -m pytest python/tests/... from the project root.
 
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312"]
+include = '\.pyi?$'
+
 [tool.pytest.ini_options]
 # AUTO mode: all async test functions and async fixtures are handled by
 # pytest-asyncio automatically — no @pytest.mark.asyncio or

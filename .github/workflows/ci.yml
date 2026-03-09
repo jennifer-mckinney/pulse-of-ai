@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    name: Test (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [22]
+
+    # ── Service containers ──────────────────────────────────────────────────
+    # pgvector/pgvector:pg16 provides PostgreSQL 16 + vector extension.
+    # Isolated test DB on port 5433 — never touches prod data.
+    services:
+      postgres_test:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: pulse_of_ai_test
+          POSTGRES_USER: pulse_user
+          POSTGRES_PASSWORD: ci_password
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U pulse_user -d pulse_of_ai_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Test DB — matches globalSetup.js expectations
+      POSTGRES_HOST:      localhost
+      POSTGRES_TEST_PORT: 5433
+      POSTGRES_TEST_DB:   pulse_of_ai_test
+      POSTGRES_USER:      pulse_user
+      POSTGRES_PASSWORD:  ci_password
+
+      # App env (non-secret CI values)
+      NODE_ENV:                   test
+      PORT:                       3000
+      EMBEDDINGS_SERVICE_URL:     http://localhost:8000
+      REDIS_PORT:                 6379
+      RETENTION_DETAIL_DAYS:      90
+      CORRELATION_MIN_CONFIDENCE: "0.85"
+      # Deterministic all-zeros salt — safe for test-only; not a production secret
+      CORRELATION_SALT: "0000000000000000000000000000000000000000000000000000000000000000"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run migrations on test DB
+        run: npm run migrate
+
+      - name: Run unit tests
+        run: npm run test:unit
+
+      - name: Run integration tests
+        run: npm run test:int
+
+      - name: Coverage report
+        run: npm run test:cov
+
+  lint-python:
+    name: Python lint (black)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install black
+        run: pip install black>=24.0.0
+
+      - name: Check black formatting
+        run: black --check python/

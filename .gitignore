@@ -39,3 +39,23 @@ scrollama-main/
 .idea/
 *.swp
 *.swo
+
+# Backup / scratch files — never commit
+*.bak
+*.backup
+*.corrupted
+*.save
+*.save2
+
+# Claude Code local config — contains machine-specific absolute paths
+.claude/
+
+# Development logs and scratch files
+firebase-debug.log
+firebase-debug.*.log
+endpoint_to_add.txt
+claude-netlog-*.json
+
+# Shell script iterations (committed versions only; working copies ignored)
+update_mapbox*.sh
+"update_mapbox copy.sh"

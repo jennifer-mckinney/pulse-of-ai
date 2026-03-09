@@ -1,4 +1,13 @@
-mapboxgl.accessToken = 'pk.eyJ1IjoiamVubmlmZXItbWNraW5uZXkiLCJhIjoiY21mcHppYzlqMG5wcDJsb2VienBmbWExNyJ9.BVmgHfDxHPAiIWQwAyhyhA';
+// ── Mapbox token loaded from server ──────────────────────────────────────────
+// Token is injected at runtime via GET /api/config so it never lives in source.
+// All map initialisation is deferred until the token resolves.
+async function loadMapboxToken() {
+  const res = await fetch('/api/config');
+  if (!res.ok) throw new Error(`/api/config returned ${res.status}`);
+  const { mapboxToken } = await res.json();
+  if (!mapboxToken) throw new Error('mapboxToken missing in /api/config response');
+  return mapboxToken;
+}
 
 // ── Escape HTML special characters in any data value inserted into HTML ───────
 // Prevents XSS if city names or source names contain <, >, ", & characters.
@@ -283,16 +292,27 @@ const DEMO_DATA = [
     ]},
 ];
 
-// ── Map initialization ────────────────────────────────────────────────────────
-const map = new mapboxgl.Map({
-  container:  'map',
-  style:      'mapbox://styles/mapbox/dark-v11',  // dark base makes colored spikes pop
-  projection: 'globe',
-  center:     [10, 20],  // balanced globe view: Europe/Africa axis
-  zoom:       1.5,
-  pitch:      0,         // flat globe overview; 3D bars revealed as user zooms in
-  hash:       true,
-});
+// ── Map initialization (deferred until token is available) ────────────────────
+let map;
+
+async function initMap() {
+  try {
+    mapboxgl.accessToken = await loadMapboxToken();
+  } catch (err) {
+    console.error('[map] Failed to load Mapbox token:', err.message);
+    document.getElementById('map').textContent = 'Map unavailable — token not configured.';
+    return;
+  }
+
+  map = new mapboxgl.Map({
+    container:  'map',
+    style:      'mapbox://styles/mapbox/dark-v11',  // dark base makes colored spikes pop
+    projection: 'globe',
+    center:     [10, 20],  // balanced globe view: Europe/Africa axis
+    zoom:       1.5,
+    pitch:      0,         // flat globe overview; 3D bars revealed as user zooms in
+    hash:       true,
+  });
 
 // ── Gesture configuration ────────────────────────────────────────────────────
 // dragRotate disabled: in globe projection it intercepts left-click+drag for
@@ -574,4 +594,8 @@ map.on('style.load', async () => {
   }
 
   console.log(`✅ 3D sentiment bars loaded — ${cities.length} cities, ${allFeatures.length} bar features`);
-});
+  });
+}
+
+// Bootstrap — token fetch runs before any Mapbox GL initialisation
+initMap();
