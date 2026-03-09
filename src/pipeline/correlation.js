@@ -5,12 +5,13 @@
 //   - No usernames, handles, or platform IDs are ever stored
 //   - Behavioral signals (writing style + topic affinity + temporal pattern) are
 //     hashed with a deployment-specific salt — not reversible
-//   - Pseudonymous IDs use a verb-noun format ('running-tiger') — human-readable
+//   - Pseudonymous IDs use an adjective-animal format ('balanced-impala') drawn from
+//     unique-names-generator (1,202 × 355 = 426,710 combinations) — human-readable
 //     but unlinked to any real identity
 //   - Correlation requires >= CORRELATION_MIN_CONFIDENCE (0.85) to create a profile
 //
 // Entry points:
-//   generatePseudoId(seed)                    — deterministic verb-noun from seed
+//   generatePseudoId(seed)                    — deterministic adjective-animal from seed
 //   computeSignalHash(signals, salt)          — SHA-256 of behavioral signals
 //   correlateUser({ sourceId, signalHash,     — find/create pseudonymous user
 //                   topicAffinity, confidence})
@@ -20,6 +21,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const { adjectives, animals, uniqueNamesGenerator } = require('unique-names-generator');
 const { dbGet, dbRun } = require('../db/connection');
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
@@ -31,39 +33,35 @@ const { dbGet, dbRun } = require('../db/connection');
  */
 const CORRELATION_MIN_CONFIDENCE = 0.85;
 
-// Verb and noun word pools for pseudo ID generation.
-// 20 verbs × 20 nouns = 400 possible combinations (sufficient for MVP scale).
-// Chosen to be neutral, non-offensive, and easy to read.
-const VERBS = [
-    'running',  'jumping',  'swimming', 'flying',   'climbing',
-    'dancing',  'singing',  'reading',  'writing',  'building',
-    'creating', 'exploring','thinking', 'growing',  'learning',
-    'moving',   'resting',  'watching', 'listening','teaching',
-];
-
-const NOUNS = [
-    'tiger',  'eagle',   'dolphin', 'wolf',   'panther',
-    'falcon', 'otter',   'bear',    'fox',    'raven',
-    'lion',   'crane',   'lynx',    'hawk',   'deer',
-    'seal',   'owl',     'elk',     'mink',   'swan',
-];
+// unique-names-generator provides curated, library-maintained word pools.
+// adjectives (1,202 words) × animals (355 words) = 426,710 combinations.
+// This replaces the previous 20×20 = 400 hardcoded list which had unacceptable
+// collision probability at 10,000+ events per 2–3 minute cycle.
+const NAME_CONFIG = {
+    dictionaries: [adjectives, animals],
+    separator: '-',
+    style: 'lowerCase',
+};
 
 // ─── generatePseudoId ─────────────────────────────────────────────────────────
 
 /**
- * Generate a deterministic verb-noun pseudonymous ID from a seed string.
+ * Generate a deterministic adjective-animal pseudonymous ID from a seed string.
  * The same seed always produces the same ID.  Not reversible — the seed is never stored.
  *
- * Algorithm: SHA-256(seed) → bytes 0-3 → verb index, bytes 4-7 → noun index.
+ * Algorithm: SHA-256(seed) → UInt32 at bytes 0–3 → integer seed for
+ * unique-names-generator, which applies its own LCG to select word indices.
+ * The library's integer seed API guarantees determinism across calls.
  *
  * @param {string} seed  Arbitrary string (typically signalHash + deploymentSalt)
- * @returns {string}     Verb-noun ID, e.g. 'running-tiger'
+ * @returns {string}     Adjective-animal ID, e.g. 'balanced-impala'
  */
 function generatePseudoId(seed) {
-    const hash    = crypto.createHash('sha256').update(seed).digest();
-    const verbIdx = hash.readUInt32BE(0) % VERBS.length;
-    const nounIdx = hash.readUInt32BE(4) % NOUNS.length;
-    return `${VERBS[verbIdx]}-${NOUNS[nounIdx]}`;
+    // Derive a stable 32-bit integer from the seed — feeds uniqueNamesGenerator's
+    // seeded PRNG so we get determinism without storing the raw seed.
+    const hash      = crypto.createHash('sha256').update(seed).digest();
+    const seedInt   = hash.readUInt32BE(0);
+    return uniqueNamesGenerator({ ...NAME_CONFIG, seed: seedInt });
 }
 
 // ─── computeSignalHash ────────────────────────────────────────────────────────

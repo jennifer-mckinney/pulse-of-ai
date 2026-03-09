@@ -32,6 +32,24 @@ services:
       timeout: 5s
       retries: 10
 
+  # Redis — BullMQ job queue backend for the event-driven pipeline.
+  # AOF persistence (appendonly yes) ensures in-flight jobs survive container restarts.
+  # At 10K+ events per 2-3 minute cycle across 50 sources, job durability is non-negotiable.
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes --appendfsync everysec
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
 volumes:
   postgres_data:
+    driver: local
+  redis_data:
     driver: local

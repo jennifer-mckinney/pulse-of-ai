@@ -42,24 +42,25 @@ describe('generatePseudoId()', () => {
         expect(a).not.toBe(b);
     });
 
-    it('returns a string in verb-noun format (word-word)', () => {
+    it('returns a string in adjective-animal format (word-word)', () => {
         const id = generatePseudoId('any-seed');
         // Must match two lowercase words joined by a hyphen
         expect(id).toMatch(/^[a-z]+-[a-z]+$/);
     });
 
-    it('uses different word pools for verb and noun', () => {
-        // Generate 100 IDs and confirm both halves have variety
-        const verbs = new Set();
-        const nouns = new Set();
+    it('uses different word pools for adjective and animal, high variety', () => {
+        // Generate 100 IDs and confirm both halves have variety.
+        // unique-names-generator has 1,202 adjectives × 355 animals = 426,710 combinations;
+        // 100 samples should show strong diversity across both halves.
+        const adjParts = new Set();
+        const animalParts = new Set();
         for (let i = 0; i < 100; i++) {
             const parts = generatePseudoId(`seed-${i}`).split('-');
-            verbs.add(parts[0]);
-            nouns.add(parts[1]);
+            adjParts.add(parts[0]);
+            animalParts.add(parts[1]);
         }
-        // With 20 verbs and 20 nouns in the word lists, 100 samples should hit many
-        expect(verbs.size).toBeGreaterThan(3);
-        expect(nouns.size).toBeGreaterThan(3);
+        expect(adjParts.size).toBeGreaterThan(10);
+        animalParts.size > 0 && expect(animalParts.size).toBeGreaterThan(3);
     });
 });
 
@@ -160,7 +161,7 @@ describe('correlateUser()', () => {
         expect(sighting.confidence).toBeCloseTo(0.92, 2);
     });
 
-    it('stores the pseudo_id in verb-noun format', async () => {
+    it('stores the pseudo_id in adjective-animal format', async () => {
         const srcId = await insertSource('corr-src-format');
         const hash  = computeSignalHash({ style: 'technical' }, 'salt-d');
 
