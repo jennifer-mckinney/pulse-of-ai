@@ -1,6 +1,6 @@
 // Jest configuration for PURE unit tests — no database, no Docker.
 // Deliberately excludes the DB wiring from jest.config.js (globalSetup /
-// globalTeardown / setupFilesAfterEach) so this loop runs anywhere, instantly.
+// globalTeardown / setupFilesAfterEnv) so this loop runs anywhere, instantly.
 // Scope is limited to tests/unit/pure/ — suites there must not require the DB,
 // Redis, or any running service. Run via: npm run test:pure
 module.exports = {

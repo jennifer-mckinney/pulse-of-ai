@@ -4,7 +4,7 @@
 
 ## Context
 
-Pulse of AI's frontend currently renders a Mapbox GL globe ([public/js/map.js](public/js/map.js), 601 lines) with custom drag/wheel gestures and fill-extrusion 3D sentiment bars on demo data with an API fallback. The user wants a modern, professional storytelling experience in the style of the WebGL Globe election visualization (https://javisantana.com/lab/globe-elecciones/): dark sphere, glowing data bars, scroll-driven narrative, dynamically derived insights, global↔regional views. This migration is also the execution vehicle for the spec's Phase E (Scrollama narrative).
+Pulse of AI's frontend currently renders a Mapbox GL globe ([public/js/map.js](../../public/js/map.js), 601 lines) with custom drag/wheel gestures and fill-extrusion 3D sentiment bars on demo data with an API fallback. The user wants a modern, professional storytelling experience in the style of the WebGL Globe election visualization (https://javisantana.com/lab/globe-elecciones/): dark sphere, glowing data bars, scroll-driven narrative, dynamically derived insights, global↔regional views. This migration is also the execution vehicle for the spec's Phase E (Scrollama narrative).
 
 ## Decisions (locked with user, 2026-07-05)
 
