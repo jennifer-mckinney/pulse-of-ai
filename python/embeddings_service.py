@@ -43,6 +43,7 @@ _model_load_time: float | None = None
 
 # ─── Model lifecycle ─────────────────────────────────────────────────────────
 
+
 def get_model() -> SentenceTransformer:
     """Lazy-load the embedding model on first request and cache it."""
     global _model, _model_load_time
@@ -60,8 +61,8 @@ async def lifespan(app: FastAPI):
     Pre-loads the embedding model once at startup so the first HTTP request
     does not pay the cold-start penalty.
     """
-    get_model()   # warm up on startup
-    yield         # application runs here
+    get_model()  # warm up on startup
+    yield  # application runs here
     # (no teardown needed — model is in-process memory)
 
 
@@ -74,6 +75,7 @@ app = FastAPI(
 
 
 # ─── Request/response models ──────────────────────────────────────────────────
+
 
 class EmbeddingRequest(BaseModel):
     input: List[str]
@@ -95,6 +97,7 @@ class EmbeddingResponse(BaseModel):
 
 # ─── Routes ──────────────────────────────────────────────────────────────────
 
+
 @app.get("/health")
 async def health():
     """
@@ -103,14 +106,16 @@ async def health():
     Used by the Node.js pipeline before submitting batches.
     """
     model_loaded = _model is not None
-    return JSONResponse({
-        "status":           "healthy",
-        "model":            MODEL_NAME,
-        "model_loaded":     model_loaded,
-        "load_time_s":      round(_model_load_time, 2) if _model_load_time else None,
-        "embedding_dims":   384,
-        "batch_size":       BATCH_SIZE,
-    })
+    return JSONResponse(
+        {
+            "status": "healthy",
+            "model": MODEL_NAME,
+            "model_loaded": model_loaded,
+            "load_time_s": round(_model_load_time, 2) if _model_load_time else None,
+            "embedding_dims": 384,
+            "batch_size": BATCH_SIZE,
+        }
+    )
 
 
 @app.post("/embeddings", response_model=EmbeddingResponse)
@@ -139,16 +144,13 @@ async def create_embeddings(request: EmbeddingRequest):
         request.input,
         batch_size=BATCH_SIZE,
         convert_to_numpy=True,
-        normalize_embeddings=True,   # cosine similarity ready without further normalisation
+        normalize_embeddings=True,  # cosine similarity ready without further normalisation
     )
 
     # Approximate token count (sentence-transformers word-pieces average ~1.3 tokens/word)
     total_tokens = sum(len(text.split()) for text in request.input)
 
-    data = [
-        EmbeddingObject(index=i, embedding=vec.tolist())
-        for i, vec in enumerate(embeddings)
-    ]
+    data = [EmbeddingObject(index=i, embedding=vec.tolist()) for i, vec in enumerate(embeddings)]
 
     return EmbeddingResponse(
         model=MODEL_NAME,

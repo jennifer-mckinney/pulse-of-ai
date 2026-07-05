@@ -3,7 +3,8 @@
 
 # Core embedding service
 sentence-transformers==2.7.0
-infinity-embed>=0.0.36
+# Infinity (PyPI package: infinity-emb) is the planned Phase-2 embedding server
+# per docs/TECHNICAL_SPEC.md §5 — add the dependency when actually adopted.
 
 # Database
 psycopg2-binary>=2.9.9

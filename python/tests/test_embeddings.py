@@ -21,8 +21,8 @@ from httpx import AsyncClient, ASGITransport
 # Import the FastAPI app directly — no running server required
 from python.embeddings_service import app, BATCH_SIZE
 
-
 # ─── Client fixture ───────────────────────────────────────────────────────────
+
 
 @pytest.fixture
 async def client():
@@ -32,6 +32,7 @@ async def client():
 
 
 # ─── Health endpoint ──────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_health_returns_200(client):
@@ -44,8 +45,8 @@ async def test_health_returns_correct_shape(client):
     response = await client.get("/health")
     body = response.json()
 
-    assert "status"       in body
-    assert "model"        in body
+    assert "status" in body
+    assert "model" in body
     assert "model_loaded" in body
     assert "embedding_dims" in body
 
@@ -64,6 +65,7 @@ async def test_health_reports_correct_embedding_dims(client):
 
 # ─── Embeddings endpoint ──────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_embeddings_returns_200_for_valid_input(client):
     response = await client.post("/embeddings", json={"input": ["Hello world"]})
@@ -76,12 +78,12 @@ async def test_embeddings_response_has_openai_compatible_shape(client):
     body = response.json()
 
     assert body["object"] == "list"
-    assert "model"  in body
-    assert "data"   in body
-    assert "usage"  in body
+    assert "model" in body
+    assert "data" in body
+    assert "usage" in body
     assert len(body["data"]) == 1
     assert body["data"][0]["object"] == "embedding"
-    assert body["data"][0]["index"]  == 0
+    assert body["data"][0]["index"] == 0
     assert isinstance(body["data"][0]["embedding"], list)
 
 
@@ -98,7 +100,7 @@ async def test_embeddings_values_are_floats(client):
     response = await client.post("/embeddings", json={"input": ["test"]})
     embedding = response.json()["data"][0]["embedding"]
 
-    for value in embedding[:10]:   # spot-check first 10 values
+    for value in embedding[:10]:  # spot-check first 10 values
         assert isinstance(value, float)
 
 
@@ -109,11 +111,12 @@ async def test_embeddings_are_l2_normalised(client):
     This enables cosine similarity via dot product without explicit normalisation.
     """
     response = await client.post(
-        "/embeddings", json={"input": ["machine learning ethics"]},
+        "/embeddings",
+        json={"input": ["machine learning ethics"]},
     )
     embedding = response.json()["data"][0]["embedding"]
 
-    magnitude = math.sqrt(sum(v ** 2 for v in embedding))
+    magnitude = math.sqrt(sum(v**2 for v in embedding))
     assert abs(magnitude - 1.0) < 1e-3, f"Expected norm ≈ 1.0, got {magnitude}"
 
 
@@ -163,10 +166,12 @@ async def test_embeddings_similar_texts_produce_similar_vectors(client):
     """Semantically similar texts should have higher cosine similarity."""
     response = await client.post(
         "/embeddings",
-        json={"input": [
-            "artificial intelligence ethics",
-            "AI ethical considerations",
-        ]},
+        json={
+            "input": [
+                "artificial intelligence ethics",
+                "AI ethical considerations",
+            ]
+        },
     )
     emb_a = response.json()["data"][0]["embedding"]
     emb_b = response.json()["data"][1]["embedding"]
@@ -185,10 +190,11 @@ async def test_embeddings_rejects_empty_input(client):
 @pytest.mark.asyncio
 async def test_embeddings_usage_contains_token_counts(client):
     response = await client.post(
-        "/embeddings", json={"input": ["hello world this is a test"]},
+        "/embeddings",
+        json={"input": ["hello world this is a test"]},
     )
     usage = response.json()["usage"]
 
     assert "prompt_tokens" in usage
-    assert "total_tokens"  in usage
+    assert "total_tokens" in usage
     assert usage["total_tokens"] > 0

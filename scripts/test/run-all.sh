@@ -21,7 +21,9 @@ black_result="SKIPPED"
 python_failed=0
 if [[ -d python/.venv ]]; then
     if [[ -x python/.venv/bin/pytest ]]; then
-        if python/.venv/bin/pytest python/tests; then
+        # Invoke pytest via the venv python from the repo root so the tests'
+        # `python.*` package imports resolve (the bare pytest binary cannot).
+        if python/.venv/bin/python -m pytest python/tests; then
             pytest_result="PASS"
         else
             pytest_result="FAIL"
