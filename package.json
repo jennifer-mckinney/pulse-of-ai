@@ -16,7 +16,9 @@
     "test:unit": "jest tests/unit",
     "test:int": "jest tests/integration",
     "test:cov": "jest --coverage",
-    "test:watch": "jest --watch"
+    "test:watch": "jest --watch",
+    "test:quick": "bash scripts/test/run-unit.sh",
+    "verify": "bash scripts/test/run-all.sh"
   },
   "keywords": [
     "ai",
