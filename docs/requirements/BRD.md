@@ -100,9 +100,9 @@ Objectives are taken directly from the specification's objectives table (spec §
 
 | Constraint | Implication |
 |---|---|
-| **GDPR compliance posture** | Data minimization at ingest (no PII ever stored); every data action logged with legal basis; right-to-erasure supported through the retention log; DPIA required before shipping cross-platform correlation, which is high-risk processing under GDPR Article 35 (spec §8, §20) |
+| **GDPR compliance posture** | Target posture (planned — verified as the retention and lifecycle-logging phases land): data minimization at ingest (no PII stored); every data action logged with legal basis; right-to-erasure supported through the retention log; DPIA required before shipping cross-platform correlation, which is high-risk processing under GDPR Article 35 (spec §8, §20) |
 | **EU AI Act readiness** | Documented, versioned methodology with plain-English justification for every automated inference; fairness thresholds sourced from academic literature and regulatory guidance (spec §3, §9, §10) |
-| **Privacy-first architecture** | Pseudonymization by design: cross-platform correlation uses salted, non-reversible verb-noun IDs and never stores the underlying identity (spec §20); location capped at city granularity (spec §17) |
+| **Privacy-first architecture** | Target posture (planned — verified when cross-platform correlation ships behind its DPIA gate): pseudonymization by design — correlation to use salted, non-reversible verb-noun IDs without storing the underlying identity (spec §20); location capped at city granularity (spec §17) |
 | **Open-source, self-hosted ethos** | No data leaves the operator's infrastructure for inference or embedding; managed AI APIs were explicitly rejected on GDPR and lock-in grounds; the stack is composed of mature open-source components and can run on a single host (spec §5, §15) |
 | **Layered retention** | Post-level detail retained 3 months, then compacted into permanent monthly rollups with content nulled and embeddings deleted — bounding both privacy exposure and storage cost while preserving research-grade trends (spec §19) |
 | **Source economics** | Almost all 50 sources use free APIs or RSS; the only recurring data cost under decision is one commercial platform API (~$100/month), with free substitutes identified (spec §16, §17) |

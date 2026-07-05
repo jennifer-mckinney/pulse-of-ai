@@ -55,7 +55,7 @@ Schema: `{id, camera:{lat,lng,altitude}, cameraMs, encoding:{metric,colorMode,fi
 
 ### Insights engine
 
-`computeInsights(cities)` with `MIN_TOTAL = 5` guard for share-based superlatives; deterministic tie-breaks (higher total → alphabetical). Derivations: globalTotals; highestVolumeCity; mostPositive/mostNegativeCity (by share); sentimentRatioExtremes (Laplace +1, no Infinity); dominantSourceCategory global + per-city; largestSourceConcentration (city, source, pct); regionalDominance via pure `regionOf(lat,lng)` bounding boxes (Americas / Europe-Africa / Asia-Pacific); extremesDelta vs global average. `computeInsights([])` → null superlatives, no throw → `resolveChapter` substitutes fallback copy ("Data unavailable — showing demo view"). All card text lands via textContent (XSS-safe by construction — comment this so nobody "helpfully" switches to HTML).
+`computeInsights(cities)` with `MIN_TOTAL = 5` guard for share-based superlatives; deterministic tie-breaks (higher total → alphabetical). Derivations: globalTotals; highestVolumeCity; mostPositive/mostNegativeCity (by share); sentimentRatioExtremes (Laplace +1, no Infinity); dominantSourceCategory global + per-city; largestSourceConcentration (city, source, pct); regionalDominance via pure `regionOf(lat,lng)` longitude bands (Americas / Europe-Africa / Asia-Pacific — lat accepted for signature stability but unused); extremesDelta vs global average. `computeInsights([])` → null superlatives, no throw → `resolveChapter` substitutes fallback copy ("Data unavailable — showing demo view"). All card text lands via textContent (XSS-safe by construction — comment this so nobody "helpfully" switches to HTML).
 
 ## Implementation Steps (TDD; jest needs Docker up — see Constraints)
 

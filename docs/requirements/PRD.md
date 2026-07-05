@@ -132,8 +132,8 @@ The frontend is the primary experience for P1 and P4. Source: `docs/plans/2026-0
 | NFR-7 | Quality | Test coverage ≥ 80% enforced as a commit gate; all tests pass before any commit; TDD (test-first) for every component | spec §13, §14 |
 | NFR-8 | Ethics gates | Before release: every threshold documented with justification; every processed post has an audit row; no PII detectable in stored content; bias assessment populated after every job | spec §14 |
 | NFR-9 | Accessibility | WCAG 2.1 AA: colorblind-safe palettes, color never the sole indicator, contrast ratio ≥ 4.5:1, keyboard navigation, aria-labels on markers, screen-reader-compatible structure | spec §11 |
-| NFR-10 | Security | Secrets only in environment configuration; parameterized queries only; input validation on all routes; no information leakage in errors; dynamic DOM built without HTML injection | spec §8; design doc |
-| NFR-11 | Privacy | No usernames, user IDs, emails, IPs, profile data, or sub-city location ever stored; GDPR lifecycle logging with legal basis on every data action | spec §8 |
+| NFR-10 | Security | Target posture (planned — verified when CSP + escaping tests land): secrets only in environment configuration; parameterized queries only; input validation on all routes; no information leakage in errors; dynamic DOM built without HTML injection | spec §8; design doc |
+| NFR-11 | Privacy | Target posture (planned — verified when the full GDPR lifecycle logging ships): no usernames, user IDs, emails, IPs, profile data, or sub-city location ever stored; GDPR lifecycle logging with legal basis on every data action | spec §8 |
 | NFR-12 | Scalability of ops | Correlation batch latency under 30 seconds per batch; retention compaction bounds storage growth | spec §14, §19 |
 
 ## 6. Acceptance Criteria by Major Feature
@@ -159,7 +159,7 @@ The frontend is the primary experience for P1 and P4. Source: `docs/plans/2026-0
 - Scrolling advances through all 7 chapters: each step moves the camera, re-encodes bars, and shows an insight card whose numbers are derived from the currently loaded data (no hardcoded insight values); no residual template tokens appear in any card.
 - **The 2-minute journalist test:** starting from a cold page load, a user can reach a concrete, sourced insight (e.g., most-negative city with its share) via the scroll story within 2 minutes without any interaction other than scrolling.
 - The final chapter releases the globe: drag/rotate works, hover shows a tooltip with the city's breakdown, filter chips re-encode the bars with animation, auto-rotate resumes after idle; scrolling back up restores the story state.
-- With the API stopped, the same walkthrough succeeds on demo data with fallback-aware copy.
+- With the API stopped, the same walkthrough succeeds on bundled demo data, and every insight card is visibly marked as demo data (`isDemo` flag from the loader → "Demo data" marker on the card title) — demo numbers are never presented as live. If even the demo data cannot support a chapter, the card shows the no-data fallback copy instead.
 - Console remains error-free through a full desktop and 375px-mobile walkthrough; on mobile, insight cards do not fully obscure the globe.
 
 ### 6.5 Researcher query (FR-12, FR-14, FR-29)

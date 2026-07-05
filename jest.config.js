@@ -16,8 +16,9 @@ module.exports = {
 
     // Coverage from src/ plus the four PURE frontend modules (unit-tested in
     // tests/unit/pure/). Browser-only frontend files (globe.js, story.js, …)
-    // are deliberately excluded — they are preview-verified, and including
-    // them would tank the gate with untestable DOM/WebGL code.
+    // are deliberately excluded — they will be preview-verified when they
+    // land (Batch 3+), and including them would tank the gate with
+    // untestable DOM/WebGL code.
     collectCoverageFrom: [
         'src/**/*.js',
         '!src/server.js',        // entry point — integration tested via supertest, not unit
