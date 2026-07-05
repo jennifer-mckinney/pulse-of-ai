@@ -33,6 +33,10 @@ exported-assets/
 exported-assets.textClipping
 scrollama-main/
 /js/
+/styles/
+
+# Playwright MCP browser session artifacts
+.playwright-mcp/
 
 # Editor
 .vscode/

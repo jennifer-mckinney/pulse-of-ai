@@ -22,7 +22,12 @@ npm run dev            # Express server on port 3000
 - **Pipeline:** `src/pipeline/` — sentiment → relevance → discourse → embeddings → correlation
 - **Workers:** BullMQ queues backed by Redis; worker files mirror pipeline modules
 - **Routes:** `src/routes/` — health, config, posts, sentiment, refresh, audit, bias, methodology, sources, query
-- **Frontend:** `public/` — map.js (Mapbox globe), main.js (health + refresh)
+- **Frontend:** `public/` — js/map.js (Mapbox globe), js/main.js (health + refresh), styles/main.css
+- **Embeddings service:** `python/embeddings_service.py` — FastAPI + sentence-transformers on port 8000 (venv at `python/.venv/`)
+- **Docs:** `docs/TECHNICAL_SPEC.md` (full spec), `docs/diagrams/architecture.png` (system diagram)
+
+## Directory Notes
+- Root `js/`, `styles/`, `scrollama-main/`, `exported-assets/`, `.playwright-mcp/` are gitignored scratch/vendor dirs — the real frontend lives in `public/`; don't edit the root copies
 
 ## Mapbox Token
 - Lives in `.env` as `MAPBOX_ACCESS_TOKEN` — never hardcode in client JS
@@ -39,6 +44,7 @@ npm run dev            # Express server on port 3000
 - Tests run serially (`maxWorkers: 1`) — shared test DB; parallel runs cause TRUNCATE race conditions
 - `globalSetup.js` migrates test DB once; `setup.js` truncates tables before each test file
 
-## Active Plan
-Full architecture plan: `~/.claude/plans/composed-coalescing-duckling.md`
-Next phase: **Phase B** — pipeline TDD (sentiment → relevance → discourse → ingest → bias)
+## Status
+Phase B (pipeline TDD) is implemented — `tests/unit/` covers sentiment, relevance, discourse, ingest, bias, correlation, embeddings, and the ingest/embed/correlate workers; `tests/integration/` covers all API routes. The plan file previously referenced here (`~/.claude/plans/composed-coalescing-duckling.md`) no longer exists.
+
+Pending working-tree change: `TECHNICAL_SPEC.md` was moved to `docs/TECHNICAL_SPEC.md` but the move is not yet committed.
