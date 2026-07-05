@@ -14,10 +14,19 @@ module.exports = {
     // Run before each test FILE (truncate all tables for a clean slate)
     setupFilesAfterEnv: ['./tests/setup.js'],
 
-    // Coverage from src/ only (not scripts/, not tests/)
+    // Coverage from src/ plus the four PURE frontend modules (unit-tested in
+    // tests/unit/pure/). Browser-only frontend files (globe.js, story.js, …)
+    // are deliberately excluded — they will be preview-verified when they
+    // land (Batch 3+), and including them would tank the gate with
+    // untestable DOM/WebGL code.
     collectCoverageFrom: [
         'src/**/*.js',
-        '!src/server.js'        // entry point — integration tested via supertest, not unit
+        '!src/server.js',        // entry point — integration tested via supertest, not unit
+        '!src/workers/start.js', // process entry point — no logic
+        'public/js/utils.js',
+        'public/js/data.js',
+        'public/js/insights.js',
+        'public/js/chapters.js'
     ],
 
     // 80% line coverage required to pass CI
