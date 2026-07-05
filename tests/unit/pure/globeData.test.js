@@ -5,8 +5,9 @@
 //   - DEMO_DATA: moved verbatim from public/js/map.js lines 219-293.
 //   - normalizeCities(raw): pure adapter — validates lat/lng, coerces counts,
 //     recomputes total/dominant, computes sentiment shares, drops bad rows.
-//   - loadCityData(): fetch /api/posts/aggregated-by-location with demo
-//     fallback on error/empty (mirrors map.js:394-400 behavior).
+//   - loadCityData(): fetch /api/posts/aggregated-by-location, resolves to
+//     { cities, isDemo } — isDemo true whenever the demo fallback was used
+//     (error / non-OK / empty / no fetch), so the UI can label demo numbers.
 
 'use strict';
 
@@ -224,52 +225,58 @@ describe('loadCityData() — fetch with demo fallback', () => {
         global.fetch = realFetch;
     });
 
-    test('returns normalized API rows when the endpoint has data', async () => {
+    test('returns normalized API rows with isDemo:false when the endpoint has data', async () => {
         global.fetch = jest.fn().mockResolvedValue({
             ok: true,
             json: async () => [validRow()],
         });
-        const cities = await data.loadCityData();
+        const { cities, isDemo } = await data.loadCityData();
         expect(global.fetch).toHaveBeenCalledWith('/api/posts/aggregated-by-location');
+        expect(isDemo).toBe(false);
         expect(cities).toHaveLength(1);
         expect(cities[0].city).toBe('Testville');
         expect(cities[0].shares.positive).toBeCloseTo(0.6, 10);
     });
 
-    test('falls back to normalized DEMO_DATA on network error', async () => {
+    test('falls back to normalized DEMO_DATA with isDemo:true on network error', async () => {
         global.fetch = jest.fn().mockRejectedValue(new Error('network down'));
-        const cities = await data.loadCityData();
+        const { cities, isDemo } = await data.loadCityData();
+        expect(isDemo).toBe(true);
         expect(cities).toHaveLength(data.DEMO_DATA.length);
         expect(cities[0].city).toBe('San Francisco');
     });
 
-    test('falls back to DEMO_DATA when the API returns an empty array', async () => {
+    test('falls back to DEMO_DATA (isDemo:true) when the API returns an empty array', async () => {
         global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => [] });
-        const cities = await data.loadCityData();
+        const { cities, isDemo } = await data.loadCityData();
+        expect(isDemo).toBe(true);
         expect(cities).toHaveLength(data.DEMO_DATA.length);
     });
 
-    test('falls back to DEMO_DATA on a non-OK HTTP response', async () => {
+    test('falls back to DEMO_DATA (isDemo:true) on a non-OK HTTP response', async () => {
         global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 500 });
-        const cities = await data.loadCityData();
+        const { cities, isDemo } = await data.loadCityData();
+        expect(isDemo).toBe(true);
         expect(cities).toHaveLength(data.DEMO_DATA.length);
     });
 
-    test('falls back to DEMO_DATA when fetch is unavailable (Node safety guard)', async () => {
+    test('falls back to DEMO_DATA (isDemo:true) when fetch is unavailable (Node safety guard)', async () => {
         // The plan requires a `typeof fetch !== 'undefined'` guard so the module
         // never throws ReferenceError in fetch-less environments.
         delete global.fetch;
-        const cities = await data.loadCityData();
+        const { cities, isDemo } = await data.loadCityData();
+        expect(isDemo).toBe(true);
         expect(cities).toHaveLength(data.DEMO_DATA.length);
         expect(cities[0].shares).toBeDefined(); // fallback is normalized too
     });
 
-    test('falls back to DEMO_DATA when every API row is invalid', async () => {
+    test('falls back to DEMO_DATA (isDemo:true) when every API row is invalid', async () => {
         global.fetch = jest.fn().mockResolvedValue({
             ok: true,
             json: async () => [validRow({ lat: null }), validRow({ lng: 999 })],
         });
-        const cities = await data.loadCityData();
+        const { cities, isDemo } = await data.loadCityData();
+        expect(isDemo).toBe(true);
         expect(cities).toHaveLength(data.DEMO_DATA.length);
     });
 });

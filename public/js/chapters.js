@@ -6,6 +6,10 @@
 // Pure module: no DOM, no fetch — globe.js/story.js apply the resolved state.
 // Card text is rendered by consumers via textContent (never innerHTML), so
 // interpolated strings are XSS-safe by construction. Keep it that way.
+// Defense in depth: attacker-influenceable strings (city names, source names,
+// category names from API data) are additionally HTML-escaped via
+// PulseUtils.esc() at the point they enter card values, so even a consumer
+// that wrongly switches to HTML rendering cannot inject markup.
 //
 // Dual export guard with dependency injection: CommonJS requires siblings for
 // jest; browser script tags read the window globals (load utils.js and
@@ -19,13 +23,16 @@
 }(typeof self !== 'undefined' ? self : this, function (utils, insightsMod) {
     'use strict';
 
-    const { fmtPct, fmtCount } = utils;
+    const { esc, fmtPct, fmtCount } = utils;
     const { TEMPLATES, renderTemplate } = insightsMod;
 
-    // Shown when the data cannot support a chapter's story (empty API + demo
-    // failure, or superlatives suppressed by the MIN_TOTAL guard).
+    // Shown when the data cannot support a chapter's story at all (empty
+    // normalized city list, or superlatives suppressed by the MIN_TOTAL
+    // guard). By this point even the demo fallback has produced nothing, so
+    // the copy must not promise a demo view — demo mode is signalled
+    // separately via the isDemo flag on the resolved chapter.
     const FALLBACK_COPY =
-        'Data unavailable — showing demo view. Scroll on to explore the globe.';
+        'No data available right now. Scroll on to explore the globe.';
 
     // ── Chapter config ──────────────────────────────────────────────────────────
     // Sequence locked by the design doc: Overview → Volume leaders → Positivity
@@ -110,6 +117,12 @@
     // renderTemplate, or null when the insights cannot support the story
     // (→ resolveChapter substitutes FALLBACK_COPY). Values are preformatted
     // strings so templates stay presentation-only.
+    //
+    // XSS boundary: every attacker-influenceable string (city / source /
+    // category names originating from API data) passes through esc() HERE,
+    // where it enters a card value. Numeric values are formatter output and
+    // need no escaping. Consumers still must render via textContent — esc()
+    // is defense in depth, not permission to use innerHTML.
     const TOKEN_BUILDERS = {
         overview(ins) {
             if (ins.cityCount === 0) return null;
@@ -124,7 +137,7 @@
             const v = ins.highestVolumeCity;
             if (!v || ins.globalTotals.total === 0) return null;
             return {
-                volumeCity: v.city,
+                volumeCity: esc(v.city),
                 volumeTotal: fmtCount(v.total),
                 volumeSharePct: fmtPct(v.total / ins.globalTotals.total),
             };
@@ -133,7 +146,7 @@
             const c = ins.mostPositiveCity;
             if (!c || !ins.extremesDelta) return null;
             return {
-                positiveCity: c.city,
+                positiveCity: esc(c.city),
                 positiveSharePct: fmtPct(c.shares.positive),
                 positiveDeltaPct: fmtPct(ins.extremesDelta.positivePct),
             };
@@ -142,7 +155,7 @@
             const c = ins.mostNegativeCity;
             if (!c || !ins.extremesDelta) return null;
             return {
-                negativeCity: c.city,
+                negativeCity: esc(c.city),
                 negativeSharePct: fmtPct(c.shares.negative),
                 negativeDeltaPct: fmtPct(ins.extremesDelta.negativePct),
             };
@@ -151,9 +164,9 @@
             const ext = ins.sentimentRatioExtremes;
             if (!ext) return null;
             return {
-                ratioHighCity: ext.highest.city.city,
+                ratioHighCity: esc(ext.highest.city.city),
                 ratioHigh: ext.highest.ratio.toFixed(1),
-                ratioLowCity: ext.lowest.city.city,
+                ratioLowCity: esc(ext.lowest.city.city),
                 ratioLow: ext.lowest.ratio.toFixed(1),
             };
         },
@@ -162,10 +175,12 @@
             const conc = ins.largestSourceConcentration;
             if (!dom || !conc) return null;
             return {
-                dominantCategory: dom.category,
+                dominantCategory: esc(dom.category),
                 dominantCategoryPct: fmtPct(dom.share),
-                concentrationCity: conc.city,
-                concentrationSource: conc.source_name,
+                // conc.city is the city OBJECT (see PulseInsights) — the
+                // display name lives at conc.city.city.
+                concentrationCity: esc(conc.city.city),
+                concentrationSource: esc(conc.source_name),
                 concentrationPct: fmtPct(conc.pct),
             };
         },
@@ -176,10 +191,11 @@
     };
 
     // Resolve a chapter's highlight key into concrete city objects.
-    // Superlative keys hold the city object itself; sentimentRatioExtremes
-    // holds two nested cities; largestSourceConcentration holds a city NAME
-    // that must be looked up in the normalized city list.
-    function highlightCitiesFor(chapter, ins, cities) {
+    // Every highlight key now carries city OBJECTS directly: superlative keys
+    // hold the city itself, sentimentRatioExtremes holds two nested cities,
+    // and largestSourceConcentration holds the city under .city — no
+    // lookup-by-name (which broke on same-name cities).
+    function highlightCitiesFor(chapter, ins) {
         if (chapter.highlight === null) return [];
         const value = ins[chapter.highlight];
         if (!value) return [];
@@ -187,19 +203,26 @@
             return [value.highest.city, value.lowest.city];
         }
         if (chapter.highlight === 'largestSourceConcentration') {
-            const match = cities.find(c => c.city === value.city);
-            return match ? [match] : [];
+            return [value.city]; // city object carried by the insight
         }
         return [value]; // city-object superlatives (volume / positivity / negativity)
     }
 
     // ── Resolver ────────────────────────────────────────────────────────────────
-    // Pure: (chapter config, computeInsights output, normalized cities) →
-    // concrete render state for globe.js/story.js. Never throws on sparse
-    // insights — it degrades to FALLBACK_COPY + the chapter's static camera.
-    function resolveChapter(chapter, ins, cities) {
-        const cityList = Array.isArray(cities) ? cities : [];
-        const highlightCities = highlightCitiesFor(chapter, ins, cityList);
+    // Pure: (chapter config, computeInsights output, normalized cities,
+    // options) → concrete render state for globe.js/story.js. Never throws on
+    // sparse insights — it degrades to FALLBACK_COPY + the chapter's static
+    // camera.
+    //
+    // opts.isDemo (default false): set by the loader when the cities came
+    // from the bundled demo fallback rather than the API. The resolved
+    // chapter then carries isDemo:true and a visible "Demo data" marker on
+    // the card title so viewers are never shown demo numbers as live ones.
+    // (`cities` is retained for signature stability; highlights now resolve
+    // from the insight objects alone.)
+    function resolveChapter(chapter, ins, cities, opts) {
+        const isDemo = Boolean(opts && opts.isDemo);
+        const highlightCities = highlightCitiesFor(chapter, ins);
 
         // Camera: follow the story's subject when there is one, else default.
         const camera = highlightCities.length > 0
@@ -233,11 +256,16 @@
             camera,
             cameraMs: chapter.cameraMs,
             encoding: chapter.encoding,
-            cardTitle: chapter.insight.title,
+            // Visible demo marker: renderers show the suffixed title as-is,
+            // and can additionally badge on the isDemo flag below.
+            cardTitle: isDemo
+                ? chapter.insight.title + ' — Demo data'
+                : chapter.insight.title,
             cardBody,
             highlightCities,
             arcs,
             autoRotate: chapter.autoRotate,
+            isDemo,
         };
     }
 

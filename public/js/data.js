@@ -7,8 +7,10 @@
 //   - normalizeCities(raw): pure adapter — validates lat/lng, coerces counts,
 //                           recomputes total/dominant, computes sentiment
 //                           shares, drops rows with unusable coordinates.
-//   - loadCityData():       fetch /api/posts/aggregated-by-location with demo
-//                           fallback on error/empty (mirrors map.js:394-400);
+//   - loadCityData():       fetch /api/posts/aggregated-by-location, returns
+//                           { cities, isDemo } — isDemo is true when the demo
+//                           fallback was used (error/non-OK/empty/no fetch),
+//                           so consumers can visibly label demo numbers;
 //                           browser-guarded so it is safe to require in Node.
 //
 // Dual export guard: CommonJS (module.exports) for jest, window.PulseData
@@ -201,18 +203,21 @@
     // Fetch live city data; fall back to normalized DEMO_DATA if the endpoint
     // errors, returns non-OK, returns nothing usable, or fetch does not exist
     // (Node safety guard — this module is also required by jest without a DOM).
-    // Mirrors the fallback behavior of map.js:394-400.
+    //
+    // Returns { cities, isDemo }: isDemo is TRUE whenever the demo fallback
+    // was used, so consumers (resolveChapter → insight cards) can visibly
+    // mark the numbers as demo data instead of passing them off as live.
     async function loadCityData() {
         if (typeof fetch !== 'undefined') {
             try {
                 const res = await fetch('/api/posts/aggregated-by-location');
                 if (res && res.ok) {
                     const cities = normalizeCities(await res.json());
-                    if (cities.length > 0) return cities;
+                    if (cities.length > 0) return { cities, isDemo: false };
                 }
             } catch (_) { /* network error — fall through to demo data */ }
         }
-        return normalizeCities(DEMO_DATA);
+        return { cities: normalizeCities(DEMO_DATA), isDemo: true };
     }
 
     return { DEMO_DATA, normalizeCities, loadCityData };

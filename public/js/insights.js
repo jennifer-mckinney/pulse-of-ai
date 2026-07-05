@@ -84,9 +84,12 @@
         const mostPositiveCity  = pickBy(eligible, c => c.shares.positive);
         const mostNegativeCity  = pickBy(eligible, c => c.shares.negative);
 
-        // Sentiment ratio extremes (Laplace smoothed; guard applies)
+        // Sentiment ratio extremes (Laplace smoothed; guard applies).
+        // Requires at least TWO eligible cities — with one, "highest" and
+        // "lowest" would be the same city and the divide story is a tautology.
+        // Callers (the divide chapter) take their fallback path on null.
         let sentimentRatioExtremes = null;
-        if (eligible.length > 0) {
+        if (eligible.length >= 2) {
             const highest = pickBy(eligible, c => laplaceRatio(c));
             const lowest  = pickBy(eligible, c => -laplaceRatio(c));
             sentimentRatioExtremes = {
@@ -108,12 +111,18 @@
 
                 // Concentration: share of the city's posts owned by ONE source.
                 // Same MIN_TOTAL guard — a 4-post city is trivially concentrated.
+                // Clamped to 1: inconsistent upstream rows (source counts
+                // exceeding the city's own counts) must not report >100%.
                 if (c.total >= MIN_TOTAL) {
-                    const pct = s.total / c.total;
+                    const pct = Math.min(1, s.total / c.total);
                     if (largestSourceConcentration === null
                         || pct > largestSourceConcentration.pct) {
                         largestSourceConcentration = {
-                            city: c.city,
+                            // The city OBJECT (like the other superlatives) —
+                            // consumers must not look it up by name, which
+                            // breaks on same-name cities. Display the name
+                            // via city.city.
+                            city: c,
                             source_name: s.source_name,
                             source_category: s.source_category,
                             pct,

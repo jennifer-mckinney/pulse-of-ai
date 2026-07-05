@@ -169,11 +169,25 @@ describe('computeInsights() — sentimentRatioExtremes (Laplace smoothed)', () =
         const out = computeInsights(data.normalizeCities([
             { city: 'Sunny', lat: 0, lng: 0,
               positive: 10, neutral: 0, negative: 0, total: 10, sources: [] },
+            { city: 'Gloomy', lat: 10, lng: 10,
+              positive: 1, neutral: 2, negative: 7, total: 10, sources: [] },
         ]));
         const { highest, lowest } = out.sentimentRatioExtremes;
         expect(Number.isFinite(highest.ratio)).toBe(true);
         expect(Number.isFinite(lowest.ratio)).toBe(true);
         expect(highest.ratio).toBeCloseTo(11 / 1, 10);
+    });
+
+    test('is null when fewer than 2 cities pass MIN_TOTAL (no single-city "divide")', () => {
+        // One eligible city would make highest === lowest — a tautology, not
+        // a divide. The divide chapter must take its fallback path instead.
+        const out = computeInsights(data.normalizeCities([
+            { city: 'Lonely', lat: 0, lng: 0,
+              positive: 10, neutral: 0, negative: 0, total: 10, sources: [] },
+            { city: 'Tiny', lat: 10, lng: 10,
+              positive: 2, neutral: 1, negative: 0, total: 3, sources: [] }, // below guard
+        ]));
+        expect(out.sentimentRatioExtremes).toBeNull();
     });
 });
 
@@ -210,15 +224,66 @@ describe('computeInsights() — source category aggregation', () => {
 
     test('largestSourceConcentration finds the most single-source-dependent city', () => {
         const { largestSourceConcentration: conc } = fixtureInsights();
-        expect(conc.city).toBe('Tokyo');
+        expect(conc.city.city).toBe('Tokyo'); // carries the city OBJECT
         expect(conc.source_name).toBe('twitter');
         expect(conc.source_category).toBe('social');
         expect(conc.pct).toBeCloseTo(0.9, 10);
     });
 
+    test('largestSourceConcentration carries the full city object, not just a name', () => {
+        const cities = data.normalizeCities(rawFixture());
+        const { largestSourceConcentration: conc } = computeInsights(cities);
+        const tokyo = cities.find(c => c.city === 'Tokyo');
+        expect(conc.city).toBe(tokyo); // same reference as the input city
+        expect(Number.isFinite(conc.city.lat)).toBe(true);
+        expect(Number.isFinite(conc.city.lng)).toBe(true);
+    });
+
+    test('concentration disambiguates same-name cities by carrying the object', () => {
+        // Two cities both named "Springfield" — a name lookup would resolve
+        // to the wrong (first) one; the object carry must reference the
+        // actually concentrated city (the one at lng 20).
+        const cities = data.normalizeCities([
+            { city: 'Springfield', lat: 40, lng: -90,
+              positive: 5, neutral: 3, negative: 2, total: 10,
+              sources: [
+                  { source_name: 'reddit', source_category: 'social',
+                    positive: 3, neutral: 1, negative: 1, total: 5 },
+                  { source_name: 'gazette', source_category: 'news',
+                    positive: 2, neutral: 2, negative: 1, total: 5 },
+              ] },
+            { city: 'Springfield', lat: 10, lng: 20,
+              positive: 8, neutral: 1, negative: 1, total: 10,
+              sources: [
+                  { source_name: 'reddit', source_category: 'social',
+                    positive: 8, neutral: 1, negative: 1, total: 10 },
+              ] },
+        ]);
+        const { largestSourceConcentration: conc } = computeInsights(cities);
+        expect(conc.pct).toBeCloseTo(1, 10);
+        expect(conc.city).toBe(cities[1]); // the 100%-reddit Springfield
+        expect(conc.city.lng).toBe(20);
+    });
+
+    test('concentration pct is clamped to 1 on inconsistent upstream rows', () => {
+        // Source counts exceeding the city's own counts (bad upstream
+        // aggregation) must not report a >100% concentration.
+        const cities = data.normalizeCities([
+            { city: 'Broken', lat: 0, lng: 0,
+              positive: 5, neutral: 0, negative: 0, total: 5,
+              sources: [
+                  { source_name: 'firehose', source_category: 'social',
+                    positive: 100, neutral: 0, negative: 0, total: 100 },
+              ] },
+        ]);
+        const { largestSourceConcentration: conc } = computeInsights(cities);
+        expect(conc.pct).toBe(1);
+        expect(conc.city.city).toBe('Broken');
+    });
+
     test('concentration ignores cities below MIN_TOTAL', () => {
         // Delhi is 100% reddit but has only 4 posts — must not win.
-        expect(fixtureInsights().largestSourceConcentration.city).not.toBe('Delhi');
+        expect(fixtureInsights().largestSourceConcentration.city.city).not.toBe('Delhi');
     });
 });
 
