@@ -17,7 +17,8 @@ module.exports = {
     // Coverage from src/ only (not scripts/, not tests/)
     collectCoverageFrom: [
         'src/**/*.js',
-        '!src/server.js'        // entry point — integration tested via supertest, not unit
+        '!src/server.js',        // entry point — integration tested via supertest, not unit
+        '!src/workers/start.js'  // process entry point — no logic
     ],
 
     // 80% line coverage required to pass CI

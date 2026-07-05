@@ -9,9 +9,6 @@
 //   - Window: COLLECT_WINDOW_MS (default: 120,000ms = 2 minutes)
 //   - 50 sources spread evenly = one source every 2,400ms
 //   - BullMQ's repeat/cron system handles re-scheduling automatically
-//
-// TODO: implement scheduleAllSources() below.
-// The function signature and contract are defined — fill in the body.
 
 'use strict';
 
@@ -47,10 +44,47 @@ const QUEUE_BY_TYPE = {
  * @returns {Promise<number>} count of scheduled jobs
  */
 async function scheduleAllSources() {
-    // TODO: implement staggered scheduling
-    // Hint: await dbAll('SELECT id, name, source_type, config FROM data_sources WHERE active = true')
-    // Then for each source, call QUEUE_BY_TYPE[source.source_type].add(...)
-    // with repeat: { every: COLLECT_WINDOW_MS } and delay: i * staggerMs
+    const sources = await dbAll(
+        'SELECT id, name, source_type, config FROM data_sources WHERE active = true',
+    );
+
+    if (!sources || sources.length === 0) {
+        return 0;
+    }
+
+    // Spread sources evenly across the collection window (thundering-herd guard)
+    const staggerMs = Math.floor(COLLECT_WINDOW_MS / sources.length);
+
+    let scheduled = 0;
+    for (let i = 0; i < sources.length; i++) {
+        const source = sources[i];
+        const queue  = QUEUE_BY_TYPE[source.source_type];
+
+        if (!queue) {
+            // Unknown type = data problem, not a scheduler crash: skip and keep going
+            console.warn(
+                `[scheduler] unknown source_type "${source.source_type}" for source "${source.name}" — skipping`,
+            );
+            continue;
+        }
+
+        await queue.add(
+            'collect',
+            {
+                sourceId:   source.id,
+                sourceName: source.name,
+                sourceType: source.source_type,
+                config:     source.config,
+            },
+            {
+                repeat: { every: COLLECT_WINDOW_MS },  // one collection per window
+                delay:  i * staggerMs,                 // staggered start across the window
+            },
+        );
+        scheduled++;
+    }
+
+    return scheduled;
 }
 
 module.exports = { scheduleAllSources, COLLECT_WINDOW_MS, QUEUE_BY_TYPE };
