@@ -87,53 +87,14 @@ describe('GET /api/audit/:post_id', () => {
         });
     });
 
-    it('each decision exposes the methodology config and a keyed input fingerprint', async () => {
-        const srcId  = await insertSource('audit-src-5');
-        const jobId  = await insertJob();
-        const mvIds  = await insertMethodologyVersions();
-        const postId = await insertPostWithFullPipeline(srcId, jobId, mvIds, { externalId: 'aud-5' });
-
-        // The helper stores SHA-256(content) as decision_audit_log.input_hash.
-        // The API must NOT return that raw value (unsalted content hashes are
-        // offline-confirmable for guessable text) — it returns
-        // HMAC-SHA256(AUDIT_HASH_KEY, storedHash) instead.
-        const storedHash = crypto
-            .createHash('sha256')
-            .update('Test post aud-5')
-            .digest('hex');
-        const expectedKeyed = crypto
-            .createHmac('sha256', process.env.AUDIT_HASH_KEY)
-            .update(storedHash)
-            .digest('hex');
-
-        const res = await request(app).get(`/api/audit/${postId}`);
-        expect(res.status).toBe(200);
-
-        // Every decision carries the KEYED input fingerprint
-        for (const decision of res.body.decisions) {
-            expect(decision.input_hash).toMatch(/^[0-9a-f]{64}$/);
-            expect(decision.input_hash).not.toBe(storedHash);
-            expect(decision.input_hash).toBe(expectedKeyed);
-            expect(decision.config).toEqual(expect.any(Object));
-        }
-
-        // Config must be the exact methodology_versions.config JSONB the helper seeded
-        const sentDec = res.body.decisions.find(d => d.decision_type === 'sentiment');
-        expect(sentDec.config).toEqual({
-            positive_threshold: 0.05,
-            negative_threshold: -0.05,
-        });
-
-        const relDec = res.body.decisions.find(d => d.decision_type === 'relevance');
-        expect(relDec.config).toEqual({
-            keywords: ['ai', 'machine learning'],
-        });
-    });
-
     // ─── input_hash keying (security review L1, 2026-07-06) ───────────────────
     // Same explicit set/delete/restore env pattern as api.config.test.js.
+    // Every test in this block establishes its own AUDIT_HASH_KEY state —
+    // none may depend on the ambient environment (CI has no key; a local
+    // .env supplies one). afterEach restores whatever the suite started with.
     describe('input_hash keying', () => {
         const ORIGINAL_KEY = process.env.AUDIT_HASH_KEY;
+        const TEST_KEY     = 'test-audit-hash-key-0123456789abcdef';
 
         afterEach(() => {
             if (ORIGINAL_KEY === undefined) {
@@ -143,8 +104,56 @@ describe('GET /api/audit/:post_id', () => {
             }
         });
 
+        it('each decision exposes the methodology config and a keyed input fingerprint', async () => {
+            // Self-sufficient in env: the route reads AUDIT_HASH_KEY per
+            // request, so setting it here controls both the server response
+            // and the expected-HMAC computation below.
+            process.env.AUDIT_HASH_KEY = TEST_KEY;
+
+            const srcId  = await insertSource('audit-src-5');
+            const jobId  = await insertJob();
+            const mvIds  = await insertMethodologyVersions();
+            const postId = await insertPostWithFullPipeline(srcId, jobId, mvIds, { externalId: 'aud-5' });
+
+            // The helper stores SHA-256(content) as decision_audit_log.input_hash.
+            // The API must NOT return that raw value (unsalted content hashes are
+            // offline-confirmable for guessable text) — it returns
+            // HMAC-SHA256(AUDIT_HASH_KEY, storedHash) instead.
+            const storedHash = crypto
+                .createHash('sha256')
+                .update('Test post aud-5')
+                .digest('hex');
+            const expectedKeyed = crypto
+                .createHmac('sha256', TEST_KEY)
+                .update(storedHash)
+                .digest('hex');
+
+            const res = await request(app).get(`/api/audit/${postId}`);
+            expect(res.status).toBe(200);
+
+            // Every decision carries the KEYED input fingerprint
+            for (const decision of res.body.decisions) {
+                expect(decision.input_hash).toMatch(/^[0-9a-f]{64}$/);
+                expect(decision.input_hash).not.toBe(storedHash);
+                expect(decision.input_hash).toBe(expectedKeyed);
+                expect(decision.config).toEqual(expect.any(Object));
+            }
+
+            // Config must be the exact methodology_versions.config JSONB the helper seeded
+            const sentDec = res.body.decisions.find(d => d.decision_type === 'sentiment');
+            expect(sentDec.config).toEqual({
+                positive_threshold: 0.05,
+                negative_threshold: -0.05,
+            });
+
+            const relDec = res.body.decisions.find(d => d.decision_type === 'relevance');
+            expect(relDec.config).toEqual({
+                keywords: ['ai', 'machine learning'],
+            });
+        });
+
         it('never returns the raw stored hash when the key is set (verified against the DB)', async () => {
-            process.env.AUDIT_HASH_KEY = 'test-audit-hash-key-0123456789abcdef';
+            process.env.AUDIT_HASH_KEY = TEST_KEY;
 
             const srcId  = await insertSource('audit-src-6');
             const jobId  = await insertJob();
