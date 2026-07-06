@@ -1,11 +1,14 @@
 // Pure unit tests for public/js/utils.js (PulseUtils module).
 // No DB, no browser — runs under jest.pure.config.js.
-// Behavior contracts ported from public/js/map.js (esc: lines 14-21,
-// SENTIMENT_COLORS / SOURCE_PALETTE: lines 25-40).
+// esc/fmtPct/fmtCount contracts ported from public/js/map.js; the color
+// tables re-export the design-handoff tokens from
+// public/js/config/design.config.js; netSentiment/sentimentBucket/fmtNet
+// implement the prototype→API data-model bridge (net = (pos−neg)/total).
 
 'use strict';
 
 const utils = require('../../../public/js/utils');
+const design = require('../../../public/js/config/design.config');
 
 describe('esc()', () => {
     test('escapes all five HTML special characters', () => {
@@ -33,17 +36,21 @@ describe('esc()', () => {
     });
 });
 
-describe('SENTIMENT_COLORS', () => {
-    test('has exactly the three sentiment keys with map.js hex values', () => {
+describe('SENTIMENT_COLORS (re-pointed to the design-config palette)', () => {
+    test('has exactly the three sentiment keys with design-handoff hex values', () => {
         expect(utils.SENTIMENT_COLORS).toEqual({
-            positive: '#62C370',
-            neutral:  '#F5C842',
-            negative: '#B63634',
+            positive: '#3BDCB2',
+            neutral:  '#7E8AA0',
+            negative: '#FF6E5E',
         });
+    });
+
+    test('is the design.config SENTIMENT_PALETTE (single source of truth)', () => {
+        expect(utils.SENTIMENT_COLORS).toEqual(design.SENTIMENT_PALETTE);
     });
 });
 
-describe('SOURCE_PALETTE', () => {
+describe('SOURCE_PALETTE (re-pointed to design-config CAT_COLORS)', () => {
     test('is an array of 8 hex color strings', () => {
         expect(Array.isArray(utils.SOURCE_PALETTE)).toBe(true);
         expect(utils.SOURCE_PALETTE).toHaveLength(8);
@@ -52,11 +59,99 @@ describe('SOURCE_PALETTE', () => {
         }
     });
 
-    test('matches the exact map.js palette in order', () => {
+    test('carries the CAT_COLORS hues in category-key order', () => {
+        expect(utils.SOURCE_PALETTE).toEqual(Object.values(design.CAT_COLORS));
         expect(utils.SOURCE_PALETTE).toEqual([
-            '#60A5FA', '#A78BFA', '#34D399', '#FB923C',
-            '#F472B6', '#FBBF24', '#38BDF8', '#4ADE80',
+            '#FF9F5A', '#5AA9FF', '#C08BFF', '#FF6E9C',
+            '#B8E986', '#3BDCB2', '#7EE0FF', '#F5D95A',
         ]);
+    });
+});
+
+describe('netSentiment()', () => {
+    // Bridge contract: prototype "sentiment −1..1" ≡ (positive − negative) / total.
+    test('computes (positive − negative) / total', () => {
+        expect(utils.netSentiment({ positive: 60, neutral: 20, negative: 20, total: 100 }))
+            .toBeCloseTo(0.4, 10);
+        expect(utils.netSentiment({ positive: 10, neutral: 30, negative: 60, total: 100 }))
+            .toBeCloseTo(-0.5, 10);
+    });
+
+    test('spans the full −1..1 range at the extremes', () => {
+        expect(utils.netSentiment({ positive: 10, neutral: 0, negative: 0, total: 10 })).toBe(1);
+        expect(utils.netSentiment({ positive: 0, neutral: 0, negative: 10, total: 10 })).toBe(-1);
+    });
+
+    test('returns 0 when total is 0 (no NaN from 0/0)', () => {
+        expect(utils.netSentiment({ positive: 0, neutral: 0, negative: 0, total: 0 })).toBe(0);
+    });
+
+    test('returns 0 for missing/non-finite fields instead of NaN', () => {
+        expect(utils.netSentiment({})).toBe(0);
+        expect(utils.netSentiment({ positive: 1, negative: 0, total: NaN })).toBe(0);
+    });
+});
+
+describe('sentimentBucket()', () => {
+    // Partitioned buckets (design.config SENTIMENT_BUCKETS):
+    //   net > 0.1 → positive, net < −0.1 → negative, else neutral.
+    test('classifies clear positives and negatives', () => {
+        expect(utils.sentimentBucket(0.5)).toBe('positive');
+        expect(utils.sentimentBucket(-0.5)).toBe('negative');
+        expect(utils.sentimentBucket(0)).toBe('neutral');
+    });
+
+    test('thresholds themselves are NEUTRAL (strict inequalities partition the axis)', () => {
+        expect(utils.sentimentBucket(0.1)).toBe('neutral');
+        expect(utils.sentimentBucket(-0.1)).toBe('neutral');
+        expect(utils.sentimentBucket(0.1000001)).toBe('positive');
+        expect(utils.sentimentBucket(-0.1000001)).toBe('negative');
+    });
+
+    test('defaults to the design-config thresholds', () => {
+        const { positiveMin, negativeMax } = design.SENTIMENT_BUCKETS;
+        expect(utils.sentimentBucket(positiveMin + 0.001)).toBe('positive');
+        expect(utils.sentimentBucket(negativeMax - 0.001)).toBe('negative');
+    });
+
+    test('accepts explicit thresholds as the second argument (stays pure)', () => {
+        const buckets = { positiveMin: 0.3, negativeMax: -0.3 };
+        expect(utils.sentimentBucket(0.2, buckets)).toBe('neutral');
+        expect(utils.sentimentBucket(0.31, buckets)).toBe('positive');
+        expect(utils.sentimentBucket(-0.31, buckets)).toBe('negative');
+    });
+
+    test('non-finite input is neutral (never a colored lie)', () => {
+        expect(utils.sentimentBucket(NaN)).toBe('neutral');
+        expect(utils.sentimentBucket(undefined)).toBe('neutral');
+    });
+});
+
+describe('fmtNet()', () => {
+    // Prototype fmt(): sign prefix + two decimals, U+2212 minus for negatives.
+    test('formats positives with an explicit plus', () => {
+        expect(utils.fmtNet(0.38)).toBe('+0.38');
+        expect(utils.fmtNet(1)).toBe('+1.00');
+    });
+
+    test('formats negatives with U+2212 MINUS SIGN (not hyphen-minus)', () => {
+        expect(utils.fmtNet(-0.26)).toBe('−0.26');
+        expect(utils.fmtNet(-0.26)).not.toBe('-0.26');
+    });
+
+    test('zero is positive-signed (matches the prototype fmt())', () => {
+        expect(utils.fmtNet(0)).toBe('+0.00');
+    });
+
+    test('rounds to two decimals', () => {
+        expect(utils.fmtNet(0.456)).toBe('+0.46');
+        expect(utils.fmtNet(-0.004)).toBe('−0.00');
+    });
+
+    test('returns em-dash for non-finite input', () => {
+        expect(utils.fmtNet(NaN)).toBe('—');
+        expect(utils.fmtNet(undefined)).toBe('—');
+        expect(utils.fmtNet(Infinity)).toBe('—');
     });
 });
 
@@ -112,7 +207,10 @@ describe('module export shape', () => {
             'SOURCE_PALETTE',
             'esc',
             'fmtCount',
+            'fmtNet',
             'fmtPct',
+            'netSentiment',
+            'sentimentBucket',
         ]);
     });
 });
