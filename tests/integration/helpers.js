@@ -151,6 +151,52 @@ async function insertPostWithFullPipeline(sourceId, jobId, mvIds, {
     return post.id;
 }
 
+// ─── Post with relevance only (no sentiment score) ────────────────────────────
+
+/**
+ * Insert a raw_post with ONLY a relevance result — no sentiment, no discourse.
+ * Models the mid-pipeline state where a post has been keyword-tagged but not
+ * yet (or never) sentiment-scored. Used by themes tests to prove unscored
+ * posts cannot influence per-keyword aggregates.
+ *
+ * @returns {Promise<string>}  UUID of the inserted raw_post
+ */
+async function insertPostWithRelevanceOnly(sourceId, jobId, mvIds, {
+    location    = 'London',
+    externalId  = null,
+    collectedAt = null,
+    keywords    = ['ai', 'machine learning'],
+} = {}) {
+    const content = `Unscored post ${externalId || Math.random()}`;
+    const hash    = crypto.createHash('sha256').update(content).digest('hex');
+    const extId   = externalId || hash.slice(0, 16);
+
+    const post = await dbRun(
+        `INSERT INTO raw_posts (source_id, external_id, content, content_hash, location, collected_at)
+         VALUES ($1, $2, $3, $4, $5, COALESCE($6::timestamptz, NOW()))
+         ON CONFLICT (source_id, external_id) DO UPDATE SET content = EXCLUDED.content
+         RETURNING id`,
+        [sourceId, extId, content, hash, location,
+         collectedAt instanceof Date ? collectedAt.toISOString() : collectedAt],
+    );
+
+    const relAudit = await dbRun(
+        `INSERT INTO decision_audit_log
+            (raw_post_id, job_id, methodology_version_id, decision_type, model_name, input_hash, output)
+         VALUES ($1, $2, $3, 'relevance', 'keyword-relevance-v1', $4, $5::jsonb)
+         RETURNING id`,
+        [post.id, jobId, mvIds.relevanceMvId, hash, JSON.stringify({ score: 0.6 })],
+    );
+    await dbRun(
+        `INSERT INTO relevance_results
+            (raw_post_id, audit_id, score, matched_keywords, is_relevant)
+         VALUES ($1, $2, 0.6, $3::text[], true)`,
+        [post.id, relAudit.id, keywords],
+    );
+
+    return post.id;
+}
+
 // ─── Alert event ──────────────────────────────────────────────────────────────
 
 async function insertAlert({ alertType = 'bias_violation', severity = 'warning' } = {}) {
@@ -168,5 +214,6 @@ module.exports = {
     insertJob,
     insertMethodologyVersions,
     insertPostWithFullPipeline,
+    insertPostWithRelevanceOnly,
     insertAlert,
 };

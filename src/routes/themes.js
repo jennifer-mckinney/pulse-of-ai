@@ -30,9 +30,10 @@ router.get('/themes', async (req, res) => {
         // and the frontend needs real numbers.
         const rows = await dbAll(
             `WITH kw_posts AS (
-                -- one row per (keyword, post): a post tagged with N keywords
-                -- contributes to N themes
-                SELECT unnest(rr.matched_keywords) AS keyword, rr.raw_post_id
+                -- one row per DISTINCT (keyword, post): a post tagged with N
+                -- keywords contributes to N themes, but a keyword repeated in
+                -- one post's matched_keywords array must not double-count
+                SELECT DISTINCT unnest(rr.matched_keywords) AS keyword, rr.raw_post_id
                 FROM relevance_results rr
             ),
             kw_sentiment AS (
@@ -59,8 +60,15 @@ router.get('/themes', async (req, res) => {
                            ORDER BY cnt DESC, category ASC
                        ) AS rn
                 FROM (
+                    -- Same sentiment_results join as kw_sentiment so the
+                    -- modal category is computed over the IDENTICAL post set
+                    -- as volume and the sentiment split — unscored posts
+                    -- (relevance-tagged, not yet sentiment-scored) must not
+                    -- flip top_category toward a category that contributed
+                    -- nothing to the counts shown next to it
                     SELECT kp.keyword, ds.category, COUNT(*) AS cnt
                     FROM kw_posts kp
+                    JOIN sentiment_results sr ON sr.raw_post_id = kp.raw_post_id
                     JOIN raw_posts rp    ON rp.id = kp.raw_post_id
                     JOIN data_sources ds ON ds.id = rp.source_id
                     GROUP BY kp.keyword, ds.category

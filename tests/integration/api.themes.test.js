@@ -7,7 +7,10 @@
 
 const request = require('supertest');
 const app     = require('../../src/server');
-const { insertSource, insertJob, insertMethodologyVersions, insertPostWithFullPipeline } = require('./helpers');
+const {
+    insertSource, insertJob, insertMethodologyVersions,
+    insertPostWithFullPipeline, insertPostWithRelevanceOnly,
+} = require('./helpers');
 
 describe('GET /api/themes', () => {
     it('returns 200 with an empty array when no relevance results exist', async () => {
@@ -88,6 +91,68 @@ describe('GET /api/themes', () => {
             volume:       3,
             top_category: 'social',
         });
+    });
+
+    it('top_category counts only sentiment-scored posts (unscored posts cannot flip the modal category)', async () => {
+        const news   = await insertSource('themes-news-3',   'news');
+        const social = await insertSource('themes-social-4', 'social');
+        const jobId  = await insertJob();
+        const mvIds  = await insertMethodologyVersions();
+
+        // "divide": 3 SCORED news posts vs 4 UNSCORED (relevance-only) social
+        // posts. volume/positive/... already count scored posts only, so the
+        // modal category must be computed over the SAME post set — otherwise
+        // the unscored social posts flip top_category to a category that
+        // contributed nothing to the numbers shown next to it.
+        await insertPostWithFullPipeline(news, jobId, mvIds,
+            { indicator: 'positive', externalId: 'th-d1', keywords: ['divide'] });
+        await insertPostWithFullPipeline(news, jobId, mvIds,
+            { indicator: 'positive', externalId: 'th-d2', keywords: ['divide'] });
+        await insertPostWithFullPipeline(news, jobId, mvIds,
+            { indicator: 'negative', externalId: 'th-d3', keywords: ['divide'] });
+        for (let i = 1; i <= 4; i++) {
+            await insertPostWithRelevanceOnly(social, jobId, mvIds,
+                { externalId: `th-du${i}`, keywords: ['divide'] });
+        }
+
+        const res = await request(app).get('/api/themes');
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual([
+            {
+                keyword:      'divide',
+                volume:       3,
+                positive:     2,
+                neutral:      0,
+                negative:     1,
+                top_category: 'news',
+            },
+        ]);
+    });
+
+    it('duplicate matched_keywords entries on one post do not double-count', async () => {
+        const social = await insertSource('themes-social-5', 'social');
+        const jobId  = await insertJob();
+        const mvIds  = await insertMethodologyVersions();
+
+        // Each post matches 'dup' twice in its keyword array; volume counts
+        // POSTS, so three posts must yield volume 3, not 6.
+        for (let i = 1; i <= 3; i++) {
+            await insertPostWithFullPipeline(social, jobId, mvIds,
+                { indicator: 'positive', externalId: `th-dd${i}`, keywords: ['dup', 'dup'] });
+        }
+
+        const res = await request(app).get('/api/themes');
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual([
+            {
+                keyword:      'dup',
+                volume:       3,
+                positive:     3,
+                neutral:      0,
+                negative:     0,
+                top_category: 'social',
+            },
+        ]);
     });
 
     it('excludes keywords with volume below 3', async () => {
