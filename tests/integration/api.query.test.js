@@ -180,4 +180,18 @@ describe('POST /api/query', () => {
         expect(res.status).toBe(400);
         expect(res.body).toEqual({ error: 'location must be a string' });
     });
+
+    it('returns 400 when location is an empty string', async () => {
+        // '' is falsy, so without an explicit guard it silently skipped the
+        // filter and returned ALL posts — a caller error must fail loudly.
+        const res = await request(app).post('/api/query').send({ location: '' });
+        expect(res.status).toBe(400);
+        expect(res.body).toEqual({ error: 'location must be a non-empty string' });
+    });
+
+    it('returns 400 when location is whitespace-only', async () => {
+        const res = await request(app).post('/api/query').send({ location: '   ' });
+        expect(res.status).toBe(400);
+        expect(res.body).toEqual({ error: 'location must be a non-empty string' });
+    });
 });
