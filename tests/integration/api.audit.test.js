@@ -4,6 +4,7 @@
 
 'use strict';
 
+const crypto  = require('crypto');
 const request = require('supertest');
 const app     = require('../../src/server');
 const { insertSource, insertJob, insertMethodologyVersions, insertPostWithFullPipeline } = require('./helpers');
@@ -83,6 +84,42 @@ describe('GET /api/audit/:post_id', () => {
             justification:        expect.any(String),
             output:               expect.any(Object),
             created_at:           expect.any(String),
+        });
+    });
+
+    it('each decision exposes the methodology config and the input hash', async () => {
+        const srcId  = await insertSource('audit-src-5');
+        const jobId  = await insertJob();
+        const mvIds  = await insertMethodologyVersions();
+        const postId = await insertPostWithFullPipeline(srcId, jobId, mvIds, { externalId: 'aud-5' });
+
+        // The helper hashes the generated content with SHA-256 and stores it as
+        // decision_audit_log.input_hash for every decision. Recompute it here so
+        // the assertion checks the VALUE, not just the field's presence.
+        const expectedHash = crypto
+            .createHash('sha256')
+            .update('Test post aud-5')
+            .digest('hex');
+
+        const res = await request(app).get(`/api/audit/${postId}`);
+        expect(res.status).toBe(200);
+
+        // Every decision carries its input fingerprint
+        for (const decision of res.body.decisions) {
+            expect(decision.input_hash).toBe(expectedHash);
+            expect(decision.config).toEqual(expect.any(Object));
+        }
+
+        // Config must be the exact methodology_versions.config JSONB the helper seeded
+        const sentDec = res.body.decisions.find(d => d.decision_type === 'sentiment');
+        expect(sentDec.config).toEqual({
+            positive_threshold: 0.05,
+            negative_threshold: -0.05,
+        });
+
+        const relDec = res.body.decisions.find(d => d.decision_type === 'relevance');
+        expect(relDec.config).toEqual({
+            keywords: ['ai', 'machine learning'],
         });
     });
 });
