@@ -112,4 +112,72 @@ describe('POST /api/query', () => {
             limit:    10,
         });
     });
+
+    // ─── location filter ──────────────────────────────────────────────────────
+
+    it('filters by location (exact match) and echoes it in query', async () => {
+        const srcId = await insertSource('query-loc-1');
+        const jobId = await insertJob();
+        const mvIds = await insertMethodologyVersions();
+
+        await insertPostWithFullPipeline(srcId, jobId, mvIds, { location: 'Mumbai', externalId: 'qloc-m1' });
+        await insertPostWithFullPipeline(srcId, jobId, mvIds, { location: 'Mumbai', externalId: 'qloc-m2' });
+        await insertPostWithFullPipeline(srcId, jobId, mvIds, { location: 'London', externalId: 'qloc-l1' });
+
+        const res = await request(app).post('/api/query').send({ location: 'Mumbai' });
+
+        expect(res.status).toBe(200);
+        expect(res.body.total).toBe(2);
+        for (const row of res.body.results) {
+            expect(row.location).toBe('Mumbai');
+        }
+        expect(res.body.query.location).toBe('Mumbai');
+    });
+
+    it('location filter combines with platform and limit', async () => {
+        const social = await insertSource('query-loc-social', 'social');
+        const news   = await insertSource('query-loc-news',   'news');
+        const jobId  = await insertJob();
+        const mvIds  = await insertMethodologyVersions();
+
+        // Three Mumbai/social posts, one Mumbai/news post, one London/social post
+        await insertPostWithFullPipeline(social, jobId, mvIds, { location: 'Mumbai', externalId: 'qlc-s1' });
+        await insertPostWithFullPipeline(social, jobId, mvIds, { location: 'Mumbai', externalId: 'qlc-s2' });
+        await insertPostWithFullPipeline(social, jobId, mvIds, { location: 'Mumbai', externalId: 'qlc-s3' });
+        await insertPostWithFullPipeline(news,   jobId, mvIds, { location: 'Mumbai', externalId: 'qlc-n1' });
+        await insertPostWithFullPipeline(social, jobId, mvIds, { location: 'London', externalId: 'qlc-s4' });
+
+        const res = await request(app)
+            .post('/api/query')
+            .send({ location: 'Mumbai', platform: 'social', limit: 2 });
+
+        expect(res.status).toBe(200);
+        expect(res.body.results).toHaveLength(2);
+        for (const row of res.body.results) {
+            expect(row.location).toBe('Mumbai');
+            expect(row.platform).toBe('social');
+        }
+        expect(res.body.query).toMatchObject({ location: 'Mumbai', platform: 'social', limit: 2 });
+    });
+
+    it('behaves unchanged when location is absent (echoed as null)', async () => {
+        const srcId = await insertSource('query-loc-2');
+        const jobId = await insertJob();
+        const mvIds = await insertMethodologyVersions();
+
+        await insertPostWithFullPipeline(srcId, jobId, mvIds, { location: 'Mumbai', externalId: 'qla-1' });
+        await insertPostWithFullPipeline(srcId, jobId, mvIds, { location: 'London', externalId: 'qla-2' });
+
+        const res = await request(app).post('/api/query').send({});
+
+        expect(res.status).toBe(200);
+        expect(res.body.total).toBe(2);
+        expect(res.body.query.location).toBeNull();
+    });
+
+    it('returns 400 when location is not a string', async () => {
+        const res = await request(app).post('/api/query').send({ location: 123 });
+        expect(res.status).toBe(400);
+        expect(res.body).toEqual({ error: 'location must be a string' });
+    });
 });
