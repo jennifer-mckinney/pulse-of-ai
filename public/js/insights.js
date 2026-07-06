@@ -356,37 +356,64 @@
     }
 
     // ── Chapter card templates ──────────────────────────────────────────────────
-    // One entry per story chapter (see public/js/chapters.js). Tokens are
-    // resolved by resolveChapter() from computeInsights() output; renderTemplate
-    // throws on any token it cannot resolve, so a typo here fails tests loudly.
+    // One entry per story beat (PulseStoryConfig.STORY, resolved by
+    // public/js/chapters.js). Body copy is VERBATIM from the design handoff
+    // prototype (design_handoff_pulse_of_ai/data.js buildChapters()) with
+    // computed interpolations converted to {token} placeholders; the
+    // prototype's "sentiment" values map to NET sentiment
+    // ((positive − negative) / total, formatted ±0.00 via utils.fmtNet).
+    // renderTemplate throws on any token it cannot resolve, so a typo here
+    // fails tests loudly.
     const TEMPLATES = {
         overview:
-            'The world is talking about AI. {totalPosts} posts across ' +
-            '{cityCount} cities — {positivePct} positive, {negativePct} negative. ' +
-            'Scroll to see where the conversation is loudest, warmest, and most wary.',
+            '50 sources. 7 categories. {cityCount} cities reporting in the ' +
+            'last hour — every dot sized by volume, colored by sentiment. ' +
+            'Scroll to read the pulse.',
         volume:
-            '{volumeCity} leads the conversation with {volumeTotal} posts — ' +
-            'more than any other city tracked. {volumeSharePct} of everything ' +
-            'we analyzed comes from this one place.',
-        positivity:
-            'Nowhere is the mood brighter than {positiveCity}, where ' +
-            '{positiveSharePct} of posts lean positive — {positiveDeltaPct} ' +
-            'above the global average.',
-        negativity:
-            '{negativeCity} is the most skeptical city on the map: ' +
-            '{negativeSharePct} of its posts lean negative, {negativeDeltaPct} ' +
-            'above the global average.',
+            '{volumeCity1} leads the world at {volumeCount1} posts/hr, with ' +
+            '{volumeCity2} ({volumeCount2}) and {volumeCity3} ({volumeCount3}) ' +
+            'close behind. Together the top three carry {topThreeSharePct} of ' +
+            'everything measured this hour.',
         divide:
-            'The divide is real. In {ratioHighCity} the positive-to-negative ' +
-            'ratio runs {ratioHigh} to 1; in {ratioLowCity} it collapses to ' +
-            '{ratioLow} to 1. Same technology, opposite moods.',
-        sources:
-            '{dominantCategory} sources drive {dominantCategoryPct} of global ' +
-            'coverage. The most single-voice city is {concentrationCity}, where ' +
-            '{concentrationSource} alone accounts for {concentrationPct} of posts.',
+            'In {divideCity}, {divideHiCategory} sources run at {divideHiNet} ' +
+            'while {divideLoCategory} coverage sits at {divideLoNet} — a ' +
+            '{divideSpan} divergence, the widest split between source ' +
+            'categories anywhere on the globe.',
+        negativity:
+            '{negCity1} runs the coolest sentiment on the map ({negNet1}), ' +
+            'where {negCategory1} discourse dominates — followed by {negCity2} ' +
+            '({negNet2}) and {negCity3} ({negNet3}). Every one of these scores ' +
+            'has a receipt. Pull one:',
+        positivity:
+            'And the warmest: {posCity1} ({posNet1}), {posCity2} ({posNet2}), ' +
+            '{posCity3} ({posNet3}) — all three led by builder communities ' +
+            'posting their own results. The good news has receipts too. Pull one:',
+        drivers:
+            'Recolor the map by dominant source and the pattern jumps out: ' +
+            '{catShare1Category} sources carry {catShare1Pct} of global volume ' +
+            'this hour, with {catShare2Category} at {catShare2Pct}. Each dot ' +
+            'now wears the color of the loudest voice in its city.',
+        'themes-warm':
+            'Zoom past cities and the conversation splits into themes. The ' +
+            'warm ones are concrete: people shipping agents, clinics piloting ' +
+            'triage, models running on-device. The map lights up where these ' +
+            'themes live.',
+        'themes-cold':
+            'The cold themes are structural: regulation deadlines, jobs and ' +
+            'displacement, the slow grind of safety evals. Now the map shows ' +
+            'where the worry concentrates — policy and news capitals.',
+        messengers:
+            '{msgHiCategory} sources run warmest this hour ({msgHiNet}), led ' +
+            'by {msgHiSource}. {msgLoCategory} sources run coldest ' +
+            '({msgLoNet}), led by {msgLoSource}. Same hour, same cities — a ' +
+            '{msgGap} gap depending on who’s talking.',
+        summary:
+            '{totalPosts} posts across 7 source categories. Global mood ' +
+            '{globalNet}. {warmestCity} ran warmest, {coolestCity} coolest — ' +
+            'and the biggest story wasn’t a place, it was the gap between ' +
+            'messengers. Every number above has a receipt behind it.',
         explore:
-            'Now it is your turn. Drag the globe, hover the bars, and filter by ' +
-            'sentiment or source category to explore all {cityCount} cities yourself.',
+            'The story’s over — the data isn’t. Try these:',
     };
 
     // Interpolate {token} placeholders. Throws on unknown tokens instead of

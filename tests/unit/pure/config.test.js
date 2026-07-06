@@ -9,15 +9,12 @@
 //     thresholds that PARTITION the sentiment axis (no overlap).
 //   - api: every endpoint the story frontend calls, plus polling constants.
 //
-// NOTE: the "every templateId exists in PulseInsights.TEMPLATES" cross-check
-// is added when B3 lands the 11-beat template set (see the cross-module
-// describe block at the bottom).
-
 'use strict';
 
 const story = require('../../../public/js/config/story.config');
 const design = require('../../../public/js/config/design.config');
 const api = require('../../../public/js/config/api.config');
+const insights = require('../../../public/js/insights');
 
 const { STORY } = story;
 
@@ -218,6 +215,27 @@ describe('story.config — STORY beat sequence', () => {
 
     test('module is data-only (no functions anywhere in the tree)', () => {
         assertNoFunctions(story, 'PulseStoryConfig');
+    });
+
+    test('every templateId exists in PulseInsights.TEMPLATES (cross-module)', () => {
+        for (const b of STORY) {
+            expect(insights.TEMPLATES).toHaveProperty(b.templateId);
+        }
+    });
+
+    test('every statsSpec token appears in no template-unknown form', () => {
+        // statsSpec strings must only reference {tokens}; renderTemplate is
+        // the runtime enforcer, this just pins the declarative shape.
+        for (const b of STORY) {
+            for (const [label, value] of b.statsSpec) {
+                for (const part of [label, value]) {
+                    // braces, if any, must wrap well-formed token names
+                    const stripped = part.replace(/\{[A-Za-z0-9_]+\}/g, '');
+                    expect(stripped).not.toContain('{');
+                    expect(stripped).not.toContain('}');
+                }
+            }
+        }
     });
 });
 

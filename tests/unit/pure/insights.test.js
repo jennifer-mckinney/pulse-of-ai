@@ -656,14 +656,28 @@ describe('renderTemplate()', () => {
     });
 });
 
-describe('TEMPLATES — one entry per story chapter', () => {
+describe('TEMPLATES — one entry per story beat', () => {
     const CHAPTER_IDS = [
-        'overview', 'volume', 'positivity', 'negativity',
-        'divide', 'sources', 'explore',
+        'overview', 'volume', 'divide', 'negativity', 'positivity',
+        'drivers', 'themes-warm', 'themes-cold', 'messengers',
+        'summary', 'explore',
     ];
 
-    test('has exactly the seven chapter template ids', () => {
+    test('has exactly the eleven story-beat template ids', () => {
         expect(Object.keys(TEMPLATES).sort()).toEqual([...CHAPTER_IDS].sort());
+    });
+
+    test('carries the verbatim prototype copy on the tokenless beats', () => {
+        expect(TEMPLATES['themes-warm']).toBe(
+            'Zoom past cities and the conversation splits into themes. '
+            + 'The warm ones are concrete: people shipping agents, clinics '
+            + 'piloting triage, models running on-device. The map lights up '
+            + 'where these themes live.');
+        expect(TEMPLATES['themes-cold']).toBe(
+            'The cold themes are structural: regulation deadlines, jobs and '
+            + 'displacement, the slow grind of safety evals. Now the map shows '
+            + 'where the worry concentrates — policy and news capitals.');
+        expect(TEMPLATES['explore']).toBe('The story’s over — the data isn’t. Try these:');
     });
 
     test('every template is a non-empty string that renders without residue', () => {
