@@ -26,7 +26,7 @@ Every score shown anywhere in the product is traceable to the model, version, pa
 
 Personas are taken from the MVP requirements as restated in spec §11.
 
-### P1— The General Public (secondary)
+### P1 — The General Public (secondary)
 - **Goal:** understand how the world feels about AI without any technical background.
 - **Flow:** the scroll story does the interpretive work — each chapter states one insight in plain language over an animated globe; free-explore afterwards invites self-directed discovery.
 
@@ -69,7 +69,7 @@ Personas are taken from the MVP requirements as restated in spec §11.
 
 ### 4.3 Storytelling Frontend (globe.gl — approved design, 2026-07-05)
 
-The frontend is the primary experience for P1 and P4. Source: `docs/plans/2026-07-05-globe-storytelling-design.md`; it is also the execution vehicle for spec §11's scroll-driven narrative.
+The frontend is the primary experience for P1 and P2. Source: `docs/plans/2026-07-05-globe-storytelling-design.md`; it is also the execution vehicle for spec §11's scroll-driven narrative.
 
 | ID | Requirement |
 |---|---|
