@@ -60,6 +60,9 @@ jobs:
       CORRELATION_MIN_CONFIDENCE: "0.85"
       # Deterministic all-zeros salt — safe for test-only; not a production secret
       CORRELATION_SALT: "0000000000000000000000000000000000000000000000000000000000000000"
+      # CI-only HMAC key so /api/audit's keyed input_hash path is exercised in CI.
+      # NOT a production secret — production sets its own via deployment env (see .env.example).
+      AUDIT_HASH_KEY: 'ci-only-0f3a9c2e7b514d86a1c0e9d2b7f4a8c3'
 
     steps:
       - name: Checkout
