@@ -4,9 +4,14 @@
 // Returns the full decision trail for a single raw post.
 // This is the explainability endpoint — every inference is traceable to:
 //   - The exact model and version used
-//   - The input hash (content fingerprint, not raw content)
+//   - The input fingerprint (keyed — see below; never raw content)
 //   - The full scored output
 //   - The plain-English justification from methodology_versions
+//
+// input_hash exposure: decision_audit_log.input_hash stores an UNSALTED
+// SHA-256 of post content — internal immutable join key, never modified.
+// The API exposes HMAC-SHA256(AUDIT_HASH_KEY, storedHash) instead; when the
+// key is unset the field is OMITTED entirely (never raw).
 //
 // Returns:
 //   200 { post: {...}, decisions: [...] }
@@ -16,10 +21,21 @@
 
 'use strict';
 
+const crypto           = require('crypto');
 const { Router }       = require('express');
 const { dbGet, dbAll } = require('../db/connection');
 
 const router = Router();
+
+// Route-init warning (once): without a key the endpoint silently drops the
+// input fingerprint, which operators should know about before wondering why
+// external consumers can't see it.
+if (!process.env.AUDIT_HASH_KEY) {
+    console.warn(
+        '[audit] AUDIT_HASH_KEY is not set — input_hash will be omitted from '
+        + '/api/audit responses. Generate one with: openssl rand -hex 32',
+    );
+}
 
 // UUID v4 regex — used to validate path params before hitting the DB
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -70,6 +86,26 @@ router.get('/audit/:post_id', async (req, res) => {
             [post_id],
         );
 
+        // input_hash is keyed to prevent offline hash-confirmation of post
+        // content (security review L1, 2026-07-06): the stored value is an
+        // unsalted SHA-256 of the content, so returning it raw would let
+        // anyone confirm a guessed post text offline. External log consumers
+        // verify content in their own systems; the DB value stays untouched
+        // as the internal immutable join key. Key read per-request so tests
+        // (and rotations) see the current environment.
+        const auditKey = process.env.AUDIT_HASH_KEY;
+        const exposed = decisions.map((d) => {
+            const { input_hash, ...rest } = d;
+            if (!auditKey) return rest;  // no key → omit, NEVER fall back to raw
+            return {
+                ...rest,
+                input_hash: crypto
+                    .createHmac('sha256', auditKey)
+                    .update(input_hash)
+                    .digest('hex'),
+            };
+        });
+
         return res.json({
             post: {
                 id:              post.id,
@@ -79,7 +115,7 @@ router.get('/audit/:post_id', async (req, res) => {
                 source_name:     post.source_name,
                 collected_at:    post.collected_at,
             },
-            decisions,
+            decisions: exposed,
         });
     } catch (err) {
         console.error('[audit] Error:', err.message);
