@@ -235,6 +235,26 @@ describe('resolveChapter() over DEMO_DATA', () => {
         expect(r.cardBody).toContain(`a ${(hi.net - lo.net).toFixed(2)} gap`);
     });
 
+    test('summary card and summaryTrio share ONE coolest-city definition under a net tie', () => {
+        // CoolBig and CoolSmall tie on net (−0.50); rankByNet(cities, −1)
+        // breaks the tie by HIGHER total → CoolBig. The card copy must name
+        // the same city the highlight rule spotlights — deriving coolest as
+        // "last of the warm ranking" flips the tie-break to CoolSmall.
+        const cities = data.normalizeCities([
+            { city: 'Warm', lat: 0, lng: 0,
+              positive: 15, neutral: 0, negative: 5, total: 20, sources: [] },
+            { city: 'CoolBig', lat: 10, lng: 10,
+              positive: 10, neutral: 0, negative: 30, total: 40, sources: [] },
+            { city: 'CoolSmall', lat: 20, lng: 20,
+              positive: 5, neutral: 0, negative: 15, total: 20, sources: [] },
+        ]);
+        const ins = computeInsights(cities);
+        const r = resolveChapter(beat('summary'), ins, cities);
+        expect(r.highlightCities.map(c => c.city)).toContain('CoolBig');
+        expect(r.cardBody).toContain('CoolBig coolest');
+        expect(r.cardBody).not.toContain('CoolSmall');
+    });
+
     test('explore beat carries nextSteps as an independent copy', () => {
         const b = beat('explore');
         const r = resolveChapter(b, demoInsights, demoCities);

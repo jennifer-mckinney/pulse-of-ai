@@ -238,7 +238,11 @@
             // not an hour-in-review. Fall back instead.
             if (ranked.length < 2 || ins.globalTotals.total === 0) return null;
             const warmest = ranked[0];
-            const coolest = ranked[ranked.length - 1];
+            // Same coolest definition as the summaryTrio highlight rule —
+            // taking the LAST of the warm ranking would flip the tie-break
+            // (net ties resolve by higher total in BOTH directions), letting
+            // the card name a different city than the globe spotlights.
+            const coolest = rankByNet(cities, -1)[0];
             return {
                 totalPosts: fmtCount(ins.globalTotals.total),
                 globalNet: fmtNet(netSentiment(ins.globalTotals)),
