@@ -98,6 +98,12 @@ router.get('/sources/timeseries', async (req, res) => {
                 JOIN sentiment_results sr ON sr.raw_post_id = rp.id
                 JOIN data_sources ds      ON ds.id = rp.source_id
                 WHERE rp.collected_at >= date_trunc('hour', NOW()) - ($1::int - 1) * INTERVAL '1 hour'
+                  -- Upper bound: end of the CURRENT hour (the newest bucket).
+                  -- Future-timestamped rows (bad upstream clocks) truncate to
+                  -- buckets that are never returned, but without this bound
+                  -- they still put their category into counts — resurrecting
+                  -- it as an all-zero series via the cross join below.
+                  AND rp.collected_at < date_trunc('hour', NOW()) + INTERVAL '1 hour'
                 GROUP BY ds.category, date_trunc('hour', rp.collected_at)
             )
             SELECT

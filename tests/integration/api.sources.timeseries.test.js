@@ -138,6 +138,25 @@ describe('GET /api/sources/timeseries', () => {
         expect(res.body.map(e => e.category)).toEqual(['social']);
     });
 
+    it('omits categories whose only posts are future-timestamped (no all-zero resurrection)', async () => {
+        const future = await insertSource('ts-future',  'futurecat');
+        const social = await insertSource('ts-present', 'social');
+        const jobId  = await insertJob();
+        const mvIds  = await insertMethodologyVersions();
+
+        // Future-timestamped row (bad upstream clock / ingestion bug), 2h ahead:
+        // it can never match a returned bucket, so without an upper bound on the
+        // counts window its category came back as an all-zero series.
+        await insertPostWithFullPipeline(future, jobId, mvIds,
+            { externalId: 'ts-f1', collectedAt: new Date(Date.now() + 2 * 60 * 60 * 1000) });
+        await insertPostWithFullPipeline(social, jobId, mvIds,
+            { externalId: 'ts-f2', collectedAt: minutesAgo(5) });
+
+        const res = await request(app).get('/api/sources/timeseries');
+        expect(res.status).toBe(200);
+        expect(res.body.map(e => e.category)).toEqual(['social']);
+    });
+
     it('clamps hours above 48 down to 48', async () => {
         const social = await insertSource('ts-clamp-hi', 'social');
         const jobId  = await insertJob();
@@ -154,8 +173,13 @@ describe('GET /api/sources/timeseries', () => {
         const social = await insertSource('ts-clamp-lo', 'social');
         const jobId  = await insertJob();
         const mvIds  = await insertMethodologyVersions();
+        // Hour-aligned INSIDE the current hour — a 1-bucket window only spans
+        // the current clock hour, so minutesAgo(5) landed in the PREVIOUS
+        // hour whenever the test ran in an hour's first five minutes (flaky
+        // near rollovers). The bucket start is inside the window by
+        // construction, whatever the wall clock says.
         await insertPostWithFullPipeline(social, jobId, mvIds,
-            { externalId: 'ts-c2', collectedAt: minutesAgo(5) });
+            { externalId: 'ts-c2', collectedAt: hourFloor(new Date()) });
 
         const res = await request(app).get('/api/sources/timeseries?hours=0');
         expect(res.status).toBe(200);
