@@ -35,6 +35,12 @@ router.post('/query', async (req, res) => {
         if (location !== null && location !== undefined && typeof location !== 'string') {
             return res.status(400).json({ error: 'location must be a string' });
         }
+        // Empty / whitespace-only strings are caller errors: '' is falsy, so
+        // it would silently skip the filter below and return ALL posts
+        // instead of the (impossible) exact match the caller asked for.
+        if (typeof location === 'string' && location.trim() === '') {
+            return res.status(400).json({ error: 'location must be a non-empty string' });
+        }
 
         const parsedLimit = parseInt(limit, 10);
         if (isNaN(parsedLimit) || parsedLimit < 1) {

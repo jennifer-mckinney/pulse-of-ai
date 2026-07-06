@@ -15,6 +15,17 @@
 }(typeof self !== 'undefined' ? self : this, function () {
     'use strict';
 
+    // Deep-freeze: config is shared, data-only state — a consumer mutating
+    // the endpoint map would silently corrupt every other module. Frozen
+    // exports make mutation attempts throw in strict mode instead.
+    function deepFreeze(node) {
+        if (node && typeof node === 'object' && !Object.isFrozen(node)) {
+            Object.freeze(node);
+            for (const key of Object.keys(node)) deepFreeze(node[key]);
+        }
+        return node;
+    }
+
     const ENDPOINTS = {
         aggregated:  '/api/posts/aggregated-by-location', // city sentiment snapshot
         query:       '/api/query',                        // per-city post drill-down
@@ -37,5 +48,5 @@
     // Hours of history requested for the source-ribbon sparklines.
     const TIMESERIES_HOURS = 12;
 
-    return { ENDPOINTS, REFRESH_MS, CITY_POSTS_LIMIT, TIMESERIES_HOURS };
+    return deepFreeze({ ENDPOINTS, REFRESH_MS, CITY_POSTS_LIMIT, TIMESERIES_HOURS });
 }));

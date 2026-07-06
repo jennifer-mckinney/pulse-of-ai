@@ -613,6 +613,43 @@ describe('partitionThemes(themes, mode)', () => {
         expect(ids.size).toBe(themes.length);
     });
 
+    test('consumes /api/themes-shaped rows (net derived from positive/negative/volume)', () => {
+        // Actual API response shape — mirrors the rows asserted by
+        // tests/integration/api.themes.test.js: no `net`, no `sent`, just
+        // {keyword, volume, positive, neutral, negative, top_category}.
+        const apiRows = [
+            { keyword: 'regulation', volume: 4, positive: 2, neutral: 1,
+              negative: 1, top_category: 'news' },      // net (2−1)/4 = 0.25
+            { keyword: 'jobs', volume: 3, positive: 0, neutral: 0,
+              negative: 3, top_category: 'social' },    // net −1
+            { keyword: 'agents', volume: 10, positive: 8, neutral: 1,
+              negative: 1, top_category: 'developer' }, // net 0.7
+            { keyword: 'safety', volume: 10, positive: 3, neutral: 5,
+              negative: 2, top_category: 'policy' },    // net 0.1 (boundary → warm)
+        ];
+        expect(partitionThemes(apiRows, 'warm').map(t => t.keyword))
+            .toEqual(['agents', 'regulation', 'safety']); // warmest first
+        expect(partitionThemes(apiRows, 'cold').map(t => t.keyword))
+            .toEqual(['jobs']);
+        // Partition invariant holds for the API shape too
+        expect(partitionThemes(apiRows, 'warm').length
+            + partitionThemes(apiRows, 'cold').length).toBe(apiRows.length);
+    });
+
+    test('API rows with zero volume fall back to net 0 (cold, no NaN)', () => {
+        const rows = [{ keyword: 'ghost', volume: 0, positive: 0, neutral: 0,
+            negative: 0, top_category: 'social' }];
+        expect(partitionThemes(rows, 'cold').map(t => t.keyword)).toEqual(['ghost']);
+        expect(partitionThemes(rows, 'warm')).toEqual([]);
+    });
+
+    test('explicit net wins over a derivable positive/negative/volume triple', () => {
+        // A row carrying BOTH must honor the precomputed net, not re-derive.
+        const rows = [{ keyword: 'mixed', net: -0.5,
+            volume: 10, positive: 9, neutral: 0, negative: 1 }];
+        expect(partitionThemes(rows, 'cold').map(t => t.keyword)).toEqual(['mixed']);
+    });
+
     test('accepts prototype-shaped themes carrying `sent` instead of `net`', () => {
         const proto = [
             { id: 'a', sent: 0.34 },

@@ -931,7 +931,7 @@ raw_posts.id
 | Journalist | "Why does this city score negative?" | Plain English: negative words found, model used, threshold explanation |
 | Regulator | "What algorithm made this decision?" | Model name, version, config JSONB, justification, date effective |
 | Internal audit | "Did methodology change between runs?" | methodology_versions.deprecated_at shows when and processing_jobs links each run to its version |
-| Researcher | "Can I reproduce this score?" | input_hash + model_name + config + output — full reproducibility trace |
+| Researcher | "Can I reproduce this score?" | input fingerprint (keyed) + model_name + config + output — reproducibility trace. The API exposes `input_hash` as HMAC-SHA256(`AUDIT_HASH_KEY`, stored hash), never the raw content hash (prevents offline hash-confirmation of post content); consumers verify content in their own systems |
 
 ### Methodology Seeding
 Before any inference runs, `scripts/seed.js` inserts the initial methodology versions:

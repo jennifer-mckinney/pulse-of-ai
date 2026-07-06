@@ -320,8 +320,12 @@
     //   'cold' → net < 0.1, sorted coldest first
     // Together the two modes PARTITION the list (no overlap, no loss).
     // Accepts rows carrying `net`, falling back to the prototype's `sent`
-    // field so the bundled demo themes work unchanged. Throws on an unknown
-    // mode — a typo must fail tests loudly, not silently render nothing.
+    // field so the bundled demo themes work unchanged, then to the actual
+    // /api/themes response shape ({keyword, volume, positive, neutral,
+    // negative, top_category}) by deriving net = (positive − negative) /
+    // volume — without this, live API rows would all silently score 0 and
+    // land in the cold half. Throws on an unknown mode — a typo must fail
+    // tests loudly, not silently render nothing.
     function partitionThemes(themes, mode) {
         if (mode !== 'warm' && mode !== 'cold') {
             throw new Error(`partitionThemes: unknown mode "${mode}"`);
@@ -330,6 +334,10 @@
         const netOf = (t) => {
             if (t && Number.isFinite(t.net)) return t.net;
             if (t && Number.isFinite(t.sent)) return t.sent; // prototype shape
+            if (t && Number.isFinite(t.positive) && Number.isFinite(t.negative)
+                && Number.isFinite(t.volume) && t.volume > 0) {
+                return (t.positive - t.negative) / t.volume;  // /api/themes shape
+            }
             return 0;
         };
         const picked = list.filter(t => mode === 'warm'
@@ -365,10 +373,14 @@
     // renderTemplate throws on any token it cannot resolve, so a typo here
     // fails tests loudly.
     const TEMPLATES = {
+        // The prototype opened with a hardcoded "50 sources. 7 categories."
+        // — neither claim is derivable from the aggregation payload (source
+        // count isn't in it at all), so the copy now interpolates the REAL
+        // category count and drops the source count entirely.
         overview:
-            '50 sources. 7 categories. {cityCount} cities reporting in the ' +
-            'last hour — every dot sized by volume, colored by sentiment. ' +
-            'Scroll to read the pulse.',
+            '{categoryCount} source categories. {cityCount} cities reporting ' +
+            'in the last hour — every dot sized by volume, colored by ' +
+            'sentiment. Scroll to read the pulse.',
         volume:
             '{volumeCity1} leads the world at {volumeCount1} posts/hr, with ' +
             '{volumeCity2} ({volumeCount2}) and {volumeCity3} ({volumeCount3}) ' +
@@ -384,10 +396,14 @@
             'where {negCategory1} discourse dominates — followed by {negCity2} ' +
             '({negNet2}) and {negCity3} ({negNet3}). Every one of these scores ' +
             'has a receipt. Pull one:',
+        // The prototype asserted "all three led by builder communities
+        // posting their own results" — an editorial claim the data cannot
+        // back. Mirrors the negativity pattern instead: name the dominant
+        // source category of the warmest city.
         positivity:
-            'And the warmest: {posCity1} ({posNet1}), {posCity2} ({posNet2}), ' +
-            '{posCity3} ({posNet3}) — all three led by builder communities ' +
-            'posting their own results. The good news has receipts too. Pull one:',
+            'And the warmest: {posCity1} ({posNet1}), where {posCategory1} ' +
+            'discourse dominates — with {posCity2} ({posNet2}) and {posCity3} ' +
+            '({posNet3}) close behind. The good news has receipts too. Pull one:',
         drivers:
             'Recolor the map by dominant source and the pattern jumps out: ' +
             '{catShare1Category} sources carry {catShare1Pct} of global volume ' +
@@ -407,8 +423,10 @@
             'by {msgHiSource}. {msgLoCategory} sources run coldest ' +
             '({msgLoNet}), led by {msgLoSource}. Same hour, same cities — a ' +
             '{msgGap} gap depending on who’s talking.',
+        // "7 source categories" was hardcoded in the prototype; the count
+        // now derives from the ribbon model (see chapters.js summary builder).
         summary:
-            '{totalPosts} posts across 7 source categories. Global mood ' +
+            '{totalPosts} posts across {categoryCount} source categories. Global mood ' +
             '{globalNet}. {warmestCity} ran warmest, {coolestCity} coolest — ' +
             'and the biggest story wasn’t a place, it was the gap between ' +
             'messengers. Every number above has a receipt behind it.',
