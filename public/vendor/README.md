@@ -10,6 +10,7 @@ replace them wholesale when upgrading and update this table.
 | globe.gl | 2.34.4 | `globe.gl/globe.gl.min.js` | https://unpkg.com/globe.gl@2.34.4/dist/globe.gl.min.js | MIT | `46c6a2a9d1faa6097144647c0b1da87df2539570bdb89e05faa5b43a5544c3a3` |
 | scrollama | 3.2.0 | `scrollama/scrollama.min.js` | Copied from local `scrollama-main/build/scrollama.min.js` (repo: https://github.com/russellsamora/scrollama) | MIT | `17d8c6db877708006d0f22a42d030b192fa68a721292253ce70a7d85301e7433` |
 | Space Grotesk | v22 (Google Fonts API, latin subset) | `fonts/space-grotesk/space-grotesk-latin-400.woff2`<br>`fonts/space-grotesk/space-grotesk-latin-500.woff2`<br>`fonts/space-grotesk/space-grotesk-latin-600.woff2`<br>`fonts/space-grotesk/space-grotesk-latin-700.woff2` | https://fonts.gstatic.com/s/spacegrotesk/v22/ via https://gwfh.mranftl.com/api/fonts/space-grotesk | SIL OFL 1.1 | `65fd17fcbd2e2f522940b5f67ead3d23329e02891aa5495e74d11a499c0b0673`<br>`1b1a8131d9edf975d9decee81e2f2bf504812f7a4f498e5500f28a613e22e64c`<br>`685bbbf69fa616df1ef81847c85fc76be097ddfb3468ff2257be54511ab3130f`<br>`35f8aec56cfd5cbfdb03cc68733a54a0b05bb3617ffcd5fd332badc0b045ca55` |
+| world-atlas (land, 110m) | 2.0.2 | `world-atlas/land-110m-geo.json` | https://unpkg.com/world-atlas@2.0.2/land-110m.json (TopoJSON, SHA-256 `ead5f68119c49a9250902e7da303bcb209341bbb8fefe7369a439b48b704658a`), converted to GeoJSON with topojson-client@3.1.0 `feature()` | ISC | `837db91532bb2f632eb822ad1159dbe687316d1e63e931327adcdd0a558f8db6` |
 | IBM Plex Mono | v20 (Google Fonts API, latin subset) | `fonts/ibm-plex-mono/ibm-plex-mono-latin-400.woff2`<br>`fonts/ibm-plex-mono/ibm-plex-mono-latin-500.woff2`<br>`fonts/ibm-plex-mono/ibm-plex-mono-latin-600.woff2` | https://fonts.gstatic.com/s/ibmplexmono/v20/ via https://gwfh.mranftl.com/api/fonts/ibm-plex-mono | SIL OFL 1.1 | `08949f728dc52d528e69b1667d15c89a5686a4ee9a296ff90983985f99c380f7`<br>`01d285447409c8a588692162439a038b8cbd7871309ee20267b0d2d91c6e8e22`<br>`0d1f0b8d0722224e32e9f28261bdc86c79115be73444ae5eceb73976a1bcdf83` |
 
 Downloaded / copied: 2026-07-05 (libraries), 2026-07-06 (fonts)
@@ -30,6 +31,13 @@ so drift in the vendored bundles is detectable at review time.
   is the one that is committed and served.
 - Textures: intentionally none. The design default is a flat `#0d1117`
   sphere, so no earth texture is vendored.
+- **world-atlas land geometry** is pre-converted from TopoJSON to
+  GeoJSON offline (no topojson-client shipped to the browser). The file
+  is a `FeatureCollection` with one `MultiPolygon` feature (125 land
+  polygons); `globe.gl` `hexPolygonsData` consumes its `.features`
+  array directly. To regenerate: download the TopoJSON source above and
+  run `topojson.feature(topo, topo.objects.land)` with
+  topojson-client@3.1.0, wrapping the result in a FeatureCollection.
 - **Fonts** (Space Grotesk, IBM Plex Mono) are self-hosted woff2 files
   (latin subset only) so the page makes no requests to
   fonts.googleapis.com / fonts.gstatic.com at runtime (FR-25). Both
