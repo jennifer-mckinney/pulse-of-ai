@@ -239,6 +239,43 @@ describe('story.config — STORY beat sequence', () => {
     });
 });
 
+// ── deep-freeze contract (all three config modules) ─────────────────────────
+// The config layer is shared, data-only state — a consumer mutating it would
+// silently corrupt every other module. Exports are deep-frozen; this file is
+// strict mode, so mutation attempts must THROW (TypeError) and change nothing.
+
+describe('config exports are deeply frozen', () => {
+    test('story.config: beats and nested arrays cannot be mutated', () => {
+        expect(() => { STORY[0].kicker = 'HACKED'; }).toThrow(TypeError);
+        expect(() => { STORY.push({ id: 'rogue' }); }).toThrow(TypeError);
+        expect(() => { STORY[STORY.length - 1].nextSteps.push('rogue'); }).toThrow(TypeError);
+        expect(() => { STORY[0].statsSpec[0][0] = 'rogue'; }).toThrow(TypeError);
+        // values unchanged
+        expect(STORY[0].kicker).toBe('LIVE · REFRESH CYCLE 2–3 MIN');
+        expect(STORY).toHaveLength(11);
+        expect(STORY[STORY.length - 1].nextSteps).toHaveLength(5);
+    });
+
+    test('design.config: nested token tables cannot be mutated', () => {
+        expect(() => { design.THEMES.Midnight.bg = '#FFFFFF'; }).toThrow(TypeError);
+        expect(() => { design.THEMES.Rogue = {}; }).toThrow(TypeError);
+        expect(() => { design.CAT_COLORS.social = '#000000'; }).toThrow(TypeError);
+        expect(() => { design.SENTIMENT_BUCKETS.positiveMin = 0; }).toThrow(TypeError);
+        expect(() => { design.GLOBE.spinPeriodMs = 1; }).toThrow(TypeError);
+        expect(design.THEMES.Midnight.bg).toBe('#06090F');
+        expect(design.CAT_COLORS.social).toBe('#FF9F5A');
+    });
+
+    test('api.config: endpoint map and constants cannot be mutated', () => {
+        expect(() => { api.ENDPOINTS.query = '/evil'; }).toThrow(TypeError);
+        expect(() => { delete api.ENDPOINTS.themes; }).toThrow(TypeError);
+        expect(() => { api.REFRESH_MS = 1; }).toThrow(TypeError);
+        expect(api.ENDPOINTS.query).toBe('/api/query');
+        expect(api.ENDPOINTS.themes).toBe('/api/themes');
+        expect(api.REFRESH_MS).toBe(150000);
+    });
+});
+
 // ── design.config ────────────────────────────────────────────────────────────
 
 describe('design.config — themes and palettes', () => {

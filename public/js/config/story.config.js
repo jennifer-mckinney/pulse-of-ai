@@ -51,6 +51,17 @@
 }(typeof self !== 'undefined' ? self : this, function () {
     'use strict';
 
+    // Deep-freeze: config is shared, data-only state — a consumer mutating a
+    // beat would silently corrupt every other module. Frozen exports make
+    // mutation attempts throw in strict mode instead.
+    function deepFreeze(node) {
+        if (node && typeof node === 'object' && !Object.isFrozen(node)) {
+            Object.freeze(node);
+            for (const key of Object.keys(node)) deepFreeze(node[key]);
+        }
+        return node;
+    }
+
     const STORY = [
         {
             id: 'overview',
@@ -265,5 +276,5 @@
         },
     ];
 
-    return { STORY };
+    return deepFreeze({ STORY });
 }));

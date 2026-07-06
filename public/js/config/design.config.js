@@ -16,6 +16,17 @@
 }(typeof self !== 'undefined' ? self : this, function () {
     'use strict';
 
+    // Deep-freeze: config is shared, data-only state — a consumer mutating a
+    // token table would silently corrupt every other module. Frozen exports
+    // make mutation attempts throw in strict mode instead.
+    function deepFreeze(node) {
+        if (node && typeof node === 'object' && !Object.isFrozen(node)) {
+            Object.freeze(node);
+            for (const key of Object.keys(node)) deepFreeze(node[key]);
+        }
+        return node;
+    }
+
     // ── Themes (CSS custom-property sets, switchable at runtime) ────────────
     // Verbatim from the handoff README theme table. panelRgb feeds
     // `--panel: rgba(var(--panel-rgb), var(--panel-alpha))`.
@@ -104,7 +115,7 @@
         pacingVhPerChapter: 1.15, // scroll spacer: 1.15 × 100vh per chapter
     };
 
-    return {
+    return deepFreeze({
         THEMES,
         DEFAULT_THEME,
         SENTIMENT_PALETTE,
@@ -112,5 +123,5 @@
         SEVERITY_COLORS,
         SENTIMENT_BUCKETS,
         GLOBE,
-    };
+    });
 }));
