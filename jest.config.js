@@ -26,7 +26,10 @@ module.exports = {
         'public/js/utils.js',
         'public/js/data.js',
         'public/js/insights.js',
-        'public/js/chapters.js'
+        'public/js/chapters.js',
+        'public/js/config/story.config.js',
+        'public/js/config/design.config.js',
+        'public/js/config/api.config.js'
     ],
 
     // 80% line coverage required to pass CI

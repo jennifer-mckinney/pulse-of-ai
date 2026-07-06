@@ -7,16 +7,19 @@
 // (never innerHTML), so the interpolated strings are XSS-safe by construction.
 // Do NOT "helpfully" switch the consumers to HTML rendering.
 //
-// Dual export guard: CommonJS (module.exports) for jest, window.PulseInsights
-// for browser script tags. Same pattern as public/js/utils.js.
+// Dual export guard with dependency injection: CommonJS requires utils for
+// jest; browser script tags read the window global (load utils.js BEFORE
+// this file). Same pattern as public/js/chapters.js.
 (function (root, factory) {
     if (typeof module === 'object' && module.exports) {
-        module.exports = factory();          // Node / jest
+        module.exports = factory(require('./utils'));   // Node / jest
     } else {
-        root.PulseInsights = factory();      // browser global
+        root.PulseInsights = factory(root.PulseUtils);  // browser global
     }
-}(typeof self !== 'undefined' ? self : this, function () {
+}(typeof self !== 'undefined' ? self : this, function (utils) {
     'use strict';
+
+    const { netSentiment } = utils;
 
     // Cities with fewer than MIN_TOTAL posts are excluded from SHARE-based
     // superlatives (a 4-post city being "100% positive" is noise, not signal).
@@ -179,6 +182,165 @@
         };
     }
 
+    // ── 11-beat story derivations ───────────────────────────────────────────────
+
+    // Categories owning less than this share of a city's posts are ignored by
+    // the divide story — a 2%-share category with an extreme score is noise,
+    // not a "split city" (prototype used the same 8% floor).
+    const DIVIDE_MIN_SHARE = 0.08;
+
+    // catBreakdown: aggregate one city's sources by source_category into
+    // [{category, share, net}] sorted by share descending (ties break
+    // alphabetically). Shares are fractions of the city's summed SOURCE
+    // totals (self-consistent: they always sum to 1 when sources exist);
+    // net is the category's own (positive − negative) / total.
+    function catBreakdown(city) {
+        if (!city || !Array.isArray(city.sources)) return [];
+        const byCat = {}; // category → {positive, negative, total}
+        let catSum = 0;
+        for (const s of city.sources) {
+            if (!s || typeof s !== 'object') continue;
+            const cat = s.source_category;
+            if (!byCat[cat]) byCat[cat] = { positive: 0, negative: 0, total: 0 };
+            byCat[cat].positive += s.positive;
+            byCat[cat].negative += s.negative;
+            byCat[cat].total    += s.total;
+            catSum += s.total;
+        }
+        const rows = Object.keys(byCat).map(category => ({
+            category,
+            share: catSum > 0 ? byCat[category].total / catSum : 0,
+            net: netSentiment(byCat[category]),
+        }));
+        rows.sort((a, b) => (b.share - a.share)
+            || (a.category < b.category ? -1 : a.category > b.category ? 1 : 0));
+        return rows;
+    }
+
+    // widestCategoryDivide: the city whose qualifying categories (share ≥
+    // DIVIDE_MIN_SHARE) disagree the most about the same hour. MIN_TOTAL
+    // guard applies (tiny cities are noise). Returns
+    // {city, hi:{category,net}, lo:{category,net}, span} — city is the
+    // OBJECT, never a name (same-name cities exist) — or null when no city
+    // has two qualifying categories. Span ties break by higher city total,
+    // then alphabetically by city name (deterministic).
+    function widestCategoryDivide(cities) {
+        const list = Array.isArray(cities) ? cities : [];
+        let best = null;
+        for (const c of list) {
+            if (!c || !(c.total >= MIN_TOTAL)) continue;
+            const rows = catBreakdown(c).filter(r => r.share >= DIVIDE_MIN_SHARE);
+            if (rows.length < 2) continue; // a divide needs two sides
+            let hi = rows[0];
+            let lo = rows[0];
+            for (const r of rows) {
+                if (r.net > hi.net) hi = r;
+                if (r.net < lo.net) lo = r;
+            }
+            const span = hi.net - lo.net;
+            if (best === null
+                || span > best.span
+                || (span === best.span && c.total > best.city.total)
+                || (span === best.span && c.total === best.city.total
+                    && String(c.city) < String(best.city.city))) {
+                best = {
+                    city: c,
+                    hi: { category: hi.category, net: hi.net },
+                    lo: { category: lo.category, net: lo.net },
+                    span,
+                };
+            }
+        }
+        return best;
+    }
+
+    // ribbonRows: the marimekko source-ribbon model. Aggregates every
+    // source row across all cities by category into
+    //   [{category, share, volume, net, split:{pos,neu,neg}, topSource}]
+    // sorted by share descending (ties alphabetical). share is the fraction
+    // of GLOBAL source volume; split is the category's own pos/neu/neg mix;
+    // topSource is the highest-volume source_name within the category
+    // (summed across cities; ties alphabetical) — the "led by <site>" voice.
+    function ribbonRows(cities) {
+        const list = Array.isArray(cities) ? cities : [];
+        const byCat = {}; // category → {positive, neutral, negative, total, bySource}
+        let globalVolume = 0;
+        for (const c of list) {
+            if (!c || !Array.isArray(c.sources)) continue;
+            for (const s of c.sources) {
+                if (!s || typeof s !== 'object') continue;
+                const cat = s.source_category;
+                if (!byCat[cat]) {
+                    byCat[cat] = { positive: 0, neutral: 0, negative: 0, total: 0, bySource: {} };
+                }
+                byCat[cat].positive += s.positive;
+                byCat[cat].neutral  += s.neutral;
+                byCat[cat].negative += s.negative;
+                byCat[cat].total    += s.total;
+                byCat[cat].bySource[s.source_name] =
+                    (byCat[cat].bySource[s.source_name] || 0) + s.total;
+                globalVolume += s.total;
+            }
+        }
+        const rows = Object.keys(byCat).map(category => {
+            const agg = byCat[category];
+            let topSource = null;
+            for (const name of Object.keys(agg.bySource)) {
+                if (topSource === null
+                    || agg.bySource[name] > agg.bySource[topSource]
+                    || (agg.bySource[name] === agg.bySource[topSource] && name < topSource)) {
+                    topSource = name;
+                }
+            }
+            return {
+                category,
+                share: globalVolume > 0 ? agg.total / globalVolume : 0,
+                volume: agg.total,
+                net: netSentiment(agg),
+                split: agg.total > 0
+                    ? { pos: agg.positive / agg.total,
+                        neu: agg.neutral / agg.total,
+                        neg: agg.negative / agg.total }
+                    : { pos: 0, neu: 0, neg: 0 },
+                topSource,
+            };
+        });
+        rows.sort((a, b) => (b.share - a.share)
+            || (a.category < b.category ? -1 : a.category > b.category ? 1 : 0));
+        return rows;
+    }
+
+    // Theme warm/cold boundary — prototype semantics: net ≥ 0.1 is a warm
+    // theme, everything below (neutral included) is cold. Intentionally the
+    // same 0.1 magnitude as design.config SENTIMENT_BUCKETS.positiveMin.
+    const THEME_WARM_MIN = 0.1;
+
+    // partitionThemes: split /api/themes rows into the warm or cold half.
+    //   'warm' → net ≥ 0.1, sorted warmest first
+    //   'cold' → net < 0.1, sorted coldest first
+    // Together the two modes PARTITION the list (no overlap, no loss).
+    // Accepts rows carrying `net`, falling back to the prototype's `sent`
+    // field so the bundled demo themes work unchanged. Throws on an unknown
+    // mode — a typo must fail tests loudly, not silently render nothing.
+    function partitionThemes(themes, mode) {
+        if (mode !== 'warm' && mode !== 'cold') {
+            throw new Error(`partitionThemes: unknown mode "${mode}"`);
+        }
+        const list = Array.isArray(themes) ? themes : [];
+        const netOf = (t) => {
+            if (t && Number.isFinite(t.net)) return t.net;
+            if (t && Number.isFinite(t.sent)) return t.sent; // prototype shape
+            return 0;
+        };
+        const picked = list.filter(t => mode === 'warm'
+            ? netOf(t) >= THEME_WARM_MIN
+            : netOf(t) < THEME_WARM_MIN);
+        picked.sort((a, b) => mode === 'warm'
+            ? netOf(b) - netOf(a)   // warmest first
+            : netOf(a) - netOf(b)); // coldest first
+        return picked;
+    }
+
     // Highest-count category; ties break alphabetically (deterministic).
     // Returns null when the map is empty.
     function topCategory(totalsByCategory) {
@@ -194,37 +356,64 @@
     }
 
     // ── Chapter card templates ──────────────────────────────────────────────────
-    // One entry per story chapter (see public/js/chapters.js). Tokens are
-    // resolved by resolveChapter() from computeInsights() output; renderTemplate
-    // throws on any token it cannot resolve, so a typo here fails tests loudly.
+    // One entry per story beat (PulseStoryConfig.STORY, resolved by
+    // public/js/chapters.js). Body copy is VERBATIM from the design handoff
+    // prototype (design_handoff_pulse_of_ai/data.js buildChapters()) with
+    // computed interpolations converted to {token} placeholders; the
+    // prototype's "sentiment" values map to NET sentiment
+    // ((positive − negative) / total, formatted ±0.00 via utils.fmtNet).
+    // renderTemplate throws on any token it cannot resolve, so a typo here
+    // fails tests loudly.
     const TEMPLATES = {
         overview:
-            'The world is talking about AI. {totalPosts} posts across ' +
-            '{cityCount} cities — {positivePct} positive, {negativePct} negative. ' +
-            'Scroll to see where the conversation is loudest, warmest, and most wary.',
+            '50 sources. 7 categories. {cityCount} cities reporting in the ' +
+            'last hour — every dot sized by volume, colored by sentiment. ' +
+            'Scroll to read the pulse.',
         volume:
-            '{volumeCity} leads the conversation with {volumeTotal} posts — ' +
-            'more than any other city tracked. {volumeSharePct} of everything ' +
-            'we analyzed comes from this one place.',
-        positivity:
-            'Nowhere is the mood brighter than {positiveCity}, where ' +
-            '{positiveSharePct} of posts lean positive — {positiveDeltaPct} ' +
-            'above the global average.',
-        negativity:
-            '{negativeCity} is the most skeptical city on the map: ' +
-            '{negativeSharePct} of its posts lean negative, {negativeDeltaPct} ' +
-            'above the global average.',
+            '{volumeCity1} leads the world at {volumeCount1} posts/hr, with ' +
+            '{volumeCity2} ({volumeCount2}) and {volumeCity3} ({volumeCount3}) ' +
+            'close behind. Together the top three carry {topThreeSharePct} of ' +
+            'everything measured this hour.',
         divide:
-            'The divide is real. In {ratioHighCity} the positive-to-negative ' +
-            'ratio runs {ratioHigh} to 1; in {ratioLowCity} it collapses to ' +
-            '{ratioLow} to 1. Same technology, opposite moods.',
-        sources:
-            '{dominantCategory} sources drive {dominantCategoryPct} of global ' +
-            'coverage. The most single-voice city is {concentrationCity}, where ' +
-            '{concentrationSource} alone accounts for {concentrationPct} of posts.',
+            'In {divideCity}, {divideHiCategory} sources run at {divideHiNet} ' +
+            'while {divideLoCategory} coverage sits at {divideLoNet} — a ' +
+            '{divideSpan} divergence, the widest split between source ' +
+            'categories anywhere on the globe.',
+        negativity:
+            '{negCity1} runs the coolest sentiment on the map ({negNet1}), ' +
+            'where {negCategory1} discourse dominates — followed by {negCity2} ' +
+            '({negNet2}) and {negCity3} ({negNet3}). Every one of these scores ' +
+            'has a receipt. Pull one:',
+        positivity:
+            'And the warmest: {posCity1} ({posNet1}), {posCity2} ({posNet2}), ' +
+            '{posCity3} ({posNet3}) — all three led by builder communities ' +
+            'posting their own results. The good news has receipts too. Pull one:',
+        drivers:
+            'Recolor the map by dominant source and the pattern jumps out: ' +
+            '{catShare1Category} sources carry {catShare1Pct} of global volume ' +
+            'this hour, with {catShare2Category} at {catShare2Pct}. Each dot ' +
+            'now wears the color of the loudest voice in its city.',
+        'themes-warm':
+            'Zoom past cities and the conversation splits into themes. The ' +
+            'warm ones are concrete: people shipping agents, clinics piloting ' +
+            'triage, models running on-device. The map lights up where these ' +
+            'themes live.',
+        'themes-cold':
+            'The cold themes are structural: regulation deadlines, jobs and ' +
+            'displacement, the slow grind of safety evals. Now the map shows ' +
+            'where the worry concentrates — policy and news capitals.',
+        messengers:
+            '{msgHiCategory} sources run warmest this hour ({msgHiNet}), led ' +
+            'by {msgHiSource}. {msgLoCategory} sources run coldest ' +
+            '({msgLoNet}), led by {msgLoSource}. Same hour, same cities — a ' +
+            '{msgGap} gap depending on who’s talking.',
+        summary:
+            '{totalPosts} posts across 7 source categories. Global mood ' +
+            '{globalNet}. {warmestCity} ran warmest, {coolestCity} coolest — ' +
+            'and the biggest story wasn’t a place, it was the gap between ' +
+            'messengers. Every number above has a receipt behind it.',
         explore:
-            'Now it is your turn. Drag the globe, hover the bars, and filter by ' +
-            'sentiment or source category to explore all {cityCount} cities yourself.',
+            'The story’s over — the data isn’t. Try these:',
     };
 
     // Interpolate {token} placeholders. Throws on unknown tokens instead of
@@ -239,5 +428,15 @@
         });
     }
 
-    return { MIN_TOTAL, computeInsights, regionOf, renderTemplate, TEMPLATES };
+    return {
+        MIN_TOTAL,
+        computeInsights,
+        regionOf,
+        renderTemplate,
+        TEMPLATES,
+        catBreakdown,
+        widestCategoryDivide,
+        ribbonRows,
+        partitionThemes,
+    };
 }));

@@ -16,7 +16,10 @@
 const insights = require('../../../public/js/insights');
 const data = require('../../../public/js/data');
 
-const { computeInsights, regionOf, renderTemplate, TEMPLATES, MIN_TOTAL } = insights;
+const {
+    computeInsights, regionOf, renderTemplate, TEMPLATES, MIN_TOTAL,
+    catBreakdown, widestCategoryDivide, ribbonRows, partitionThemes,
+} = insights;
 
 // ── Hand-computed 4-city fixture ─────────────────────────────────────────────
 // Austin  (Americas):      120 / 60 / 20  → total 200, shares .60/.30/.10
@@ -347,6 +350,289 @@ describe('computeInsights() — empty / invalid input', () => {
     });
 });
 
+// ── 11-beat story derivations ────────────────────────────────────────────────
+
+describe('catBreakdown(city)', () => {
+    const austin = () => data.normalizeCities(rawFixture())[0];
+    const tokyo = () => data.normalizeCities(rawFixture())[2];
+
+    test('aggregates sources by category into {category, share, net} rows', () => {
+        // Austin: social 120 of 200 (net (80−10)/120), news 80 of 200 (net 30/80)
+        const rows = catBreakdown(austin());
+        expect(rows).toHaveLength(2);
+        expect(rows[0].category).toBe('social');
+        expect(rows[0].share).toBeCloseTo(120 / 200, 10);
+        expect(rows[0].net).toBeCloseTo(70 / 120, 10);
+        expect(rows[1].category).toBe('news');
+        expect(rows[1].share).toBeCloseTo(80 / 200, 10);
+        expect(rows[1].net).toBeCloseTo(30 / 80, 10);
+    });
+
+    test('rows are sorted by share descending', () => {
+        const rows = catBreakdown(tokyo());
+        for (let i = 1; i < rows.length; i++) {
+            expect(rows[i - 1].share).toBeGreaterThanOrEqual(rows[i].share);
+        }
+        expect(rows[0].category).toBe('social');   // 90 of 100
+        expect(rows[1].category).toBe('academic'); // 10 of 100
+    });
+
+    test('merges multiple sources of the same category into one row', () => {
+        const [city] = data.normalizeCities([
+            { city: 'Twin', lat: 0, lng: 0,
+              positive: 20, neutral: 0, negative: 10, total: 30,
+              sources: [
+                  { source_name: 'reddit',  source_category: 'social',
+                    positive: 10, neutral: 0, negative: 0, total: 10 },
+                  { source_name: 'twitter', source_category: 'social',
+                    positive: 10, neutral: 0, negative: 10, total: 20 },
+              ] },
+        ]);
+        const rows = catBreakdown(city);
+        expect(rows).toHaveLength(1);
+        expect(rows[0].category).toBe('social');
+        expect(rows[0].share).toBe(1);
+        expect(rows[0].net).toBeCloseTo(10 / 30, 10); // (20 − 10) / 30
+    });
+
+    test('shares sum to 1 when the city has sources', () => {
+        for (const city of data.normalizeCities(data.DEMO_DATA)) {
+            const rows = catBreakdown(city);
+            const sum = rows.reduce((a, r) => a + r.share, 0);
+            expect(sum).toBeCloseTo(1, 10);
+        }
+    });
+
+    test('empty/missing sources yield an empty array (no throw)', () => {
+        const [bare] = data.normalizeCities([
+            { city: 'Bare', lat: 0, lng: 0,
+              positive: 1, neutral: 1, negative: 1, total: 3, sources: [] },
+        ]);
+        expect(catBreakdown(bare)).toEqual([]);
+        expect(catBreakdown(null)).toEqual([]);
+        expect(catBreakdown({})).toEqual([]);
+    });
+});
+
+describe('widestCategoryDivide(cities)', () => {
+    test('finds the city with the widest net span among ≥8%-share categories', () => {
+        // Hand-computed spans (categories all ≥ 0.08 share):
+        //   Austin: social 70/120 − news 30/80  ≈ 0.208
+        //   Berlin: social −10/30 − policy −40/70 ≈ 0.238
+        //   Tokyo:  social 57/90 − academic 3/10 ≈ 0.333  ← widest
+        //   Delhi:  below MIN_TOTAL — excluded
+        const d = widestCategoryDivide(data.normalizeCities(rawFixture()));
+        expect(d.city.city).toBe('Tokyo');
+        expect(d.hi).toEqual({ category: 'social', net: expect.closeTo(57 / 90, 10) });
+        expect(d.lo).toEqual({ category: 'academic', net: expect.closeTo(3 / 10, 10) });
+        expect(d.span).toBeCloseTo(57 / 90 - 3 / 10, 10);
+    });
+
+    test('carries the city OBJECT (not just a name)', () => {
+        const cities = data.normalizeCities(rawFixture());
+        const d = widestCategoryDivide(cities);
+        expect(d.city).toBe(cities.find(c => c.city === 'Tokyo'));
+        expect(Number.isFinite(d.city.lat)).toBe(true);
+    });
+
+    test('categories under the 8% share floor cannot set the divide', () => {
+        // 'fringe' is wildly negative but owns only 5% of the city's posts —
+        // the divide must come from the two big categories instead.
+        const cities = data.normalizeCities([
+            { city: 'Floor', lat: 0, lng: 0,
+              positive: 60, neutral: 20, negative: 20, total: 100,
+              sources: [
+                  { source_name: 'a', source_category: 'social',
+                    positive: 40, neutral: 10, negative: 0, total: 50 },
+                  { source_name: 'b', source_category: 'news',
+                    positive: 18, neutral: 9, negative: 18, total: 45 },
+                  { source_name: 'c', source_category: 'fringe',
+                    positive: 0, neutral: 0, negative: 5, total: 5 },
+              ] },
+        ]);
+        const d = widestCategoryDivide(cities);
+        expect(d.city.city).toBe('Floor');
+        expect(d.lo.category).toBe('news');   // not 'fringe' (net −1, share 0.05)
+        expect(d.hi.category).toBe('social');
+    });
+
+    test('MIN_TOTAL guard: tiny cities never win', () => {
+        const cities = data.normalizeCities([
+            { city: 'Tiny', lat: 0, lng: 0,
+              positive: 2, neutral: 0, negative: 2, total: 4,
+              sources: [
+                  { source_name: 'a', source_category: 'social',
+                    positive: 2, neutral: 0, negative: 0, total: 2 },
+                  { source_name: 'b', source_category: 'news',
+                    positive: 0, neutral: 0, negative: 2, total: 2 },
+              ] },
+        ]);
+        expect(widestCategoryDivide(cities)).toBeNull();
+    });
+
+    test('null when no city has two qualifying categories', () => {
+        const oneCat = data.normalizeCities([
+            { city: 'Mono', lat: 0, lng: 0,
+              positive: 10, neutral: 5, negative: 5, total: 20,
+              sources: [
+                  { source_name: 'reddit', source_category: 'social',
+                    positive: 10, neutral: 5, negative: 5, total: 20 },
+              ] },
+        ]);
+        expect(widestCategoryDivide(oneCat)).toBeNull();
+        expect(widestCategoryDivide([])).toBeNull();
+        expect(widestCategoryDivide(null)).toBeNull();
+    });
+
+    test('span ties break by higher city total, then alphabetically', () => {
+        // Identical two-category structure → identical span; Big has more posts.
+        const mk = (name, lng, scale) => ({
+            city: name, lat: 0, lng,
+            positive: 10 * scale, neutral: 0, negative: 10 * scale, total: 20 * scale,
+            sources: [
+                { source_name: 'a', source_category: 'social',
+                  positive: 10 * scale, neutral: 0, negative: 0, total: 10 * scale },
+                { source_name: 'b', source_category: 'news',
+                  positive: 0, neutral: 0, negative: 10 * scale, total: 10 * scale },
+            ],
+        });
+        const byTotal = widestCategoryDivide(
+            data.normalizeCities([mk('Small', 0, 1), mk('Big', 10, 2)]));
+        expect(byTotal.city.city).toBe('Big');
+
+        const byName = widestCategoryDivide(
+            data.normalizeCities([mk('Zed', 0, 1), mk('Alpha', 10, 1)]));
+        expect(byName.city.city).toBe('Alpha');
+    });
+});
+
+describe('ribbonRows(cities)', () => {
+    test('aggregates per category across all cities with share/volume/net/split', () => {
+        // Fixture totals: social 244 (pos 154 / neu 57 / neg 33), news 80,
+        // policy 70, academic 10; global source volume 404.
+        const rows = ribbonRows(data.normalizeCities(rawFixture()));
+        expect(rows.map(r => r.category)).toEqual(['social', 'news', 'policy', 'academic']);
+
+        const social = rows[0];
+        expect(social.volume).toBe(244);
+        expect(social.share).toBeCloseTo(244 / 404, 10);
+        expect(social.net).toBeCloseTo((154 - 33) / 244, 10);
+        expect(social.split.pos).toBeCloseTo(154 / 244, 10);
+        expect(social.split.neu).toBeCloseTo(57 / 244, 10);
+        expect(social.split.neg).toBeCloseTo(33 / 244, 10);
+
+        const policy = rows.find(r => r.category === 'policy');
+        expect(policy.volume).toBe(70);
+        expect(policy.net).toBeCloseTo((5 - 45) / 70, 10);
+    });
+
+    test('rows are sorted by share descending and shares sum to 1', () => {
+        const rows = ribbonRows(data.normalizeCities(data.DEMO_DATA));
+        for (let i = 1; i < rows.length; i++) {
+            expect(rows[i - 1].share).toBeGreaterThanOrEqual(rows[i].share);
+        }
+        expect(rows.reduce((a, r) => a + r.share, 0)).toBeCloseTo(1, 10);
+    });
+
+    test('topSource is the highest-volume source within the category', () => {
+        // social: reddit 120 + 30 + 4 = 154 across cities vs twitter 90.
+        const rows = ribbonRows(data.normalizeCities(rawFixture()));
+        expect(rows.find(r => r.category === 'social').topSource).toBe('reddit');
+        expect(rows.find(r => r.category === 'news').topSource).toBe('statesman');
+    });
+
+    test('topSource merges the same source across cities before ranking', () => {
+        const rows = ribbonRows(data.normalizeCities([
+            { city: 'A', lat: 0, lng: 0, positive: 6, neutral: 0, negative: 0, total: 6,
+              sources: [
+                  { source_name: 'big_in_a', source_category: 'social',
+                    positive: 4, neutral: 0, negative: 0, total: 4 },
+                  { source_name: 'spread',   source_category: 'social',
+                    positive: 2, neutral: 0, negative: 0, total: 2 },
+              ] },
+            { city: 'B', lat: 0, lng: 10, positive: 3, neutral: 0, negative: 0, total: 3,
+              sources: [
+                  { source_name: 'spread', source_category: 'social',
+                    positive: 3, neutral: 0, negative: 0, total: 3 },
+              ] },
+        ]));
+        expect(rows[0].topSource).toBe('spread'); // 2 + 3 = 5 beats 4
+    });
+
+    test('zero-volume categories report zeroed split and net (no NaN)', () => {
+        const rows = ribbonRows(data.normalizeCities([
+            { city: 'Ghost', lat: 0, lng: 0, positive: 0, neutral: 0, negative: 0, total: 0,
+              sources: [
+                  { source_name: 'quiet', source_category: 'social',
+                    positive: 0, neutral: 0, negative: 0, total: 0 },
+              ] },
+        ]));
+        expect(rows).toHaveLength(1);
+        expect(rows[0].share).toBe(0);
+        expect(rows[0].net).toBe(0);
+        expect(rows[0].split).toEqual({ pos: 0, neu: 0, neg: 0 });
+    });
+
+    test('empty/invalid input yields an empty array', () => {
+        expect(ribbonRows([])).toEqual([]);
+        expect(ribbonRows(null)).toEqual([]);
+        expect(ribbonRows(data.normalizeCities([
+            { city: 'NoSrc', lat: 0, lng: 0,
+              positive: 5, neutral: 0, negative: 0, total: 5, sources: [] },
+        ]))).toEqual([]);
+    });
+});
+
+describe('partitionThemes(themes, mode)', () => {
+    // Prototype semantics: warm = net ≥ 0.1 sorted warmest-first,
+    // cold = net < 0.1 sorted coldest-first.
+    const themes = [
+        { id: 'agents',     label: 'AI agents & automation', net: 0.34 },
+        { id: 'regulation', label: 'Regulation & AI Act',    net: -0.22 },
+        { id: 'jobs',       label: 'Jobs & displacement',    net: -0.17 },
+        { id: 'health',     label: 'AI in healthcare',       net: 0.29 },
+        { id: 'safety',     label: 'Safety & evals',         net: 0.08 },
+        { id: 'boundary',   label: 'Boundary theme',         net: 0.1 },
+    ];
+
+    test('warm: net ≥ 0.1 (inclusive), sorted warmest first', () => {
+        expect(partitionThemes(themes, 'warm').map(t => t.id))
+            .toEqual(['agents', 'health', 'boundary']);
+    });
+
+    test('cold: net < 0.1, sorted coldest first (neutral themes are cold)', () => {
+        expect(partitionThemes(themes, 'cold').map(t => t.id))
+            .toEqual(['regulation', 'jobs', 'safety']);
+    });
+
+    test('warm and cold partition the theme list (no overlap, no loss)', () => {
+        const warm = partitionThemes(themes, 'warm');
+        const cold = partitionThemes(themes, 'cold');
+        expect(warm.length + cold.length).toBe(themes.length);
+        const ids = new Set([...warm, ...cold].map(t => t.id));
+        expect(ids.size).toBe(themes.length);
+    });
+
+    test('accepts prototype-shaped themes carrying `sent` instead of `net`', () => {
+        const proto = [
+            { id: 'a', sent: 0.34 },
+            { id: 'b', sent: -0.22 },
+        ];
+        expect(partitionThemes(proto, 'warm').map(t => t.id)).toEqual(['a']);
+        expect(partitionThemes(proto, 'cold').map(t => t.id)).toEqual(['b']);
+    });
+
+    test('empty/invalid theme lists yield an empty array', () => {
+        expect(partitionThemes([], 'warm')).toEqual([]);
+        expect(partitionThemes(null, 'cold')).toEqual([]);
+    });
+
+    test('THROWS on an unknown mode (a typo must fail tests, not ship)', () => {
+        expect(() => partitionThemes(themes, 'lukewarm')).toThrow(/lukewarm/);
+        expect(() => partitionThemes(themes)).toThrow();
+    });
+});
+
 describe('renderTemplate()', () => {
     test('replaces multiple distinct tokens', () => {
         expect(renderTemplate('{a} beats {b} by {gap}', { a: 'X', b: 'Y', gap: '12%' }))
@@ -370,14 +656,28 @@ describe('renderTemplate()', () => {
     });
 });
 
-describe('TEMPLATES — one entry per story chapter', () => {
+describe('TEMPLATES — one entry per story beat', () => {
     const CHAPTER_IDS = [
-        'overview', 'volume', 'positivity', 'negativity',
-        'divide', 'sources', 'explore',
+        'overview', 'volume', 'divide', 'negativity', 'positivity',
+        'drivers', 'themes-warm', 'themes-cold', 'messengers',
+        'summary', 'explore',
     ];
 
-    test('has exactly the seven chapter template ids', () => {
+    test('has exactly the eleven story-beat template ids', () => {
         expect(Object.keys(TEMPLATES).sort()).toEqual([...CHAPTER_IDS].sort());
+    });
+
+    test('carries the verbatim prototype copy on the tokenless beats', () => {
+        expect(TEMPLATES['themes-warm']).toBe(
+            'Zoom past cities and the conversation splits into themes. '
+            + 'The warm ones are concrete: people shipping agents, clinics '
+            + 'piloting triage, models running on-device. The map lights up '
+            + 'where these themes live.');
+        expect(TEMPLATES['themes-cold']).toBe(
+            'The cold themes are structural: regulation deadlines, jobs and '
+            + 'displacement, the slow grind of safety evals. Now the map shows '
+            + 'where the worry concentrates — policy and news capitals.');
+        expect(TEMPLATES['explore']).toBe('The story’s over — the data isn’t. Try these:');
     });
 
     test('every template is a non-empty string that renders without residue', () => {
@@ -401,9 +701,13 @@ describe('module export shape', () => {
         expect(Object.keys(insights).sort()).toEqual([
             'MIN_TOTAL',
             'TEMPLATES',
+            'catBreakdown',
             'computeInsights',
+            'partitionThemes',
             'regionOf',
             'renderTemplate',
+            'ribbonRows',
+            'widestCategoryDivide',
         ]);
     });
 });

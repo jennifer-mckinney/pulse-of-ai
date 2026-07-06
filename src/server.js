@@ -13,7 +13,9 @@
 //   GET  /api/bias/latest
 //   GET  /api/methodology
 //   GET  /api/sources
+//   GET  /api/sources/timeseries
 //   POST /api/query
+//   GET  /api/themes
 
 'use strict';
 
@@ -33,6 +35,7 @@ const biasRouter        = require('./routes/bias');
 const methodologyRouter = require('./routes/methodology');
 const sourcesRouter     = require('./routes/sources');
 const queryRouter       = require('./routes/query');
+const themesRouter      = require('./routes/themes');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -53,6 +56,7 @@ app.use('/api', biasRouter);
 app.use('/api', methodologyRouter);
 app.use('/api', sourcesRouter);
 app.use('/api', queryRouter);
+app.use('/api', themesRouter);
 
 // ─── Frontend fallback ────────────────────────────────────────────────────────
 app.get('/', (req, res) => {

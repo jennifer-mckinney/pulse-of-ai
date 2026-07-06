@@ -5,11 +5,11 @@
 // Designed for non-real-time research queries (journalists, researchers, policy makers).
 //
 // Request body:
-//   { platform?: string, from?: ISO8601, to?: ISO8601, limit?: number (max 100) }
+//   { platform?: string, location?: string, from?: ISO8601, to?: ISO8601, limit?: number (max 100) }
 //
 // Returns:
-//   200 { results: [...], total: number, query: { platform, from, to, limit } }
-//   400 on validation errors (limit > 100, invalid dates)
+//   200 { results: [...], total: number, query: { platform, location, from, to, limit } }
+//   400 on validation errors (limit > 100, invalid dates, non-string location)
 
 'use strict';
 
@@ -22,12 +22,19 @@ router.post('/query', async (req, res) => {
     try {
         const {
             platform = null,
+            location = null,
             from     = null,
             to       = null,
             limit    = 20,
         } = req.body || {};
 
         // ─── Validation ───────────────────────────────────────────────────────
+
+        // location is an exact-match filter on raw_posts.location (city-level).
+        // Reject non-string values early; null/undefined means "no filter".
+        if (location !== null && location !== undefined && typeof location !== 'string') {
+            return res.status(400).json({ error: 'location must be a string' });
+        }
 
         const parsedLimit = parseInt(limit, 10);
         if (isNaN(parsedLimit) || parsedLimit < 1) {
@@ -61,6 +68,13 @@ router.post('/query', async (req, res) => {
         if (platform) {
             params.push(platform);
             conditions.push(`ds.category = $${params.length}`);
+        }
+
+        // Exact match by design: raw_posts.location stores normalized city names,
+        // so pattern matching would only invite false positives.
+        if (location) {
+            params.push(location);
+            conditions.push(`rp.location = $${params.length}`);
         }
 
         if (fromDate) {
@@ -104,6 +118,7 @@ router.post('/query', async (req, res) => {
             total: results.length,
             query: {
                 platform: platform ?? null,
+                location: location ?? null,
                 from:     from     ?? null,
                 to:       to       ?? null,
                 limit:    parsedLimit,

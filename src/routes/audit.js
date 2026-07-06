@@ -57,7 +57,9 @@ router.get('/audit/:post_id', async (req, res) => {
                 dal.decision_type,
                 dal.model_name,
                 mv.version   AS methodology_version,
+                mv.config,
                 mv.justification,
+                dal.input_hash,
                 dal.output,
                 dal.confidence,
                 dal.created_at
