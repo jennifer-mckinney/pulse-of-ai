@@ -1,0 +1,123 @@
+%%{init: {'theme': 'dark', 'themeVariables': {'primaryColor':'#1f6feb','primaryTextColor':'#f0f6fc','primaryBorderColor':'#30363d','lineColor':'#58a6ff','secondaryColor':'#161b22','tertiaryColor':'#0d1117','background':'#0d1117','mainBkg':'#161b22','nodeBorder':'#30363d','clusterBkg':'#161b22','titleColor':'#58a6ff','edgeLabelBackground':'#0d1117','fontSize':'14px'}}}%%
+%% Canonical Mermaid source for the Pulse of AI architecture diagram.
+%% docs/diagrams/architecture.html embeds this exact definition and
+%% docs/diagrams/architecture.png is rendered from this file via
+%% mermaid-cli (mmdc). Keep all three in sync when editing.
+%% Status legend (plan tracking): solid green = delivered,
+%% amber = in progress, dashed grey = planned.
+flowchart TD
+
+  subgraph SOURCES["① DATA SOURCES  ·  50 seeded sources across 7 categories"]
+    direction LR
+    S1["Reddit<br/>Pushshift"]
+    S2["arXiv<br/>API"]
+    S3["RSS Feeds<br/>News / Policy"]
+    S4["Playwright<br/>Scraper  P2"]
+    S5["Twitter/X<br/>Bearer · seeded inactive"]
+  end
+
+  subgraph INGEST["② INGEST  ·  BullMQ queues · collect processors planned"]
+    direction LR
+    I1["collect.reddit<br/>queue"]
+    I2["collect.arxiv<br/>queue"]
+    I3["collect.rss<br/>queue"]
+    I4["collect.scraper<br/>queue"]
+    SCH["workers/collector.scheduler.js<br/>per-source stagger · stale cleanup<br/>start.js wiring planned"]
+    INX["pipeline/<br/>ingest.js<br/>PII strip · dedup<br/>SHA-256 hash"]
+  end
+
+  subgraph DB["③ POSTGRESQL 16 + pgvector  ·  6 migrations"]
+    direction TB
+    DB1[("raw_posts<br/>external_id · content_hash<br/>raw_payload JSONB")]
+    DB2[("sentiment_results<br/>relevance_results<br/>discourse_scores")]
+    DB3[("decision_audit_log<br/>methodology_versions")]
+    DB4[("post_embeddings<br/>VECTOR 384")]
+    DB5[("bias_assessments<br/>alert_events")]
+    DB6[("pseudonymous_users<br/>user_platform_sightings")]
+  end
+
+  subgraph PIPELINE["④ PROCESSING PIPELINE  ·  TDD · audit log every step"]
+    direction LR
+    P1["sentiment.js<br/>AFINN · v1.0.0"]
+    P2["relevance.js<br/>keyword hybrid"]
+    P3["discourse.js<br/>DQI scoring"]
+    P4["embeddings.js<br/>all-MiniLM-L6-v2<br/>384-dim"]
+    P5["correlation.js<br/>verb-noun ID<br/>≥0.85 conf"]
+  end
+
+  subgraph PYTHON["⑤ PYTHON SERVICE  ·  FastAPI + sentence-transformers"]
+    PY["embeddings_service.py<br/>sentence-transformers embed<br/>port 8000"]
+  end
+
+  subgraph API["⑥ EXPRESS API  ·  port 3000"]
+    direction LR
+    A1["GET /api/posts<br/>/aggregated-by-location"]:::done
+    A2["GET /api/sentiment<br/>/latest"]:::done
+    A3["GET /api/audit/:post_id<br/>HMAC-keyed input fingerprint<br/>AUDIT_HASH_KEY env"]:::done
+    A4["GET /api/health<br/>bias alerts"]:::done
+    A5["GET /api/config<br/>Mapbox token"]:::done
+    A6["GET /api/themes<br/>keyword themes"]:::done
+    A7["GET /api/sources<br/>/timeseries · hourly by category"]:::done
+    A8["POST /api/query<br/>+ location filter"]:::done
+  end
+
+  subgraph FRONTEND["⑦ FRONTEND  ·  globe.gl WebGL globe + scrollama story · vendored, no CDN (FR-25)"]
+    direction LR
+    FC["js/config/<br/>story · design · api<br/>.config.js · data-only"]:::done
+    FM["utils.js · data.js<br/>insights.js · chapters.js<br/>pure · jest-tested"]:::done
+    FV["vendor/<br/>fonts · land-110m GeoJSON<br/>globe.gl · scrollama"]:::done
+    FSH["page shell<br/>C1"]:::wip
+    FB["globe.js C2 · story.js C3<br/>ui.js C4 · browser layer"]:::planned
+    F1["map.js<br/>legacy Mapbox globe<br/>removal C5"]:::planned
+    F2["main.js<br/>health status<br/>refresh"]:::done
+  end
+
+  subgraph LEGEND["STATUS  ·  plan tracking"]
+    direction LR
+    LD["delivered"]:::done
+    LW["in progress"]:::wip
+    LP["planned"]:::planned
+    LN["also planned: city registry config · Playwright E2E<br/>coverage TARGET 98 pct — issue 3 · jest gate today 80/80/70<br/>Phase D doc consolidation"]:::planned
+  end
+
+  S1 --> I1
+  S2 --> I2
+  S3 --> I3
+  S4 --> I4
+  SCH -.-> I1 & I2 & I3 & I4
+  I1 & I2 & I3 & I4 --> INX
+  INX --> DB1
+  DB1 --> P1 & P2 & P3
+  P1 & P2 & P3 --> DB2
+  P1 & P2 & P3 --> DB3
+  DB1 --> P4
+  P4 <--> PY
+  P4 --> DB4
+  DB1 --> P5
+  P5 --> DB6
+  P1 --> DB5
+  DB2 --> A1 & A2 & A6
+  DB1 --> A7
+  DB4 --> A8
+  DB3 --> A3
+  DB5 --> A4
+  A1 & A6 & A7 & A8 --> FM
+  FC --> FM
+  FM --> FB
+  FV --> FB
+  FSH --> FB
+  A1 --> F1
+  A2 & A4 & A5 --> F2
+
+  classDef done fill:#0f2417,stroke:#3fb950,color:#7ee2a8
+  classDef wip fill:#2b2111,stroke:#e3b341,color:#e3b341
+  classDef planned fill:#161b22,stroke:#7d8590,color:#8b949e,stroke-dasharray:4 3
+
+  style SOURCES  fill:#0d1117,stroke:#1f6feb,stroke-width:2px,color:#58a6ff
+  style INGEST   fill:#0d1117,stroke:#1f6feb,stroke-width:2px,color:#58a6ff
+  style DB       fill:#0d1117,stroke:#bc8cff,stroke-width:2px,color:#bc8cff
+  style PIPELINE fill:#0d1117,stroke:#388bfd,stroke-width:2px,color:#79c0ff
+  style PYTHON   fill:#0d1117,stroke:#388bfd,stroke-width:1px,color:#79c0ff
+  style API      fill:#0d1117,stroke:#3fb950,stroke-width:2px,color:#56d364
+  style FRONTEND fill:#0d1117,stroke:#e3b341,stroke-width:2px,color:#e3b341
+  style LEGEND   fill:#0d1117,stroke:#30363d,stroke-width:1px,color:#7d8590

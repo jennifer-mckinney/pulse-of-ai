@@ -1,4 +1,11 @@
 <!DOCTYPE html>
+<!--
+  SYNC CONTRACT: docs/diagrams/architecture.mmd is the CANONICAL Mermaid
+  source for this diagram. The <div class="mermaid"> block below embeds that
+  file's definition VERBATIM, and docs/diagrams/architecture.png is rendered
+  from the same .mmd via @mermaid-js/mermaid-cli. Edit the .mmd first, then
+  mirror the definition here and regenerate the PNG.
+-->
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -110,74 +117,99 @@
 <div class="container">
 
   <h1>The Pulse of AI — System Architecture</h1>
-  <div class="subtitle">Real-time AI discourse monitoring · PostgreSQL 16 + pgvector · Node.js + Python · Phase A–C complete</div>
+  <div class="subtitle">Real-time AI discourse monitoring · PostgreSQL 16 + pgvector · Node.js + Python · Phase A–B delivered, storytelling frontend (Phase C) in progress — see status legend in diagram</div>
 
   <!-- ── Diagram ── -->
   <div class="diagram-section">
     <div class="section-label">Data Flow Architecture</div>
     <div class="mermaid">
 %%{init: {'theme': 'dark', 'themeVariables': {'primaryColor':'#1f6feb','primaryTextColor':'#f0f6fc','primaryBorderColor':'#30363d','lineColor':'#58a6ff','secondaryColor':'#161b22','tertiaryColor':'#0d1117','background':'#0d1117','mainBkg':'#161b22','nodeBorder':'#30363d','clusterBkg':'#161b22','titleColor':'#58a6ff','edgeLabelBackground':'#0d1117','fontSize':'14px'}}}%%
+%% Canonical Mermaid source for the Pulse of AI architecture diagram.
+%% docs/diagrams/architecture.html embeds this exact definition and
+%% docs/diagrams/architecture.png is rendered from this file via
+%% mermaid-cli (mmdc). Keep all three in sync when editing.
+%% Status legend (plan tracking): solid green = delivered,
+%% amber = in progress, dashed grey = planned.
 flowchart TD
 
-  subgraph SOURCES["① DATA SOURCES  ·  50 sources across 7 categories"]
+  subgraph SOURCES["① DATA SOURCES  ·  50 seeded sources across 7 categories"]
     direction LR
-    S1["Reddit\nPushshift"]
-    S2["arXiv\nAPI"]
-    S3["RSS Feeds\nNews / Policy"]
-    S4["Playwright\nScraper  P2"]
-    S5["Twitter/X\nBearer"]
+    S1["Reddit<br/>Pushshift"]
+    S2["arXiv<br/>API"]
+    S3["RSS Feeds<br/>News / Policy"]
+    S4["Playwright<br/>Scraper  P2"]
+    S5["Twitter/X<br/>Bearer · seeded inactive"]
   end
 
-  subgraph INGEST["② INGEST PIPELINE  ·  BullMQ workers · 2–3 min refresh"]
+  subgraph INGEST["② INGEST  ·  BullMQ queues · collect processors planned"]
     direction LR
-    I1["collectors/\nreddit.js"]
-    I2["collectors/\narxiv.js"]
-    I3["collectors/\nrss.js"]
-    I4["collectors/\nscraper.js"]
-    INX["pipeline/\ningest.js\nPII strip · dedup\nSHA-256 hash"]
+    I1["collect.reddit<br/>queue"]
+    I2["collect.arxiv<br/>queue"]
+    I3["collect.rss<br/>queue"]
+    I4["collect.scraper<br/>queue"]
+    SCH["workers/collector.scheduler.js<br/>per-source stagger · stale cleanup<br/>start.js wiring planned"]
+    INX["pipeline/<br/>ingest.js<br/>PII strip · dedup<br/>SHA-256 hash"]
   end
 
   subgraph DB["③ POSTGRESQL 16 + pgvector  ·  6 migrations"]
     direction TB
-    DB1[("raw_posts\nexternal_id · content_hash\nraw_payload JSONB")]
-    DB2[("sentiment_results\nrelevance_results\ndiscourse_scores")]
-    DB3[("decision_audit_log\nmethodology_versions")]
-    DB4[("post_embeddings\nVECTOR 384")]
-    DB5[("bias_assessments\nalert_events")]
-    DB6[("pseudonymous_users\nuser_platform_sightings")]
+    DB1[("raw_posts<br/>external_id · content_hash<br/>raw_payload JSONB")]
+    DB2[("sentiment_results<br/>relevance_results<br/>discourse_scores")]
+    DB3[("decision_audit_log<br/>methodology_versions")]
+    DB4[("post_embeddings<br/>VECTOR 384")]
+    DB5[("bias_assessments<br/>alert_events")]
+    DB6[("pseudonymous_users<br/>user_platform_sightings")]
   end
 
   subgraph PIPELINE["④ PROCESSING PIPELINE  ·  TDD · audit log every step"]
     direction LR
-    P1["sentiment.js\nAFINN · v1.0.0"]
-    P2["relevance.js\nkeyword hybrid"]
-    P3["discourse.js\nDQI scoring"]
-    P4["embeddings.js\nall-MiniLM-L6-v2\n384-dim"]
-    P5["correlation.js\nverb-noun ID\n≥0.85 conf"]
+    P1["sentiment.js<br/>AFINN · v1.0.0"]
+    P2["relevance.js<br/>keyword hybrid"]
+    P3["discourse.js<br/>DQI scoring"]
+    P4["embeddings.js<br/>all-MiniLM-L6-v2<br/>384-dim"]
+    P5["correlation.js<br/>verb-noun ID<br/>≥0.85 conf"]
   end
 
-  subgraph PYTHON["⑤ PYTHON SERVICE  ·  FastAPI + Infinity"]
-    PY["embeddings_service.py\nInfinity embed\nport 8000"]
+  subgraph PYTHON["⑤ PYTHON SERVICE  ·  FastAPI + sentence-transformers"]
+    PY["embeddings_service.py<br/>sentence-transformers embed<br/>port 8000"]
   end
 
   subgraph API["⑥ EXPRESS API  ·  port 3000"]
     direction LR
-    A1["GET /api/posts\n/aggregated-by-location"]
-    A2["GET /api/sentiment\n/latest"]
-    A3["GET /api/audit\n/:post_id"]
-    A4["GET /api/health\nbias alerts"]
-    A5["GET /api/config\nMapbox token"]
+    A1["GET /api/posts<br/>/aggregated-by-location"]:::done
+    A2["GET /api/sentiment<br/>/latest"]:::done
+    A3["GET /api/audit/:post_id<br/>HMAC-keyed input fingerprint<br/>AUDIT_HASH_KEY env"]:::done
+    A4["GET /api/health<br/>bias alerts"]:::done
+    A5["GET /api/config<br/>Mapbox token"]:::done
+    A6["GET /api/themes<br/>keyword themes"]:::done
+    A7["GET /api/sources<br/>/timeseries · hourly by category"]:::done
+    A8["POST /api/query<br/>+ location filter"]:::done
   end
 
-  subgraph FRONTEND["⑦ FRONTEND  ·  Mapbox GL JS · globe projection"]
-    F1["map.js\n3D fill-extrusion bars\nsentiment + source stack"]
-    F2["main.js\nhealth status\nrefresh"]
+  subgraph FRONTEND["⑦ FRONTEND  ·  globe.gl WebGL globe + scrollama story · vendored, no CDN (FR-25)"]
+    direction LR
+    FC["js/config/<br/>story · design · api<br/>.config.js · data-only"]:::done
+    FM["utils.js · data.js<br/>insights.js · chapters.js<br/>pure · jest-tested"]:::done
+    FV["vendor/<br/>fonts · land-110m GeoJSON<br/>globe.gl · scrollama"]:::done
+    FSH["page shell<br/>C1"]:::wip
+    FB["globe.js C2 · story.js C3<br/>ui.js C4 · browser layer"]:::planned
+    F1["map.js<br/>legacy Mapbox globe<br/>removal C5"]:::planned
+    F2["main.js<br/>health status<br/>refresh"]:::done
+  end
+
+  subgraph LEGEND["STATUS  ·  plan tracking"]
+    direction LR
+    LD["delivered"]:::done
+    LW["in progress"]:::wip
+    LP["planned"]:::planned
+    LN["also planned: city registry config · Playwright E2E<br/>coverage TARGET 98 pct — issue 3 · jest gate today 80/80/70<br/>Phase D doc consolidation"]:::planned
   end
 
   S1 --> I1
   S2 --> I2
   S3 --> I3
   S4 --> I4
+  SCH -.-> I1 & I2 & I3 & I4
   I1 & I2 & I3 & I4 --> INX
   INX --> DB1
   DB1 --> P1 & P2 & P3
@@ -189,11 +221,22 @@ flowchart TD
   DB1 --> P5
   P5 --> DB6
   P1 --> DB5
-  DB2 --> A1 & A2
+  DB2 --> A1 & A2 & A6
+  DB1 --> A7
+  DB4 --> A8
   DB3 --> A3
   DB5 --> A4
+  A1 & A6 & A7 & A8 --> FM
+  FC --> FM
+  FM --> FB
+  FV --> FB
+  FSH --> FB
   A1 --> F1
   A2 & A4 & A5 --> F2
+
+  classDef done fill:#0f2417,stroke:#3fb950,color:#7ee2a8
+  classDef wip fill:#2b2111,stroke:#e3b341,color:#e3b341
+  classDef planned fill:#161b22,stroke:#7d8590,color:#8b949e,stroke-dasharray:4 3
 
   style SOURCES  fill:#0d1117,stroke:#1f6feb,stroke-width:2px,color:#58a6ff
   style INGEST   fill:#0d1117,stroke:#1f6feb,stroke-width:2px,color:#58a6ff
@@ -202,6 +245,7 @@ flowchart TD
   style PYTHON   fill:#0d1117,stroke:#388bfd,stroke-width:1px,color:#79c0ff
   style API      fill:#0d1117,stroke:#3fb950,stroke-width:2px,color:#56d364
   style FRONTEND fill:#0d1117,stroke:#e3b341,stroke-width:2px,color:#e3b341
+  style LEGEND   fill:#0d1117,stroke:#30363d,stroke-width:1px,color:#7d8590
     </div>
   </div>
 
@@ -219,34 +263,22 @@ flowchart TD
       </thead>
       <tbody>
         <tr class="cat-ingest">
-          <td>①</td>
-          <td>collectors/reddit.js</td>
+          <td>②</td>
+          <td>queues/index.js</td>
           <td><span class="badge badge-blue">Ingest</span></td>
-          <td>Reddit Pushshift API collector; falls back to mock generator when credentials absent</td>
+          <td>BullMQ queues: collect.reddit / collect.rss / collect.arxiv / collect.scraper plus ingest, embed, correlate. Collect processors land in a later phase (planned)</td>
         </tr>
         <tr class="cat-ingest">
-          <td>①</td>
-          <td>collectors/arxiv.js</td>
+          <td>②</td>
+          <td>workers/collector.scheduler.js</td>
           <td><span class="badge badge-blue">Ingest</span></td>
-          <td>arXiv query API — no auth required; collects AI-domain papers</td>
-        </tr>
-        <tr class="cat-ingest">
-          <td>①</td>
-          <td>collectors/rss.js</td>
-          <td><span class="badge badge-blue">Ingest</span></td>
-          <td>rss-parser feeds for news, policy, and blog sources across 7 categories</td>
-        </tr>
-        <tr class="cat-ingest">
-          <td>①</td>
-          <td>collectors/scraper.js</td>
-          <td><span class="badge badge-blue">Ingest</span></td>
-          <td>Playwright headless scraper for P2 sources (LinkedIn, Threads, etc.)</td>
+          <td>Per-source BullMQ v5 job schedulers: staggered startDate spreads the 50 sources across the collect window (default 2 min); stale schedulers cleaned up. Wiring into workers/start.js is planned</td>
         </tr>
         <tr class="cat-ingest">
           <td>②</td>
           <td>pipeline/ingest.js</td>
           <td><span class="badge badge-blue">Ingest</span></td>
-          <td>Orchestrator: collect → strip PII → SHA-256 dedup → store raw_posts. BullMQ worker, 2–3 min staggered refresh</td>
+          <td>Orchestrator: normalise → strip PII → SHA-256 dedup → store raw_posts, then sentiment/relevance/discourse scoring</td>
         </tr>
         <tr class="cat-pipeline">
           <td>④</td>
@@ -270,7 +302,7 @@ flowchart TD
           <td>⑤</td>
           <td>pipeline/embeddings.js</td>
           <td><span class="badge badge-blue">Pipeline</span></td>
-          <td>Sends content to Python Infinity service; stores VECTOR(384) in post_embeddings. Model: all-MiniLM-L6-v2</td>
+          <td>Sends content to the Python FastAPI embeddings service (sentence-transformers); stores VECTOR(384) in post_embeddings. Model: all-MiniLM-L6-v2</td>
         </tr>
         <tr class="cat-pipeline">
           <td>④</td>
@@ -324,13 +356,13 @@ flowchart TD
           <td>⑥</td>
           <td>GET /api/posts/aggregated-by-location</td>
           <td><span class="badge badge-green">API</span></td>
-          <td>Sentiment totals + per-source breakdown by city. Powers Mapbox 3D bar chart markers</td>
+          <td>Sentiment totals + per-source breakdown by city. Powers the globe sentiment bars (legacy Mapbox today; globe.gl story planned)</td>
         </tr>
         <tr class="cat-api">
           <td>⑥</td>
           <td>GET /api/audit/:post_id</td>
           <td><span class="badge badge-green">API</span></td>
-          <td>Full decision trail for any post: sentiment, relevance, discourse scores + model + methodology justification</td>
+          <td>Full decision trail for any post: sentiment, relevance, discourse scores + model + methodology justification. Input fingerprint exposed as HMAC-SHA256 keyed by AUDIT_HASH_KEY env (omitted when unset)</td>
         </tr>
         <tr class="cat-api">
           <td>⑥</td>
@@ -344,11 +376,53 @@ flowchart TD
           <td><span class="badge badge-green">API</span></td>
           <td>DB connectivity + last job status + active bias alert_events. Dashboard health indicator source</td>
         </tr>
+        <tr class="cat-api">
+          <td>⑥</td>
+          <td>GET /api/themes</td>
+          <td><span class="badge badge-green">API</span></td>
+          <td>Keyword themes for scroll-story chapters: volume + sentiment split + modal source category per matched keyword. Max 12 themes, min 3 posts each</td>
+        </tr>
+        <tr class="cat-api">
+          <td>⑥</td>
+          <td>GET /api/sources · /sources/timeseries</td>
+          <td><span class="badge badge-green">API</span></td>
+          <td>Source registry listing, plus hourly zero-filled post counts by category (1–48 h window, default 12 h)</td>
+        </tr>
+        <tr class="cat-api">
+          <td>⑥</td>
+          <td>POST /api/query</td>
+          <td><span class="badge badge-green">API</span></td>
+          <td>Post search with platform, city-level location, and from/to date filters; limit capped at 100</td>
+        </tr>
+        <tr class="cat-frontend">
+          <td>⑦</td>
+          <td>public/js/config/</td>
+          <td><span class="badge badge-yellow">Frontend</span></td>
+          <td>story.config.js, design.config.js, api.config.js — data-only configuration for the scroll story (delivered)</td>
+        </tr>
+        <tr class="cat-frontend">
+          <td>⑦</td>
+          <td>public/js/ pure modules</td>
+          <td><span class="badge badge-yellow">Frontend</span></td>
+          <td>utils.js, data.js, insights.js, chapters.js — pure DOM-free modules, jest-tested (delivered)</td>
+        </tr>
+        <tr class="cat-frontend">
+          <td>⑦</td>
+          <td>public/vendor/</td>
+          <td><span class="badge badge-yellow">Frontend</span></td>
+          <td>Vendored assets, no CDN (FR-25): globe.gl, scrollama, IBM Plex Mono + Space Grotesk fonts, world-atlas land-110m GeoJSON (delivered)</td>
+        </tr>
+        <tr class="cat-frontend">
+          <td>⑦</td>
+          <td>globe.js · story.js · ui.js</td>
+          <td><span class="badge badge-yellow">Frontend</span></td>
+          <td>Browser layer of the storytelling frontend (C2–C4, planned); page shell C1 in progress</td>
+        </tr>
         <tr class="cat-frontend">
           <td>⑦</td>
           <td>public/js/map.js</td>
           <td><span class="badge badge-yellow">Frontend</span></td>
-          <td>Mapbox GL JS globe projection. 3D fill-extrusion sentiment bars (green/yellow/red) + stacked source column. Rich hover tooltips. All gestures custom-implemented</td>
+          <td>Legacy Mapbox GL JS globe projection with 3D fill-extrusion sentiment bars. Removal planned (C5) once the globe.gl story ships</td>
         </tr>
         <tr class="cat-frontend">
           <td>⑦</td>
