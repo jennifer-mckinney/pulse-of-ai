@@ -121,12 +121,15 @@
     // need no escaping. Consumers still must render via textContent — esc()
     // is defense in depth, not permission to use innerHTML.
     const TOKEN_BUILDERS = {
-        overview(ins) {
+        overview(ins, cities) {
             if (ins.cityCount === 0) return null;
             return {
                 cityCount: fmtCount(ins.cityCount),
                 totalPosts: fmtCount(ins.globalTotals.total),
                 globalNet: fmtNet(netSentiment(ins.globalTotals)),
+                // Derived category count — replaces the prototype's
+                // hardcoded "50 sources. 7 categories." editorial claim.
+                categoryCount: fmtCount(ribbonRows(cities).length),
             };
         },
         volume(ins, cities) {
@@ -173,9 +176,15 @@
         positivity(ins, cities) {
             const warmest = rankByNet(cities, +1).slice(0, 3);
             if (warmest.length < 3) return null;
+            // Dominant category of the warmest city (mirrors negativity) —
+            // replaces the prototype's unverifiable "builder communities"
+            // editorial claim with a data-derived voice.
+            const topCat = catBreakdown(warmest[0])[0];
+            if (!topCat) return null;
             return {
                 posCity1: esc(warmest[0].city),
                 posNet1: fmtNet(netSentiment(warmest[0])),
+                posCategory1: esc(topCat.category),
                 posCity2: esc(warmest[1].city),
                 posNet2: fmtNet(netSentiment(warmest[1])),
                 posCity3: esc(warmest[2].city),
@@ -233,6 +242,9 @@
             return {
                 totalPosts: fmtCount(ins.globalTotals.total),
                 globalNet: fmtNet(netSentiment(ins.globalTotals)),
+                // Derived category count — replaces the prototype's
+                // hardcoded "7 source categories".
+                categoryCount: fmtCount(ribbonRows(cities).length),
                 warmestCity: esc(warmest.city),
                 warmestNet: fmtNet(netSentiment(warmest)),
                 coolestCity: esc(coolest.city),

@@ -198,6 +198,32 @@ describe('resolveChapter() over DEMO_DATA', () => {
         expect(r.stats[2]).toEqual(['divergence', `${d.span.toFixed(2)} — global max`]);
     });
 
+    test('overview and summary interpolate the DERIVED category count — no hardcoded editorial claims', () => {
+        // The payload cannot support "50 sources" / "7 categories" claims;
+        // the count must come from ribbonRows (5 categories in DEMO_DATA).
+        const catCount = insightsMod.ribbonRows(demoCities).length;
+        expect(catCount).toBe(5); // fixture sanity — demo is NOT 7 categories
+
+        const overview = resolveChapter(beat('overview'), demoInsights, demoCities);
+        expect(overview.cardBody).not.toContain('50 sources');
+        expect(overview.cardBody).not.toContain('7 categories');
+        expect(overview.cardBody).toContain(`${catCount} source categories`);
+
+        const summary = resolveChapter(beat('summary'), demoInsights, demoCities);
+        expect(summary.cardBody).not.toContain('7 source categories');
+        expect(summary.cardBody).toContain(`${catCount} source categories`);
+    });
+
+    test('positivity interpolates the warmest city\'s dominant category (mirrors negativity)', () => {
+        const r = resolveChapter(beat('positivity'), demoInsights, demoCities);
+        // The prototype hardcoded "builder communities posting their own
+        // results" — an editorial claim the data cannot back. The card must
+        // name the dominant source category of the warmest city instead.
+        expect(r.cardBody).not.toContain('builder communities');
+        const topCat = insightsMod.catBreakdown(r.highlightCities[0])[0];
+        expect(r.cardBody).toContain(topCat.category);
+    });
+
     test('messengers card names the warmest/coldest categories and their lead sources', () => {
         const rows = insightsMod.ribbonRows(demoCities);
         const bySent = [...rows].sort((a, b) => b.net - a.net);
@@ -272,6 +298,17 @@ describe('resolveChapter() — degraded data (partial fallbacks)', () => {
         expect(r.cardBody).toBe(FALLBACK_COPY);
         expect(r.highlightCities).toEqual([]);
         expect(r.camera).toEqual({ lat: 20, lng: 10, altitude: beat('divide').altitude });
+    });
+
+    test('positivity falls back when the warmest city has no sources (no category to name)', () => {
+        const cities = data.normalizeCities([
+            { city: 'A', lat: 0, lng: 0, positive: 10, neutral: 0, negative: 0, total: 10, sources: [] },
+            { city: 'B', lat: 5, lng: 5, positive: 8, neutral: 1, negative: 1, total: 10, sources: [] },
+            { city: 'C', lat: 9, lng: 9, positive: 6, neutral: 2, negative: 2, total: 10, sources: [] },
+        ]);
+        const r = resolveChapter(beat('positivity'), computeInsights(cities), cities);
+        expect(r.cardBody).toBe(FALLBACK_COPY);
+        expect(r.stats).toEqual([]);
     });
 
     test('summary falls back when fewer than two cities pass MIN_TOTAL', () => {
