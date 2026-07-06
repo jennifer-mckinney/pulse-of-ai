@@ -320,8 +320,12 @@
     //   'cold' → net < 0.1, sorted coldest first
     // Together the two modes PARTITION the list (no overlap, no loss).
     // Accepts rows carrying `net`, falling back to the prototype's `sent`
-    // field so the bundled demo themes work unchanged. Throws on an unknown
-    // mode — a typo must fail tests loudly, not silently render nothing.
+    // field so the bundled demo themes work unchanged, then to the actual
+    // /api/themes response shape ({keyword, volume, positive, neutral,
+    // negative, top_category}) by deriving net = (positive − negative) /
+    // volume — without this, live API rows would all silently score 0 and
+    // land in the cold half. Throws on an unknown mode — a typo must fail
+    // tests loudly, not silently render nothing.
     function partitionThemes(themes, mode) {
         if (mode !== 'warm' && mode !== 'cold') {
             throw new Error(`partitionThemes: unknown mode "${mode}"`);
@@ -330,6 +334,10 @@
         const netOf = (t) => {
             if (t && Number.isFinite(t.net)) return t.net;
             if (t && Number.isFinite(t.sent)) return t.sent; // prototype shape
+            if (t && Number.isFinite(t.positive) && Number.isFinite(t.negative)
+                && Number.isFinite(t.volume) && t.volume > 0) {
+                return (t.positive - t.negative) / t.volume;  // /api/themes shape
+            }
             return 0;
         };
         const picked = list.filter(t => mode === 'warm'
