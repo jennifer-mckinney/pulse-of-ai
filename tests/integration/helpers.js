@@ -72,8 +72,9 @@ async function insertMethodologyVersions() {
  * @param {string} sourceId
  * @param {string} jobId
  * @param {{ sentimentMvId, relevanceMvId, discourseMvId }} mvIds
- * @param {{ location?, indicator?, comparative?, externalId?, collectedAt? }} opts
+ * @param {{ location?, indicator?, comparative?, externalId?, collectedAt?, keywords? }} opts
  *        collectedAt: Date or ISO string; null lets the DB default to NOW().
+ *        keywords: matched_keywords stored on the relevance result.
  * @returns {Promise<string>}  UUID of the inserted raw_post
  */
 async function insertPostWithFullPipeline(sourceId, jobId, mvIds, {
@@ -82,6 +83,7 @@ async function insertPostWithFullPipeline(sourceId, jobId, mvIds, {
     comparative = 0.5,
     externalId  = null,
     collectedAt = null,
+    keywords    = ['ai', 'machine learning'],
 } = {}) {
     const content = `Test post ${externalId || Math.random()}`;
     const hash    = crypto.createHash('sha256').update(content).digest('hex');
@@ -124,8 +126,8 @@ async function insertPostWithFullPipeline(sourceId, jobId, mvIds, {
     await dbRun(
         `INSERT INTO relevance_results
             (raw_post_id, audit_id, score, matched_keywords, is_relevant)
-         VALUES ($1, $2, 0.6, ARRAY['ai', 'machine learning'], true)`,
-        [post.id, relAudit.id],
+         VALUES ($1, $2, 0.6, $3::text[], true)`,
+        [post.id, relAudit.id, keywords],
     );
 
     // Discourse: audit log + derived result
