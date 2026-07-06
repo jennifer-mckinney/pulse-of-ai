@@ -72,7 +72,8 @@ async function insertMethodologyVersions() {
  * @param {string} sourceId
  * @param {string} jobId
  * @param {{ sentimentMvId, relevanceMvId, discourseMvId }} mvIds
- * @param {{ location?, indicator?, comparative?, externalId? }} opts
+ * @param {{ location?, indicator?, comparative?, externalId?, collectedAt? }} opts
+ *        collectedAt: Date or ISO string; null lets the DB default to NOW().
  * @returns {Promise<string>}  UUID of the inserted raw_post
  */
 async function insertPostWithFullPipeline(sourceId, jobId, mvIds, {
@@ -80,18 +81,21 @@ async function insertPostWithFullPipeline(sourceId, jobId, mvIds, {
     indicator   = 'positive',
     comparative = 0.5,
     externalId  = null,
+    collectedAt = null,
 } = {}) {
     const content = `Test post ${externalId || Math.random()}`;
     const hash    = crypto.createHash('sha256').update(content).digest('hex');
     const extId   = externalId || hash.slice(0, 16);
 
-    // raw_posts
+    // raw_posts — COALESCE keeps the NOW() default when no explicit timestamp
+    // is requested (a plain $6 = NULL would store NULL, not the column default)
     const post = await dbRun(
-        `INSERT INTO raw_posts (source_id, external_id, content, content_hash, location)
-         VALUES ($1, $2, $3, $4, $5)
+        `INSERT INTO raw_posts (source_id, external_id, content, content_hash, location, collected_at)
+         VALUES ($1, $2, $3, $4, $5, COALESCE($6::timestamptz, NOW()))
          ON CONFLICT (source_id, external_id) DO UPDATE SET content = EXCLUDED.content
          RETURNING id`,
-        [sourceId, extId, content, hash, location],
+        [sourceId, extId, content, hash, location,
+         collectedAt instanceof Date ? collectedAt.toISOString() : collectedAt],
     );
 
     // Sentiment: audit log + derived result
