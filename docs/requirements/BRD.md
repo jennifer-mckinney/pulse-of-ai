@@ -106,7 +106,7 @@ Objectives are taken directly from the specification's objectives table (spec §
 | **Open-source, self-hosted ethos** | No data leaves the operator's infrastructure for inference or embedding; managed AI APIs were explicitly rejected on GDPR and lock-in grounds; the stack is composed of mature open-source components and can run on a single host (spec §5, §15) |
 | **Layered retention** | Post-level detail retained 3 months, then compacted into permanent monthly rollups with content nulled and embeddings deleted — bounding both privacy exposure and storage cost while preserving research-grade trends (spec §19) |
 | **Source economics** | Almost all 50 sources use free APIs or RSS; the only recurring data cost under decision is one commercial platform API (~$100/month), with free substitutes identified (spec §16, §17) |
-| **Quality bar** | Nothing ships without passing tests, 80% coverage, and the ethical quality gates (all thresholds documented, all decisions auditable, no PII in the database, bias assessment on every job) (spec §14) |
+| **Quality bar** | Nothing ships without passing tests, 98% coverage, and the ethical quality gates (all thresholds documented, all decisions auditable, no PII in the database, bias assessment on every job) (spec §14) |
 
 ## 8. Risks
 
