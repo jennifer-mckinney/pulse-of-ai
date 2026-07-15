@@ -217,4 +217,12 @@ describe('saveSentiment()', () => {
         expect(result.raw_post_id).toBe(postId);
         expect(result.indicator).toBeDefined();
     });
+
+    it('throws when post does not exist', async () => {
+        const jobId  = await insertJob();
+        const mvId   = await sentimentMethodologyId();
+        const fakePostId = 99999999; // Non-existent post ID
+
+        await expect(saveSentiment(fakePostId, jobId, mvId)).rejects.toThrow();
+    });
 });
