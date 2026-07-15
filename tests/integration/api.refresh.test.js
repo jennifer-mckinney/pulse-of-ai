@@ -84,4 +84,55 @@ describe('POST /api/refresh', () => {
 
         expect(res.status).toBe(201);
     });
+
+    it('background job completes and marks job as completed when sources exist', async () => {
+        // Insert some data sources so the background job has work to do
+        const { insertSource } = require('./helpers');
+        await insertSource('refresh-bg-src-1');
+        await insertSource('refresh-bg-src-2');
+
+        const res = await request(app).post('/api/refresh');
+        const jobId = res.body.job_id;
+
+        expect(res.status).toBe(201);
+
+        // Wait for the background job to execute (should be nearly instant)
+        // Poll up to 2 seconds for the job to complete
+        let job;
+        for (let i = 0; i < 20; i++) {
+            job = await dbGet(
+                'SELECT id, status, completed_at FROM processing_jobs WHERE id = $1',
+                [jobId],
+            );
+            if (job && job.status === 'completed') break;
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+
+        expect(job).toBeDefined();
+        expect(job.status).toBe('completed');
+        expect(job.completed_at).not.toBeNull();
+    });
+
+    it('background job completes and marks job as completed when no sources exist', async () => {
+        const res = await request(app).post('/api/refresh');
+        const jobId = res.body.job_id;
+
+        expect(res.status).toBe(201);
+
+        // Wait for the background job to execute
+        // Poll up to 2 seconds for the job to complete
+        let job;
+        for (let i = 0; i < 20; i++) {
+            job = await dbGet(
+                'SELECT id, status, completed_at FROM processing_jobs WHERE id = $1',
+                [jobId],
+            );
+            if (job && job.status === 'completed') break;
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+
+        expect(job).toBeDefined();
+        expect(job.status).toBe('completed');
+        expect(job.completed_at).not.toBeNull();
+    });
 });

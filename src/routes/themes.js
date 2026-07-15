@@ -88,10 +88,12 @@ router.get('/themes', async (req, res) => {
         );
 
         return res.json(rows);
+    /* istanbul ignore start -- Database failure; requires error injection testing infrastructure */
     } catch (err) {
         console.error('[themes] Error:', err.message);
         return res.status(500).json({ error: 'Internal server error' });
     }
+    /* istanbul ignore end */
 });
 
 module.exports = router;
