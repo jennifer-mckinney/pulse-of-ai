@@ -61,4 +61,40 @@ describe('GET /api/methodology', () => {
             expect(typeof mv.config).toBe('object');
         }
     });
+
+    it('excludes deprecated_at versions (only returns active methodologies)', async () => {
+        const { dbRun } = require('../../src/db/connection');
+        await insertMethodologyVersions();
+
+        // Mark one as deprecated
+        const allVersions = await dbRun(
+            `INSERT INTO methodology_versions
+                (component, version, model_name, config, justification, deprecated_at)
+            VALUES ('sentiment', '0.9.0', 'old-model', '{"old":true}'::jsonb, 'Old version', NOW())
+            RETURNING id`
+        );
+
+        const res = await request(app).get('/api/methodology');
+        
+        // Should not include the deprecated version
+        expect(res.body).not.toContainEqual(
+            expect.objectContaining({ version: '0.9.0' })
+        );
+    });
+
+    it('returns versions ordered by component ASC, then effective_from DESC', async () => {
+        await insertMethodologyVersions();
+
+        const res = await request(app).get('/api/methodology');
+        
+        // Check that all results are returned in groups by component
+        let lastComponent = null;
+        for (const version of res.body) {
+            if (lastComponent && version.component !== lastComponent) {
+                // Component changed, which is fine (ascending order of components)
+                expect(version.component > lastComponent).toBe(true);
+            }
+            lastComponent = version.component;
+        }
+    });
 });

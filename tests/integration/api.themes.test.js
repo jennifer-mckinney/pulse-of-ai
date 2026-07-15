@@ -169,4 +169,69 @@ describe('GET /api/themes', () => {
         expect(res.status).toBe(200);
         expect(res.body).toEqual([]);
     });
+
+    it('returns the dominant sentiment for each keyword', async () => {
+        const social = await insertSource('themes-sentiment', 'social');
+        const jobId  = await insertJob();
+        const mvIds  = await insertMethodologyVersions();
+
+        // "future": 3 posts, all negative
+        for (let i = 1; i <= 3; i++) {
+            await insertPostWithFullPipeline(social, jobId, mvIds,
+                { indicator: 'negative', externalId: `th-fut${i}`, keywords: ['future'] });
+        }
+
+        const res = await request(app).get('/api/themes');
+        expect(res.status).toBe(200);
+        expect(res.body).toHaveLength(1);
+        expect(res.body[0]).toMatchObject({
+            keyword:  'future',
+            volume:   3,
+            positive: 0,
+            neutral:  0,
+            negative: 3,
+        });
+    });
+
+    it('limits results to 12 themes', async () => {
+        const social = await insertSource('themes-limit', 'social');
+        const jobId  = await insertJob();
+        const mvIds  = await insertMethodologyVersions();
+
+        // Create 15 different keywords with 3+ posts each
+        for (let k = 1; k <= 15; k++) {
+            const keyword = `keyword${k}`;
+            for (let i = 1; i <= 3; i++) {
+                await insertPostWithFullPipeline(social, jobId, mvIds,
+                    { externalId: `th-lim${k}-${i}`, keywords: [keyword] });
+            }
+        }
+
+        const res = await request(app).get('/api/themes');
+        expect(res.status).toBe(200);
+        expect(res.body.length).toBeLessThanOrEqual(12);
+    });
+
+    it('sorts by volume DESC, then keyword ASC for deterministic tie-break', async () => {
+        const social = await insertSource('themes-sort', 'social');
+        const jobId  = await insertJob();
+        const mvIds  = await insertMethodologyVersions();
+
+        // Create two keywords with same volume (3 posts each)
+        // "alpha" should come before "beta" in the alphabetical tie-break
+        for (let i = 1; i <= 3; i++) {
+            await insertPostWithFullPipeline(social, jobId, mvIds,
+                { externalId: `th-sort-a${i}`, keywords: ['alpha'] });
+            await insertPostWithFullPipeline(social, jobId, mvIds,
+                { externalId: `th-sort-b${i}`, keywords: ['beta'] });
+        }
+
+        const res = await request(app).get('/api/themes');
+        expect(res.status).toBe(200);
+        expect(res.body.length).toBe(2);
+        
+        // Both have volume 3, so "alpha" should come first (alphabetically)
+        expect(res.body[0].keyword).toBe('alpha');
+        expect(res.body[1].keyword).toBe('beta');
+    });
 });
