@@ -194,4 +194,78 @@ describe('POST /api/query', () => {
         expect(res.status).toBe(400);
         expect(res.body).toEqual({ error: 'location must be a non-empty string' });
     });
+
+    it('returns 400 when limit is 0', async () => {
+        const res = await request(app).post('/api/query').send({ limit: 0 });
+        expect(res.status).toBe(400);
+        expect(res.body).toEqual({ error: 'limit must be a positive integer' });
+    });
+
+    it('returns 400 when limit is negative', async () => {
+        const res = await request(app).post('/api/query').send({ limit: -5 });
+        expect(res.status).toBe(400);
+        expect(res.body).toEqual({ error: 'limit must be a positive integer' });
+    });
+
+    it('returns 400 when limit is not numeric', async () => {
+        const res = await request(app).post('/api/query').send({ limit: 'not-a-number' });
+        expect(res.status).toBe(400);
+        expect(res.body).toEqual({ error: 'limit must be a positive integer' });
+    });
+
+    it('filters by from date only', async () => {
+        const srcId = await insertSource('query-from');
+        const jobId = await insertJob();
+        const mvIds = await insertMethodologyVersions();
+
+        // Create posts at different times
+        await insertPostWithFullPipeline(srcId, jobId, mvIds, { externalId: 'qfrom-1' });
+        
+        const now = new Date();
+        const oneDayAgo = new Date(now.getTime() - 86400000); // 1 day ago
+        const from = oneDayAgo.toISOString();
+
+        const res = await request(app).post('/api/query').send({ from });
+        
+        expect(res.status).toBe(200);
+        expect(res.body.query.from).toBe(from);
+        expect(res.body.results).toBeDefined();
+    });
+
+    it('filters by to date only', async () => {
+        const srcId = await insertSource('query-to');
+        const jobId = await insertJob();
+        const mvIds = await insertMethodologyVersions();
+
+        await insertPostWithFullPipeline(srcId, jobId, mvIds, { externalId: 'qto-1' });
+        
+        const now = new Date();
+        const to = now.toISOString();
+
+        const res = await request(app).post('/api/query').send({ to });
+        
+        expect(res.status).toBe(200);
+        expect(res.body.query.to).toBe(to);
+        expect(res.body.results).toBeDefined();
+    });
+
+    it('filters by both from and to dates', async () => {
+        const srcId = await insertSource('query-from-to');
+        const jobId = await insertJob();
+        const mvIds = await insertMethodologyVersions();
+
+        await insertPostWithFullPipeline(srcId, jobId, mvIds, { externalId: 'qft-1' });
+        
+        const now = new Date();
+        const oneDayAgo = new Date(now.getTime() - 86400000);
+        const from = oneDayAgo.toISOString();
+        const to = now.toISOString();
+
+        const res = await request(app).post('/api/query').send({ from, to });
+        
+        expect(res.status).toBe(200);
+        expect(res.body.query.from).toBe(from);
+        expect(res.body.query.to).toBe(to);
+        expect(res.body.results).toBeDefined();
+    });
 });
