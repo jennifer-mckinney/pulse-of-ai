@@ -19,6 +19,7 @@
     if (typeof module === 'object' && module.exports) {
         module.exports = factory();          // Node / jest
     } else {
+        /* istanbul ignore next -- Browser UMD global; unreachable in Node tests */
         root.PulseData = factory();          // browser global
     }
 }(typeof self !== 'undefined' ? self : this, function () {

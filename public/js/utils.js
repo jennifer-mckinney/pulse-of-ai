@@ -10,6 +10,7 @@
     if (typeof module === 'object' && module.exports) {
         module.exports = factory(require('./config/design.config')); // Node / jest
     } else {
+        /* istanbul ignore next -- Browser UMD global; unreachable in Node tests */
         root.PulseUtils = factory(root.PulseDesignConfig);           // browser global
     }
 }(typeof self !== 'undefined' ? self : this, function (designConfig) {
