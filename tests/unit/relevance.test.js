@@ -185,4 +185,12 @@ describe('saveRelevance()', () => {
         expect(result).toBeDefined();
         expect(result.raw_post_id).toBe(postId);
     });
+
+    it('throws when post does not exist', async () => {
+        const jobId  = await insertJob();
+        const mvId   = await relevanceMvId();
+        const fakePostId = 99999999; // Non-existent post ID
+
+        await expect(saveRelevance(fakePostId, jobId, mvId)).rejects.toThrow();
+    });
 });

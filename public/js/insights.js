@@ -14,6 +14,7 @@
     if (typeof module === 'object' && module.exports) {
         module.exports = factory(require('./utils'));   // Node / jest
     } else {
+        /* istanbul ignore next -- Browser UMD global; unreachable in Node tests */
         root.PulseInsights = factory(root.PulseUtils);  // browser global
     }
 }(typeof self !== 'undefined' ? self : this, function (utils) {

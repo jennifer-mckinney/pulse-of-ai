@@ -23,6 +23,7 @@
             require('./insights'),
             require('./config/story.config'));
     } else {
+        /* istanbul ignore next -- Browser UMD global; unreachable in Node tests */
         root.PulseChapters = factory(
             root.PulseUtils, root.PulseInsights, root.PulseStoryConfig);
     }

@@ -76,4 +76,16 @@ describe('GET /api/health', () => {
         const res = await request(app).get('/api/health');
         expect(res.body.active_alerts).toHaveLength(0);
     });
+
+    it('returns multiple unresolved alerts with correct ordering', async () => {
+        await insertAlert({ alertType: 'location_concentration', severity: 'warning' });
+        await insertAlert({ alertType: 'bias_violation', severity: 'critical' });
+
+        const res = await request(app).get('/api/health');
+        
+        expect(res.body.active_alerts.length).toBeGreaterThanOrEqual(2);
+
+        const [a0, a1] = res.body.active_alerts;
+        expect(new Date(a0.created_at).getTime())
+            .toBeGreaterThanOrEqual(new Date(a1.created_at).getTime());
 });

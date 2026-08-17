@@ -190,6 +190,32 @@ describe('checkLocationConcentration()', () => {
         expect(alert).toBeDefined();
         expect(['warning', 'critical']).toContain(alert.severity);
     });
+
+    it('handles zero located posts gracefully', async () => {
+        const srcId  = await insertSource('loc-test-src-5');
+        const jobId  = await insertJob();
+        const mvIds  = await insertMethodologyVersions();
+        const biasMv = await insertBiasMv();
+
+        // Insert posts WITHOUT locations (location: null)
+        for (let i = 0; i < 5; i++) {
+            await insertPostWithSentiment(srcId, jobId, mvIds.sentimentMvId, { externalId: `no-loc-${i}` });
+        }
+
+        const result = await checkLocationConcentration(jobId, biasMv);
+        expect(result.isViolation).toBe(false);
+        expect(result.metricValue).toBe(0);
+        expect(result.groupValue).toBeNull();
+
+        // Verify assessment was written with default values
+        const assessment = await dbGet(
+            `SELECT * FROM bias_assessments WHERE job_id = $1 AND assessment_type = 'location_concentration'`,
+            [jobId],
+        );
+        expect(assessment).toBeDefined();
+        expect(assessment.is_violation).toBe(false);
+        expect(assessment.group_value).toBe('none');
+    });
 });
 
 // ─── checkPlatformSentimentParity() ──────────────────────────────────────────
@@ -269,6 +295,28 @@ describe('checkNegativeDominance()', () => {
         const result = await checkNegativeDominance(jobId, biasMv);
         expect(result.isViolation).toBe(true);
         expect(result.metricValue).toBeCloseTo(0.8, 2);
+    });
+
+    it('handles zero posts with sentiment gracefully', async () => {
+        const srcId  = await insertSource('neg-dom-src-3');
+        const jobId  = await insertJob();
+        const mvIds  = await insertMethodologyVersions();
+        const biasMv = await insertBiasMv();
+
+        // Job exists but has no posts (neither positive nor negative)
+        // checkNegativeDominance queries for posts grouped by indicator — should find zero
+        const result = await checkNegativeDominance(jobId, biasMv);
+        expect(result.isViolation).toBe(false);
+        expect(result.metricValue).toBe(0);
+
+        // Verify assessment was written with default values
+        const assessment = await dbGet(
+            `SELECT * FROM bias_assessments WHERE job_id = $1 AND assessment_type = 'negative_dominance'`,
+            [jobId],
+        );
+        expect(assessment).toBeDefined();
+        expect(assessment.is_violation).toBe(false);
+        expect(assessment.group_value).toBe('all');
     });
 });
 

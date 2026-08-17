@@ -109,6 +109,34 @@ describe('normalisePost()', () => {
         expect(normalisePost(p1, 'reddit').contentHash)
             .toBe(normalisePost(p2, 'reddit').contentHash);
     });
+
+    it('uses generic fallback for non-reddit source types (prioritizes text, body, content, title)', () => {
+        // Test with 'text' field (highest priority)
+        const payload1 = { id: 'news-123', text: 'News article content' };
+        const result1 = normalisePost(payload1, 'news');
+        expect(result1.content).toBe('News article content');
+        expect(result1.externalId).toBe('news-123');
+
+        // Test with 'body' field (second priority)
+        const payload2 = { id: 'comment-456', body: 'User comment text' };
+        const result2 = normalisePost(payload2, 'twitter');
+        expect(result2.content).toBe('User comment text');
+
+        // Test with 'content' field (third priority)
+        const payload3 = { id: 'post-789', content: 'Blog post content' };
+        const result3 = normalisePost(payload3, 'blog');
+        expect(result3.content).toBe('Blog post content');
+
+        // Test with 'title' field only (fourth priority)
+        const payload4 = { id: 'hn-999', title: 'HN story title' };
+        const result4 = normalisePost(payload4, 'hackernews');
+        expect(result4.content).toBe('HN story title');
+
+        // Test empty fallback (all fields missing)
+        const payload5 = { id: 'empty-000' };
+        const result5 = normalisePost(payload5, 'social');
+        expect(result5.content).toBe('');
+    });
 });
 
 // ─── ingestPost() ────────────────────────────────────────────────────────────
