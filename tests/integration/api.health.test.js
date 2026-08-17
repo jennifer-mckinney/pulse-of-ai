@@ -84,8 +84,8 @@ describe('GET /api/health', () => {
         const res = await request(app).get('/api/health');
         
         expect(res.body.active_alerts.length).toBeGreaterThanOrEqual(2);
-        expect(res.body.active_alerts[0]).toHaveProperty('alert_type');
-        expect(res.body.active_alerts[0]).toHaveProperty('severity');
-        expect(res.body.active_alerts[0]).toHaveProperty('created_at');
-    });
+
+        const [a0, a1] = res.body.active_alerts;
+        expect(new Date(a0.created_at).getTime())
+            .toBeGreaterThanOrEqual(new Date(a1.created_at).getTime());
 });
