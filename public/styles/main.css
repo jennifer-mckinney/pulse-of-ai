@@ -469,3 +469,16 @@ body {
   }
   .drawer { transition: none; }
 }
+
+/* ── No-JS fallback (index.html <noscript>) ───────────────────────────────────
+   Classes instead of inline style= attributes so the CSP can stay strict
+   (style-src 'self', no 'unsafe-inline'). */
+.noscript-fallback {
+  max-width: 640px;
+  margin: 15vh auto 0;
+  padding: 0 24px;
+  font-family: system-ui, sans-serif;
+}
+.noscript-title {
+  letter-spacing: -0.02em;
+}

@@ -16,8 +16,10 @@
      (The no-WebGL runtime fallback — ranked city list from the same data —
      is globe.js's job in C2; this block covers no-JS entirely.) -->
 <noscript>
-  <div style="max-width: 640px; margin: 15vh auto 0; padding: 0 24px; font-family: system-ui, sans-serif;">
-    <h1 style="letter-spacing: -0.02em;">The Pulse of AI</h1>
+  <!-- Styled via .noscript-fallback classes in main.css — no inline style=
+       attributes anywhere, so the CSP never needs style-src 'unsafe-inline'. -->
+  <div class="noscript-fallback">
+    <h1 class="noscript-title">The Pulse of AI</h1>
     <p>This is an interactive, scroll-driven view of global AI discourse:
        city-level sentiment on a rotating globe, a ten-chapter guided story,
        and a per-post audit trail behind every score.</p>

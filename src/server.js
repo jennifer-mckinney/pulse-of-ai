@@ -41,6 +41,30 @@ const app  = express();
 const PORT = process.env.PORT || 3000;
 
 // ─── Global middleware ────────────────────────────────────────────────────────
+
+// Security headers — set on EVERY response (static assets included), so this
+// runs before express.static. The CSP is deliberately strict: the frontend is
+// fully self-hosted (FR-25 — vendored fonts/world-atlas, no CDN, no inline
+// scripts or style attributes), so no 'unsafe-inline' anywhere.
+const CSP = [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "frame-ancestors 'none'",
+].join('; ');
+
+app.use((req, res, next) => {
+    res.set({
+        'Content-Security-Policy': CSP,
+        'X-Content-Type-Options':  'nosniff',
+        'X-Frame-Options':         'DENY',
+        'Referrer-Policy':         'no-referrer',
+    });
+    next();
+});
+
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../public')));

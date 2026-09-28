@@ -11,6 +11,18 @@ test('landing: canvas painted, intro lede, header chips, seeded health state', a
     const errors = consoleErrors(page);
     await gotoAndWaitForData(page);
 
+    // Security headers (F1): the strict CSP must be present on the document
+    // response — and since the whole suite asserts a clean console, any CSP
+    // violation the policy would cause shows up as a console error here.
+    const headers = await page.request.get('/').then((r) => r.headers());
+    expect(headers['content-security-policy']).toContain("default-src 'self'");
+    expect(headers['content-security-policy']).toContain("script-src 'self'");
+    expect(headers['content-security-policy']).toContain("frame-ancestors 'none'");
+    expect(headers['content-security-policy']).not.toContain('unsafe-inline');
+    expect(headers['x-content-type-options']).toBe('nosniff');
+    expect(headers['x-frame-options']).toBe('DENY');
+    expect(headers['referrer-policy']).toBe('no-referrer');
+
     // Canvas present inside the globe mount.
     const canvas = page.locator('#globe-wrap canvas');
     await expect(canvas).toHaveCount(1);
