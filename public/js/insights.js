@@ -7,20 +7,24 @@
 // (never innerHTML), so the interpolated strings are XSS-safe by construction.
 // Do NOT "helpfully" switch the consumers to HTML rendering.
 //
-// Dual export guard with dependency injection: CommonJS requires utils for
-// jest; browser script tags read the window global (load utils.js BEFORE
-// this file). Same pattern as public/js/chapters.js.
+// Dual export guard with dependency injection: CommonJS requires utils and
+// the design config for jest; browser script tags read the window globals
+// (load config/design.config.js and utils.js BEFORE this file — the
+// index.html script order is a contract). Same pattern as chapters.js.
 (function (root, factory) {
     if (typeof module === 'object' && module.exports) {
-        module.exports = factory(require('./utils'));   // Node / jest
+        module.exports = factory(                       // Node / jest
+            require('./utils'),
+            require('./config/design.config'));
     } else {
         /* istanbul ignore next -- Browser UMD global; unreachable in Node tests */
-        root.PulseInsights = factory(root.PulseUtils);  // browser global
+        root.PulseInsights = factory(root.PulseUtils, root.PulseDesignConfig);
     }
-}(typeof self !== 'undefined' ? self : this, function (utils) {
+}(typeof self !== 'undefined' ? self : this, function (utils, designConfig) {
     'use strict';
 
     const { netSentiment } = utils;
+    const CATEGORIES = designConfig.CATEGORIES;
 
     // Cities with fewer than MIN_TOTAL posts are excluded from SHARE-based
     // superlatives (a 4-post city being "100% positive" is noise, not signal).
@@ -309,8 +313,44 @@
                 topSource,
             };
         });
-        rows.sort((a, b) => (b.share - a.share)
-            || (a.category < b.category ? -1 : a.category > b.category ? 1 : 0));
+        rows.sort(compareRibbonRows);
+        return rows;
+    }
+
+    // Shared ribbon ordering: share descending, ties alphabetical — zero
+    // rows therefore always trail the data rows, alphabetically.
+    function compareRibbonRows(a, b) {
+        return (b.share - a.share)
+            || (a.category < b.category ? -1 : a.category > b.category ? 1 : 0);
+    }
+
+    // allCategoryRows: ribbonRows padded to the CANONICAL taxonomy
+    // (design.config CATEGORIES — spec §17). Categories with no posts in
+    // the snapshot get an explicit zero row, so every enumeration surface
+    // (ribbon segments, explore chips, CH05 legend, "categories tracked"
+    // copy) always renders the full taxonomy — the prototype marimekko's
+    // "all categories, always" contract — instead of silently dropping
+    // quiet categories. Non-canonical categories present in the data are
+    // kept (never hidden); membership is compared case-insensitively so a
+    // display-cased spelling is not duplicated. Share/net ranking surfaces
+    // (drivers/messengers cards, tooltip top-4) stay on ribbonRows /
+    // catBreakdown — a zero row must never be named a "leader".
+    function allCategoryRows(cities) {
+        const rows = ribbonRows(cities);
+        const present = new Set(
+            rows.map(r => String(r.category).toLowerCase()));
+        for (const slug of CATEGORIES) {
+            if (present.has(slug)) continue;
+            rows.push({
+                category: slug,
+                share: 0,
+                volume: 0,
+                net: 0,
+                split: { pos: 0, neu: 0, neg: 0 },
+                topSource: null,
+            });
+        }
+        rows.sort(compareRibbonRows);
         return rows;
     }
 
@@ -459,6 +499,7 @@
         catBreakdown,
         widestCategoryDivide,
         ribbonRows,
+        allCategoryRows,
         partitionThemes,
     };
 }));

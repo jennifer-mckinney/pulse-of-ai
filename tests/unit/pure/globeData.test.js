@@ -16,6 +16,7 @@
 'use strict';
 
 const data = require('../../../public/js/data');
+const design = require('../../../public/js/config/design.config');
 const { launchCities } =
     require('../../../public/js/config/cities.config.js');
 
@@ -298,10 +299,12 @@ describe('DEMO_DATA / buildDemoData — registry-derived demo set', () => {
             }
             dominants.add(row.dominant);
         }
-        // All three dominants and a multi-category palette must appear so
-        // every story chapter has leaders/hotspots to talk about (FR-22).
+        // All three dominants must appear so every story chapter has
+        // leaders/hotspots to talk about (FR-22), and the demo must put
+        // VOLUME behind every canonical category (design.config CATEGORIES)
+        // so no chip/legend/ribbon segment sits at zero in demo mode.
         expect(dominants).toEqual(new Set(['positive', 'neutral', 'negative']));
-        expect(categories.size).toBeGreaterThanOrEqual(5);
+        expect(categories).toEqual(new Set(design.CATEGORIES));
     });
 
     test('buildDemoData tolerates non-array input as []', () => {

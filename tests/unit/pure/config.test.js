@@ -340,6 +340,22 @@ describe('design.config — themes and palettes', () => {
         expect(design.CAT_COLORS.blog).toBe('#7EE0FF');
     });
 
+    test('CATEGORIES is the canonical 7-slug taxonomy (spec §17) in spec order', () => {
+        // Enumeration surfaces (explore chips, CH05 legend, source ribbon,
+        // "categories tracked" copy) render from THIS list — categories with
+        // zero posts in the window must never vanish from the UI.
+        expect(design.CATEGORIES).toEqual([
+            'social', 'news', 'academic', 'policy',
+            'nonprofit', 'developer', 'blog',
+        ]);
+    });
+
+    test('every canonical category has a CAT_COLORS swatch', () => {
+        for (const slug of design.CATEGORIES) {
+            expect(design.CAT_COLORS[slug]).toMatch(HEX_RE);
+        }
+    });
+
     test('every category color is unique (categories must be tellable apart)', () => {
         const colors = Object.values(design.CAT_COLORS).map(c => c.toUpperCase());
         expect(new Set(colors).size).toBe(colors.length);

@@ -87,6 +87,20 @@
         tech:      '#F5D95A', // addition — the handoff "Forums" yellow, reused for the tech/forums-adjacent slug
     };
 
+    // ── Canonical category taxonomy (spec §17 — Source Taxonomy, Top 50) ────
+    // The 7 API slugs of data_sources.category (scripts/seed.js and
+    // GET /api/sources serve exactly these), in the spec's category order.
+    // Enumeration surfaces — explore chips, the CH05 category legend, the
+    // source ribbon and the "categories tracked" copy — render from THIS
+    // list (via insights.allCategoryRows), never from whichever categories
+    // happen to have posts in the window, so quiet categories (e.g. social /
+    // nonprofit / academic on a sparse seed) stay visible. CAT_COLORS keeps
+    // a swatch for every canonical slug plus the legacy 'tech' slug.
+    const CATEGORIES = [
+        'social', 'news', 'academic', 'policy',
+        'nonprofit', 'developer', 'blog',
+    ];
+
     // ── Severity colors (bias/health drawer) ────────────────────────────────
     const SEVERITY_COLORS = {
         alert: '#FF6E5E',
@@ -129,6 +143,7 @@
         DEFAULT_THEME,
         SENTIMENT_PALETTE,
         CAT_COLORS,
+        CATEGORIES,
         SEVERITY_COLORS,
         SENTIMENT_BUCKETS,
         GLOBE,

@@ -428,10 +428,33 @@ describe('ribbonModel — timeseries → marimekko rows (audit G23)', () => {
         // note: 'news' omitted — zero posts in the window
     ];
 
-    test('base segments come from the snapshot; shares sum to 1', () => {
+    test('always one segment per canonical category — data rows first, zero rows padded', () => {
         const rows = P.ribbonModel(cities(), timeseries(), {});
-        expect(rows.map(r => r.category)).toEqual(['social', 'news']);
+        // social/news carry the snapshot volume; the other five canonical
+        // categories render as explicit zero segments (prototype marimekko:
+        // ALL categories, always) instead of vanishing.
+        expect(rows.map(r => r.category)).toEqual([
+            'social', 'news',
+            'academic', 'blog', 'developer', 'nonprofit', 'policy',
+        ]);
         expect(rows.reduce((a, r) => a + r.share, 0)).toBeCloseTo(1);
+    });
+
+    test('zero-volume segments are honest: 0 volume, 0 share, flat sparkline, no words/site', () => {
+        for (const opts of [{}, { demo: true }]) {
+            const rows = P.ribbonModel(cities(), opts.demo ? null : timeseries(), opts);
+            const zero = rows.find(r => r.category === 'nonprofit');
+            expect(zero.volume).toBe(0);
+            expect(zero.share).toBe(0);
+            expect(zero.net).toBe(0);
+            expect(zero.split).toEqual({ pos: 0, neu: 0, neg: 0 });
+            expect(zero.site).toBeNull();
+            expect(zero.words).toEqual([]);
+            // Flat zero series (never a synthesized demo walk) → the ribbon
+            // draws a flat baseline sparkline, not fake activity.
+            expect(zero.series).toHaveLength(12);
+            expect(zero.series.every(v => v === 0)).toBe(true);
+        }
     });
 
     test('series is normalized 0..1 against the window max', () => {
@@ -483,6 +506,37 @@ describe('sparklinePoints', () => {
     });
 });
 
+describe('ribbonFlexPercents — zero-volume segments keep a readable sliver', () => {
+    test('proportional to share for normal rows', () => {
+        const pcts = P.ribbonFlexPercents([{ share: 0.75 }, { share: 0.25 }]);
+        expect(pcts[0]).toBeCloseTo(75);
+        expect(pcts[1]).toBeCloseTo(25);
+    });
+
+    test('zero-share rows get the minimum flex floor and totals stay 100', () => {
+        const pcts = P.ribbonFlexPercents([
+            { share: 0.9 }, { share: 0.1 }, { share: 0 }, { share: 0 },
+        ]);
+        expect(pcts).toHaveLength(4);
+        expect(pcts.reduce((a, b) => a + b, 0)).toBeCloseTo(100);
+        // Zero rows are visible (label + dot fit) but clearly the smallest.
+        expect(pcts[2]).toBeGreaterThan(0);
+        expect(pcts[2]).toBeCloseTo(pcts[3]);
+        expect(pcts[2]).toBeLessThan(pcts[1]);
+    });
+
+    test('all-zero input still splits evenly (no NaN / divide-by-zero)', () => {
+        const pcts = P.ribbonFlexPercents([{ share: 0 }, { share: 0 }]);
+        expect(pcts[0]).toBeCloseTo(50);
+        expect(pcts[1]).toBeCloseTo(50);
+    });
+
+    test('empty / non-array → empty array', () => {
+        expect(P.ribbonFlexPercents([])).toEqual([]);
+        expect(P.ribbonFlexPercents(null)).toEqual([]);
+    });
+});
+
 // ── Demo synthesis (FR-22) ──────────────────────────────────────────────────
 
 describe('demoPostsForCity — deterministic prototype-style posts', () => {
@@ -511,9 +565,21 @@ describe('demoPostsForCity — deterministic prototype-style posts', () => {
         expect(p.isDemo).toBe(true);
     });
 
-    test('first post uses the city dominant category pool', () => {
+    test('first post uses the city dominant category pool — every canonical category has one', () => {
+        for (const slug of design.CATEGORIES) {
+            const c = city('Cat-' + slug, 30, 10, 10, [
+                { source_name: 'src', source_category: slug,
+                  positive: 30, neutral: 10, negative: 10, total: 50 },
+            ]);
+            const [p] = P.demoPostsForCity(c, NOW);
+            expect(p.platform).toBe(slug);
+            expect(typeof p.source_name).toBe('string');
+        }
+    });
+
+    test('a non-canonical dominant category falls back to the canonical rotation', () => {
         const [p] = P.demoPostsForCity(techCity(), NOW);
-        expect(p.platform).toBe('tech');
+        expect(p.platform).toBe(design.CATEGORIES[0]); // 'social'
     });
 
     test('demo ids are never UUIDs (must not hit /api/audit — G16)', () => {

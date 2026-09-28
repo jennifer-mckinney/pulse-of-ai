@@ -69,55 +69,59 @@
     }
 
     // Region-keyed source templates: which sources plausibly appear per
-    // region (names match the seeded data_sources registry where one exists).
-    // Union of categories across regions is 6 — the demo must showcase the
-    // category palette without hardcoding the editorial "7 categories" claim
-    // (chapters derive the count from the data).
+    // region (names match the seeded data_sources registry where one
+    // exists). The union of source_category values across regions covers
+    // the FULL canonical taxonomy (design.config CATEGORIES, spec §17) so
+    // demo mode puts volume behind every category the chips / legend /
+    // ribbon enumerate — no zero segments in demo. Template LENGTHS are
+    // load-bearing: the seeded random walk in buildDemoData draws offsets
+    // from templates.length, so changing a region's length reshuffles that
+    // region's deterministic demo numbers (tests pin them).
     const REGION_SOURCES = {
         north_america: [
-            { source_name: 'reddit',        source_category: 'social' },
-            { source_name: 'hacker_news',   source_category: 'tech' },
-            { source_name: 'nytimes_tech',  source_category: 'news' },
-            { source_name: 'arxiv',         source_category: 'academic' },
-            { source_name: 'github_blog',   source_category: 'developer' },
+            { source_name: 'reddit',          source_category: 'social' },
+            { source_name: 'lesswrong',       source_category: 'blog' },
+            { source_name: 'nytimes_tech',    source_category: 'news' },
+            { source_name: 'arxiv',           source_category: 'academic' },
+            { source_name: 'github_blog',     source_category: 'developer' },
         ],
         south_america: [
-            { source_name: 'reddit',        source_category: 'social' },
-            { source_name: 'folha_tech',    source_category: 'news' },
-            { source_name: 'arxiv',         source_category: 'academic' },
-            { source_name: 'hacker_news',   source_category: 'tech' },
+            { source_name: 'reddit',          source_category: 'social' },
+            { source_name: 'folha_tech',      source_category: 'news' },
+            { source_name: 'arxiv',           source_category: 'academic' },
+            { source_name: 'access_now',      source_category: 'nonprofit' },
         ],
         europe: [
-            { source_name: 'guardian_tech', source_category: 'news' },
-            { source_name: 'eu_commission', source_category: 'policy' },
-            { source_name: 'reddit',        source_category: 'social' },
-            { source_name: 'arxiv',         source_category: 'academic' },
-            { source_name: 'github_blog',   source_category: 'developer' },
+            { source_name: 'guardian_tech',   source_category: 'news' },
+            { source_name: 'eu_commission',   source_category: 'policy' },
+            { source_name: 'reddit',          source_category: 'social' },
+            { source_name: 'arxiv',           source_category: 'academic' },
+            { source_name: 'algorithm_watch', source_category: 'nonprofit' },
         ],
         africa: [
-            { source_name: 'reddit',        source_category: 'social' },
-            { source_name: 'techcabal',     source_category: 'news' },
-            { source_name: 'arxiv',         source_category: 'academic' },
-            { source_name: 'github_blog',   source_category: 'developer' },
+            { source_name: 'reddit',          source_category: 'social' },
+            { source_name: 'techcabal',       source_category: 'news' },
+            { source_name: 'arxiv',           source_category: 'academic' },
+            { source_name: 'github_blog',     source_category: 'developer' },
         ],
         middle_east: [
-            { source_name: 'reddit',        source_category: 'social' },
-            { source_name: 'haaretz_tech',  source_category: 'news' },
-            { source_name: 'hacker_news',   source_category: 'tech' },
-            { source_name: 'arxiv',         source_category: 'academic' },
+            { source_name: 'reddit',          source_category: 'social' },
+            { source_name: 'haaretz_tech',    source_category: 'news' },
+            { source_name: 'substack_ai',     source_category: 'blog' },
+            { source_name: 'arxiv',           source_category: 'academic' },
         ],
         asia: [
-            { source_name: 'weibo',         source_category: 'social' },
-            { source_name: 'nikkei_tech',   source_category: 'news' },
-            { source_name: 'arxiv',         source_category: 'academic' },
-            { source_name: 'hacker_news',   source_category: 'tech' },
-            { source_name: 'gov_policy',    source_category: 'policy' },
+            { source_name: 'weibo',           source_category: 'social' },
+            { source_name: 'nikkei_tech',     source_category: 'news' },
+            { source_name: 'arxiv',           source_category: 'academic' },
+            { source_name: 'mozilla_ai',      source_category: 'nonprofit' },
+            { source_name: 'gov_policy',      source_category: 'policy' },
         ],
         oceania: [
-            { source_name: 'reddit',        source_category: 'social' },
-            { source_name: 'abc_tech',      source_category: 'news' },
-            { source_name: 'arxiv',         source_category: 'academic' },
-            { source_name: 'github_blog',   source_category: 'developer' },
+            { source_name: 'reddit',          source_category: 'social' },
+            { source_name: 'abc_tech',        source_category: 'news' },
+            { source_name: 'arxiv',           source_category: 'academic' },
+            { source_name: 'github_blog',     source_category: 'developer' },
         ],
     };
 
