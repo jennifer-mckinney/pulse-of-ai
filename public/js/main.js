@@ -8,7 +8,9 @@
 //   2. Run the header "time to insight" timer; expose freezeInsightTimer()
 //      so ui.js (C4) can freeze it at the first opened receipt (US-1).
 //   3. Wire the header health chip to GET /api/health (light + label only;
-//      the full health drawer is C4).
+//      the full health drawer is C4), re-polled on the api.config REFRESH_MS
+//      cadence so alerts raised after load turn the chip yellow without a
+//      page reload (FR-24).
 //   4. Wire the intro "Skip to the globe →" link and the skip-story pill to
 //      jump to the explore beat, so the page is navigable before story.js.
 //   5. Initialize globe.js / story.js / ui.js when present — and tolerate
@@ -143,6 +145,13 @@
         sizeSpacer();
         startInsightTimer();
         pollHealth();
+        // Health is a live signal, not a load-time snapshot: re-poll on the
+        // same refresh cadence as the data snapshot (story.js uses
+        // apiConfig.REFRESH_MS for loadAndRender) so the FR-24 traffic light
+        // reflects alerts that arrive while the page is open.
+        if (apiConfig && Number.isFinite(apiConfig.REFRESH_MS)) {
+            setInterval(pollHealth, apiConfig.REFRESH_MS);
+        }
         wireSkips();
         initModules();
     });
