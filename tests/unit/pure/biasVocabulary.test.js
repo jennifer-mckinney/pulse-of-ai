@@ -147,8 +147,10 @@ describe('buildLayers — per-job fairness layers for the audit receipt', () => 
 
     it('returns only planned layers (or []) when nothing was assessed', () => {
         expect(buildLayers([], null)).toEqual([]);
+        // With the config: the two planned layers PLUS the 'not computed
+        // for this job' placeholder for the parity layer — all honest n-a.
         const layers = buildLayers([], BIAS_CONFIG);
-        expect(layers).toHaveLength(2);
+        expect(layers).toHaveLength(3);
         expect(layers.every(l => l.status === 'n-a')).toBe(true);
     });
 
@@ -179,6 +181,28 @@ describe('buildLayers — per-job fairness layers for the audit receipt', () => 
         expect(layers[2].status).toBe('n-a');
         expect(layers[1].value).toBeNull();
         expect(layers[2].value).toBeNull();
+    });
+
+    it('serves an honest n-a placeholder for a named layer the job never computed', () => {
+        // A job with NO parity assessment still presents 'Demographic
+        // parity' — value null, config citation, 'not computed' note.
+        // Absence is stated, never papered over with fabricated values.
+        const layers = buildLayers([
+            { assessment_type: 'negative_dominance', metric_value: 0.4, threshold: 0.6, is_violation: false, severity: null },
+        ], BIAS_CONFIG);
+        expect(layers.map(l => l.name)).toEqual([
+            'Demographic parity',
+            'Equalized odds',
+            'Counterfactual fairness',
+            'Negative dominance',
+        ]);
+        expect(layers[0]).toMatchObject({
+            value:    null,
+            threshold: null,
+            citation: 'Barocas & Selbst (2016)',
+            status:   'n-a',
+            note:     'not computed for this job',
+        });
     });
 
     it('keeps assembled order when the config declares no layer_order', () => {

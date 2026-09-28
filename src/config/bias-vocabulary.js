@@ -123,6 +123,24 @@ function buildLayers(assessments, biasConfig) {
     const order = (biasConfig && Array.isArray(biasConfig.layer_order))
         ? biasConfig.layer_order
         : [];
+    // A named layer the job never computed (and that is not a declared
+    // planned layer either) still appears — as an HONEST n-a row with its
+    // config name/citation and a "not computed" note. Values are never
+    // fabricated; absence is stated, not hidden (the prototype's own
+    // layer-3 pattern).
+    for (const id of order) {
+        if (layers.some(l => l.assessment_type === id)) continue;
+        layers.push({
+            name:            layerName(id, biasConfig),
+            assessment_type: id,
+            value:           null,
+            threshold:       null,
+            citation:        citationFor(id, biasConfig),
+            status:          'n-a',
+            severity:        null,
+            note:            'not computed for this job',
+        });
+    }
     if (order.length > 0) {
         const rank = new Map(order.map((id, i) => [id, i]));
         return layers
