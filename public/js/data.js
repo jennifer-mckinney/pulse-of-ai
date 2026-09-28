@@ -25,77 +25,78 @@
 }(typeof self !== 'undefined' ? self : this, function () {
     'use strict';
 
-    // ── Demo fallback data (verbatim from map.js) ───────────────────────────────
+    // ── Demo fallback data (from map.js; C4 added ISO country codes to match
+    //    the live aggregation payload's city-registry `country` field) ────────────
     // Used when the API returns empty (DB not yet seeded). Showcases all visual elements.
     const DEMO_DATA = [
-        { city:'San Francisco', lat:37.7749,  lng:-122.4194, positive:142, neutral:89,  negative:47,  total:278, dominant:'positive', last_updated:new Date().toISOString(),
+        { city:'San Francisco', lat:37.7749,  lng:-122.4194, country:'US', positive:142, neutral:89,  negative:47,  total:278, dominant:'positive', last_updated:new Date().toISOString(),
             sources:[
                 { source_name:'reddit',      source_category:'social',   positive:65, neutral:40, negative:20, total:125 },
                 { source_name:'hacker_news', source_category:'tech',     positive:50, neutral:30, negative:15, total:95  },
                 { source_name:'arxiv',       source_category:'academic', positive:27, neutral:19, negative:12, total:58  },
             ]},
-        { city:'New York',      lat:40.7128,  lng:-74.0060,  positive:178, neutral:134, negative:88,  total:400, dominant:'positive', last_updated:new Date().toISOString(),
+        { city:'New York',      lat:40.7128,  lng:-74.0060, country:'US',  positive:178, neutral:134, negative:88,  total:400, dominant:'positive', last_updated:new Date().toISOString(),
             sources:[
                 { source_name:'reddit',       source_category:'social',   positive:70, neutral:55, negative:35, total:160 },
                 { source_name:'nytimes_tech', source_category:'news',     positive:50, neutral:45, negative:30, total:125 },
                 { source_name:'hacker_news',  source_category:'tech',     positive:38, neutral:24, negative:15, total:77  },
                 { source_name:'arxiv',        source_category:'academic', positive:20, neutral:10, negative:8,  total:38  },
             ]},
-        { city:'London',        lat:51.5074,  lng:-0.1278,   positive:88,  neutral:112, negative:67,  total:267, dominant:'neutral',  last_updated:new Date().toISOString(),
+        { city:'London',        lat:51.5074,  lng:-0.1278, country:'GB',   positive:88,  neutral:112, negative:67,  total:267, dominant:'neutral',  last_updated:new Date().toISOString(),
             sources:[
                 { source_name:'guardian_tech', source_category:'news',   positive:30, neutral:55, negative:32, total:117 },
                 { source_name:'reddit',        source_category:'social', positive:38, neutral:40, negative:22, total:100 },
                 { source_name:'bbc_tech',      source_category:'news',   positive:20, neutral:17, negative:13, total:50  },
             ]},
-        { city:'Berlin',        lat:52.5200,  lng:13.4050,   positive:55,  neutral:78,  negative:102, total:235, dominant:'negative', last_updated:new Date().toISOString(),
+        { city:'Berlin',        lat:52.5200,  lng:13.4050, country:'DE',   positive:55,  neutral:78,  negative:102, total:235, dominant:'negative', last_updated:new Date().toISOString(),
             sources:[
                 { source_name:'reddit',        source_category:'social',   positive:20, neutral:35, negative:45, total:100 },
                 { source_name:'eu_commission', source_category:'policy',   positive:10, neutral:30, negative:42, total:82  },
                 { source_name:'arxiv',         source_category:'academic', positive:25, neutral:13, negative:15, total:53  },
             ]},
-        { city:'Tokyo',         lat:35.6762,  lng:139.6503,  positive:195, neutral:67,  negative:30,  total:292, dominant:'positive', last_updated:new Date().toISOString(),
+        { city:'Tokyo',         lat:35.6762,  lng:139.6503, country:'JP',  positive:195, neutral:67,  negative:30,  total:292, dominant:'positive', last_updated:new Date().toISOString(),
             sources:[
                 { source_name:'reddit',  source_category:'social',   positive:80, neutral:30, negative:15, total:125 },
                 { source_name:'twitter', source_category:'social',   positive:75, neutral:25, negative:8,  total:108 },
                 { source_name:'arxiv',   source_category:'academic', positive:40, neutral:12, negative:7,  total:59  },
             ]},
-        { city:'Beijing',       lat:39.9042,  lng:116.4074,  positive:210, neutral:80,  negative:40,  total:330, dominant:'positive', last_updated:new Date().toISOString(),
+        { city:'Beijing',       lat:39.9042,  lng:116.4074, country:'CN',  positive:210, neutral:80,  negative:40,  total:330, dominant:'positive', last_updated:new Date().toISOString(),
             sources:[
                 { source_name:'weibo',  source_category:'social',   positive:90, neutral:35, negative:20, total:145 },
                 { source_name:'arxiv',  source_category:'academic', positive:75, neutral:25, negative:10, total:110 },
                 { source_name:'xinhua', source_category:'news',     positive:45, neutral:20, negative:10, total:75  },
             ]},
-        { city:'Singapore',     lat:1.3521,   lng:103.8198,  positive:120, neutral:55,  negative:25,  total:200, dominant:'positive', last_updated:new Date().toISOString(),
+        { city:'Singapore',     lat:1.3521,   lng:103.8198, country:'SG',  positive:120, neutral:55,  negative:25,  total:200, dominant:'positive', last_updated:new Date().toISOString(),
             sources:[
                 { source_name:'reddit',        source_category:'social',   positive:60, neutral:25, negative:10, total:95  },
                 { source_name:'arxiv',         source_category:'academic', positive:40, neutral:20, negative:10, total:70  },
                 { source_name:'straits_times', source_category:'news',     positive:20, neutral:10, negative:5,  total:35  },
             ]},
-        { city:'Seoul',         lat:37.5665,  lng:126.9780,  positive:155, neutral:60,  negative:25,  total:240, dominant:'positive', last_updated:new Date().toISOString(),
+        { city:'Seoul',         lat:37.5665,  lng:126.9780, country:'KR',  positive:155, neutral:60,  negative:25,  total:240, dominant:'positive', last_updated:new Date().toISOString(),
             sources:[
                 { source_name:'reddit',      source_category:'social',   positive:70, neutral:28, negative:12, total:110 },
                 { source_name:'korea_times', source_category:'news',     positive:55, neutral:20, negative:8,  total:83  },
                 { source_name:'arxiv',       source_category:'academic', positive:30, neutral:12, negative:5,  total:47  },
             ]},
-        { city:'São Paulo',     lat:-23.5505, lng:-46.6333,  positive:65,  neutral:88,  negative:47,  total:200, dominant:'neutral',  last_updated:new Date().toISOString(),
+        { city:'São Paulo',     lat:-23.5505, lng:-46.6333, country:'BR',  positive:65,  neutral:88,  negative:47,  total:200, dominant:'neutral',  last_updated:new Date().toISOString(),
             sources:[
                 { source_name:'reddit', source_category:'social',   positive:35, neutral:40, negative:20, total:95 },
                 { source_name:'folha',  source_category:'news',     positive:20, neutral:35, negative:20, total:75 },
                 { source_name:'arxiv',  source_category:'academic', positive:10, neutral:13, negative:7,  total:30 },
             ]},
-        { city:'Bangalore',     lat:12.9716,  lng:77.5946,   positive:145, neutral:55,  negative:20,  total:220, dominant:'positive', last_updated:new Date().toISOString(),
+        { city:'Bangalore',     lat:12.9716,  lng:77.5946, country:'IN',   positive:145, neutral:55,  negative:20,  total:220, dominant:'positive', last_updated:new Date().toISOString(),
             sources:[
                 { source_name:'reddit',         source_category:'social',   positive:70, neutral:28, negative:10, total:108 },
                 { source_name:'times_of_india', source_category:'news',     positive:45, neutral:17, negative:6,  total:68  },
                 { source_name:'arxiv',          source_category:'academic', positive:30, neutral:10, negative:4,  total:44  },
             ]},
-        { city:'Sydney',        lat:-33.8688, lng:151.2093,  positive:98,  neutral:67,  negative:35,  total:200, dominant:'positive', last_updated:new Date().toISOString(),
+        { city:'Sydney',        lat:-33.8688, lng:151.2093, country:'AU',  positive:98,  neutral:67,  negative:35,  total:200, dominant:'positive', last_updated:new Date().toISOString(),
             sources:[
                 { source_name:'reddit',   source_category:'social',   positive:55, neutral:35, negative:15, total:105 },
                 { source_name:'abc_tech', source_category:'news',     positive:30, neutral:22, negative:13, total:65  },
                 { source_name:'arxiv',    source_category:'academic', positive:13, neutral:10, negative:7,  total:30  },
             ]},
-        { city:'Toronto',       lat:43.6532,  lng:-79.3832,  positive:88,  neutral:72,  negative:40,  total:200, dominant:'positive', last_updated:new Date().toISOString(),
+        { city:'Toronto',       lat:43.6532,  lng:-79.3832, country:'CA',  positive:88,  neutral:72,  negative:40,  total:200, dominant:'positive', last_updated:new Date().toISOString(),
             sources:[
                 { source_name:'reddit',   source_category:'social',   positive:45, neutral:35, negative:20, total:100 },
                 { source_name:'cbc_tech', source_category:'news',     positive:30, neutral:25, negative:15, total:70  },
@@ -197,6 +198,11 @@
                 city: row.city,
                 lat,
                 lng,
+                // ISO country code from the backend city registry (C4: the
+                // explore city-detail header shows it). Optional — absent
+                // or non-string values become null, never rendered.
+                country: typeof row.country === 'string' && row.country !== ''
+                    ? row.country : null,
                 positive,
                 neutral,
                 negative,
