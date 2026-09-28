@@ -63,3 +63,7 @@ claude-netlog-*.json
 # Shell script iterations (committed versions only; working copies ignored)
 update_mapbox*.sh
 "update_mapbox copy.sh"
+
+# Playwright E2E artifacts (specs live in tests/e2e/; reports are transient)
+test-results/
+playwright-report/

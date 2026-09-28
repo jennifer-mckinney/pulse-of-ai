@@ -19,6 +19,7 @@
     "test:cov": "jest --coverage",
     "test:watch": "jest --watch",
     "test:quick": "bash scripts/test/run-unit.sh",
+    "test:e2e": "playwright test",
     "verify": "bash scripts/test/run-all.sh"
   },
   "keywords": [
@@ -51,6 +52,7 @@
     "ws": "^8.13.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "jest": "^29.7.0",
     "supertest": "^6.3.4"
   }
