@@ -2,7 +2,8 @@
 // scripts/seed.js
 // Seeds the database with:
 //   1. All 50 data_sources (7 categories) — config includes poll_interval_sec, URL/subreddit
-//   2. Initial methodology_versions for sentiment v1.0.0, relevance v1.0.0, discourse v1.0.0-DQI
+//   2. Initial methodology_versions: sentiment, relevance, discourse, bias,
+//      ingest, and audit_narration (all v1.0.0; discourse is v1.0.0-DQI)
 // Safe to re-run: uses INSERT ... ON CONFLICT DO NOTHING
 
 'use strict';
@@ -480,6 +481,63 @@ const METHODOLOGY_VERSIONS = [
             echo_chamber_cosine_threshold: 0.15,
         },
         justification: 'Deliberative Quality Index (DQI) — Steenbergen et al. (2003), operationalizing Habermas deliberative democracy theory. Applied to AI discourse with four improvements: (1) semantic argument deduplication via embeddings (cosine > 0.4 = novel), (2) echo chamber detection via cross-platform spread, (3) source authority weighting by category credibility, (4) NLP claim-evidence linkage detection. See TECHNICAL_SPEC.md §18.',
+    },
+    {
+        component: 'bias',
+        version: '1.0.0',
+        model_name: 'pulse-bias-monitor-v1',
+        config: {
+            // Thresholds read by src/pipeline/bias.js (DB-driven, no code deploy to change)
+            location_concentration_max: 0.35,
+            platform_parity_max_diff:   0.30,
+            negative_dominance_max:     0.60,
+            // Frontend display names for stored assessment_type values
+            layer_names: {
+                location_concentration:    'Location concentration',
+                platform_sentiment_parity: 'Demographic parity (source category)',
+                negative_dominance:        'Negative dominance',
+            },
+            // Literature/spec citations rendered next to each layer (audit
+            // receipt fairness layers + bias alert history)
+            citations: {
+                location_concentration:    'Suresh & Guttag (2021)',
+                platform_sentiment_parity: 'Barocas & Selbst (2016)',
+                negative_dominance:        'Suresh & Guttag (2021)',
+            },
+            // Declared-but-not-yet-computed layers: surfaced as N/A on the
+            // audit receipt so coverage claims stay honest
+            planned_layers: [
+                { id: 'equalized_odds',          name: 'Equalized odds',          citation: 'Hardt et al. (2016)',  note: 'Phase 3 — not yet enforced' },
+                { id: 'counterfactual_fairness', name: 'Counterfactual fairness', citation: 'Kusner et al. (2017)', note: 'Phase 3 — not yet enforced' },
+            ],
+            legal_basis: 'EU AI Act Article 13 - Transparency and provision of information',
+        },
+        justification: 'Three fairness checks run automatically after every processing job: location concentration (representation bias — Suresh & Guttag 2021), platform sentiment parity (demographic-parity-style outcome gap across source categories — Barocas & Selbst 2016), and negative dominance (selection bias toward controversy). Thresholds live in this config so they are auditable, versioned, and adjustable without a code change (AI Act §13). Equalized odds and counterfactual fairness are declared planned layers and reported as not-yet-enforced rather than omitted.',
+    },
+    {
+        component: 'ingest',
+        version: '1.0.0',
+        model_name: 'pulse-ingest-v1',
+        config: {
+            // Must match src/pipeline/ingest.js PII_FIELDS
+            pii_fields_removed:   ['author', 'author_fullname', 'username', 'user', 'email'],
+            location_granularity: 'city',
+            dedup_strategy:       'sha256-content-hash',
+            legal_basis:          'GDPR Article 6(1)(f) - Legitimate Interest',
+        },
+        justification: 'Public-source collection with PII minimisation at ingest: author identifiers are stripped from the raw payload before any database write, location is retained at city granularity only (GDPR data-minimisation), and content is SHA-256 hashed to give every downstream inference an immutable, non-reversible join key. Processing rests on legitimate interest (GDPR Art. 6(1)(f)) — aggregate discourse measurement over public posts with no profiling of identifiable individuals.',
+    },
+    {
+        component: 'audit_narration',
+        version: '1.0.0',
+        model_name: 'pulse-narration-templates-v1',
+        config: {
+            audiences: ['public', 'plain', 'config', 'researcher'],
+            renderer:  'src/config/audit-narration.js',
+            rendering: 'read-time deterministic templates over stored decision_audit_log output + methodology config; no per-post prose is generated or persisted',
+            reproduce_command: 'pulse replay --post {post_id} --methodology {component}@{version}',
+        },
+        justification: 'The audit endpoint serves four audience representations (public, journalist, regulator, researcher) of every decision step. The wording is part of the auditable surface, so the template set is registered here and version-bumped on any change — the API reports which narration version rendered a receipt. Templates only restate stored facts (cue words, scores, thresholds, versions); they never invent per-post content.',
     },
 ];
 
