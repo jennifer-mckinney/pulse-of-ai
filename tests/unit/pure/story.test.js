@@ -401,6 +401,36 @@ describe('themeNet — /api/themes row net-sentiment ladder', () => {
         expect(pure.themeNet({ positive: 1, negative: 1, volume: 0 })).toBe(0);
         expect(pure.themeNet(null)).toBe(0);
     });
+
+    test('is the insights.js export, not a copy (grumpy #4 — one derivation)', () => {
+        const insights = require('../../../public/js/insights');
+        expect(pure.themeNet).toBe(insights.themeNet);
+    });
+});
+
+describe('extraSlugs — shared canon-plus-extras enumeration (grumpy #4)', () => {
+    const cityWith = (cat) => ({
+        city: 'X', lat: 1, lng: 1, positive: 5, neutral: 3, negative: 2,
+        total: 10, shares: { positive: 0.5, neutral: 0.3, negative: 0.2 },
+        sources: [{ source_name: 's', source_category: cat,
+            positive: 5, neutral: 3, negative: 2, total: 10 }],
+    });
+
+    test('canonical-only snapshots yield no extras', () => {
+        expect(pure.extraSlugs([cityWith('social')])).toEqual([]);
+        expect(pure.extraSlugs([])).toEqual([]);
+    });
+
+    test('non-canonical categories surface once, normalized', () => {
+        const cities = [cityWith('Zines'), cityWith('zines'), cityWith('news')];
+        expect(pure.extraSlugs(cities)).toEqual(['zines']);
+    });
+
+    test('legacy spellings that normalize onto the canon are NOT extras', () => {
+        // 'tech' folds onto 'developer'; 'Blogs' onto 'blog'.
+        expect(pure.extraSlugs([cityWith('tech'), cityWith('Blogs')]))
+            .toEqual([]);
+    });
 });
 
 describe('jumpTop — rail/drill scroll targets', () => {

@@ -69,7 +69,9 @@
     'use strict';
 
     const { catLabel, fmtNet, netSentiment } = utils;
-    const { computeInsights, allCategoryRows, partitionThemes } = insightsMod;
+    const {
+        computeInsights, allCategoryRows, partitionThemes, themeNet,
+    } = insightsMod;
     const { STORY, resolveChapter } = chaptersMod;
     const gmath = globeMod.math;
     const GLOBE = designConfig.GLOBE;
@@ -298,16 +300,23 @@
         return out;
     }
 
-    // themeNet: a theme row's net sentiment — same derivation ladder as
-    // insights.partitionThemes (net → sent → counts/volume → 0).
-    function themeNet(t) {
-        if (t && Number.isFinite(t.net)) return t.net;
-        if (t && Number.isFinite(t.sent)) return t.sent;
-        if (t && Number.isFinite(t.positive) && Number.isFinite(t.negative)
-            && Number.isFinite(t.volume) && t.volume > 0) {
-            return (t.positive - t.negative) / t.volume;
+    // extraSlugs: the NON-canonical category slugs present in a snapshot,
+    // deduped, in allCategoryRows order. THE shared helper behind every
+    // canon-plus-extras enumeration surface (grumpy #4): the CH05 legend
+    // (renderLegend below) and the explore filter chips (ui.js) both build
+    // their list as CATEGORY_SLUGS.concat(extraSlugs(cities)) — extras are
+    // kept visible, never hidden, and never duplicated.
+    function extraSlugs(cities) {
+        const canon = designConfig.CATEGORY_SLUGS;
+        const out = [];
+        for (const row of allCategoryRows(cities)) {
+            const s = gmath.normalizeCategorySlug(row.category);
+            if (s !== null && canon.indexOf(s) === -1
+                && out.indexOf(s) === -1) {
+                out.push(s);
+            }
         }
-        return 0;
+        return out;
     }
 
     const pure = {
@@ -335,7 +344,10 @@
         pickExtremePost,
         minutesAgoFrom,
         themeHighlightCitiesFor,
+        // Re-export: the derivation lives in insights.js (single source);
+        // kept on the story pure surface for its existing consumers/tests.
         themeNet,
+        extraSlugs,
     };
 
     // ═══ DOM orchestration (browser only — everything below needs a page) ═══
@@ -669,12 +681,8 @@
             // ('Blogs' → 'blogs', 'Non-profit' → 'non-profit'), never the
             // raw slug. Non-canonical categories present in the data are
             // appended after the canon (kept, never hidden).
-            const canonSlugs = designConfig.CATEGORY_SLUGS;
-            const slugs = canonSlugs.slice();
-            for (const row of allCategoryRows(state.cities)) {
-                const s = gmath.normalizeCategorySlug(row.category);
-                if (s !== null && slugs.indexOf(s) === -1) slugs.push(s);
-            }
+            const slugs = designConfig.CATEGORY_SLUGS
+                .concat(extraSlugs(state.cities));
             for (const slug of slugs) {
                 const span = el('span', null, '● ' + catLabel(slug).toLowerCase());
                 span.style.color = CAT_COLORS[slug] || SENTIMENT_PALETTE.neutral;

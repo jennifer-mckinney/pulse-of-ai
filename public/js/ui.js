@@ -1017,18 +1017,11 @@
         // Social / Non-profit / Academic / Forums never vanish when they
         // have no posts in the current window. Non-canonical categories
         // present in the data are appended after the canon (kept, never
-        // hidden — allCategoryRows honesty).
+        // hidden) via the SHARED extraSlugs helper — the same enumeration
+        // the CH05 legend uses (story.js renderLegend).
         const chips = el('div', 'chips');
-        const canonSlugs = designConfig.CATEGORY_SLUGS;
-        const extras = [];
-        for (const r of allCategoryRows(state.cities)) {
-            const s = gmath.normalizeCategorySlug(r.category);
-            if (s !== null && canonSlugs.indexOf(s) === -1
-                && extras.indexOf(s) === -1) {
-                extras.push(s);
-            }
-        }
-        const cats = canonSlugs.concat(extras);
+        const cats = designConfig.CATEGORY_SLUGS
+            .concat(storyMod.pure.extraSlugs(state.cities));
         for (const cat of ['All'].concat(cats)) {
             const on = state.filters.cat === cat;
             const chip = el('button', 'chip' + (on ? ' on' : ''));

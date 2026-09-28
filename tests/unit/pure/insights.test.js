@@ -830,6 +830,7 @@ describe('module export shape', () => {
             'regionOf',
             'renderTemplate',
             'ribbonRows',
+            'themeNet',
             'widestCategoryDivide',
         ]);
     });

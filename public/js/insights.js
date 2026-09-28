@@ -362,37 +362,41 @@
     // same 0.1 magnitude as design.config SENTIMENT_BUCKETS.positiveMin.
     const THEME_WARM_MIN = 0.1;
 
-    // partitionThemes: split /api/themes rows into the warm or cold half.
-    //   'warm' → net ≥ 0.1, sorted warmest first
-    //   'cold' → net < 0.1, sorted coldest first
-    // Together the two modes PARTITION the list (no overlap, no loss).
-    // Accepts rows carrying `net`, falling back to the prototype's `sent`
+    // themeNet: a theme row's net sentiment. THE single derivation ladder
+    // for theme rows (grumpy #4 — story.js consumes this export, never a
+    // copy): `net` when present, falling back to the prototype's `sent`
     // field so the bundled demo themes work unchanged, then to the actual
     // /api/themes response shape ({keyword, volume, positive, neutral,
     // negative, top_category}) by deriving net = (positive − negative) /
     // volume — without this, live API rows would all silently score 0 and
-    // land in the cold half. Throws on an unknown mode — a typo must fail
-    // tests loudly, not silently render nothing.
+    // land in the cold half. Unusable rows score 0.
+    function themeNet(t) {
+        if (t && Number.isFinite(t.net)) return t.net;
+        if (t && Number.isFinite(t.sent)) return t.sent; // prototype shape
+        if (t && Number.isFinite(t.positive) && Number.isFinite(t.negative)
+            && Number.isFinite(t.volume) && t.volume > 0) {
+            return (t.positive - t.negative) / t.volume;  // /api/themes shape
+        }
+        return 0;
+    }
+
+    // partitionThemes: split /api/themes rows into the warm or cold half.
+    //   'warm' → net ≥ 0.1, sorted warmest first
+    //   'cold' → net < 0.1, sorted coldest first
+    // Together the two modes PARTITION the list (no overlap, no loss); the
+    // net derivation is themeNet above. Throws on an unknown mode — a typo
+    // must fail tests loudly, not silently render nothing.
     function partitionThemes(themes, mode) {
         if (mode !== 'warm' && mode !== 'cold') {
             throw new Error(`partitionThemes: unknown mode "${mode}"`);
         }
         const list = Array.isArray(themes) ? themes : [];
-        const netOf = (t) => {
-            if (t && Number.isFinite(t.net)) return t.net;
-            if (t && Number.isFinite(t.sent)) return t.sent; // prototype shape
-            if (t && Number.isFinite(t.positive) && Number.isFinite(t.negative)
-                && Number.isFinite(t.volume) && t.volume > 0) {
-                return (t.positive - t.negative) / t.volume;  // /api/themes shape
-            }
-            return 0;
-        };
         const picked = list.filter(t => mode === 'warm'
-            ? netOf(t) >= THEME_WARM_MIN
-            : netOf(t) < THEME_WARM_MIN);
+            ? themeNet(t) >= THEME_WARM_MIN
+            : themeNet(t) < THEME_WARM_MIN);
         picked.sort((a, b) => mode === 'warm'
-            ? netOf(b) - netOf(a)   // warmest first
-            : netOf(a) - netOf(b)); // coldest first
+            ? themeNet(b) - themeNet(a)   // warmest first
+            : themeNet(a) - themeNet(b)); // coldest first
         return picked;
     }
 
@@ -503,6 +507,7 @@
         widestCategoryDivide,
         ribbonRows,
         allCategoryRows,
+        themeNet,
         partitionThemes,
     };
 }));
