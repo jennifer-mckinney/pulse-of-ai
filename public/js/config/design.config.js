@@ -112,8 +112,16 @@
         spinPeriodMs: 300000,     // ~5 min per revolution at speed 1 (handoff-verified)
         ringPeriodMs: 2200,       // city pulse-ring expansion period
         idleResumeMs: 3000,       // auto-rotation resumes this long after a drag
+                                  // (also the user-zoom override window)
         labelVolumeMin: 230,      // explore mode labels cities above this volume
         pacingVhPerChapter: 1.15, // scroll spacer: 1.15 × 100vh per chapter
+        // User zoom (handoff ZIP revision; audit gap G7). globe.js composes
+        // userZoom with the chapter zoom: target = chapterZoom × userZoom.
+        userZoomMin: 0.5,         // pinch/wheel/keyboard zoom clamp floor
+        userZoomMax: 3.5,         // pinch/wheel/keyboard zoom clamp ceiling
+        wheelZoomCtrlFactor: 0.01,   // exp(−deltaY × this) for ctrl-wheel/pinch-trackpad
+        wheelZoomPlainFactor: 0.002, // plain wheel factor (explore mode only)
+        keyZoomStep: 1.15,        // "+" multiplies, "−" divides; "0" resets to 1
     };
 
     return deepFreeze({

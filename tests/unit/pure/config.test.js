@@ -369,6 +369,12 @@ describe('design.config — themes and palettes', () => {
             idleResumeMs: 3000,
             labelVolumeMin: 230,
             pacingVhPerChapter: 1.15,
+            // User-zoom constants (handoff ZIP revision; audit gap G7)
+            userZoomMin: 0.5,
+            userZoomMax: 3.5,
+            wheelZoomCtrlFactor: 0.01,
+            wheelZoomPlainFactor: 0.002,
+            keyZoomStep: 1.15,
         });
         for (const v of Object.values(design.GLOBE)) {
             expect(v).toBeGreaterThan(0);
