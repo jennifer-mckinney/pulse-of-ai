@@ -993,14 +993,23 @@
         };
 
         // Keyboard zoom: + / − step, 0 resets (skipped inside form fields).
+        // Grumpy #2 guards: modifier chords (ctrl/cmd/alt +/−/0 are BROWSER
+        // page-zoom and shortcuts — never eat them) and non-interactive mode
+        // (story mode owns the page; the globe takes no keyboard input) both
+        // bail before any handling.
         const onKey = (e) => {
+            if (e.ctrlKey || e.metaKey || e.altKey) return;
+            if (!p.interactive) return;
             if (e.target && /INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) return;
             const f = keyZoomFactor(e.key);
             if (f !== null) {
                 zoomBy(f);
                 e.preventDefault();
             } else if (e.key === '0') {
+                // Reset gets the same rotation hold as zoomBy — without it
+                // the auto-spin snapped back the instant the zoom reset.
                 st.userZoom = 1;
+                st.userUntil = performance.now() + GLOBE.idleResumeMs;
             }
         };
 
