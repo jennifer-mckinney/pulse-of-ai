@@ -213,6 +213,8 @@ function auditPayload(overrides) {
         bias: {
             job_id: 'job-1',
             assessed_at: '2026-09-28T10:05:00.000Z',
+            model_name: 'pulse-bias-monitor-v1',
+            version: '1.0.0',
             layers: [
                 { name: 'Source concentration', assessment_type: 'source_concentration', value: 0.41, threshold: 0.35, citation: 'fairness@2026.04', status: 'fail', severity: 'alert', note: null },
                 { name: 'Location concentration', assessment_type: 'location_concentration', value: 0.18, threshold: 0.25, citation: 'spec §9', status: 'pass', severity: 'pass', note: null },
@@ -281,6 +283,10 @@ describe('mapAuditResponse — served audit shape → drawer model', () => {
         const m = P.mapAuditResponse(auditPayload());
         const bias = m.steps[m.steps.length - 1];
         expect(bias.status).toBe('fail');
+        // Model pill from the served bias-block identity (versioned
+        // methodology), rendered like every other step's model@version.
+        expect(bias.model).toBe('pulse-bias-monitor-v1');
+        expect(bias.version).toBe('1.0.0');
         expect(bias.layers).toHaveLength(3);
         expect(bias.layers[0].status).toBe('fail');
         expect(bias.layers[2].status).toBe('n-a');
@@ -294,11 +300,15 @@ describe('mapAuditResponse — served audit shape → drawer model', () => {
 
     test('empty bias layers → n-a status, honest empty texts', () => {
         const m = P.mapAuditResponse(auditPayload({
-            bias: { job_id: null, assessed_at: null, layers: [] },
+            bias: { job_id: null, assessed_at: null, model_name: null,
+                version: null, layers: [] },
         }));
         const bias = m.steps[m.steps.length - 1];
         expect(bias.status).toBe('n-a');
         expect(bias.audiences.researcher).toBe('No assessments stored for this job.');
+        // No served identity → no pill, never an invented model name.
+        expect(bias.model).toBeNull();
+        expect(bias.version).toBeNull();
     });
 
     test('null / shapeless payloads map to null (drawer shows the outage)', () => {

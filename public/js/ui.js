@@ -327,8 +327,12 @@
 
         return {
             stage: 'Bias assessment',
-            model: null,        // the audit payload carries no bias model name
-            version: null,
+            // Versioned bias-monitor identity served in the bias block (from
+            // the 'bias' methodology_versions row) — renders the same
+            // model@version pill as the other steps. Absent → no pill,
+            // never an invented name.
+            model: (bias && bias.model_name) || null,
+            version: (bias && bias.version) || null,
             status: failed > 0 ? 'fail' : (computed === 0 ? 'n-a' : 'pass'),
             score: null,
             scoreKind: null,

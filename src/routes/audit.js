@@ -21,7 +21,8 @@
 //
 // Returns:
 //   200 { post: {...}, narration: {...}, ingest: {...}|null,
-//         decisions: [...], bias: { job_id, assessed_at, layers } }
+//         decisions: [...],
+//         bias: { job_id, assessed_at, model_name, version, layers } }
 //   400 if post_id is not a valid UUID
 //   404 if the post does not exist
 //   500 on DB error (no stack trace returned to client)
@@ -145,8 +146,11 @@ router.get('/audit/:post_id', async (req, res) => {
             ? decisions[decisions.length - 1].job_id
             : null;
 
+        // model_name + version ride along so the drawer's bias step can show
+        // the same model@version pill as every other pipeline step — the
+        // fairness checks are versioned methodology like any inference.
         const biasMv = await dbGet(
-            `SELECT config FROM methodology_versions
+            `SELECT model_name, version, config FROM methodology_versions
              WHERE component = 'bias' AND deprecated_at IS NULL
              ORDER BY effective_from DESC
              LIMIT 1`,
@@ -170,6 +174,11 @@ router.get('/audit/:post_id', async (req, res) => {
             assessed_at: biasAssessments.length > 0
                 ? biasAssessments[biasAssessments.length - 1].created_at
                 : null,
+            // Versioned bias-monitor identity (e.g. pulse-bias-monitor-v1 @
+            // 1.0.0); null when no 'bias' methodology is registered — the
+            // frontend omits the pill rather than inventing one.
+            model_name:  biasMv ? biasMv.model_name : null,
+            version:     biasMv ? biasMv.version    : null,
             layers:      buildLayers(biasAssessments, biasConfig),
         };
 

@@ -212,6 +212,9 @@ describe('GET /api/audit/:post_id', () => {
             const res = await request(app).get(`/api/audit/${postId}`);
             expect(res.body.bias.job_id).toBe(jobId);
             expect(res.body.bias.assessed_at).toEqual(expect.any(String));
+            // Versioned bias-monitor identity for the drawer's model pill
+            expect(res.body.bias.model_name).toBe('pulse-bias-monitor-v1');
+            expect(res.body.bias.version).toBe('1.0.0');
 
             const loc = res.body.bias.layers.find(l => l.assessment_type === 'location_concentration');
             expect(loc).toMatchObject({
@@ -259,6 +262,8 @@ describe('GET /api/audit/:post_id', () => {
             expect(res.body.bias).toEqual({
                 job_id:      jobId,
                 assessed_at: null,
+                model_name:  null,   // no 'bias' methodology → no invented pill
+                version:     null,
                 layers:      [],
             });
         });
