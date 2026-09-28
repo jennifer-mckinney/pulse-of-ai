@@ -7,6 +7,7 @@
 
 const crypto = require('crypto');
 const { dbRun } = require('../../src/db/connection');
+const { METHODOLOGY_VERSIONS } = require('../../src/config/methodology-registry');
 
 // ─── Source ───────────────────────────────────────────────────────────────────
 
@@ -64,73 +65,41 @@ async function insertMethodologyVersions() {
 }
 
 /**
- * Register the versioned 'bias' methodology row (thresholds + layer names +
- * citations + planned layers) that the audit fairness layers and the bias
- * history endpoint read. Mirrors the scripts/seed.js entry.
+ * Register a methodology row exactly as the shared registry defines it
+ * (src/config/methodology-registry.js — the source seed.js and migration 009
+ * both use), so integration tests exercise the REAL registered config
+ * instead of a hand-mirrored copy that can drift.
  * @returns {Promise<string>}  methodology_versions.id
  */
-async function insertBiasMethodology() {
-    const config = {
-        location_concentration_max: 0.35,
-        platform_parity_max_diff:   0.30,
-        negative_dominance_max:     0.60,
-        layer_names: {
-            location_concentration:    'Location concentration',
-            platform_sentiment_parity: 'Demographic parity',
-            negative_dominance:        'Negative dominance',
-        },
-        layer_notes: {
-            platform_sentiment_parity: 'parity measured across source categories (platform), not user demographics',
-        },
-        citations: {
-            location_concentration:    'Suresh & Guttag (2021)',
-            platform_sentiment_parity: 'Barocas & Selbst (2016)',
-            negative_dominance:        'Suresh & Guttag (2021)',
-        },
-        planned_layers: [
-            { id: 'equalized_odds',          name: 'Equalized odds',          citation: 'Hardt et al. (2016)',  note: 'Phase 3 — not yet enforced' },
-            { id: 'counterfactual_fairness', name: 'Counterfactual fairness', citation: 'Kusner et al. (2017)', note: 'Phase 3 — not yet enforced' },
-        ],
-        // Presentation order — prototype's three named layers first, extra
-        // real checks after (mirrors scripts/seed.js bias@1.1.0)
-        layer_order: [
-            'platform_sentiment_parity',
-            'equalized_odds',
-            'counterfactual_fairness',
-        ],
-        legal_basis: 'EU AI Act Article 13 - Transparency and provision of information',
-    };
+async function insertRegisteredMethodology(component) {
+    const m = METHODOLOGY_VERSIONS.find(r => r.component === component);
     const row = await dbRun(
         `INSERT INTO methodology_versions (component, version, model_name, config, justification)
-         VALUES ('bias', '1.1.0', 'pulse-bias-monitor-v1', $1::jsonb, 'Automated post-job fairness checks.')
+         VALUES ($1, $2, $3, $4::jsonb, $5)
          ON CONFLICT (component, version) DO UPDATE SET config = EXCLUDED.config
          RETURNING id`,
-        [JSON.stringify(config)],
+        [m.component, m.version, m.model_name, JSON.stringify(m.config), m.justification],
     );
     return row.id;
 }
 
 /**
+ * Register the versioned 'bias' methodology row (thresholds, layer names,
+ * layer notes, citations, planned layers, layer order) that the audit
+ * fairness layers and the bias history endpoint read.
+ * @returns {Promise<string>}  methodology_versions.id
+ */
+async function insertBiasMethodology() {
+    return insertRegisteredMethodology('bias');
+}
+
+/**
  * Register the versioned 'ingest' methodology row (PII fields, granularity,
  * legal basis) that the audit route renders as the synthetic Ingestion step.
- * Mirrors the scripts/seed.js entry.
  * @returns {Promise<string>}  methodology_versions.id
  */
 async function insertIngestMethodology() {
-    const config = {
-        pii_fields_removed:   ['author', 'author_fullname', 'username', 'user', 'email'],
-        location_granularity: 'city',
-        dedup_strategy:       'sha256-content-hash',
-        legal_basis:          'GDPR Article 6(1)(f) - Legitimate Interest',
-    };
-    const row = await dbRun(
-        `INSERT INTO methodology_versions (component, version, model_name, config, justification)
-         VALUES ('ingest', '1.0.0', 'pulse-ingest-v1', $1::jsonb, 'PII-minimised public-source ingestion.')
-         ON CONFLICT (component, version) DO UPDATE SET config = EXCLUDED.config
-         RETURNING id`,
-        [JSON.stringify(config)],
-    );
-    return row.id;
+    return insertRegisteredMethodology('ingest');
 }
 
 // ─── Bias assessment ──────────────────────────────────────────────────────────
@@ -317,6 +286,7 @@ module.exports = {
     insertSource,
     insertJob,
     insertMethodologyVersions,
+    insertRegisteredMethodology,
     insertBiasMethodology,
     insertIngestMethodology,
     insertBiasAssessment,

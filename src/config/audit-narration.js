@@ -13,13 +13,15 @@
 // is generated or persisted; the templates below are deterministic string
 // builders over stored facts. Because the wording itself is part of the
 // auditable surface, this module is registered in methodology_versions
-// (component 'audit_narration') by scripts/seed.js — changes to the wording
+// (component 'audit_narration') via src/config/methodology-registry.js
+// (seed.js + migration 009) — changes to the wording
 // MUST bump NARRATION_VERSION and add a new methodology row, never edit the
 // registered version in place.
 
 'use strict';
 
-// Registered in methodology_versions — keep in sync with scripts/seed.js
+// Registered in methodology_versions — must equal the audit_narration row in
+// src/config/methodology-registry.js (enforced by methodologyRegistry.test.js)
 const NARRATION_COMPONENT = 'audit_narration';
 // 1.1.0: the researcher view's reproduce command is now REAL — it names the
 // shipped `npm run replay` script (scripts/replay.js) instead of the
