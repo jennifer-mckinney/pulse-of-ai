@@ -12,9 +12,10 @@
 </head>
 <body>
 
-<!-- FR-25 groundwork: static fallback when JavaScript is unavailable.
-     (The no-WebGL runtime fallback — ranked city list from the same data —
-     is globe.js's job in C2; this block covers no-JS entirely.) -->
+<!-- FR-25: static fallback when JavaScript is unavailable. (When canvas
+     rendering is unavailable, globe.js create() renders a ranked city list —
+     name, volume, sentiment — into #globe-wrap instead; this block covers
+     no-JS entirely.) -->
 <noscript>
   <!-- Styled via .noscript-fallback classes in main.css — no inline style=
        attributes anywhere, so the CSP never needs style-src 'unsafe-inline'. -->
@@ -39,7 +40,8 @@
 <!-- ══ Fixed stage — everything visual lives here ══════════════════════════ -->
 <div class="stage">
 
-  <!-- Globe canvas mount (C2: globe.js renders into this element). -->
+  <!-- Globe canvas mount: globe.js renders the canvas globe here, or the
+       ranked city-list fallback when canvas rendering is unavailable. -->
   <div class="globe-wrap" id="globe-wrap"></div>
 
   <!-- Header: brand dot + name/tag, time-to-insight chip, health chip. -->

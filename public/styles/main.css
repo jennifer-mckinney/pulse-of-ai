@@ -99,6 +99,12 @@ body {
   pointer-events: none;
 }
 .globe-wrap { position: absolute; inset: 0; transition: opacity 0.4s; }
+/* P1-5: canvas-unavailable fallback — ranked city list rendered by globe.js */
+.globe-fallback { position: absolute; top: 88px; right: 32px; width: min(420px, calc(100% - 32px)); max-height: calc(100% - 176px); overflow-y: auto; border: 1px solid var(--line); border-radius: 4px; padding: 14px 16px; background: rgba(13, 17, 23, 0.85); }
+.globe-fallback-note { font-size: 12px; color: var(--ink-dim); margin: 0 0 10px; }
+.globe-fallback-list { margin: 0; padding-left: 22px; font-size: 13px; }
+.globe-fallback-list li { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; padding: 3px 0; }
+.globe-fallback-list .gf-vol, .globe-fallback-list .gf-sent { font-size: 11.5px; color: var(--ink-dim); }
 
 /* header */
 .hdr {

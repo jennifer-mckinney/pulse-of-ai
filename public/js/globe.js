@@ -470,6 +470,25 @@
         return dots;
     }
 
+    // rankedCityRows (P1-5): the canvas-unavailable fallback's rows — the
+    // adapted cities ranked by volume (desc, name asc on ties), formatted as
+    // plain strings. Pure: the DOM layer only ever assigns them via
+    // textContent, so a city name can never become markup.
+    function rankedCityRows(cities) {
+        return (Array.isArray(cities) ? cities.slice() : [])
+            .sort((a, b) => (b.volume - a.volume)
+                || String(a.name).localeCompare(String(b.name)))
+            .map((c, i) => ({
+                rank: String(i + 1),
+                name: String(c.name),
+                volume: Math.round(c.volume) + (Math.round(c.volume) === 1 ? ' post' : ' posts'),
+                sentiment: (c.sentiment >= 0 ? '+' : '−') + Math.abs(c.sentiment).toFixed(2),
+            }));
+    }
+
+    // First-frame performance mark name (P1-6) — landing.spec reads it.
+    const FIRST_FRAME_MARK = 'pulse:first-frame';
+
     const math = {
         D2R,
         SPIN_RAD_PER_SEC,
@@ -503,6 +522,7 @@
         pointInRings,
         landDotsFromRings,
         assignNearestCity,
+        rankedCityRows,
     };
 
     // ═══ Shared land geometry (module-level, loaded once per page) ═════════
@@ -579,6 +599,51 @@
         canvas.style.touchAction = 'none';
 
         const ctx = canvas.getContext && canvas.getContext('2d');
+
+        // P1-5 (FR-25): when canvas 2D rendering is unavailable, the globe
+        // degrades to a DOM ranked-city list (name, volume, sentiment) in the
+        // mount, rebuilt from setState's cities. textContent only — no markup
+        // is ever built from data. The dead canvas is hidden.
+        const fallbackMount = ctx ? null
+            : (ownsCanvas ? mountOrCanvas : canvas.parentNode || null);
+        let fallbackEl = null;
+        function renderFallback() {
+            if (!fallbackMount || typeof document === 'undefined') return;
+            if (!fallbackEl) {
+                fallbackEl = document.createElement('div');
+                fallbackEl.className = 'globe-fallback';
+                fallbackEl.setAttribute('role', 'region');
+                fallbackEl.setAttribute('aria-label', 'Cities ranked by post volume');
+                fallbackMount.appendChild(fallbackEl);
+            }
+            while (fallbackEl.firstChild) fallbackEl.removeChild(fallbackEl.firstChild);
+            const note = document.createElement('p');
+            note.className = 'globe-fallback-note';
+            note.textContent = 'Globe unavailable: canvas rendering is not supported here. '
+                + 'Cities ranked by post volume:';
+            fallbackEl.appendChild(note);
+            const list = document.createElement('ol');
+            list.className = 'globe-fallback-list';
+            for (const row of rankedCityRows(p.cities)) {
+                const li = document.createElement('li');
+                for (const [cls, text] of [
+                    ['gf-name', row.name],
+                    ['gf-vol mono', row.volume],
+                    ['gf-sent mono', row.sentiment],
+                ]) {
+                    const span = document.createElement('span');
+                    span.className = cls;
+                    span.textContent = text;
+                    li.appendChild(span);
+                }
+                list.appendChild(li);
+            }
+            fallbackEl.appendChild(list);
+        }
+
+        // P1-6: the first painted frame is marked once for the perf budget
+        // (landing.spec asserts it lands under 1000 ms after navigation).
+        let firstFrameMarked = false;
 
         // Props — prototype defaults (app.jsx tweak defaults: speed 1,
         // graticule on, land heat on).
@@ -885,9 +950,22 @@
                 }
             }
 
+            if (!firstFrameMarked) {
+                firstFrameMarked = true;
+                if (typeof performance !== 'undefined'
+                    && typeof performance.mark === 'function') {
+                    performance.mark(FIRST_FRAME_MARK);
+                }
+            }
+
             raf = requestAnimationFrame(frame);
         }
-        if (ctx) raf = requestAnimationFrame(frame);
+        if (ctx) {
+            raf = requestAnimationFrame(frame);
+        } else {
+            canvas.style.display = 'none';
+            renderFallback();
+        }
 
         // ── Input (Pointer Events port of the prototype's mouse handlers) ───
 
@@ -1039,6 +1117,7 @@
                 p[key] = key === 'cities' ? adaptCities(partial.cities) : partial[key];
             }
             if ('interactive' in partial) applyInteractive();
+            if (!ctx && 'cities' in partial) renderFallback();
         }
 
         // getState: snapshot of the current props (adapted cities included).
@@ -1066,6 +1145,7 @@
                 mql.removeEventListener('change', onMotionChange);
             }
             pointers.clear();
+            if (fallbackEl && fallbackEl.parentNode) fallbackEl.parentNode.removeChild(fallbackEl);
             if (ownsCanvas && canvas.parentNode) canvas.parentNode.removeChild(canvas);
         }
 
@@ -1098,6 +1178,7 @@
         getInstance,
         loadLandDots,
         LAND_URL,
+        FIRST_FRAME_MARK,
         math,
     };
 }));
