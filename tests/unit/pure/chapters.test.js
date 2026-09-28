@@ -10,9 +10,9 @@
 //      highlightCities, isDemo}.
 //   - No unresolved {tokens} on DEMO_DATA (body OR stats); empty insights →
 //     FALLBACK_COPY + valid camera; camera follows the FIRST highlighted
-//     city; isDemo suffixes the card title; attacker-influenceable strings
-//     are esc()-escaped at token entry (defense in depth — consumers still
-//     render via textContent, never innerHTML).
+//     city; isDemo suffixes the card title; token values are RAW strings
+//     (textContent is the one XSS boundary — pre-escaping would
+//     double-encode; see the chapters.js header rule).
 
 'use strict';
 
@@ -390,11 +390,13 @@ describe('resolveChapter() — isDemo propagation (demo-data transparency)', () 
     });
 });
 
-describe('resolveChapter() — XSS defense in depth (esc on data-derived names)', () => {
-    // Attacker-controlled strings enter via API city/source/category names.
-    // Consumers render via textContent, but the token builders must ALSO
-    // HTML-escape these values so a wrong consumer cannot inject markup.
+describe('resolveChapter() — raw token values (textContent is the XSS boundary)', () => {
+    // Attacker-influenceable strings enter via API city/source/category
+    // names. The ONE escaping boundary is the consumers' textContent sink —
+    // token values must pass through RAW, because pre-escaping here
+    // double-encodes ('&' would render on the page as '&amp;').
     const XSS_CITY = '<img src=x onerror=alert(1)>';
+    const SPICY_CITY = 'A&W <City> "quoted" \'town\'';
 
     // The hostile city dominates every ranking (volume, warmth) and its
     // hostile source/category dominate the ribbon, so the payloads flow
@@ -426,36 +428,55 @@ describe('resolveChapter() — XSS defense in depth (esc on data-derived names)'
     }
 
     test.each(STORY.map(b => [b.id, b]))(
-        'beat "%s" card body and stats contain no raw < or > from hostile data', (_id, b) => {
+        'beat "%s" card body and stats never contain HTML entities (no pre-escaping)', (_id, b) => {
             const cities = maliciousCities();
             const ins = computeInsights(cities);
             const r = resolveChapter(b, ins, cities);
-            expect(r.cardBody).not.toContain('<');
-            expect(r.cardBody).not.toContain('>');
-            for (const [label, value] of r.stats) {
-                expect(label).not.toContain('<');
-                expect(label).not.toContain('>');
-                expect(value).not.toContain('<');
-                expect(value).not.toContain('>');
+            // Double-encode canary: an interpolated '&' must stay '&', never
+            // become '&amp;' (which textContent would then render literally).
+            for (const text of [r.cardBody].concat(r.stats.flat())) {
+                expect(text).not.toMatch(/&(amp|lt|gt|quot|#39);/);
             }
         });
 
-    test('a hostile city name is escaped in the volume card (&lt;img …)', () => {
+    test('a hostile city name passes through RAW in the volume card', () => {
         const cities = maliciousCities();
         const ins = computeInsights(cities);
         expect(ins.highestVolumeCity.city).toBe(XSS_CITY); // it wins volume
         const r = resolveChapter(beat('volume'), ins, cities);
-        expect(r.cardBody).toContain('&lt;img');
-        expect(r.cardBody).not.toContain('<img');
+        expect(r.cardBody).toContain(XSS_CITY);        // exact raw string
+        expect(r.cardBody).not.toContain('&lt;img');   // never entity-encoded
     });
 
-    test('hostile source and category names are escaped in the messengers card', () => {
+    test('a city name with &<>\'" renders as the exact raw string', () => {
+        const cities = data.normalizeCities([
+            { city: SPICY_CITY, lat: 10, lng: 20,
+              positive: 900, neutral: 50, negative: 50, total: 1000,
+              sources: [{ source_name: 'reddit', source_category: 'social',
+                  positive: 900, neutral: 50, negative: 50, total: 1000 }] },
+            { city: 'Plainville', lat: 0, lng: 0,
+              positive: 1, neutral: 2, negative: 7, total: 10,
+              sources: [{ source_name: 'reddit', source_category: 'social',
+                  positive: 1, neutral: 2, negative: 7, total: 10 }] },
+            { city: 'Midtown', lat: 5, lng: 5,
+              positive: 5, neutral: 5, negative: 5, total: 15,
+              sources: [{ source_name: 'wire', source_category: 'news',
+                  positive: 5, neutral: 5, negative: 5, total: 15 }] },
+        ]);
+        const ins = computeInsights(cities);
+        const r = resolveChapter(beat('volume'), ins, cities);
+        expect(r.cardBody).toContain(SPICY_CITY);      // raw, character for character
+        expect(r.cardBody).not.toContain('&amp;');
+        expect(r.cardBody).not.toContain('&quot;');
+        expect(r.cardBody).not.toContain('&#39;');
+    });
+
+    test('hostile source and category names pass through RAW in the messengers card', () => {
         const cities = maliciousCities();
         const ins = computeInsights(cities);
         const r = resolveChapter(beat('messengers'), ins, cities);
-        expect(r.cardBody).toContain('&lt;script&gt;');
-        expect(r.cardBody).not.toContain('<script>');
-        expect(r.cardBody).not.toContain('"><b>');
+        expect(r.cardBody).toContain('<script>steal()</script>');
+        expect(r.cardBody).not.toContain('&lt;script&gt;');
     });
 });
 
