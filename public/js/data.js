@@ -1,6 +1,6 @@
 // PulseData — city sentiment data for the Pulse of AI frontend.
-// DEMO_DATA is moved verbatim from public/js/map.js (lines 219-293) so the
-// globe.gl storytelling modules can consume it without loading Mapbox code.
+// DEMO_DATA originated in the legacy map shell (removed in C5) and now lives
+// here so the globe.gl storytelling modules own the demo fallback path.
 //
 // Exports:
 //   - DEMO_DATA:            12-city demo fallback set (DB not yet seeded).

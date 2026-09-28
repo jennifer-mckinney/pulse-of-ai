@@ -1,5 +1,5 @@
 // PulseMain — page-shell bootstrap for the Pulse of AI story frontend.
-// Rewritten in C1c: the previous main.js served the legacy Mapbox shell
+// Rewritten in C1c: the previous main.js served the legacy map shell
 // (#refresh-btn / #health-status markup) that public/index.html no longer
 // renders.
 //

@@ -27,7 +27,6 @@ const path    = require('path');
 const cors    = require('cors');
 
 const healthRouter      = require('./routes/health');
-const configRouter      = require('./routes/config');
 const postsRouter       = require('./routes/posts');
 const sentimentRouter   = require('./routes/sentiment');
 const refreshRouter     = require('./routes/refresh');
@@ -48,7 +47,6 @@ app.use(express.static(path.join(__dirname, '../public')));
 
 // ─── API routes ───────────────────────────────────────────────────────────────
 app.use('/api', healthRouter);
-app.use('/api', configRouter);
 app.use('/api', postsRouter);
 app.use('/api', sentimentRouter);
 app.use('/api', refreshRouter);

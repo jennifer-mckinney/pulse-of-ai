@@ -1,7 +1,7 @@
 // src/routes/posts.js
 // GET /api/posts/aggregated-by-location
 //
-// Returns sentiment counts grouped by city for the Mapbox map.
+// Returns sentiment counts grouped by city for the globe frontend.
 // Includes lat/lng from a hardcoded lookup of major cities (Phase E: geocoding service).
 //
 // Query params:
