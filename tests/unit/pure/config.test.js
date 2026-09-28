@@ -321,37 +321,64 @@ describe('design.config — themes and palettes', () => {
         });
     });
 
-    test('CAT_COLORS keys are the REAL API category slugs (plus demo "tech")', () => {
+    test('CAT_COLORS keys are exactly the canonical API slugs (no legacy "tech")', () => {
         expect(Object.keys(design.CAT_COLORS).sort()).toEqual([
-            'academic', 'blog', 'developer', 'news',
-            'nonprofit', 'policy', 'social', 'tech',
+            'academic', 'blog', 'developer', 'forums',
+            'news', 'nonprofit', 'policy', 'social',
         ]);
         for (const cat of Object.keys(design.CAT_COLORS)) {
             expect(design.CAT_COLORS[cat]).toMatch(HEX_RE);
         }
     });
 
-    test('CAT_COLORS handoff hues map onto their API slugs verbatim', () => {
+    test('CAT_COLORS prototype hues map onto their API slugs verbatim', () => {
         expect(design.CAT_COLORS.social).toBe('#FF9F5A');
         expect(design.CAT_COLORS.news).toBe('#5AA9FF');
         expect(design.CAT_COLORS.academic).toBe('#C08BFF');
         expect(design.CAT_COLORS.policy).toBe('#FF6E9C');
         expect(design.CAT_COLORS.developer).toBe('#3BDCB2');
+        expect(design.CAT_COLORS.forums).toBe('#F5D95A');   // prototype "Forums" yellow
         expect(design.CAT_COLORS.blog).toBe('#7EE0FF');
+        // Non-profit has no prototype hue — the one documented addition
+        // (palette-consistent lime; see design.config.js comment).
+        expect(design.CAT_COLORS.nonprofit).toBe('#A9F55A');
     });
 
-    test('CATEGORIES is the canonical 7-slug taxonomy (spec §17) in spec order', () => {
+    test('CATEGORIES is the canonical 8-entry registry (prototype ∪ BRD §17) in order', () => {
         // Enumeration surfaces (explore chips, CH05 legend, source ribbon,
-        // "categories tracked" copy) render from THIS list — categories with
-        // zero posts in the window must never vanish from the UI.
-        expect(design.CATEGORIES).toEqual([
-            'social', 'news', 'academic', 'policy',
-            'nonprofit', 'developer', 'blog',
+        // /api/sources/timeseries, "categories tracked" copy) render from
+        // THIS registry — categories with zero posts in the window must
+        // never vanish from the UI. Labels are the prototype's EXACT
+        // display strings ('Blogs', 'Non-profit' — never naive
+        // capitalizations of the slug).
+        expect(design.CATEGORIES.map(c => ({ slug: c.slug, label: c.label }))).toEqual([
+            { slug: 'social',    label: 'Social' },
+            { slug: 'news',      label: 'News' },
+            { slug: 'academic',  label: 'Academic' },
+            { slug: 'policy',    label: 'Policy' },
+            { slug: 'nonprofit', label: 'Non-profit' },
+            { slug: 'developer', label: 'Developer' },
+            { slug: 'forums',    label: 'Forums' },
+            { slug: 'blog',      label: 'Blogs' },
         ]);
+        // Registry rows carry their color inline; derived tables agree.
+        for (const c of design.CATEGORIES) {
+            expect(c.color).toMatch(HEX_RE);
+            expect(design.CAT_COLORS[c.slug]).toBe(c.color);
+            expect(design.CAT_LABELS[c.slug]).toBe(c.label);
+        }
+    });
+
+    test('CATEGORY_SLUGS is the registry slug list in registry order', () => {
+        expect(design.CATEGORY_SLUGS).toEqual([
+            'social', 'news', 'academic', 'policy',
+            'nonprofit', 'developer', 'forums', 'blog',
+        ]);
+        expect(design.CATEGORY_SLUGS).toEqual(design.CATEGORIES.map(c => c.slug));
     });
 
     test('every canonical category has a CAT_COLORS swatch', () => {
-        for (const slug of design.CATEGORIES) {
+        for (const slug of design.CATEGORY_SLUGS) {
             expect(design.CAT_COLORS[slug]).toMatch(HEX_RE);
         }
     });

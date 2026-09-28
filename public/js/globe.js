@@ -88,20 +88,24 @@
     const SPIN_RAD_PER_SEC = TWO_PI / (GLOBE.spinPeriodMs / 1000);
     const RING_RATE_PER_SEC = 1000 / GLOBE.ringPeriodMs;
 
-    // Prototype display-cased categories → API slugs (CAT_COLORS keys).
-    // "Forums" has no API slug of its own; the handoff reuses its yellow for
-    // the `tech` slug, so Forums maps to tech (design.config comment).
+    // Any category spelling (prototype display name or API slug, any case)
+    // → the canonical API slug (design.config registry keys). Forums is a
+    // first-class canonical slug ('forums'); the retired legacy 'tech' slug
+    // maps to 'developer' (the same residual mapping the backend data
+    // update applies — migration 007), and the display names 'Blogs' /
+    // 'Non-profit' fold onto their slugs.
     const CATEGORY_SLUGS = {
         social: 'social',
         news: 'news',
         academic: 'academic',
         policy: 'policy',
+        nonprofit: 'nonprofit',
+        'non-profit': 'nonprofit',
         developer: 'developer',
+        forums: 'forums',
         blogs: 'blog',
         blog: 'blog',
-        forums: 'tech',
-        tech: 'tech',
-        nonprofit: 'nonprofit',
+        tech: 'developer',
     };
 
     // ═══ Pure math (no canvas, no DOM — unit-tested in Node) ═══════════════

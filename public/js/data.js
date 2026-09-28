@@ -70,10 +70,14 @@
 
     // Region-keyed source templates: which sources plausibly appear per
     // region (names match the seeded data_sources registry where one
-    // exists). The union of source_category values across regions covers
-    // the FULL canonical taxonomy (design.config CATEGORIES, spec §17) so
+    // exists; forums has NO seeded source, so its demo source keeps the
+    // prototype's boards.example hostname). The union of source_category
+    // values across regions covers the FULL canonical 8-category taxonomy
+    // (design.config CATEGORIES — prototype master contract ∪ BRD §17) so
     // demo mode puts volume behind every category the chips / legend /
-    // ribbon enumerate — no zero segments in demo. Template LENGTHS are
+    // ribbon enumerate — no zero segments in demo. Forums appears in the
+    // regions whose prototype launch cities were Forums-topped (Buenos
+    // Aires, Warsaw, Melbourne — south_america / europe / oceania). Template LENGTHS are
     // load-bearing: the seeded random walk in buildDemoData draws offsets
     // from templates.length, so changing a region's length reshuffles that
     // region's deterministic demo numbers (tests pin them).
@@ -89,6 +93,7 @@
             { source_name: 'reddit',          source_category: 'social' },
             { source_name: 'folha_tech',      source_category: 'news' },
             { source_name: 'arxiv',           source_category: 'academic' },
+            { source_name: 'boards.example',  source_category: 'forums' },
             { source_name: 'access_now',      source_category: 'nonprofit' },
         ],
         europe: [
@@ -96,6 +101,7 @@
             { source_name: 'eu_commission',   source_category: 'policy' },
             { source_name: 'reddit',          source_category: 'social' },
             { source_name: 'arxiv',           source_category: 'academic' },
+            { source_name: 'boards.example',  source_category: 'forums' },
             { source_name: 'algorithm_watch', source_category: 'nonprofit' },
         ],
         africa: [
@@ -120,6 +126,7 @@
         oceania: [
             { source_name: 'reddit',          source_category: 'social' },
             { source_name: 'abc_tech',        source_category: 'news' },
+            { source_name: 'boards.example',  source_category: 'forums' },
             { source_name: 'arxiv',           source_category: 'academic' },
             { source_name: 'github_blog',     source_category: 'developer' },
         ],

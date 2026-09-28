@@ -304,7 +304,7 @@ describe('DEMO_DATA / buildDemoData — registry-derived demo set', () => {
         // VOLUME behind every canonical category (design.config CATEGORIES)
         // so no chip/legend/ribbon segment sits at zero in demo mode.
         expect(dominants).toEqual(new Set(['positive', 'neutral', 'negative']));
-        expect(categories).toEqual(new Set(design.CATEGORIES));
+        expect(categories).toEqual(new Set(design.CATEGORY_SLUGS));
     });
 
     test('buildDemoData tolerates non-array input as []', () => {

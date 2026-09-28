@@ -30,7 +30,7 @@
 }(typeof self !== 'undefined' ? self : this, function (utils, insightsMod, storyConfig) {
     'use strict';
 
-    const { esc, fmtPct, fmtCount, fmtNet, netSentiment } = utils;
+    const { esc, catLabel, fmtPct, fmtCount, fmtNet, netSentiment } = utils;
     const {
         TEMPLATES, renderTemplate, MIN_TOTAL,
         catBreakdown, widestCategoryDivide, ribbonRows, allCategoryRows,
@@ -121,6 +121,11 @@
     // where it enters a card value. Numeric values are formatter output and
     // need no escaping. Consumers still must render via textContent — esc()
     // is defense in depth, not permission to use innerHTML.
+    //
+    // Category tokens interpolate the canonical DISPLAY label
+    // (utils.catLabel — 'blog' → 'Blogs', 'nonprofit' → 'Non-profit'),
+    // matching the prototype's display-cased chapter copy, never the raw
+    // API slug.
     const TOKEN_BUILDERS = {
         overview(ins, cities) {
             if (ins.cityCount === 0) return null;
@@ -155,9 +160,9 @@
             if (!d) return null;
             return {
                 divideCity: esc(d.city.city),
-                divideHiCategory: esc(d.hi.category),
+                divideHiCategory: esc(catLabel(d.hi.category)),
                 divideHiNet: fmtNet(d.hi.net),
-                divideLoCategory: esc(d.lo.category),
+                divideLoCategory: esc(catLabel(d.lo.category)),
                 divideLoNet: fmtNet(d.lo.net),
                 divideSpan: d.span.toFixed(2),
             };
@@ -170,7 +175,7 @@
             return {
                 negCity1: esc(coolest[0].city),
                 negNet1: fmtNet(netSentiment(coolest[0])),
-                negCategory1: esc(topCat.category),
+                negCategory1: esc(catLabel(topCat.category)),
                 negCity2: esc(coolest[1].city),
                 negNet2: fmtNet(netSentiment(coolest[1])),
                 negCity3: esc(coolest[2].city),
@@ -188,7 +193,7 @@
             return {
                 posCity1: esc(warmest[0].city),
                 posNet1: fmtNet(netSentiment(warmest[0])),
-                posCategory1: esc(topCat.category),
+                posCategory1: esc(catLabel(topCat.category)),
                 posCity2: esc(warmest[1].city),
                 posNet2: fmtNet(netSentiment(warmest[1])),
                 posCity3: esc(warmest[2].city),
@@ -206,9 +211,9 @@
             const second = rows.find(r => r.category !== dom.category);
             if (!second) return null;
             return {
-                catShare1Category: esc(dom.category),
+                catShare1Category: esc(catLabel(dom.category)),
                 catShare1Pct: fmtPct(dom.share),
-                catShare2Category: esc(second.category),
+                catShare2Category: esc(catLabel(second.category)),
                 catShare2Pct: fmtPct(second.share),
                 categoryCount: fmtCount(allCategoryRows(cities).length),
             };
@@ -229,10 +234,10 @@
             const hi = bySent[0];
             const lo = bySent[bySent.length - 1];
             return {
-                msgHiCategory: esc(hi.category),
+                msgHiCategory: esc(catLabel(hi.category)),
                 msgHiNet: fmtNet(hi.net),
                 msgHiSource: esc(hi.topSource),
-                msgLoCategory: esc(lo.category),
+                msgLoCategory: esc(catLabel(lo.category)),
                 msgLoNet: fmtNet(lo.net),
                 msgLoSource: esc(lo.topSource),
                 msgGap: (hi.net - lo.net).toFixed(2),

@@ -24,7 +24,10 @@
     'use strict';
 
     const { netSentiment } = utils;
-    const CATEGORIES = designConfig.CATEGORIES;
+    // Canonical taxonomy slugs in registry order (the design.config
+    // CATEGORIES registry is {slug,label,color} rows — enumeration here
+    // needs the slugs only).
+    const CATEGORY_SLUGS = designConfig.CATEGORY_SLUGS;
 
     // Cities with fewer than MIN_TOTAL posts are excluded from SHARE-based
     // superlatives (a 4-post city being "100% positive" is noise, not signal).
@@ -339,7 +342,7 @@
         const rows = ribbonRows(cities);
         const present = new Set(
             rows.map(r => String(r.category).toLowerCase()));
-        for (const slug of CATEGORIES) {
+        for (const slug of CATEGORY_SLUGS) {
             if (present.has(slug)) continue;
             rows.push({
                 category: slug,

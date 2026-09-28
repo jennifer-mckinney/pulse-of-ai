@@ -37,6 +37,25 @@
     const SENTIMENT_COLORS = designConfig.SENTIMENT_PALETTE;
     const SOURCE_PALETTE = Object.values(designConfig.CAT_COLORS);
 
+    // ── Category display labels (canonical registry lookup) ────────────────────
+    // catLabel: API category slug → the prototype's EXACT display string via
+    // the design.config registry ('blog' → 'Blogs', 'nonprofit' →
+    // 'Non-profit', 'forums' → 'Forums'). NEVER a naive capitalizer for
+    // canonical slugs — capitalize(slug) would render "Blog"/"Nonprofit",
+    // which the prototype (master contract) does not say. The
+    // first-letter-uppercase fallback exists ONLY for non-canonical strings
+    // arriving from data (unknown categories must still render something,
+    // not crash or vanish). Empty/null input → ''.
+    const CAT_LABELS = designConfig.CAT_LABELS || {};
+    function catLabel(slug) {
+        const s = String(slug === null || slug === undefined ? '' : slug);
+        if (s === '') return '';
+        if (Object.prototype.hasOwnProperty.call(CAT_LABELS, s)) {
+            return CAT_LABELS[s];
+        }
+        return s.charAt(0).toUpperCase() + s.slice(1);
+    }
+
     // ── Sentiment bridge helpers ────────────────────────────────────────────────
     // The design prototype carried a per-city "sentiment" in −1..1; the real
     // normalized cities carry counts. NET sentiment is the bridge:
@@ -99,6 +118,7 @@
         esc,
         SENTIMENT_COLORS,
         SOURCE_PALETTE,
+        catLabel,
         netSentiment,
         sentimentBucket,
         fmtPct,

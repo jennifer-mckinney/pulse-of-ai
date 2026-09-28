@@ -112,12 +112,11 @@
     // gets ~6% of the strip so its dot, label and "0/hr · 0%" are readable.
     const RIBBON_MIN_FLEX_SHARE = 0.06;
 
-    // catLabel: API slug → display label ('social' → 'Social').
-    function catLabel(slug) {
-        const s = String(slug === null || slug === undefined ? '' : slug);
-        if (s === '') return '';
-        return s.charAt(0).toUpperCase() + s.slice(1);
-    }
+    // catLabel: API slug → display label via the canonical registry
+    // (PulseUtils.catLabel — 'blog' → 'Blogs', 'nonprofit' → 'Non-profit',
+    // 'forums' → 'Forums'; capitalize-fallback only for non-canonical
+    // strings). Re-exported through the pure namespace for tests.
+    const catLabel = utils.catLabel;
 
     // cityTopSlug: a normalized city's dominant source category as the
     // CAT_COLORS slug (null when the city has no sources).
@@ -658,16 +657,27 @@
             { text: 'Our digital-rights clinic helped 40 people appeal automated benefit denials this month. Documentation wins cases.', cues: [['wins cases', 0.36], ['denials', -0.22]] },
             { text: 'New watchdog audit: only 12 of 60 public-sector chatbots disclose that users are talking to a machine.', cues: [['only 12 of 60', -0.30], ['disclose', 0.08]] },
         ],
+        // Forums pool: prototype-verbatim (data.js POST_POOL.Forums) —
+        // forums is a canonical category with zero LIVE sources, but the
+        // demo world keeps the prototype's Forums presence (FR-22).
+        forums: [
+            { text: 'Is anyone else’s team quietly rolling back AI code review? Curious what changed for you.', cues: [['rolling back', -0.27], ['curious', 0.06]] },
+            { text: 'Hot take: local models finally crossed the "good enough" line for 80% of my daily tasks.', cues: [['good enough', 0.33], ['finally', 0.15]] },
+        ],
         blog: [
             { text: 'Six months of running a local LLM stack: the costs, the surprises, and the two things I regret.', cues: [['surprises', 0.09], ['regret', -0.29]] },
             { text: 'Why our newsroom now publishes the prompt alongside every AI-assisted chart.', cues: [['publishes', 0.21], ['alongside', 0.04]] },
         ],
     };
-    // Rotation over the canonical taxonomy (design.config CATEGORIES) —
-    // demo posts draw from the same 7 categories every other surface
+    // Rotation over the canonical taxonomy (design.config CATEGORY_SLUGS)
+    // — demo posts draw from the same 8 categories every other surface
     // enumerates. A city whose dominant category has no pool (a legacy /
     // unknown slug) falls back to the canonical rotation.
-    const DEMO_POOL_ORDER = designConfig.CATEGORIES;
+    const DEMO_POOL_ORDER = designConfig.CATEGORY_SLUGS;
+    // Demo source hostnames: prototype SOURCES verbatim (data.js), keyed by
+    // API slug — forums keeps the prototype's boards.example; nonprofit has
+    // no prototype source (the prototype never rendered the category) so it
+    // keeps the fix-branch civicwatch.example.
     const DEMO_SOURCES = {
         social: 'firehose.social',
         news: 'wireservice.example',
@@ -675,6 +685,7 @@
         policy: 'policytracker.example',
         nonprofit: 'civicwatch.example',
         developer: 'devlog.example',
+        forums: 'boards.example',
         blog: 'longform.example',
     };
 
@@ -1131,8 +1142,11 @@
         for (const r of catBreakdown(sel).slice(0, DETAIL_CATS_MAX)) {
             const slug = gmath.normalizeCategorySlug(r.category);
             const row = el('div', 'tip-bar-row');
+            // Prototype casing contract: bar labels are the DISPLAY name
+            // lowercased ('Blogs' → 'blogs', 'Non-profit' → 'non-profit'),
+            // never the raw slug ('blog'/'nonprofit').
             row.appendChild(el('span', 'tip-bar-lbl mono',
-                String(r.category).toLowerCase()));
+                catLabel(r.category).toLowerCase()));
             const track = el('span', 'tip-bar-track');
             const barFill = el('span', 'tip-bar-fill');
             barFill.style.width = detailBarWidth(r.share) + '%';
@@ -1201,7 +1215,9 @@
             const minutes = minutesAgoFrom(p.collected_at, Date.now());
             const metaParts = [];
             if (p.source_name) metaParts.push(String(p.source_name));
-            if (p.platform) metaParts.push(String(p.platform).toLowerCase());
+            // Category meta: display label lowercased (prototype post-meta
+            // casing — 'blogs', 'non-profit'), never the raw slug.
+            if (p.platform) metaParts.push(catLabel(p.platform).toLowerCase());
             if (minutes !== null) metaParts.push(minutes + 'm ago');
             post.appendChild(el('div', 'post-meta mono', metaParts.join(' · ')));
             post.appendChild(el('div', 'post-text', p.content_snippet || ''));
@@ -1254,8 +1270,10 @@
         for (const r of rows) {
             const slug = gmath.normalizeCategorySlug(r.category);
             const row = el('div', 'tip-bar-row');
+            // Display name lowercased (prototype tooltip casing) — see the
+            // city-detail bars.
             row.appendChild(el('span', 'tip-bar-lbl mono',
-                String(r.category).toLowerCase()));
+                catLabel(r.category).toLowerCase()));
             const track = el('span', 'tip-bar-track');
             const fill = el('span', 'tip-bar-fill');
             fill.style.width = tooltipBarWidth(r.share, maxShare) + '%';

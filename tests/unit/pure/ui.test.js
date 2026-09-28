@@ -76,9 +76,14 @@ describe('filterCities — partitioned sentiment buckets (bug c fix)', () => {
     });
 
     test('category filter matches the dominant-source slug', () => {
+        // Legacy 'tech'-sourced data folds onto the canonical 'developer'
+        // slug (retired-slug residual mapping) — the chip that matches it
+        // is Developer, and no 'tech' chip exists any more.
         const out = P.filterCities([posCity(), techCity()],
-            { sent: 'All', cat: 'tech' });
+            { sent: 'All', cat: 'developer' });
         expect(out.map(c => c.city)).toEqual(['Techton']);
+        expect(P.filterCities([posCity(), techCity()],
+            { sent: 'All', cat: 'tech' })).toEqual([]);
     });
 
     test('All/All passes everything; junk rows are dropped', () => {
@@ -430,12 +435,12 @@ describe('ribbonModel — timeseries → marimekko rows (audit G23)', () => {
 
     test('always one segment per canonical category — data rows first, zero rows padded', () => {
         const rows = P.ribbonModel(cities(), timeseries(), {});
-        // social/news carry the snapshot volume; the other five canonical
+        // social/news carry the snapshot volume; the other six canonical
         // categories render as explicit zero segments (prototype marimekko:
         // ALL categories, always) instead of vanishing.
         expect(rows.map(r => r.category)).toEqual([
             'social', 'news',
-            'academic', 'blog', 'developer', 'nonprofit', 'policy',
+            'academic', 'blog', 'developer', 'forums', 'nonprofit', 'policy',
         ]);
         expect(rows.reduce((a, r) => a + r.share, 0)).toBeCloseTo(1);
     });
@@ -566,7 +571,7 @@ describe('demoPostsForCity — deterministic prototype-style posts', () => {
     });
 
     test('first post uses the city dominant category pool — every canonical category has one', () => {
-        for (const slug of design.CATEGORIES) {
+        for (const slug of design.CATEGORY_SLUGS) {
             const c = city('Cat-' + slug, 30, 10, 10, [
                 { source_name: 'src', source_category: slug,
                   positive: 30, neutral: 10, negative: 10, total: 50 },
@@ -577,9 +582,18 @@ describe('demoPostsForCity — deterministic prototype-style posts', () => {
         }
     });
 
-    test('a non-canonical dominant category falls back to the canonical rotation', () => {
+    test('a legacy tech-dominant city draws from the developer pool (residual mapping)', () => {
         const [p] = P.demoPostsForCity(techCity(), NOW);
-        expect(p.platform).toBe(design.CATEGORIES[0]); // 'social'
+        expect(p.platform).toBe('developer');
+    });
+
+    test('a non-canonical dominant category falls back to the canonical rotation', () => {
+        const zineCity = city('Zineton', 30, 10, 10, [
+            { source_name: 'zine_press', source_category: 'zines',
+              positive: 30, neutral: 10, negative: 10, total: 50 },
+        ]);
+        const [p] = P.demoPostsForCity(zineCity, NOW);
+        expect(p.platform).toBe(design.CATEGORY_SLUGS[0]); // 'social'
     });
 
     test('demo ids are never UUIDs (must not hit /api/audit — G16)', () => {
@@ -633,13 +647,18 @@ describe('demoAuditModel — prototype buildAudit receipt', () => {
 // ── Misc ────────────────────────────────────────────────────────────────────
 
 describe('catLabel / cityTopSlug / fmtAlertTime', () => {
-    test('catLabel title-cases slugs', () => {
+    test('catLabel maps slugs to registry display labels', () => {
         expect(P.catLabel('social')).toBe('Social');
+        // Registry labels, never naive capitalization ('Blog'/'Nonprofit'
+        // would be prototype violations):
+        expect(P.catLabel('blog')).toBe('Blogs');
+        expect(P.catLabel('nonprofit')).toBe('Non-profit');
+        expect(P.catLabel('forums')).toBe('Forums');
         expect(P.catLabel('')).toBe('');
         expect(P.catLabel(null)).toBe('');
     });
     test('cityTopSlug reads the dominant source category', () => {
-        expect(P.cityTopSlug(techCity())).toBe('tech');
+        expect(P.cityTopSlug(techCity())).toBe('developer'); // legacy tech → developer
         expect(P.cityTopSlug({ sources: [] })).toBeNull();
     });
     test('fmtAlertTime renders HH:MM UTC and tolerates junk', () => {

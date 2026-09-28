@@ -69,7 +69,9 @@ describe('category slug mapping (G11)', () => {
         expect(m.normalizeCategorySlug('Policy')).toBe('policy');
         expect(m.normalizeCategorySlug('Developer')).toBe('developer');
         expect(m.normalizeCategorySlug('Blogs')).toBe('blog');
-        expect(m.normalizeCategorySlug('Forums')).toBe('tech'); // handoff yellow reuse
+        expect(m.normalizeCategorySlug('Forums')).toBe('forums'); // first-class canon
+        expect(m.normalizeCategorySlug('Non-profit')).toBe('nonprofit');
+        expect(m.normalizeCategorySlug('tech')).toBe('developer'); // retired slug → developer
     });
 
     test('API slugs pass through unchanged', () => {

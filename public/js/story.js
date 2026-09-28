@@ -68,7 +68,7 @@
     designConfig, apiConfig, storyConfig) {
     'use strict';
 
-    const { fmtNet, netSentiment } = utils;
+    const { catLabel, fmtNet, netSentiment } = utils;
     const { computeInsights, allCategoryRows, partitionThemes } = insightsMod;
     const { STORY, resolveChapter } = chaptersMod;
     const gmath = globeMod.math;
@@ -427,7 +427,9 @@
         const minutes = minutesAgoFrom(post.collected_at, Date.now());
         const metaParts = [];
         if (post.source_name) metaParts.push(String(post.source_name));
-        if (post.platform) metaParts.push(String(post.platform).toLowerCase());
+        // Category meta: display label lowercased (prototype mini-post
+        // casing — 'blogs', 'non-profit'), never the raw slug.
+        if (post.platform) metaParts.push(catLabel(post.platform).toLowerCase());
         if (minutes !== null) metaParts.push(minutes + 'm ago');
         wrap.appendChild(el('div', 'mini-post-meta mono', metaParts.join(' · ')));
         wrap.appendChild(el('div', 'mini-post-text', post.content_snippet || ''));
@@ -667,7 +669,10 @@
             // "categories tracked" count.
             for (const row of allCategoryRows(state.cities)) {
                 const slug = gmath.normalizeCategorySlug(row.category);
-                const span = el('span', null, '● ' + String(row.category).toLowerCase());
+                // Prototype legend casing: the DISPLAY label lowercased
+                // ('Blogs' → 'blogs', 'Non-profit' → 'non-profit'), never
+                // the raw slug.
+                const span = el('span', null, '● ' + catLabel(row.category).toLowerCase());
                 span.style.color = (slug && CAT_COLORS[slug])
                     || SENTIMENT_PALETTE.neutral;
                 els.legend.appendChild(span);

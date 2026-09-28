@@ -25,7 +25,7 @@ const design = require('../../../public/js/config/design.config');
 
 const { STORY, resolveChapter, FALLBACK_COPY } = chapters;
 const { computeInsights, MIN_TOTAL } = insightsMod;
-const { netSentiment, fmtNet, fmtCount } = utils;
+const { catLabel, netSentiment, fmtNet, fmtCount } = utils;
 
 const demoCities = data.normalizeCities(data.DEMO_DATA);
 const demoInsights = computeInsights(demoCities);
@@ -195,7 +195,9 @@ describe('resolveChapter() over DEMO_DATA', () => {
     test('divide card interpolates the widest-divide derivation', () => {
         const d = insightsMod.widestCategoryDivide(demoCities);
         const r = resolveChapter(beat('divide'), demoInsights, demoCities);
-        expect(r.cardBody).toContain(`In ${d.city.city}, ${d.hi.category} sources run at ${fmtNet(d.hi.net)}`);
+        // Category tokens interpolate the registry DISPLAY label
+        // ('Developer', 'Blogs', 'Non-profit'), never the raw slug.
+        expect(r.cardBody).toContain(`In ${d.city.city}, ${catLabel(d.hi.category)} sources run at ${fmtNet(d.hi.net)}`);
         expect(r.cardBody).toContain(`a ${d.span.toFixed(2)} divergence`);
         expect(r.stats[2]).toEqual(['divergence', `${d.span.toFixed(2)} — global max`]);
     });
@@ -207,7 +209,7 @@ describe('resolveChapter() over DEMO_DATA', () => {
         // some categories have no posts this hour. "50 sources" remains an
         // editorial claim the payload cannot back and stays banned.
         const catCount = insightsMod.allCategoryRows(demoCities).length;
-        expect(catCount).toBe(design.CATEGORIES.length); // 7 — full taxonomy
+        expect(catCount).toBe(design.CATEGORIES.length); // 8 — full taxonomy
 
         const overview = resolveChapter(beat('overview'), demoInsights, demoCities);
         expect(overview.cardBody).not.toContain('50 sources');
@@ -231,7 +233,7 @@ describe('resolveChapter() over DEMO_DATA', () => {
         // name the dominant source category of the warmest city instead.
         expect(r.cardBody).not.toContain('builder communities');
         const topCat = insightsMod.catBreakdown(r.highlightCities[0])[0];
-        expect(r.cardBody).toContain(topCat.category);
+        expect(r.cardBody).toContain(catLabel(topCat.category));
     });
 
     test('messengers card names the warmest/coldest categories and their lead sources', () => {
@@ -240,8 +242,8 @@ describe('resolveChapter() over DEMO_DATA', () => {
         const hi = bySent[0];
         const lo = bySent[bySent.length - 1];
         const r = resolveChapter(beat('messengers'), demoInsights, demoCities);
-        expect(r.cardBody).toContain(`${hi.category} sources run warmest this hour (${fmtNet(hi.net)}), led by ${hi.topSource}`);
-        expect(r.cardBody).toContain(`${lo.category} sources run coldest (${fmtNet(lo.net)}), led by ${lo.topSource}`);
+        expect(r.cardBody).toContain(`${catLabel(hi.category)} sources run warmest this hour (${fmtNet(hi.net)}), led by ${hi.topSource}`);
+        expect(r.cardBody).toContain(`${catLabel(lo.category)} sources run coldest (${fmtNet(lo.net)}), led by ${lo.topSource}`);
         expect(r.cardBody).toContain(`a ${(hi.net - lo.net).toFixed(2)} gap`);
     });
 

@@ -603,10 +603,17 @@ describe('allCategoryRows(cities) — canonical taxonomy enumeration', () => {
         // academic... add them back" — quiet categories must not vanish).
         const rows = allCategoryRows(data.normalizeCities(rawFixture()));
         expect(rows.map(r => r.category).sort())
-            .toEqual([...design.CATEGORIES].sort());
+            .toEqual([...design.CATEGORY_SLUGS].sort());
         const zero = rows.find(r => r.category === 'nonprofit');
         expect(zero).toEqual({
             category: 'nonprofit', share: 0, volume: 0, net: 0,
+            split: { pos: 0, neu: 0, neg: 0 }, topSource: null,
+        });
+        // Forums-zero honesty: forums is first-class canon with NO seeded
+        // sources — it must enumerate as an explicit zero row (never
+        // invented volume, never dropped).
+        expect(rows.find(r => r.category === 'forums')).toEqual({
+            category: 'forums', share: 0, volume: 0, net: 0,
             split: { pos: 0, neu: 0, neg: 0 }, topSource: null,
         });
     });
@@ -617,7 +624,7 @@ describe('allCategoryRows(cities) — canonical taxonomy enumeration', () => {
         const rows = allCategoryRows(cities);
         expect(rows.slice(0, dataRows.length)).toEqual(dataRows);
         expect(rows.slice(dataRows.length).map(r => r.category))
-            .toEqual(['blog', 'developer', 'nonprofit']); // share-0 ties → alphabetical
+            .toEqual(['blog', 'developer', 'forums', 'nonprofit']); // share-0 ties → alphabetical
         expect(rows.reduce((a, r) => a + r.share, 0)).toBeCloseTo(1, 10);
     });
 
@@ -639,7 +646,7 @@ describe('allCategoryRows(cities) — canonical taxonomy enumeration', () => {
         for (const input of [[], null, undefined]) {
             const rows = allCategoryRows(input);
             expect(rows.map(r => r.category))
-                .toEqual([...design.CATEGORIES].sort());
+                .toEqual([...design.CATEGORY_SLUGS].sort());
             for (const r of rows) {
                 expect(r.volume).toBe(0);
                 expect(r.share).toBe(0);
@@ -656,7 +663,7 @@ describe('allCategoryRows(cities) — canonical taxonomy enumeration', () => {
               ] },
         ]));
         expect(rows.map(r => r.category).sort())
-            .toEqual([...design.CATEGORIES, 'tech'].sort());
+            .toEqual([...design.CATEGORY_SLUGS, 'tech'].sort());
         expect(rows[0].category).toBe('tech'); // only category with volume
     });
 });
