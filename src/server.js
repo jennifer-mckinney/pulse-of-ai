@@ -11,6 +11,7 @@
 //   POST /api/refresh
 //   GET  /api/audit/:post_id
 //   GET  /api/bias/latest
+//   GET  /api/bias/history
 //   GET  /api/methodology
 //   GET  /api/sources
 //   GET  /api/sources/timeseries

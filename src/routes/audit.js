@@ -7,6 +7,12 @@
 //   - The input fingerprint (keyed — see below; never raw content)
 //   - The full scored output
 //   - The plain-English justification from methodology_versions
+//   - FOUR audience representations per step (public / plain / config /
+//     researcher), rendered at read time by the versioned templates in
+//     src/config/audit-narration.js — no per-post prose is stored or invented
+//   - The bias fairness layers for the post's processing job (value, τ,
+//     citation, pass/fail/n-a) from bias_assessments + the versioned 'bias'
+//     methodology config
 //
 // input_hash exposure: decision_audit_log.input_hash stores an UNSALTED
 // SHA-256 of post content — internal immutable join key, never modified.
@@ -14,7 +20,8 @@
 // key is unset the field is OMITTED entirely (never raw).
 //
 // Returns:
-//   200 { post: {...}, decisions: [...] }
+//   200 { post: {...}, narration: {...}, ingest: {...}|null,
+//         decisions: [...], bias: { job_id, assessed_at, layers } }
 //   400 if post_id is not a valid UUID
 //   404 if the post does not exist
 //   500 on DB error (no stack trace returned to client)
@@ -24,6 +31,15 @@
 const crypto           = require('crypto');
 const { Router }       = require('express');
 const { dbGet, dbAll } = require('../db/connection');
+const {
+    NARRATION_COMPONENT,
+    NARRATION_VERSION,
+    renderAudiences,
+    deriveScore,
+    deriveStatus,
+    renderIngestStep,
+} = require('../config/audit-narration');
+const { buildLayers } = require('../config/bias-vocabulary');
 
 const router = Router();
 
@@ -74,6 +90,7 @@ router.get('/audit/:post_id', async (req, res) => {
             `SELECT
                 dal.decision_type,
                 dal.model_name,
+                dal.job_id,
                 mv.version   AS methodology_version,
                 mv.config,
                 mv.justification,
@@ -97,16 +114,75 @@ router.get('/audit/:post_id', async (req, res) => {
         // (and rotations) see the current environment.
         const auditKey = process.env.AUDIT_HASH_KEY;
         const exposed = decisions.map((d) => {
-            const { input_hash, ...rest } = d;
-            if (!auditKey) return rest;  // no key → omit, NEVER fall back to raw
-            return {
+            const { input_hash, job_id, ...rest } = d;
+            // Four audience representations + headline score/status, rendered
+            // read-time from the STORED output/config (versioned templates —
+            // see src/config/audit-narration.js). job_id stays internal (used
+            // for the bias layers below, not part of the decision payload).
+            const enriched = {
                 ...rest,
+                status:    deriveStatus(d),
+                score:     deriveScore(d),
+                audiences: renderAudiences(d, post.id),
+            };
+            if (!auditKey) return enriched;  // no key → omit, NEVER fall back to raw
+            return {
+                ...enriched,
                 input_hash: crypto
                     .createHmac('sha256', auditKey)
                     .update(input_hash)
                     .digest('hex'),
             };
         });
+
+        // ── Bias fairness layers for this post's processing job (gap G18) ────
+        // The job that produced the post's decisions also ran the bias checks;
+        // surface those job-level assessments as per-step fairness layers.
+        // Citations / display names / planned layers come from the versioned
+        // 'bias' methodology config — layers degrade gracefully when either
+        // the assessments or the config are absent.
+        const latestJobId = decisions.length > 0
+            ? decisions[decisions.length - 1].job_id
+            : null;
+
+        const biasMv = await dbGet(
+            `SELECT config FROM methodology_versions
+             WHERE component = 'bias' AND deprecated_at IS NULL
+             ORDER BY effective_from DESC
+             LIMIT 1`,
+        );
+        const biasConfig = biasMv ? biasMv.config : null;
+
+        let biasAssessments = [];
+        if (latestJobId) {
+            biasAssessments = await dbAll(
+                `SELECT assessment_type, group_field, group_value, metric_name,
+                        metric_value, threshold, is_violation, severity, created_at
+                 FROM bias_assessments
+                 WHERE job_id = $1
+                 ORDER BY created_at ASC`,
+                [latestJobId],
+            );
+        }
+
+        const biasBlock = {
+            job_id:      latestJobId,
+            assessed_at: biasAssessments.length > 0
+                ? biasAssessments[biasAssessments.length - 1].created_at
+                : null,
+            layers:      buildLayers(biasAssessments, biasConfig),
+        };
+
+        // ── Synthetic ingestion step (versioned 'ingest' methodology) ─────────
+        // Ingestion is not an inference so it has no decision_audit_log rows;
+        // its regulator-relevant facts (PII fields stripped, city granularity,
+        // legal basis) live in the registered methodology config.
+        const ingestMv = await dbGet(
+            `SELECT model_name, version, config FROM methodology_versions
+             WHERE component = 'ingest' AND deprecated_at IS NULL
+             ORDER BY effective_from DESC
+             LIMIT 1`,
+        );
 
         return res.json({
             post: {
@@ -117,7 +193,10 @@ router.get('/audit/:post_id', async (req, res) => {
                 source_name:     post.source_name,
                 collected_at:    post.collected_at,
             },
+            narration: { component: NARRATION_COMPONENT, version: NARRATION_VERSION },
+            ingest:    renderIngestStep(ingestMv),
             decisions: exposed,
+            bias:      biasBlock,
         });
     /* istanbul ignore start -- Database failure; requires error injection testing infrastructure */
     } catch (err) {

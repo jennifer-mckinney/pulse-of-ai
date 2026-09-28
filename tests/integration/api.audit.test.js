@@ -7,7 +7,11 @@
 const crypto  = require('crypto');
 const request = require('supertest');
 const app     = require('../../src/server');
-const { insertSource, insertJob, insertMethodologyVersions, insertPostWithFullPipeline } = require('./helpers');
+const {
+    insertSource, insertJob, insertMethodologyVersions,
+    insertBiasMethodology, insertIngestMethodology, insertBiasAssessment,
+    insertPostWithFullPipeline,
+} = require('./helpers');
 
 describe('GET /api/audit/:post_id', () => {
     it('returns 400 for an invalid (non-UUID) post_id', async () => {
@@ -84,6 +88,179 @@ describe('GET /api/audit/:post_id', () => {
             justification:        expect.any(String),
             output:               expect.any(Object),
             created_at:           expect.any(String),
+        });
+    });
+
+    // ─── Four audience views per step (gap G17) ───────────────────────────────
+
+    describe('four audience representations', () => {
+        it('every decision carries audiences { public, plain, config, researcher } + status + score', async () => {
+            const srcId  = await insertSource('audit-aud-1');
+            const jobId  = await insertJob();
+            const mvIds  = await insertMethodologyVersions();
+            const postId = await insertPostWithFullPipeline(srcId, jobId, mvIds, { externalId: 'aud-v4-1' });
+
+            const res = await request(app).get(`/api/audit/${postId}`);
+            expect(res.status).toBe(200);
+            expect(res.body.decisions.length).toBeGreaterThan(0);
+            for (const decision of res.body.decisions) {
+                expect(decision.status).toBe('pass');
+                expect(decision).toHaveProperty('score');
+                expect(decision.audiences).toMatchObject({
+                    public:     expect.any(String),
+                    plain:      expect.any(String),
+                    config:     expect.any(Object),
+                    researcher: expect.any(String),
+                });
+                // Researcher view always carries the reproduce command
+                expect(decision.audiences.researcher).toContain(`pulse replay --post ${postId}`);
+            }
+        });
+
+        it('the regulator config view merges versioned thresholds with the observed output', async () => {
+            const srcId  = await insertSource('audit-aud-2');
+            const jobId  = await insertJob();
+            const mvIds  = await insertMethodologyVersions();
+            const postId = await insertPostWithFullPipeline(srcId, jobId, mvIds, {
+                externalId: 'aud-v4-2', indicator: 'positive', comparative: 0.5,
+            });
+
+            const res = await request(app).get(`/api/audit/${postId}`);
+            const sentDec = res.body.decisions.find(d => d.decision_type === 'sentiment');
+            expect(sentDec.audiences.config).toMatchObject({
+                model:                'afinn-sentiment-v5@1.0.0',
+                positive_threshold:   0.05,
+                negative_threshold:   -0.05,
+                observed_comparative: 0.5,
+                observed_indicator:   'positive',
+            });
+            // Headline score = bounded comparative
+            expect(sentDec.score).toBe(0.5);
+        });
+
+        it('reports the narration template version that rendered the receipt', async () => {
+            const srcId  = await insertSource('audit-aud-3');
+            const jobId  = await insertJob();
+            const mvIds  = await insertMethodologyVersions();
+            const postId = await insertPostWithFullPipeline(srcId, jobId, mvIds, { externalId: 'aud-v4-3' });
+
+            const res = await request(app).get(`/api/audit/${postId}`);
+            expect(res.body.narration).toEqual({
+                component: 'audit_narration',
+                version:   expect.stringMatching(/^\d+\.\d+\.\d+$/),
+            });
+        });
+    });
+
+    // ─── Synthetic ingestion step from versioned config ───────────────────────
+
+    describe('ingestion step', () => {
+        it('renders the ingestion step when the ingest methodology is registered', async () => {
+            const srcId  = await insertSource('audit-ing-1');
+            const jobId  = await insertJob();
+            const mvIds  = await insertMethodologyVersions();
+            await insertIngestMethodology();
+            const postId = await insertPostWithFullPipeline(srcId, jobId, mvIds, { externalId: 'aud-ing-1' });
+
+            const res = await request(app).get(`/api/audit/${postId}`);
+            expect(res.body.ingest).toMatchObject({
+                stage:               'ingestion',
+                model_name:          'pulse-ingest-v1',
+                methodology_version: '1.0.0',
+                status:              'pass',
+            });
+            // Legal basis comes from the VERSIONED config, not a hardcoded string
+            expect(res.body.ingest.audiences.config.legal_basis)
+                .toBe('GDPR Article 6(1)(f) - Legitimate Interest');
+            expect(res.body.ingest.audiences.public).toEqual(expect.any(String));
+        });
+
+        it('serves ingest: null when no ingest methodology is registered', async () => {
+            const srcId  = await insertSource('audit-ing-2');
+            const jobId  = await insertJob();
+            const mvIds  = await insertMethodologyVersions();
+            const postId = await insertPostWithFullPipeline(srcId, jobId, mvIds, { externalId: 'aud-ing-2' });
+
+            const res = await request(app).get(`/api/audit/${postId}`);
+            expect(res.body.ingest).toBeNull();
+        });
+    });
+
+    // ─── Bias fairness layers for the post's job (gap G18) ────────────────────
+
+    describe('bias fairness layers', () => {
+        it('serves the job-level assessments as layers with value, τ, citation, and status', async () => {
+            const srcId  = await insertSource('audit-bias-1');
+            const jobId  = await insertJob();
+            const mvIds  = await insertMethodologyVersions();
+            await insertBiasMethodology();
+            const postId = await insertPostWithFullPipeline(srcId, jobId, mvIds, { externalId: 'aud-b-1' });
+
+            await insertBiasAssessment(jobId, {
+                assessmentType: 'location_concentration',
+                metricValue: 0.41, threshold: 0.35,
+                isViolation: true, severity: 'warning',
+            });
+            await insertBiasAssessment(jobId, {
+                assessmentType: 'platform_sentiment_parity',
+                groupField: 'platform', groupValue: 'social vs news',
+                metricName: 'max_comparative_diff',
+                metricValue: 0.031, threshold: 0.30,
+                isViolation: false,
+            });
+
+            const res = await request(app).get(`/api/audit/${postId}`);
+            expect(res.body.bias.job_id).toBe(jobId);
+            expect(res.body.bias.assessed_at).toEqual(expect.any(String));
+
+            const loc = res.body.bias.layers.find(l => l.assessment_type === 'location_concentration');
+            expect(loc).toMatchObject({
+                name:      'Location concentration',
+                value:     0.41,
+                threshold: 0.35,
+                citation:  'Suresh & Guttag (2021)',
+                status:    'fail',
+                severity:  'watch',
+            });
+
+            const parity = res.body.bias.layers.find(l => l.assessment_type === 'platform_sentiment_parity');
+            expect(parity).toMatchObject({
+                name:     'Demographic parity (source category)',
+                citation: 'Barocas & Selbst (2016)',
+                status:   'pass',
+            });
+        });
+
+        it('includes planned-but-not-enforced layers as n-a (honest coverage)', async () => {
+            const srcId  = await insertSource('audit-bias-2');
+            const jobId  = await insertJob();
+            const mvIds  = await insertMethodologyVersions();
+            await insertBiasMethodology();
+            const postId = await insertPostWithFullPipeline(srcId, jobId, mvIds, { externalId: 'aud-b-2' });
+
+            const res = await request(app).get(`/api/audit/${postId}`);
+            const eo = res.body.bias.layers.find(l => l.assessment_type === 'equalized_odds');
+            expect(eo).toMatchObject({
+                name:     'Equalized odds',
+                value:    null,
+                status:   'n-a',
+                citation: 'Hardt et al. (2016)',
+                note:     expect.stringContaining('not yet enforced'),
+            });
+        });
+
+        it('degrades to empty layers when no assessments and no bias methodology exist', async () => {
+            const srcId  = await insertSource('audit-bias-3');
+            const jobId  = await insertJob();
+            const mvIds  = await insertMethodologyVersions();
+            const postId = await insertPostWithFullPipeline(srcId, jobId, mvIds, { externalId: 'aud-b-3' });
+
+            const res = await request(app).get(`/api/audit/${postId}`);
+            expect(res.body.bias).toEqual({
+                job_id:      jobId,
+                assessed_at: null,
+                layers:      [],
+            });
         });
     });
 

@@ -63,6 +63,100 @@ async function insertMethodologyVersions() {
     return { sentimentMvId: rows[0].id, relevanceMvId: rows[1].id, discourseMvId: rows[2].id };
 }
 
+/**
+ * Register the versioned 'bias' methodology row (thresholds + layer names +
+ * citations + planned layers) that the audit fairness layers and the bias
+ * history endpoint read. Mirrors the scripts/seed.js entry.
+ * @returns {Promise<string>}  methodology_versions.id
+ */
+async function insertBiasMethodology() {
+    const config = {
+        location_concentration_max: 0.35,
+        platform_parity_max_diff:   0.30,
+        negative_dominance_max:     0.60,
+        layer_names: {
+            location_concentration:    'Location concentration',
+            platform_sentiment_parity: 'Demographic parity (source category)',
+            negative_dominance:        'Negative dominance',
+        },
+        citations: {
+            location_concentration:    'Suresh & Guttag (2021)',
+            platform_sentiment_parity: 'Barocas & Selbst (2016)',
+            negative_dominance:        'Suresh & Guttag (2021)',
+        },
+        planned_layers: [
+            { id: 'equalized_odds',          name: 'Equalized odds',          citation: 'Hardt et al. (2016)',  note: 'Phase 3 — not yet enforced' },
+            { id: 'counterfactual_fairness', name: 'Counterfactual fairness', citation: 'Kusner et al. (2017)', note: 'Phase 3 — not yet enforced' },
+        ],
+        legal_basis: 'EU AI Act Article 13 - Transparency and provision of information',
+    };
+    const row = await dbRun(
+        `INSERT INTO methodology_versions (component, version, model_name, config, justification)
+         VALUES ('bias', '1.0.0', 'pulse-bias-monitor-v1', $1::jsonb, 'Automated post-job fairness checks.')
+         ON CONFLICT (component, version) DO UPDATE SET config = EXCLUDED.config
+         RETURNING id`,
+        [JSON.stringify(config)],
+    );
+    return row.id;
+}
+
+/**
+ * Register the versioned 'ingest' methodology row (PII fields, granularity,
+ * legal basis) that the audit route renders as the synthetic Ingestion step.
+ * Mirrors the scripts/seed.js entry.
+ * @returns {Promise<string>}  methodology_versions.id
+ */
+async function insertIngestMethodology() {
+    const config = {
+        pii_fields_removed:   ['author', 'author_fullname', 'username', 'user', 'email'],
+        location_granularity: 'city',
+        dedup_strategy:       'sha256-content-hash',
+        legal_basis:          'GDPR Article 6(1)(f) - Legitimate Interest',
+    };
+    const row = await dbRun(
+        `INSERT INTO methodology_versions (component, version, model_name, config, justification)
+         VALUES ('ingest', '1.0.0', 'pulse-ingest-v1', $1::jsonb, 'PII-minimised public-source ingestion.')
+         ON CONFLICT (component, version) DO UPDATE SET config = EXCLUDED.config
+         RETURNING id`,
+        [JSON.stringify(config)],
+    );
+    return row.id;
+}
+
+// ─── Bias assessment ──────────────────────────────────────────────────────────
+
+/**
+ * Insert a bias_assessments row directly (bypasses the pipeline).
+ * @param {string} jobId
+ * @param {{ assessmentType?, groupValue?, metricName?, metricValue?, threshold?,
+ *           isViolation?, severity?, createdAt? }} opts
+ *        severity: stored severity ('warning'|'critical') — only meaningful
+ *        when isViolation is true. createdAt: Date/ISO for history-window tests.
+ */
+async function insertBiasAssessment(jobId, {
+    assessmentType = 'location_concentration',
+    groupField     = 'location',
+    groupValue     = 'San Francisco',
+    metricName     = 'share_of_total',
+    metricValue    = 0.40,
+    threshold      = 0.35,
+    isViolation    = false,
+    severity       = null,
+    createdAt      = null,
+} = {}) {
+    const row = await dbRun(
+        `INSERT INTO bias_assessments
+            (job_id, assessment_type, group_field, group_value,
+             metric_name, metric_value, threshold, is_violation, severity, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10::timestamptz, NOW()))
+         RETURNING id`,
+        [jobId, assessmentType, groupField, groupValue, metricName, metricValue,
+         threshold, isViolation, severity,
+         createdAt instanceof Date ? createdAt.toISOString() : createdAt],
+    );
+    return row.id;
+}
+
 // ─── Full post + all three pipeline results ───────────────────────────────────
 
 /**
@@ -213,6 +307,9 @@ module.exports = {
     insertSource,
     insertJob,
     insertMethodologyVersions,
+    insertBiasMethodology,
+    insertIngestMethodology,
+    insertBiasAssessment,
     insertPostWithFullPipeline,
     insertPostWithRelevanceOnly,
     insertAlert,
