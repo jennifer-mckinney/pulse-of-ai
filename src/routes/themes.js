@@ -13,8 +13,12 @@
 // Ordered by volume DESC (keyword ASC tie-break), capped at 12 themes.
 // Keywords matched by fewer than 3 posts are excluded entirely.
 //
+// words: the theme's cue-word list for the UI theme rows — the keyword itself
+// followed by up to 2 keywords most frequently co-matched on the same posts
+// (count DESC, keyword ASC tie-break). Always at least [keyword].
+//
 // Returns:
-//   200 [ { keyword, volume, positive, neutral, negative, top_category } ]
+//   200 [ { keyword, words, volume, positive, neutral, negative, top_category } ]
 //   200 [] when no relevance results exist
 
 'use strict';
@@ -87,7 +91,49 @@ router.get('/themes', async (req, res) => {
             LIMIT 12`,
         );
 
-        return res.json(rows);
+        // ── Cue-word lists per theme (frontend `words[]`) ─────────────────────
+        // For each surfaced keyword: the other keywords most often co-matched
+        // on the SAME sentiment-scored posts. Same DISTINCT + sentiment join
+        // as above so the co-occurrence set is identical to the counted set.
+        const wordsByKeyword = {};
+        if (rows.length > 0) {
+            const keywords = rows.map(r => r.keyword);
+            const coRows = await dbAll(
+                `WITH kw_posts AS (
+                    SELECT DISTINCT unnest(rr.matched_keywords) AS keyword, rr.raw_post_id
+                    FROM relevance_results rr
+                    JOIN sentiment_results sr ON sr.raw_post_id = rr.raw_post_id
+                )
+                SELECT keyword, co_keyword
+                FROM (
+                    SELECT a.keyword, b.keyword AS co_keyword,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY a.keyword
+                               ORDER BY COUNT(*) DESC, b.keyword ASC
+                           ) AS rn
+                    FROM kw_posts a
+                    JOIN kw_posts b
+                      ON b.raw_post_id = a.raw_post_id
+                     AND b.keyword    != a.keyword
+                    WHERE a.keyword = ANY($1::text[])
+                    GROUP BY a.keyword, b.keyword
+                ) ranked
+                WHERE rn <= 2
+                ORDER BY keyword ASC, rn ASC`,
+                [keywords],
+            );
+            for (const cr of coRows) {
+                if (!wordsByKeyword[cr.keyword]) wordsByKeyword[cr.keyword] = [];
+                wordsByKeyword[cr.keyword].push(cr.co_keyword);
+            }
+        }
+
+        const themes = rows.map(r => ({
+            ...r,
+            words: [r.keyword, ...(wordsByKeyword[r.keyword] || [])],
+        }));
+
+        return res.json(themes);
     /* istanbul ignore start -- Database failure; requires error injection testing infrastructure */
     } catch (err) {
         console.error('[themes] Error:', err.message);

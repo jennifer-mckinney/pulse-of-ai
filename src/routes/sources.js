@@ -17,9 +17,14 @@
 //   ?hours=12    window size in hours (integer, default 12, clamped to 1..48)
 //
 // Returns:
-//   200 [ { category, series: [ { hour, positive, neutral, negative, total } ] } ]
+//   200 [ { category, top_site, words,
+//           series: [ { hour, positive, neutral, negative, total } ] } ]
 //        series has EXACTLY `hours` buckets (oldest → newest, zero-filled);
-//        categories with no posts in the window are omitted entirely
+//        categories with no posts in the window are omitted entirely;
+//        top_site = display_name of the category's busiest source in the
+//        window (post count DESC, name ASC tie-break);
+//        words = up to 2 most-matched relevance keywords for the category's
+//        posts in the window (ribbon cue-words line; [] when none matched)
 //   400 when hours is not an integer
 
 'use strict';
@@ -122,14 +127,75 @@ router.get('/sources/timeseries', async (req, res) => {
             [hours],
         );
 
-        // ─── Fold flat rows into [{ category, series }] ───────────────────────
+        // ─── Ribbon metadata: busiest source + cue words per category ────────
+        // Same window bounds as the counts CTE so the metadata describes the
+        // exact post set the sparkline renders. top_site = display_name of the
+        // category's highest-volume source; words = up to 2 most-matched
+        // relevance keywords (count DESC, keyword ASC tie-breaks throughout).
+        const siteRows = await dbAll(
+            `SELECT category, display_name
+             FROM (
+                SELECT ds.category, ds.display_name,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY ds.category
+                           ORDER BY COUNT(*) DESC, ds.display_name ASC
+                       ) AS rn
+                FROM raw_posts rp
+                JOIN sentiment_results sr ON sr.raw_post_id = rp.id
+                JOIN data_sources ds      ON ds.id = rp.source_id
+                WHERE rp.collected_at >= date_trunc('hour', NOW()) - ($1::int - 1) * INTERVAL '1 hour'
+                  AND rp.collected_at <  date_trunc('hour', NOW()) + INTERVAL '1 hour'
+                GROUP BY ds.category, ds.display_name
+             ) ranked
+             WHERE rn = 1`,
+            [hours],
+        );
+        const topSiteByCategory = {};
+        for (const row of siteRows) topSiteByCategory[row.category] = row.display_name;
+
+        const wordRows = await dbAll(
+            `SELECT category, keyword
+             FROM (
+                SELECT ds.category, kw.keyword,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY ds.category
+                           ORDER BY COUNT(*) DESC, kw.keyword ASC
+                       ) AS rn
+                FROM raw_posts rp
+                JOIN sentiment_results sr ON sr.raw_post_id = rp.id
+                JOIN data_sources ds      ON ds.id = rp.source_id
+                JOIN LATERAL (
+                    SELECT DISTINCT unnest(rr.matched_keywords) AS keyword
+                    FROM relevance_results rr
+                    WHERE rr.raw_post_id = rp.id
+                ) kw ON TRUE
+                WHERE rp.collected_at >= date_trunc('hour', NOW()) - ($1::int - 1) * INTERVAL '1 hour'
+                  AND rp.collected_at <  date_trunc('hour', NOW()) + INTERVAL '1 hour'
+                GROUP BY ds.category, kw.keyword
+             ) ranked
+             WHERE rn <= 2
+             ORDER BY category ASC, rn ASC`,
+            [hours],
+        );
+        const wordsByCategory = {};
+        for (const row of wordRows) {
+            if (!wordsByCategory[row.category]) wordsByCategory[row.category] = [];
+            wordsByCategory[row.category].push(row.keyword);
+        }
+
+        // ─── Fold flat rows into [{ category, top_site, words, series }] ─────
         // Rows arrive ordered by category then hour, so a simple accumulator keeps
         // both the category ordering and the oldest→newest bucket ordering
         const byCategory = [];
         for (const row of rows) {
             let entry = byCategory[byCategory.length - 1];
             if (!entry || entry.category !== row.category) {
-                entry = { category: row.category, series: [] };
+                entry = {
+                    category: row.category,
+                    top_site: topSiteByCategory[row.category] ?? null,
+                    words:    wordsByCategory[row.category]   ?? [],
+                    series:   [],
+                };
                 byCategory.push(entry);
             }
             entry.series.push({

@@ -195,4 +195,91 @@ describe('GET /api/sources/timeseries', () => {
         expect(bad2.status).toBe(400);
         expect(bad2.body).toHaveProperty('error');
     });
+
+    // ─── Ribbon metadata: busiest source + cue words per category ─────────────
+
+    describe('ribbon metadata (top_site + words)', () => {
+        it('top_site is the display name of the category\'s busiest source in the window', async () => {
+            const busy  = await insertSource('ts-site-busy',  'social');
+            const quiet = await insertSource('ts-site-quiet', 'social');
+            const jobId = await insertJob();
+            const mvIds = await insertMethodologyVersions();
+
+            // busy: 2 posts, quiet: 1 post — busy wins
+            await insertPostWithFullPipeline(busy, jobId, mvIds,
+                { externalId: 'tsb-1', collectedAt: minutesAgo(5) });
+            await insertPostWithFullPipeline(busy, jobId, mvIds,
+                { externalId: 'tsb-2', collectedAt: minutesAgo(10) });
+            await insertPostWithFullPipeline(quiet, jobId, mvIds,
+                { externalId: 'tsq-1', collectedAt: minutesAgo(5) });
+
+            const res = await request(app).get('/api/sources/timeseries');
+            const social = res.body.find(e => e.category === 'social');
+            // insertSource sets display_name = name
+            expect(social.top_site).toBe('ts-site-busy');
+        });
+
+        it('words are the category\'s two most-matched relevance keywords in the window', async () => {
+            const src   = await insertSource('ts-words-src', 'news');
+            const jobId = await insertJob();
+            const mvIds = await insertMethodologyVersions();
+
+            // "regulation" 3×, "safety" 2×, "misc" 1× → top-2 = regulation, safety
+            for (let i = 0; i < 3; i++) {
+                await insertPostWithFullPipeline(src, jobId, mvIds, {
+                    externalId: `tsw-r${i}`, collectedAt: minutesAgo(5),
+                    keywords: ['regulation'],
+                });
+            }
+            for (let i = 0; i < 2; i++) {
+                await insertPostWithFullPipeline(src, jobId, mvIds, {
+                    externalId: `tsw-s${i}`, collectedAt: minutesAgo(10),
+                    keywords: ['safety'],
+                });
+            }
+            await insertPostWithFullPipeline(src, jobId, mvIds, {
+                externalId: 'tsw-m0', collectedAt: minutesAgo(15),
+                keywords: ['misc'],
+            });
+
+            const res = await request(app).get('/api/sources/timeseries');
+            const news = res.body.find(e => e.category === 'news');
+            expect(news.words).toEqual(['regulation', 'safety']);
+        });
+
+        it('words is [] and top_site still set for categories whose posts matched no keywords', async () => {
+            const { dbRun } = require('../../src/db/connection');
+            const crypto2   = require('crypto');
+            const src   = await insertSource('ts-nokw-src', 'policy');
+            const jobId = await insertJob();
+            const mvIds = await insertMethodologyVersions();
+
+            // Sentiment-scored post with NO relevance row at all
+            const content = 'No-keyword post';
+            const hash    = crypto2.createHash('sha256').update(content).digest('hex');
+            const post = await dbRun(
+                `INSERT INTO raw_posts (source_id, external_id, content, content_hash, location, collected_at)
+                 VALUES ($1, 'tsnk-1', $2, $3, 'London', $4) RETURNING id`,
+                [src, content, hash, minutesAgo(5).toISOString()],
+            );
+            const audit = await dbRun(
+                `INSERT INTO decision_audit_log
+                    (raw_post_id, job_id, methodology_version_id, decision_type, model_name, input_hash, output)
+                 VALUES ($1, $2, $3, 'sentiment', 'afinn-sentiment-v5', $4, '{}'::jsonb)
+                 RETURNING id`,
+                [post.id, jobId, mvIds.sentimentMvId, hash],
+            );
+            await dbRun(
+                `INSERT INTO sentiment_results
+                    (raw_post_id, audit_id, score, comparative, indicator, positive_words, negative_words, token_count)
+                 VALUES ($1, $2, 1, 0.1, 'positive', '{}', '{}', 5)`,
+                [post.id, audit.id],
+            );
+
+            const res = await request(app).get('/api/sources/timeseries');
+            const policy = res.body.find(e => e.category === 'policy');
+            expect(policy.top_site).toBe('ts-nokw-src');
+            expect(policy.words).toEqual([]);
+        });
+    });
 });
