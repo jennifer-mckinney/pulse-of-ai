@@ -121,3 +121,55 @@ test('ribbon: explore-only, proportional segments, sparklines, 12h label, hover 
 
     expectNoConsoleErrors(errors);
 });
+
+test('ribbon: live timeseries FAILURE → no sparklines, no fabricated words, honest notice', async ({ page }) => {
+    // Grumpy #1: a live /api/sources/timeseries failure must not flip the
+    // ribbon into demo synthesis. The aborted request is the only allowed
+    // console noise.
+    const errors = consoleErrors(page, [/Failed to load resource/, /sources\/timeseries/]);
+    await stabilizeSnapshot(page);
+    await page.route('**/api/sources/timeseries*', (route) => route.abort());
+    await gotoAndWaitForData(page);
+    await enterExplore(page);
+
+    const strip = page.locator('#strip');
+    await expect(strip).toBeVisible();
+    await expect(strip.locator('.strip-seg')).toHaveCount(8);
+
+    // The outage notice renders (same voice as the other fallback labels)…
+    await expect(strip.locator('.strip-note'))
+        .toHaveText('live timeseries unavailable — sparklines omitted');
+    // …no sparkline SVGs are drawn for live segments (zero-volume segments
+    // draw a flat zero baseline, which is honest — count only segments with
+    // volume > 0 by asserting no NON-flat polyline: simplest honest check is
+    // that no segment carries fabricated cue words and the live segments
+    // have no synthesized series).
+    const fabricated = await page.evaluate(() => {
+        const w = (window as any);
+        const rows = w.PulseUI.pure.ribbonModel(
+            w.PulseStory.getCities(), null, { demo: false });
+        return rows.filter((r: any) => r.volume > 0 && r.series !== null).length;
+    });
+    expect(fabricated, 'no live segment may synthesize a series').toBe(0);
+    // DOM cross-check: the only sparklines on the strip are the flat zero
+    // baselines of zero-volume segments — every volume>0 segment is bare.
+    const svgVsZero = await page.evaluate(() => {
+        const segs = Array.from(document.querySelectorAll('#strip .strip-seg'));
+        const zeroSegs = segs.filter((s) =>
+            (s.querySelector('.seg-vol') as HTMLElement).innerText.startsWith('0/hr'));
+        const withSvg = segs.filter((s) => s.querySelector('svg.seg-area'));
+        return {
+            zero: zeroSegs.length,
+            svg: withSvg.length,
+            liveWithSvg: withSvg.filter((s) => !zeroSegs.includes(s)).length,
+        };
+    });
+    expect(svgVsZero.liveWithSvg, 'volume>0 segments must have no sparkline').toBe(0);
+    expect(svgVsZero.svg).toBe(svgVsZero.zero);
+    // No quoted cue words anywhere (the old bug rendered “AI” “models”).
+    const quoted = await strip.locator('.seg-words').allInnerTexts();
+    expect(quoted.join(' ')).not.toContain('“AI”');
+    expect(quoted.join(' ')).not.toContain('“models”');
+
+    expectNoConsoleErrors(errors);
+});

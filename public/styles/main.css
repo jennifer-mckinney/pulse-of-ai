@@ -381,6 +381,10 @@ body {
   padding: 6px 10px 9px; cursor: pointer; transition: background 0.15s;
 }
 .strip-seg:first-child { border-left: none; }
+/* Live timeseries-outage notice appended after the segments (ui.js
+   renderRibbon) — keep it a fixed-width sliver so it never squashes the
+   marimekko flex-basis percentages. */
+.strip-note { flex: 0 0 auto; align-self: center; padding: 4px 10px; }
 .strip-seg:hover { background: rgba(140,165,205,0.08); }
 .seg-area { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 .seg-content { position: relative; display: flex; flex-direction: column; gap: 2px; min-width: 0; }

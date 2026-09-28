@@ -483,6 +483,18 @@ describe('ribbonModel — timeseries → marimekko rows (audit G23)', () => {
         expect(social.words).toEqual(['agents', 'shipped']);
     });
 
+    test('live mode with NO timeseries (fetch failed or in flight) never fabricates', () => {
+        // Grumpy #1: synthesis is DEMO-ONLY. A live timeseries outage must
+        // yield series null (no sparkline) and zero cue words — never the
+        // deterministic demo walk or the ["AI","models"] filler.
+        const rows = P.ribbonModel(cities(), null, { demo: false });
+        const social = rows.find(r => r.category === 'social');
+        expect(social.volume).toBeGreaterThan(0);
+        expect(social.series).toBeNull();
+        expect(social.words).toEqual([]);
+        expect(social.site).toBe('reddit');   // snapshot top source only
+    });
+
     test('demo mode synthesizes a deterministic 12-point series', () => {
         const a = P.ribbonModel(cities(), null, { demo: true });
         const b = P.ribbonModel(cities(), null, { demo: true });

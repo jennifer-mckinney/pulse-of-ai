@@ -542,7 +542,10 @@
     // omits zero-post categories, audit G23 — a missing series is
     // tolerated). Zero-volume categories stay honest: flat zero series
     // (never a synthesized walk), no cue words, no lead site.
-    // opts.demo=true synthesizes deterministic series instead (FR-22).
+    // opts.demo=true (STORY demo mode ONLY — never a live fetch failure)
+    // synthesizes deterministic series instead (FR-22). In live mode a
+    // missing timeseries row yields series null (no sparkline) and no
+    // fabricated cue words — the caller surfaces the outage separately.
     function ribbonModel(cities, timeseries, opts) {
         const demo = !!(opts && opts.demo);
         const base = allCategoryRows(cities);
@@ -908,7 +911,8 @@
         audience: 'Public',     // audit drawer segmented control
         auditModel: null,
         timeseries: null,       // cached /api/sources/timeseries rows
-        timeseriesAt: 0,
+        timeseriesAt: 0,        // when the rows were fetched (staleness gate)
+        timeseriesError: false, // live fetch FAILED (distinct from still-loading)
     };
 
     let els = null;
@@ -1311,6 +1315,7 @@
     function loadTimeseries() {
         if (state.isDemo || typeof fetch !== 'function') {
             state.timeseries = null;
+            state.timeseriesError = false;   // demo synthesizes; nothing failed
             renderRibbon();
             return;
         }
@@ -1318,10 +1323,15 @@
             .then((rows) => {
                 state.timeseries = Array.isArray(rows) ? rows : [];
                 state.timeseriesAt = Date.now();
+                state.timeseriesError = false;
                 renderRibbon();
             })
             .catch(() => {
+                // Live fetch FAILURE (not "still loading"): never fabricate a
+                // demo walk for live segments — render without sparklines and
+                // say so inline (same voice as the other fallback labels).
                 state.timeseries = null;
+                state.timeseriesError = true;
                 renderRibbon();
             });
     }
@@ -1334,8 +1344,10 @@
     function renderRibbon() {
         if (!els.strip) return;
         clear(els.strip);
+        // demo ONLY when the whole story is in demo mode — a live timeseries
+        // failure (or a fetch still in flight) must never synthesize series.
         const rows = ribbonModel(state.cities, state.timeseries,
-            { demo: state.isDemo || state.timeseries === null });
+            { demo: state.isDemo });
         const totShare = rows.reduce((a, r) => a + r.share, 0) || 1;
         // Flex widths carry a minimum sliver for zero-volume segments; the
         // DISPLAYED percentage stays the real share (0% for a quiet
@@ -1445,6 +1457,14 @@
             });
             els.strip.appendChild(seg);
         });
+
+        // Honest outage notice: live mode + failed timeseries fetch → the
+        // segments render without sparklines and this line says why (same
+        // voice as the other live-unavailable fallback labels).
+        if (!state.isDemo && state.timeseriesError) {
+            els.strip.appendChild(el('div', 'empty mono strip-note',
+                'live timeseries unavailable — sparklines omitted'));
+        }
     }
 
     // ── Audit drawer ────────────────────────────────────────────────────────
