@@ -6,12 +6,13 @@
 //    isDemo}
 //
 // Pure module: no DOM, no fetch — globe.js/story.js apply the resolved state.
-// Card text is rendered by consumers via textContent (never innerHTML), so
-// interpolated strings are XSS-safe by construction. Keep it that way.
-// Defense in depth: attacker-influenceable strings (city names, source names,
-// category names from API data) are additionally HTML-escaped via
-// PulseUtils.esc() at the point they enter card values, so even a consumer
-// that wrongly switches to HTML rendering cannot inject markup.
+//
+// XSS rule (THE one rule, stated once): card strings reach the page ONLY via
+// textContent — that DOM sink is the escaping boundary, and the repo Write
+// hook blocks innerHTML in client JS to keep it that way. Token values are
+// therefore RAW strings; nothing here pre-escapes them, because escaping
+// before textContent double-encodes ('&' would render as '&amp;'). Any
+// consumer that wants HTML rendering must not get it from this resolver.
 //
 // Dual export guard with dependency injection: CommonJS requires siblings for
 // jest; browser script tags read the window globals (load config/*.js,
@@ -30,7 +31,7 @@
 }(typeof self !== 'undefined' ? self : this, function (utils, insightsMod, storyConfig) {
     'use strict';
 
-    const { esc, catLabel, fmtPct, fmtCount, fmtNet, netSentiment } = utils;
+    const { catLabel, fmtPct, fmtCount, fmtNet, netSentiment } = utils;
     const {
         TEMPLATES, renderTemplate, MIN_TOTAL,
         catBreakdown, widestCategoryDivide, ribbonRows, allCategoryRows,
@@ -116,11 +117,8 @@
     // and empty stats). Values are preformatted strings so templates stay
     // presentation-only.
     //
-    // XSS boundary: every attacker-influenceable string (city / source /
-    // category names originating from API data) passes through esc() HERE,
-    // where it enters a card value. Numeric values are formatter output and
-    // need no escaping. Consumers still must render via textContent — esc()
-    // is defense in depth, not permission to use innerHTML.
+    // XSS: token values are RAW strings — see the file-header rule.
+    // textContent is the boundary; pre-escaping here would double-encode.
     //
     // Category tokens interpolate the canonical DISPLAY label
     // (utils.catLabel — 'blog' → 'Blogs', 'nonprofit' → 'Non-profit'),
@@ -146,11 +144,11 @@
             if (top.length < 3 || ins.globalTotals.total === 0) return null;
             const topSum = top[0].total + top[1].total + top[2].total;
             return {
-                volumeCity1: esc(top[0].city),
+                volumeCity1: top[0].city,
                 volumeCount1: fmtCount(top[0].total),
-                volumeCity2: esc(top[1].city),
+                volumeCity2: top[1].city,
                 volumeCount2: fmtCount(top[1].total),
-                volumeCity3: esc(top[2].city),
+                volumeCity3: top[2].city,
                 volumeCount3: fmtCount(top[2].total),
                 topThreeSharePct: fmtPct(topSum / ins.globalTotals.total),
             };
@@ -159,10 +157,10 @@
             const d = widestCategoryDivide(cities);
             if (!d) return null;
             return {
-                divideCity: esc(d.city.city),
-                divideHiCategory: esc(catLabel(d.hi.category)),
+                divideCity: d.city.city,
+                divideHiCategory: catLabel(d.hi.category),
                 divideHiNet: fmtNet(d.hi.net),
-                divideLoCategory: esc(catLabel(d.lo.category)),
+                divideLoCategory: catLabel(d.lo.category),
                 divideLoNet: fmtNet(d.lo.net),
                 divideSpan: d.span.toFixed(2),
             };
@@ -173,12 +171,12 @@
             const topCat = catBreakdown(coolest[0])[0]; // dominant category
             if (!topCat) return null;
             return {
-                negCity1: esc(coolest[0].city),
+                negCity1: coolest[0].city,
                 negNet1: fmtNet(netSentiment(coolest[0])),
-                negCategory1: esc(catLabel(topCat.category)),
-                negCity2: esc(coolest[1].city),
+                negCategory1: catLabel(topCat.category),
+                negCity2: coolest[1].city,
                 negNet2: fmtNet(netSentiment(coolest[1])),
-                negCity3: esc(coolest[2].city),
+                negCity3: coolest[2].city,
                 negNet3: fmtNet(netSentiment(coolest[2])),
             };
         },
@@ -191,12 +189,12 @@
             const topCat = catBreakdown(warmest[0])[0];
             if (!topCat) return null;
             return {
-                posCity1: esc(warmest[0].city),
+                posCity1: warmest[0].city,
                 posNet1: fmtNet(netSentiment(warmest[0])),
-                posCategory1: esc(catLabel(topCat.category)),
-                posCity2: esc(warmest[1].city),
+                posCategory1: catLabel(topCat.category),
+                posCity2: warmest[1].city,
                 posNet2: fmtNet(netSentiment(warmest[1])),
-                posCity3: esc(warmest[2].city),
+                posCity3: warmest[2].city,
                 posNet3: fmtNet(netSentiment(warmest[2])),
             };
         },
@@ -211,9 +209,9 @@
             const second = rows.find(r => r.category !== dom.category);
             if (!second) return null;
             return {
-                catShare1Category: esc(catLabel(dom.category)),
+                catShare1Category: catLabel(dom.category),
                 catShare1Pct: fmtPct(dom.share),
-                catShare2Category: esc(catLabel(second.category)),
+                catShare2Category: catLabel(second.category),
                 catShare2Pct: fmtPct(second.share),
                 categoryCount: fmtCount(allCategoryRows(cities).length),
             };
@@ -234,12 +232,12 @@
             const hi = bySent[0];
             const lo = bySent[bySent.length - 1];
             return {
-                msgHiCategory: esc(catLabel(hi.category)),
+                msgHiCategory: catLabel(hi.category),
                 msgHiNet: fmtNet(hi.net),
-                msgHiSource: esc(hi.topSource),
-                msgLoCategory: esc(catLabel(lo.category)),
+                msgHiSource: hi.topSource,
+                msgLoCategory: catLabel(lo.category),
                 msgLoNet: fmtNet(lo.net),
-                msgLoSource: esc(lo.topSource),
+                msgLoSource: lo.topSource,
                 msgGap: (hi.net - lo.net).toFixed(2),
             };
         },
@@ -260,9 +258,9 @@
                 // Canonical category count — same derivation as the
                 // overview card (allCategoryRows), never hardcoded.
                 categoryCount: fmtCount(allCategoryRows(cities).length),
-                warmestCity: esc(warmest.city),
+                warmestCity: warmest.city,
                 warmestNet: fmtNet(netSentiment(warmest)),
-                coolestCity: esc(coolest.city),
+                coolestCity: coolest.city,
                 coolestNet: fmtNet(netSentiment(coolest)),
             };
         },

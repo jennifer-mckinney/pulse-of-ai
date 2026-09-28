@@ -36,9 +36,9 @@
 //
 // DOM discipline: createElement/textContent/classList/style ONLY — the repo
 // Write hook blocks innerHTML in client JS, and card strings may echo API
-// data. Values are rendered RAW via textContent (never pre-escaped here —
-// escaping before textContent double-encodes; the resolver's esc() pass is
-// its own defense-in-depth layer for its interpolated copy).
+// data. Values are rendered RAW via textContent (never pre-escaped anywhere
+// — escaping before textContent double-encodes; textContent IS the XSS
+// boundary, the one rule stated in the chapters.js header).
 //
 // Dual export guard with dependency injection (same pattern as chapters.js):
 // CommonJS requires the siblings for jest (the pure namespace is what the
