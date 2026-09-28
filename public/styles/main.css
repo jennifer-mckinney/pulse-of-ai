@@ -78,9 +78,11 @@ body {
 .mono { font-family: "IBM Plex Mono", monospace; }
 ::selection { background: rgba(59,220,178,0.3); }
 
-/* scroll spacer — story.js sets the real height from the chapter count;
-   1200vh is a static fallback so the page scrolls before story.js exists */
-.scroll-spacer { height: 1200vh; }
+/* scroll spacer — main.js sets the exact height from the beat count:
+   (N−1) × pacingVhPerChapter × 100vh + 100vh. The static fallback below is
+   that formula for the 11-beat story (10 × 1.15 × 100 + 100 = 1250vh) so
+   the page still scrolls if JS never runs. */
+.scroll-spacer { height: 1250vh; }
 
 /* stage */
 .stage { position: fixed; inset: 0; overflow: hidden; }
@@ -123,20 +125,15 @@ body {
 .health-light { width: 8px; height: 8px; border-radius: 50%; background: #3BDC7E; box-shadow: 0 0 8px #3BDC7E; }
 .h-yellow .health-light, .health-light.yellow { background: #F5C36B; box-shadow: 0 0 8px #F5C36B; animation: blink 2.4s ease-in-out infinite; }
 
-/* refresh chip + health status markup injected by js/main.js (dot + label) */
-.hdr-refresh { cursor: pointer; font-family: inherit; color: var(--ink); transition: border-color 0.15s; }
-.hdr-refresh:hover { border-color: rgba(59,220,178,0.5); }
-.status-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 8px; background: #3BDC7E; box-shadow: 0 0 8px #3BDC7E; }
-.status-dot.green { background: #3BDC7E; box-shadow: 0 0 8px #3BDC7E; }
-.status-dot.red { background: #FF6E5E; box-shadow: 0 0 8px #FF6E5E; }
-
 /* chapter cards — docked bottom-left so the globe stays clear */
 .card-col {
   position: absolute; left: 0; bottom: 0; width: clamp(340px, 34vw, 620px);
   display: grid; place-items: end start; padding: 0 16px clamp(36px, 4.5vh, 72px) clamp(16px, 1.6vw, 36px); pointer-events: none;
 }
 .chapter-card {
-  grid-area: 1 / 1; pointer-events: auto; max-width: 100%; width: 100%;
+  /* min-width: 0 is part of the zip revision's overflow hardening — long
+     stat values must ellipsize instead of widening the card */
+  grid-area: 1 / 1; pointer-events: auto; width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box;
   background: var(--panel); backdrop-filter: blur(12px);
   border: 1px solid var(--line); border-radius: 4px;
   padding: clamp(15px, 1.4vw, 28px) clamp(17px, 1.6vw, 32px);
@@ -148,10 +145,10 @@ body {
 .ch-title { font-size: clamp(18px, 1.45vw, 26px); line-height: 1.15; margin: 0 0 clamp(6px, 0.6vw, 11px); font-weight: 500; letter-spacing: -0.005em; }
 .ch-body { color: var(--ink-dim); font-size: clamp(12px, 0.9vw, 17px); line-height: 1.5; margin: 0; text-wrap: pretty; }
 .ch-stats { display: flex; gap: 0; margin-top: clamp(10px, 1vw, 18px); border-top: 1px solid var(--line); }
-.ch-stat { flex: 1; padding: clamp(8px, 0.75vw, 13px) 10px 0 0; }
+.ch-stat { flex: 1 1 0; min-width: 0; padding: clamp(8px, 0.75vw, 13px) 10px 0 0; }
 .ch-stat + .ch-stat { border-left: 1px solid var(--line); padding-left: clamp(9px, 0.85vw, 15px); }
-.ch-stat-v { font-size: clamp(12px, 0.85vw, 16px); font-weight: 500; }
-.ch-stat-k { font-size: clamp(9px, 0.58vw, 11px); color: var(--ink-dim); text-transform: uppercase; letter-spacing: 0.08em; margin-top: 4px; }
+.ch-stat-v { font-size: clamp(12px, 0.85vw, 16px); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ch-stat-k { font-size: clamp(9px, 0.58vw, 11px); color: var(--ink-dim); text-transform: uppercase; letter-spacing: 0.08em; margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ch-hint { margin-top: 12px; font-size: 11px; color: var(--ink-dim); letter-spacing: 0.1em; }
 
 /* next steps list on final card */
@@ -358,8 +355,8 @@ body {
 .theme-row { display: flex; flex-direction: column; gap: 4px; }
 .theme-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .theme-dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 7px; align-self: center; }
-.theme-name { font-size: clamp(11.5px, 0.85vw, 15px); font-weight: 500; white-space: nowrap; flex: 0 0 auto; }
-.theme-words { font-size: 9.5px; color: var(--ink-dim); flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
+.theme-name { font-size: clamp(11.5px, 0.85vw, 15px); font-weight: 500; white-space: nowrap; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.theme-words { font-size: 9.5px; color: var(--ink-dim); flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; max-width: 45%; }
 .theme-sent { font-size: 11.5px; font-weight: 600; flex: 0 0 auto; }
 .mix-bar { display: flex; height: 5px; border-radius: 3px; overflow: hidden; background: rgba(140,165,205,0.1); }
 .mix-bar span { display: block; height: 100%; }
@@ -398,7 +395,7 @@ body {
   display: flex; flex-direction: column; align-items: flex-start; justify-content: center;
   text-align: left; padding: 0 24px 40px clamp(28px, 3.2vw, 64px);
 }
-.intro-kicker { font-size: 11px; letter-spacing: 0.22em; color: var(--accent); }
+.intro-kicker { font-size: 11px; letter-spacing: 0.22em; color: var(--accent); white-space: nowrap; }
 .intro-title { font-size: clamp(42px, 4.6vw, 72px); font-weight: 700; letter-spacing: -0.02em; line-height: 1.02; margin: 16px 0 18px; }
 .intro-sub { font-size: clamp(14px, 1.15vw, 20px); color: var(--ink-dim); max-width: clamp(380px, 36vw, 620px); line-height: 1.6; margin: 0; text-wrap: pretty; }
 .intro-ask { font-size: clamp(12.5px, 0.95vw, 17px); color: var(--ink-dim); max-width: clamp(380px, 36vw, 620px); line-height: 1.6; margin: 14px 0 0; text-wrap: pretty; }
@@ -429,8 +426,10 @@ body {
 .legend { position: fixed; left: 28px; bottom: 24px; z-index: 20; display: flex; align-items: center; gap: 10px; font-size: 10.5px; color: var(--ink-dim); }
 .legend-grad { width: 90px; height: 4px; border-radius: 2px; }
 .legend-sep { margin-left: 10px; padding-left: 14px; border-left: 1px solid var(--line); }
-.scroll-cue { position: fixed; bottom: 74px; left: 50%; transform: translateX(-50%); z-index: 20; font-size: 11px; letter-spacing: 0.22em; color: var(--ink-dim); animation: cue 2s ease-in-out infinite; }
-@keyframes cue { 50% { transform: translate(-50%, 7px); opacity: 0.5; } }
+/* NOTE: the prototype's .scroll-cue class + its translateX-based `cue`
+   keyframe are deliberately OMITTED — the class is dead (nothing renders it;
+   the intro uses .intro-cue with the translateY-only `cue-y` keyframe, per
+   the handoff README's "must not use translateX" regression note). */
 
 /* scrollbars */
 ::-webkit-scrollbar { width: 8px; }
@@ -448,16 +447,20 @@ body {
   .exp-detail { right: 12px; left: 12px; width: auto; top: auto; bottom: 68px; max-height: 48vh; }
 }
 
-/* ── Reduced motion: disable decorative CSS loops. The JS modules
-   (globe rotation, ring pulses) check this media query themselves in
-   later steps — this block only covers the pure-CSS animations. ────────── */
+/* ── Reduced motion: disable decorative CSS loops (cue bob, header
+   blink + expanding ring, health-light pulse) and the entrance slides.
+   The JS modules (globe auto-spin, city pulse rings) check this media
+   query themselves in C2 — this block only covers pure-CSS animation. ──── */
 @media (prefers-reduced-motion: reduce) {
   .hdr-dot,
   .hdr-dot::after,
   .h-yellow .health-light,
   .health-light.yellow,
   .intro-cue,
-  .scroll-cue {
+  .exp-filters,
+  .exp-detail,
+  .next-card {
     animation: none;
   }
+  .drawer { transition: none; }
 }

@@ -1,75 +1,142 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>The Pulse of AI - Real-Time AI Discourse Dashboard</title>
-    <link href="https://api.mapbox.com/mapbox-gl-js/v3.0.1/mapbox-gl.css" rel="stylesheet">
-    <style>
-        body { background-color: #0d1117; color: #f0f6fc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; margin: 0; }
-        .navbar { background: #161b22; padding: 1rem; border-bottom: 1px solid #30363d; display: flex; justify-content: space-between; align-items: center; }
-        .nav-brand h1 { color: #58a6ff; margin: 0; }
-        .tagline { color: #7d8590; font-size: 0.9rem; }
-        .nav-controls { display: flex; gap: 1rem; align-items: center; }
-        button { background: #238636; color: white; border: none; padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer; }
-        .model-health-indicator { display: flex; align-items: center; gap: 0.5rem; }
-        .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #238636; }
-        .dashboard { padding: 2rem; }
-        .chapter { margin-bottom: 3rem; }
-        .story-content h2 { color: #58a6ff; }
-        #map { height: 700px; width: 100%; border-radius: 8px; background: #08080f; }
-        .chart-container { background: #21262d; padding: 2rem; border-radius: 8px; color: #7d8590; text-align: center; }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="The Pulse of AI — a scroll-driven globe narrative of global AI discourse, with every score traceable to the model that made it.">
+<title>The Pulse of AI</title>
+<!-- FR-25: all assets self-hosted — fonts are @font-face rules in main.css
+     pointing at public/vendor/fonts/; no CDN, no Google Fonts, no Mapbox. -->
+<link rel="stylesheet" href="styles/main.css">
 </head>
 <body>
-    <div id="app">
-        <nav class="navbar">
-            <div class="nav-brand">
-                <h1>The Pulse of AI</h1>
-                <span class="tagline">Real-time AI discourse monitoring</span>
-            </div>
-            <div class="nav-controls">
-                <button id="refresh-btn">Refresh Data</button>
-                <div class="model-health-indicator" id="health-status">
-                    <span class="status-dot"></span>
-                    <span>System Healthy</span>
-                </div>
-            </div>
-        </nav>
 
-        <main class="dashboard">
-            <section id="map-section" class="chapter">
-                <div class="story-content">
-                    <h2>Global AI Discourse Landscape</h2>
-                    <p>Explore real-time AI conversations across the globe...</p>
-                </div>
-                <div id="map"></div>
-            </section>
+<!-- FR-25 groundwork: static fallback when JavaScript is unavailable.
+     (The no-WebGL runtime fallback — ranked city list from the same data —
+     is globe.js's job in C2; this block covers no-JS entirely.) -->
+<noscript>
+  <div style="max-width: 640px; margin: 15vh auto 0; padding: 0 24px; font-family: system-ui, sans-serif;">
+    <h1 style="letter-spacing: -0.02em;">The Pulse of AI</h1>
+    <p>This is an interactive, scroll-driven view of global AI discourse:
+       city-level sentiment on a rotating globe, a ten-chapter guided story,
+       and a per-post audit trail behind every score.</p>
+    <p>It needs JavaScript to render. Please enable JavaScript, or query the
+       read-only API directly — for example
+       <code>GET /api/posts/aggregated-by-location</code> for the city
+       snapshot and <code>GET /api/methodology</code> for the versioned
+       models behind each score.</p>
+  </div>
+</noscript>
 
-            <section id="demographics-section" class="chapter">
-                <div class="story-content">
-                    <h2>Who is Talking About AI?</h2>
-                    <p>Demographic patterns in AI discourse reveal...</p>
-                </div>
-                <div class="chart-container">
-                    📈 DEMOGRAPHIC CHARTS - Coming Soon
-                </div>
-            </section>
+<!-- Scroll spacer: gives the document its story height (the stage itself is
+     position:fixed). main.js sets the exact height from the beat count;
+     the CSS fallback keeps the page scrollable before then. -->
+<div class="scroll-spacer" id="scroll-spacer" aria-hidden="true"></div>
 
-            <section id="topics-section" class="chapter">
-                <div class="story-content">
-                    <h2>AI Topic Evolution</h2>
-                    <p>Track how AI discussions evolve and spread...</p>
-                </div>
-                <div class="chart-container">
-                    🌳 TOPIC TREE - Coming Soon
-                </div>
-            </section>
-        </main>
+<!-- ══ Fixed stage — everything visual lives here ══════════════════════════ -->
+<div class="stage">
+
+  <!-- Globe canvas mount (C2: globe.js renders into this element). -->
+  <div class="globe-wrap" id="globe-wrap"></div>
+
+  <!-- Header: brand dot + name/tag, time-to-insight chip, health chip. -->
+  <header class="hdr">
+    <div class="hdr-brand">
+      <span class="hdr-dot" aria-hidden="true"></span>
+      <span class="hdr-name">THE PULSE OF AI</span>
+      <span class="hdr-tag">responsible monitoring · not just another dashboard</span>
     </div>
+    <div class="hdr-right">
+      <div class="hdr-chip" id="insight-chip" title="Time from page load to your first receipt. Target: under 2:00.">
+        <span class="mono" id="insight-timer">0:00</span>
+        <span class="hdr-chip-lbl" id="insight-label">time to insight</span>
+      </div>
+      <button type="button" class="hdr-chip hdr-health h-green" id="health-chip"
+              title="Model health · click for bias assessment &amp; alert history"
+              aria-haspopup="dialog" aria-controls="health-drawer">
+        <span class="health-light" id="health-light" aria-hidden="true"></span>
+        <span class="hdr-chip-lbl" id="health-label">model health</span>
+      </button>
+    </div>
+  </header>
 
-    <script src="https://api.mapbox.com/mapbox-gl-js/v3.0.1/mapbox-gl.js"></script>
-    <script src="js/map.js"></script>
-    <script src="js/main.js"></script>
+  <!-- Intro — editorial lede, left column. story.js (C3) fades it with the
+       first scroll (opacity = max(0, 1 − progress × 5)). -->
+  <div class="intro" id="intro">
+    <div class="intro-kicker mono">LIVE · UPDATED EVERY 2–3 MINUTES</div>
+    <h1 class="intro-title">The Pulse of AI</h1>
+    <p class="intro-sub">Everyone has an opinion about artificial intelligence. Right now you can watch all of them move — 4,500 posts an hour across 50 sources and 30 cities, every score traceable to the model that made it.</p>
+    <p class="intro-ask">Scroll for the guided tour: ten short chapters, about two minutes. Prefer to drive? <button type="button" class="intro-skip" id="intro-skip">Skip to the globe →</button> drag it, click a city, pull a receipt.</p>
+    <div class="intro-byline mono">INTERACTIVE · 7 SOURCE CATEGORIES · EVERY SCORE AUDITABLE</div>
+    <div class="intro-cue mono">SCROLL TO BEGIN ↓</div>
+  </div>
+
+  <!-- Chapter-card column, docked bottom-left. story.js (C3) renders the
+       active beat's .chapter-card here from PulseChapters.resolveChapter. -->
+  <div class="card-col" id="card-col" aria-live="polite"></div>
+
+  <!-- Free-explore overlay (final beat). ui.js (C4) populates the filter
+       panel (color-by / sentiment segments, category chips, sorted city
+       list) and the bottom-right city-detail panel. -->
+  <div class="explore" id="explore" hidden>
+    <div class="exp-filters" id="exp-filters"></div>
+    <div class="exp-detail" id="exp-detail" role="region" aria-label="City detail" hidden></div>
+  </div>
+
+  <!-- Next-steps card slot: the explore beat's checklist persists here as a
+       dismissible bottom-right panel until a city is selected or closed
+       (guard: render only when resolved.nextSteps is a non-empty array). -->
+  <div id="next-card-slot" hidden></div>
+
+  <!-- Source ribbon (explore only) — marimekko: one segment button per
+       category, flex-basis = volume share. ui.js (C4) builds the segments;
+       the "← 12h" axis label must stay INLINE in the first segment (never
+       absolutely positioned — regression guard from the handoff README). -->
+  <div class="strip" id="strip" role="group" aria-label="Source categories — width shows volume share" hidden></div>
+
+  <!-- Legend (story mode; explore swaps it out for the filter panel). -->
+  <div class="legend mono" id="legend" hidden></div>
+
+  <!-- Skip-story pill: story.js shows it while 0.14 < progress and not
+       exploring. -->
+  <button type="button" class="skip-btn mono" id="skip-btn" hidden>SKIP STORY · EXPLORE →</button>
+
+  <!-- Progress rail: one dot button per beat, built by story.js (C3). -->
+  <nav class="rail" id="rail" aria-label="Story progress"></nav>
+
+</div><!-- /.stage -->
+
+<!-- Hover tooltip (fixed, follows cursor, pointer-events: none). -->
+<div class="tip" id="tip" role="status" hidden></div>
+
+<!-- Audit drawer — "Why does it say that?" receipt (C4 populates). -->
+<aside class="drawer" id="audit-drawer" role="dialog" aria-label="Audit trail" aria-hidden="true">
+  <div class="drawer-inner" id="audit-drawer-inner"></div>
+</aside>
+
+<!-- Health / bias drawer — alert history + versioned methodology (C4). -->
+<aside class="drawer" id="health-drawer" role="dialog" aria-label="Model health and bias assessment" aria-hidden="true">
+  <div class="drawer-inner" id="health-drawer-inner"></div>
+</aside>
+
+<!-- NOTE: the prototype's tweaks panel (tweaks-panel.jsx) is deliberately
+     NOT shipped — it is marked "prototype-only; do not ship" in the design
+     handoff README/INTEGRATION.md. -->
+
+<!-- ══ Scripts — order is a contract (each UMD module reads the window
+     globals of the ones before it): config → utils → data → insights →
+     chapters → renderers → main. All self-hosted (FR-25). ═══════════════ -->
+<script defer src="js/config/design.config.js"></script>
+<script defer src="js/config/api.config.js"></script>
+<script defer src="js/config/story.config.js"></script>
+<script defer src="js/utils.js"></script>
+<script defer src="js/data.js"></script>
+<script defer src="js/insights.js"></script>
+<script defer src="js/chapters.js"></script>
+<!-- C2: insert  <script defer src="js/globe.js"></script>  here -->
+<!-- C3: insert  <script defer src="js/story.js"></script>  after globe.js -->
+<!-- C4: insert  <script defer src="js/ui.js"></script>     after story.js -->
+<script defer src="js/main.js"></script>
+
 </body>
 </html>
