@@ -65,21 +65,29 @@ app.use((req, res, next) => {
     next();
 });
 
-app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../public')));
 
 // ─── API routes ───────────────────────────────────────────────────────────────
-app.use('/api', healthRouter);
-app.use('/api', postsRouter);
-app.use('/api', sentimentRouter);
+// F2: CORS is scoped to the READ-ONLY surface only. POST /api/refresh mutates
+// state (creates a processing job), so it is mounted FIRST and without cors()
+// — cross-origin pages get no Access-Control-Allow-Origin for it, while the
+// same-origin frontend is unaffected. Everything below serves read-only data
+// (POST /api/query is a read-only search) and stays world-readable.
 app.use('/api', refreshRouter);
-app.use('/api', auditRouter);
-app.use('/api', biasRouter);
-app.use('/api', methodologyRouter);
-app.use('/api', sourcesRouter);
-app.use('/api', queryRouter);
-app.use('/api', themesRouter);
+
+const readOnlyApi = express.Router();
+readOnlyApi.use(cors());
+readOnlyApi.use(healthRouter);
+readOnlyApi.use(postsRouter);
+readOnlyApi.use(sentimentRouter);
+readOnlyApi.use(auditRouter);
+readOnlyApi.use(biasRouter);
+readOnlyApi.use(methodologyRouter);
+readOnlyApi.use(sourcesRouter);
+readOnlyApi.use(queryRouter);
+readOnlyApi.use(themesRouter);
+app.use('/api', readOnlyApi);
 
 // ─── Frontend fallback ────────────────────────────────────────────────────────
 app.get('/', (req, res) => {

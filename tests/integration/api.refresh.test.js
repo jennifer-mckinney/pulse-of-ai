@@ -48,6 +48,18 @@ describe('POST /api/refresh', () => {
         expect(res.body).toHaveProperty('error');
     });
 
+    it('debounces GLOBALLY — a different caller is still 429 inside the window (F2)', async () => {
+        // The debounce is a single in-process timestamp, deliberately not
+        // keyed on req.ip: rotating IPs or spoofed forwarding headers must
+        // not buy extra collection cycles. Distinct X-Forwarded-For values
+        // therefore share the same window.
+        await request(app).post('/api/refresh').set('X-Forwarded-For', '203.0.113.1');
+        const res = await request(app).post('/api/refresh').set('X-Forwarded-For', '198.51.100.7');
+
+        expect(res.status).toBe(429);
+        expect(res.body.error).toMatch(/global/i);
+    });
+
     it('returns the job_id as a valid UUID', async () => {
         const res = await request(app).post('/api/refresh');
         const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
