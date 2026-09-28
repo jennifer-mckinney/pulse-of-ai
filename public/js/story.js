@@ -662,19 +662,22 @@
         state.legendMode = flavor;
         while (els.legend.firstChild) els.legend.removeChild(els.legend.firstChild);
         if (flavor === 'category') {
-            // One swatch per CANONICAL category, always (allCategoryRows
-            // pads the live ribbon model with zero rows — spec §17 taxonomy),
-            // so quiet categories never vanish from the legend. Same
-            // enumeration as the chips, ribbon and the resolver's
-            // "categories tracked" count.
+            // One swatch per CANONICAL category, always, in REGISTRY order
+            // (prototype contract: PULSE.CATEGORIES.map — fixed order,
+            // never the share ranking), so quiet categories never vanish
+            // from the legend. Labels are the DISPLAY name lowercased
+            // ('Blogs' → 'blogs', 'Non-profit' → 'non-profit'), never the
+            // raw slug. Non-canonical categories present in the data are
+            // appended after the canon (kept, never hidden).
+            const canonSlugs = designConfig.CATEGORY_SLUGS;
+            const slugs = canonSlugs.slice();
             for (const row of allCategoryRows(state.cities)) {
-                const slug = gmath.normalizeCategorySlug(row.category);
-                // Prototype legend casing: the DISPLAY label lowercased
-                // ('Blogs' → 'blogs', 'Non-profit' → 'non-profit'), never
-                // the raw slug.
-                const span = el('span', null, '● ' + catLabel(row.category).toLowerCase());
-                span.style.color = (slug && CAT_COLORS[slug])
-                    || SENTIMENT_PALETTE.neutral;
+                const s = gmath.normalizeCategorySlug(row.category);
+                if (s !== null && slugs.indexOf(s) === -1) slugs.push(s);
+            }
+            for (const slug of slugs) {
+                const span = el('span', null, '● ' + catLabel(slug).toLowerCase());
+                span.style.color = CAT_COLORS[slug] || SENTIMENT_PALETTE.neutral;
                 els.legend.appendChild(span);
             }
         } else {

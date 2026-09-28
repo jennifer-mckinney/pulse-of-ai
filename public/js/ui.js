@@ -1008,13 +1008,23 @@
             }));
 
         // Category chips with color dots — the FULL canonical taxonomy,
-        // always (allCategoryRows pads quiet categories with zero rows), so
-        // Social / Nonprofit / Academic never vanish when they have no
-        // posts in the current window.
+        // always, in REGISTRY order (prototype contract: ['All',
+        // ...CATEGORIES] — fixed order, never the share ranking), so
+        // Social / Non-profit / Academic / Forums never vanish when they
+        // have no posts in the current window. Non-canonical categories
+        // present in the data are appended after the canon (kept, never
+        // hidden — allCategoryRows honesty).
         const chips = el('div', 'chips');
-        const cats = allCategoryRows(state.cities)
-            .map((r) => gmath.normalizeCategorySlug(r.category))
-            .filter((s) => s !== null);
+        const canonSlugs = designConfig.CATEGORY_SLUGS;
+        const extras = [];
+        for (const r of allCategoryRows(state.cities)) {
+            const s = gmath.normalizeCategorySlug(r.category);
+            if (s !== null && canonSlugs.indexOf(s) === -1
+                && extras.indexOf(s) === -1) {
+                extras.push(s);
+            }
+        }
+        const cats = canonSlugs.concat(extras);
         for (const cat of ['All'].concat(cats)) {
             const on = state.filters.cat === cat;
             const chip = el('button', 'chip' + (on ? ' on' : ''));
