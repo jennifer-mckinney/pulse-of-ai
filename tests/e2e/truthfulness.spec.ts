@@ -59,10 +59,11 @@ test('truthfulness: hour-windowed fetch, /hr labels, /api/config 404, same-origi
 
     // ZERO external-origin requests: every request the page made — fonts,
     // land geometry, API calls — stays on the dev origin.
+    const appOrigin = new URL(page.url()).origin;
     const external = requests.filter((u) => {
         if (u.startsWith('data:') || u.startsWith('blob:')) return false;
         try {
-            return new URL(u).origin !== 'http://localhost:3000';
+            return new URL(u).origin !== appOrigin;
         } catch {
             return false;
         }

@@ -10,9 +10,11 @@
 # posts' relative spacing, so the newest post sits 10 minutes ago and the
 # seeded distribution lands back inside the trailing hour.
 #
-# Runs against the DEV database (port 5434) — the one the e2e suite's dev
-# server reads. Uses the project's own node/pg connection so no local psql
-# client is required. Safe to re-run; a no-op when raw_posts is empty.
+# Runs against the database named by POSTGRES_DB on POSTGRES_PORT. The e2e
+# globalSetup invokes it with POSTGRES_DB=pulse_of_ai_e2e (the suite's
+# isolated database); run bare, it targets the dev database from .env. Uses
+# the project's own node/pg connection so no local psql client is
+# required. Safe to re-run; a no-op when raw_posts is empty.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."

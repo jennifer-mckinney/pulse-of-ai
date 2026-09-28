@@ -3,26 +3,28 @@
 // Scope: tests/e2e/*.spec.ts — chunked verification specs (one concern per
 // file, each independently runnable via `npm run test:e2e -- <spec-name>`).
 //
-// The webServer block boots `npm run dev` (Express on port 3000) when no
-// server is already listening, and reuses a running one otherwise — so the
-// suite works both against a dev server you started yourself and cold.
-// The dev DB (docker compose, port 5434) must be migrated + seeded for the
-// live-data specs; the demo-fallback spec blocks /api/** and needs no DB.
+// Isolation: the suite runs against its OWN database, `pulse_of_ai_e2e`, on
+// the dev Postgres (compose project pulse-of-ai, port 5434), served by its
+// OWN server on port 3100. The globalSetup (tests/e2e/global-setup.js)
+// creates that database if missing, migrates it, runs `seed` + `seed:e2e`
+// (the deterministic fixture dataset) and freshens its timestamps. Nothing
+// the suite asserts can therefore be shadowed by whatever the dev database
+// happens to hold, and the suite never writes to the dev database.
 //
 // NOTE: deliberately NOT wired into `npm run verify` — the verify gate's
 // runtime is kept stable; run E2E explicitly with `npm run test:e2e`.
 const { defineConfig } = require('@playwright/test');
+const { E2E_DB, E2E_PORT } = require('./tests/e2e/e2e-env');
 
 module.exports = defineConfig({
     testDir: 'tests/e2e',
 
-    // Re-freshen dev-seed collected_at before every run so the suite never
-    // decays out of the trailing-hour window (see tests/e2e/global-setup.js).
+    // Provision + freshen the isolated e2e database before every run.
     globalSetup: require.resolve('./tests/e2e/global-setup.js'),
     timeout: 90000,
     expect: { timeout: 10000 },
 
-    // Specs drive one shared dev server + seeded DB; serial keeps the
+    // Specs drive one shared server + seeded DB; serial keeps the
     // refresh-poll and health states deterministic across specs.
     fullyParallel: false,
     workers: 1,
@@ -30,16 +32,20 @@ module.exports = defineConfig({
     reporter: [['list']],
 
     use: {
-        baseURL: 'http://localhost:3000',
+        baseURL: `http://localhost:${E2E_PORT}`,
         viewport: { width: 1440, height: 900 },
         screenshot: 'only-on-failure',
         trace: 'retain-on-failure',
     },
 
+    // A dedicated server bound to the e2e database. Env passed here wins over
+    // .env (dotenv never overrides variables that are already set). Never
+    // reuse an unknown server: it could be pointed at another database.
     webServer: {
-        command: 'npm run dev',
-        port: 3000,
-        reuseExistingServer: true,
+        command: 'node src/server.js',
+        port: E2E_PORT,
+        reuseExistingServer: false,
         timeout: 30000,
+        env: { PORT: String(E2E_PORT), POSTGRES_DB: E2E_DB },
     },
 });

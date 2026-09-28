@@ -9,8 +9,10 @@
 //
 //   npm run migrate && npm run seed && npm run seed:e2e
 //
-// Runs against the DEV database (POSTGRES_PORT), the one `npm run dev` and
-// therefore the e2e suite read. Idempotent: when the first fixture post
+// Targets the database named by POSTGRES_DB on POSTGRES_PORT. The e2e
+// globalSetup runs it against the suite's isolated database
+// (pulse_of_ai_e2e — tests/e2e/e2e-env.js); run bare, it loads the fixture
+// into the dev database from .env. Idempotent: when the first fixture post
 // already exists the whole seed is skipped, so the job, bias rows and alert
 // are never duplicated. collected_at offsets are relative to NOW(); the
 // Playwright globalSetup (scripts/test/freshen-seed.sh) re-shifts them into
