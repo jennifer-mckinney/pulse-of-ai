@@ -125,7 +125,7 @@ describe('GET /api/posts/aggregated-by-location', () => {
         expect(res.body).toEqual({ error: 'Invalid to date' });
     });
 
-    it('attaches lat/lng from CITY_COORDS lookup for known cities', async () => {
+    it('attaches lat/lng from the city registry for known cities', async () => {
         const srcId = await insertSource('loc-posts-coords');
         const jobId = await insertJob();
         const mvIds = await insertMethodologyVersions();
@@ -142,7 +142,7 @@ describe('GET /api/posts/aggregated-by-location', () => {
         expect(sf.lng).toBe(-122.4194);
     });
 
-    it('omits lat/lng (null) for unknown cities not in CITY_COORDS', async () => {
+    it('omits lat/lng (null) for unknown cities not in the registry', async () => {
         const srcId = await insertSource('loc-posts-unknown');
         const jobId = await insertJob();
         const mvIds = await insertMethodologyVersions();
@@ -185,7 +185,9 @@ describe('GET /api/posts/aggregated-by-location', () => {
     // ─── City registry completeness + country codes (gaps G26 / G22) ──────────
 
     describe('city registry', () => {
-        const { CITY_COORDS } = require('../../src/routes/posts');
+        // The canonical registry the route consumes (full completeness/parity
+        // invariants live in tests/unit/pure/cityRegistry.test.js).
+        const { findCity } = require('../../public/js/config/cities.config.js');
 
         // The 30 prototype launch cities — every one MUST resolve to
         // coordinates + a country code, or the globe silently loses it.
@@ -200,8 +202,8 @@ describe('GET /api/posts/aggregated-by-location', () => {
 
         it('every prototype launch city resolves to coordinates and a country code', () => {
             for (const city of PROTOTYPE_LAUNCH_CITIES) {
-                const entry = CITY_COORDS[city];
-                expect(entry).toBeDefined();
+                const entry = findCity(city);
+                expect(entry).not.toBeNull();
                 expect(typeof entry.lat).toBe('number');
                 expect(typeof entry.lng).toBe('number');
                 expect(entry.country).toMatch(/^[A-Z]{2}$/);

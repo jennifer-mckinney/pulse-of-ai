@@ -3,7 +3,7 @@
 // Seeds realistic demo posts + sentiment results so the globe shows markers
 // before the live collectors (Phase E) are running.
 //
-// Inserts for each of the 20 known CITY_COORDS cities:
+// Inserts for each city below:
 //   processing_job → raw_posts → decision_audit_log → sentiment_results
 //
 // Safe to re-run: external_ids are deterministic, INSERT ON CONFLICT DO NOTHING.
@@ -14,7 +14,8 @@ require('dotenv').config();
 const crypto = require('crypto');
 const { dbRun, dbGet, dbAll, closePool } = require('../src/db/connection');
 
-// Cities from CITY_COORDS in posts.js — must match exactly for geocoding to work
+// City names must resolve via the registry (public/js/config/cities.config.js)
+// for geocoding to work — lookup is case-insensitive and alias-aware.
 const CITIES = [
     { city: 'San Francisco', sentiment: 'positive' },
     { city: 'New York',      sentiment: 'positive' },

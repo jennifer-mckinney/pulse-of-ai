@@ -29,7 +29,8 @@ module.exports = {
         'public/js/chapters.js',
         'public/js/config/story.config.js',
         'public/js/config/design.config.js',
-        'public/js/config/api.config.js'
+        'public/js/config/api.config.js',
+        'public/js/config/cities.config.js'
     ],
 
     // 80% line coverage required to pass CI
