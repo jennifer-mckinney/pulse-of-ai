@@ -696,3 +696,58 @@ describe('module surface', () => {
         expect(typeof ui.openHealth).toBe('function');
     });
 });
+
+// ── P0-3: the drawer renders a computed layer's methodology note ────────────
+describe('layerRowView — fairness-layer display strings (P0-3)', () => {
+    const NOTE = 'parity measured across source categories (platform), not user demographics';
+
+    test('computed layer: value / τ in the value slot, note on its own line', () => {
+        const v = P.layerRowView({
+            name: 'Demographic parity', value: 0.031, threshold: 0.3,
+            citation: 'Barocas & Selbst (2016)', status: 'pass', note: NOTE,
+        });
+        expect(v).toEqual({
+            okClass: 'ok',
+            okText: 'PASS',
+            name: 'Demographic parity',
+            valueText: '0.031 / τ 0.3',
+            noteText: NOTE,
+            citation: 'Barocas & Selbst (2016)',
+        });
+    });
+
+    test('computed layer without a note renders no note line', () => {
+        const v = P.layerRowView({ name: 'Location concentration', value: 0.41,
+            threshold: 0.35, citation: null, status: 'fail', note: null });
+        expect(v.okText).toBe('FAIL');
+        expect(v.okClass).toBe('bad');
+        expect(v.noteText).toBeNull();
+        expect(v.citation).toBe('');
+    });
+
+    test('n-a layer: the note fills the value slot and is not repeated', () => {
+        const v = P.layerRowView({ name: 'Equalized odds', value: null,
+            threshold: null, citation: 'Hardt et al. (2016)', status: 'n-a',
+            note: 'Phase 3 — not yet enforced' });
+        expect(v.okText).toBe('N/A');
+        expect(v.valueText).toBe('Phase 3 — not yet enforced');
+        expect(v.noteText).toBeNull();
+    });
+
+    test('served audit payload → bias step keeps the parity note through mapping', () => {
+        const m = P.mapAuditResponse({
+            post: { id: 'p1', content_snippet: 'x', location: 'Paris',
+                source_category: 'news', source_name: 's', collected_at: null },
+            decisions: [],
+            ingest: null,
+            bias: { job_id: 'j', assessed_at: null, model_name: 'pulse-bias-monitor-v1',
+                version: '1.1.0', layers: [
+                    { name: 'Demographic parity', assessment_type: 'platform_sentiment_parity',
+                        value: 0.031, threshold: 0.3, citation: 'Barocas & Selbst (2016)',
+                        status: 'pass', note: NOTE },
+                ] },
+        });
+        const bias = m.steps[m.steps.length - 1];
+        expect(P.layerRowView(bias.layers[0]).noteText).toBe(NOTE);
+    });
+});

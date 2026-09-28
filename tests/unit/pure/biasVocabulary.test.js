@@ -5,12 +5,17 @@
 'use strict';
 
 const {
+    ASSESSMENT_TYPE_SYNONYMS,
+    canonicalAssessmentType,
     severityLabel,
     layerName,
     citationFor,
+    layerNoteFor,
     alertDetail,
     buildLayers,
 } = require('../../../src/config/bias-vocabulary');
+
+const PARITY_NOTE = 'parity measured across source categories (platform), not user demographics';
 
 // Mirrors the seeded bias@1.1.0 shape (scripts/seed.js): the prototype's
 // three literature-named layers — the computed platform_sentiment_parity IS
@@ -25,6 +30,9 @@ const BIAS_CONFIG = {
     citations: {
         location_concentration:    'Suresh & Guttag (2021)',
         platform_sentiment_parity: 'Barocas & Selbst (2016)',
+    },
+    layer_notes: {
+        platform_sentiment_parity: PARITY_NOTE,
     },
     planned_layers: [
         { id: 'equalized_odds', name: 'Equalized odds', citation: 'Hardt et al. (2016)', note: 'Phase 3 — not yet enforced' },
@@ -210,5 +218,52 @@ describe('buildLayers — per-job fairness layers for the audit receipt', () => 
             { assessment_type: 'negative_dominance', metric_value: 0.4, threshold: 0.6, is_violation: false, severity: null },
         ], null);
         expect(layers.map(l => l.assessment_type)).toEqual(['negative_dominance']);
+    });
+});
+
+// ─── P0-3: layer_notes carried into the computed layer's note ────────────────
+describe('layerNoteFor / buildLayers — methodology notes (P0-3)', () => {
+    it('reads the note from the versioned config and null when absent (never invented)', () => {
+        expect(layerNoteFor('platform_sentiment_parity', BIAS_CONFIG)).toBe(PARITY_NOTE);
+        expect(layerNoteFor('location_concentration', BIAS_CONFIG)).toBeNull();
+        expect(layerNoteFor('platform_sentiment_parity', null)).toBeNull();
+    });
+
+    it('carries the parity note into the computed Demographic parity layer', () => {
+        const layers = buildLayers([
+            { assessment_type: 'platform_sentiment_parity', metric_value: 0.031, threshold: 0.3, is_violation: false, severity: null },
+            { assessment_type: 'location_concentration', metric_value: 0.2, threshold: 0.35, is_violation: false, severity: null },
+        ], BIAS_CONFIG);
+        const parity = layers.find(l => l.assessment_type === 'platform_sentiment_parity');
+        expect(parity).toMatchObject({ status: 'pass', value: 0.031, note: PARITY_NOTE });
+        const loc = layers.find(l => l.assessment_type === 'location_concentration');
+        expect(loc.note).toBeNull();
+    });
+});
+
+// ─── P1-9: read-time synonym mapping is the standing drift pattern ──────────
+describe('canonicalAssessmentType — read-time synonym mapping (P1-9)', () => {
+    it('maps the 008 synonym onto the pipeline vocabulary and passes others through', () => {
+        expect(ASSESSMENT_TYPE_SYNONYMS.demographic_parity).toBe('platform_sentiment_parity');
+        expect(canonicalAssessmentType('demographic_parity')).toBe('platform_sentiment_parity');
+        expect(canonicalAssessmentType('location_concentration')).toBe('location_concentration');
+        // Prototype keys never resolve as synonyms.
+        expect(canonicalAssessmentType('toString')).toBe('toString');
+    });
+
+    it('resolves a synonym row to the canonical layer name, citation and note', () => {
+        expect(layerName('demographic_parity', BIAS_CONFIG)).toBe('Demographic parity');
+        expect(citationFor('demographic_parity', BIAS_CONFIG)).toBe('Barocas & Selbst (2016)');
+        const layers = buildLayers([
+            { assessment_type: 'demographic_parity', metric_value: 0.031, threshold: 0.1, is_violation: false, severity: null },
+        ], BIAS_CONFIG);
+        expect(layers[0]).toMatchObject({
+            name:            'Demographic parity',
+            assessment_type: 'platform_sentiment_parity',
+            value:           0.031,
+            note:            PARITY_NOTE,
+        });
+        // No duplicate 'not computed' placeholder for the canonical type.
+        expect(layers.filter(l => l.name === 'Demographic parity')).toHaveLength(1);
     });
 });

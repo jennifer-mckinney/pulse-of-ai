@@ -312,11 +312,13 @@ body {
 .kv-v { text-align: right; word-break: break-word; }
 .layers { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; }
 .layer { display: grid; grid-template-columns: 44px 1fr; gap: 2px 12px; align-items: baseline; border: 1px solid var(--line); border-radius: 3px; padding: 9px 11px; }
-.layer-ok { font-size: 10px; letter-spacing: 0.08em; grid-row: span 3; }
+.layer-ok { font-size: 10px; letter-spacing: 0.08em; grid-row: span 4; }
 .layer-ok.ok { color: #3BDC7E; } .layer-ok.bad { color: #FF6E5E; } .layer-ok.na { color: var(--ink-dim); }
 .layer-name { font-size: 12.5px; font-weight: 600; }
 .layer-val { font-size: 11px; color: var(--ink-dim); }
 .layer-cite { font-size: 10px; color: var(--ink-dim); opacity: 0.7; }
+/* P0-3: methodology note under a computed layer's value (what it measures) */
+.layer-note { font-size: 11px; color: var(--ink-dim); font-style: italic; }
 .drawer-foot { font-size: 10px; color: var(--ink-dim); opacity: 0.7; margin-top: 8px; padding-bottom: 10px; }
 
 /* tooltip */

@@ -79,6 +79,9 @@ async function insertBiasMethodology() {
             platform_sentiment_parity: 'Demographic parity',
             negative_dominance:        'Negative dominance',
         },
+        layer_notes: {
+            platform_sentiment_parity: 'parity measured across source categories (platform), not user demographics',
+        },
         citations: {
             location_concentration:    'Suresh & Guttag (2021)',
             platform_sentiment_parity: 'Barocas & Selbst (2016)',

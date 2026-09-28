@@ -90,6 +90,10 @@ test('audit drawer: audiences, bias layers, timer freeze, close restores view', 
     const layerVals = await drawer.locator('.layer-val').allInnerTexts();
     expect(layerVals[0], 'Demographic parity carries a REAL value + τ').toContain('τ');
     expect(layerVals.some((t) => t.includes('τ')), 'τ threshold values').toBe(true);
+    // P0-3: the computed Demographic parity row states what it measures
+    // (source categories, not people) — the versioned bias config's note.
+    await expect(layers.first().locator('.layer-note'))
+        .toHaveText('parity measured across source categories (platform), not user demographics');
 
     // Timer froze at the FIRST receipt (US-1) and stays frozen.
     await expect(page.locator('#insight-label')).toHaveText('first receipt ✓');

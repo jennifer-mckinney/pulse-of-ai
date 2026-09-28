@@ -290,6 +290,26 @@
         };
     }
 
+    // layerRowView: the drawer's display strings for one normalized fairness
+    // layer. A computed layer (real value) shows value / τ in the value slot
+    // and its methodology note (P0-3 — e.g. "parity measured across source
+    // categories (platform), not user demographics") on its own line; an
+    // n-a layer has no value, so its note fills the value slot instead and
+    // is not repeated. Plain strings only — the DOM layer sets textContent.
+    function layerRowView(l) {
+        const hasValue = l.value !== null && l.value !== undefined;
+        return {
+            okClass: l.status === 'pass' ? 'ok' : l.status === 'fail' ? 'bad' : 'na',
+            okText: l.status === 'pass' ? 'PASS' : l.status === 'fail' ? 'FAIL' : 'N/A',
+            name: l.name,
+            valueText: hasValue
+                ? Number(l.value).toFixed(3) + ' / τ ' + l.threshold
+                : (l.note || '—'),
+            noteText: hasValue && l.note ? String(l.note) : null,
+            citation: l.citation || '',
+        };
+    }
+
     // biasStepFrom: the drawer's "Bias assessment" step from the served
     // bias block. Audience texts are DERIVED from the stored layer facts —
     // nothing invented (the audit route serves no bias prose).
@@ -879,6 +899,7 @@
         stepScoreDisplay,
         fmtHashPrefix,
         biasStepFrom,
+        layerRowView,
         mapAuditResponse,
         fmtAlertTime,
         mapBiasHistory,
@@ -1635,18 +1656,15 @@
         if (Array.isArray(step.layers) && step.layers.length > 0) {
             const layersWrap = el('div', 'layers');
             for (const l of step.layers) {
+                const v = layerRowView(l);
                 const layer = el('div', 'layer');
-                const okClass = l.status === 'pass' ? 'ok'
-                    : l.status === 'fail' ? 'bad' : 'na';
-                layer.appendChild(el('span', 'layer-ok mono ' + okClass,
-                    l.status === 'pass' ? 'PASS'
-                        : l.status === 'fail' ? 'FAIL' : 'N/A'));
-                layer.appendChild(el('span', 'layer-name', l.name));
-                layer.appendChild(el('span', 'layer-val mono',
-                    l.value !== null && l.value !== undefined
-                        ? Number(l.value).toFixed(3) + ' / τ ' + l.threshold
-                        : (l.note || '—')));
-                layer.appendChild(el('span', 'layer-cite mono', l.citation || ''));
+                layer.appendChild(el('span', 'layer-ok mono ' + v.okClass, v.okText));
+                layer.appendChild(el('span', 'layer-name', v.name));
+                layer.appendChild(el('span', 'layer-val mono', v.valueText));
+                // P0-3: a computed layer's methodology note renders under
+                // its value (what the check measures — never overstated).
+                if (v.noteText) layer.appendChild(el('span', 'layer-note', v.noteText));
+                layer.appendChild(el('span', 'layer-cite mono', v.citation));
                 layersWrap.appendChild(layer);
             }
             body.appendChild(layersWrap);

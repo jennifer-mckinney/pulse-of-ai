@@ -16,6 +16,32 @@
 
 'use strict';
 
+// ─── Read-time synonym mapping (THE standing pattern for vocabulary drift) ────
+// When a stored assessment_type drifts from the pipeline's vocabulary of
+// record (src/pipeline/bias.js), map the synonym HERE, at read time, instead
+// of rewriting stored rows. bias_assessments is an audit record: its rows stay
+// exactly as written, and every consumer (receipt layers, alert history)
+// resolves names/citations/notes through canonicalAssessmentType().
+// Migration 008 was the one-time exception that folded the pre-existing
+// 'demographic_parity' rows in place (recorded in the bias@1.1.0
+// justification); the synonym stays mapped here so any such row that
+// reappears (older dumps, ad-hoc inserts) still resolves identically. Future
+// drift: add an entry below — do NOT write another UPDATE migration.
+const ASSESSMENT_TYPE_SYNONYMS = Object.freeze({
+    demographic_parity: 'platform_sentiment_parity',
+});
+
+/**
+ * Canonical (pipeline-vocabulary) assessment type for a stored value.
+ * @param {string} assessmentType
+ * @returns {string}
+ */
+function canonicalAssessmentType(assessmentType) {
+    return Object.prototype.hasOwnProperty.call(ASSESSMENT_TYPE_SYNONYMS, assessmentType)
+        ? ASSESSMENT_TYPE_SYNONYMS[assessmentType]
+        : assessmentType;
+}
+
 /**
  * Map a stored bias_assessments row to the frontend severity vocabulary.
  * @param {{ is_violation: boolean, severity: string|null }} row
@@ -38,8 +64,9 @@ function titleCase(assessmentType) {
  * @param {object|null} biasConfig  methodology_versions.config for component='bias'
  */
 function layerName(assessmentType, biasConfig) {
-    return (biasConfig && biasConfig.layer_names && biasConfig.layer_names[assessmentType])
-        || titleCase(assessmentType);
+    const type = canonicalAssessmentType(assessmentType);
+    return (biasConfig && biasConfig.layer_names && biasConfig.layer_names[type])
+        || titleCase(type);
 }
 
 /**
@@ -47,7 +74,21 @@ function layerName(assessmentType, biasConfig) {
  * @returns {string|null}  null when the config carries no citation (never invented)
  */
 function citationFor(assessmentType, biasConfig) {
-    return (biasConfig && biasConfig.citations && biasConfig.citations[assessmentType]) || null;
+    const type = canonicalAssessmentType(assessmentType);
+    return (biasConfig && biasConfig.citations && biasConfig.citations[type]) || null;
+}
+
+/**
+ * Methodology note for an assessment type, from the versioned bias config's
+ * layer_notes (P0-3) — e.g. platform_sentiment_parity carries "parity
+ * measured across source categories (platform), not user demographics" so
+ * the receipt never overstates what the check measures.
+ * @returns {string|null}  null when the config carries no note (never invented)
+ */
+function layerNoteFor(assessmentType, biasConfig) {
+    const type = canonicalAssessmentType(assessmentType);
+    return (biasConfig && biasConfig.layer_notes
+        && biasConfig.layer_notes[type]) || null;
 }
 
 /**
@@ -80,20 +121,24 @@ function alertDetail(row, biasConfig) {
  */
 function buildLayers(assessments, biasConfig) {
     // Latest row per assessment_type (rows arrive oldest→newest per route query)
+    // Keyed by the CANONICAL type so a synonym row and its pipeline-vocabulary
+    // twin collapse to one layer (latest wins), exactly as after 008's fold.
     const latestByType = new Map();
     for (const row of assessments || []) {
-        latestByType.set(row.assessment_type, row);
+        latestByType.set(canonicalAssessmentType(row.assessment_type), row);
     }
 
-    const layers = [...latestByType.values()].map(row => ({
-        name:            layerName(row.assessment_type, biasConfig),
-        assessment_type: row.assessment_type,
+    const layers = [...latestByType.entries()].map(([type, row]) => ({
+        name:            layerName(type, biasConfig),
+        assessment_type: type,
         value:           row.metric_value,
         threshold:       row.threshold,
-        citation:        citationFor(row.assessment_type, biasConfig),
+        citation:        citationFor(type, biasConfig),
         status:          row.is_violation ? 'fail' : 'pass',
         severity:        severityLabel(row),
-        note:            null,
+        // P0-3: computed layers carry the config's methodology note (what
+        // the check actually measures), null when the config has none.
+        note:            layerNoteFor(type, biasConfig),
     }));
 
     // Planned layers: declared in versioned config, never computed → 'n-a'
@@ -158,9 +203,12 @@ function buildLayers(assessments, biasConfig) {
 }
 
 module.exports = {
+    ASSESSMENT_TYPE_SYNONYMS,
+    canonicalAssessmentType,
     severityLabel,
     layerName,
     citationFor,
+    layerNoteFor,
     alertDetail,
     buildLayers,
 };

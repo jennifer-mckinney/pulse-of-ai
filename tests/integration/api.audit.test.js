@@ -233,7 +233,12 @@ describe('GET /api/audit/:post_id', () => {
                 threshold: 0.30,
                 citation: 'Barocas & Selbst (2016)',
                 status:   'pass',
+                // P0-3: the versioned config's layer note rides along so the
+                // receipt states what the parity check actually measures.
+                note:     'parity measured across source categories (platform), not user demographics',
             });
+            // Layers without a configured note stay null — never invented.
+            expect(loc.note).toBeNull();
 
             // Prototype presentation order: the three literature-named
             // layers lead (Demographic parity real, Equalized odds /

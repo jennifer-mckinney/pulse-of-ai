@@ -507,6 +507,13 @@ const METHODOLOGY_VERSIONS = [
                 platform_sentiment_parity: 'Demographic parity',
                 negative_dominance:        'Negative dominance',
             },
+            // Methodology notes (P0-3) carried into each computed layer's
+            // `note` and rendered in the audit drawer, so the receipt never
+            // overstates what a check measures: the 'Demographic parity'
+            // layer compares SOURCE CATEGORIES, not people.
+            layer_notes: {
+                platform_sentiment_parity: 'parity measured across source categories (platform), not user demographics',
+            },
             // Literature/spec citations rendered next to each layer (audit
             // receipt fairness layers + bias alert history)
             citations: {
@@ -532,7 +539,7 @@ const METHODOLOGY_VERSIONS = [
             ],
             legal_basis: 'EU AI Act Article 13 - Transparency and provision of information',
         },
-        justification: 'Three fairness checks run automatically after every processing job: platform sentiment parity (the demographic-parity outcome gap across source categories — Barocas & Selbst 2016), location concentration (representation bias — Suresh & Guttag 2021), and negative dominance (selection bias toward controversy). Thresholds live in this config so they are auditable, versioned, and adjustable without a code change (AI Act §13). Equalized odds and counterfactual fairness are declared planned layers and reported as not-yet-enforced rather than omitted; the receipt presents the three literature-named fairness layers first, then the additional checks.',
+        justification: 'Three fairness checks run automatically after every processing job: platform sentiment parity (the demographic-parity outcome gap across source categories — Barocas & Selbst 2016), location concentration (representation bias — Suresh & Guttag 2021), and negative dominance (selection bias toward controversy). Thresholds live in this config so they are auditable, versioned, and adjustable without a code change (AI Act §13). Equalized odds and counterfactual fairness are declared planned layers and reported as not-yet-enforced rather than omitted; the receipt presents the three literature-named fairness layers first, then the additional checks. The Demographic parity layer is annotated as parity measured across source categories (platform), not user demographics. Vocabulary: migration 008 folded legacy bias_assessments rows stored under the synonym demographic_parity onto the pipeline vocabulary platform_sentiment_parity (values, thresholds and violation flags untouched); any future vocabulary drift is resolved by read-time synonym mapping (src/config/bias-vocabulary.js), never by rewriting stored audit rows.',
     },
     {
         component: 'ingest',
