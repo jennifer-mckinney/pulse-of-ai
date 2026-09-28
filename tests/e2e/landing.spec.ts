@@ -1,4 +1,5 @@
-// FR-17 — Landing: page loads, the canvas globe is mounted AND painted,
+// FR-17 — Landing: page loads, the canvas globe is mounted AND painted
+// (first frame marked within the 1000 ms budget — P1-6),
 // the intro lede renders, header chips render, and the health chip
 // reflects the live /api/health state (seeded: 1 unresolved alert →
 // yellow). Zero console errors.
@@ -26,6 +27,15 @@ test('landing: canvas painted, intro lede, header chips, seeded health state', a
     // Canvas present inside the globe mount.
     const canvas = page.locator('#globe-wrap canvas');
     await expect(canvas).toHaveCount(1);
+
+    // P1-6 perf budget: globe.js marks its first painted frame. The mark's
+    // startTime is ms since navigation start; it must land under 1000 ms.
+    const firstFrameMs = await page.waitForFunction(() => {
+        const m = performance.getEntriesByName('pulse:first-frame', 'mark');
+        return m.length > 0 ? m[0].startTime : null;
+    }).then((h) => h.jsonValue() as Promise<number>);
+    console.log(`[perf] pulse:first-frame at ${firstFrameMs.toFixed(1)} ms after navigation start`);
+    expect(firstFrameMs, 'first globe frame within the 1000 ms budget').toBeLessThan(1000);
 
     // Painted: sample a center region of the backing store and require a
     // meaningful number of non-transparent pixels (the sphere body fills
