@@ -21,6 +21,7 @@ const insightsMod = require('../../../public/js/insights');
 const storyConfig = require('../../../public/js/config/story.config');
 const utils = require('../../../public/js/utils');
 const data = require('../../../public/js/data');
+const design = require('../../../public/js/config/design.config');
 
 const { STORY, resolveChapter, FALLBACK_COPY } = chapters;
 const { computeInsights, MIN_TOTAL } = insightsMod;
@@ -199,21 +200,28 @@ describe('resolveChapter() over DEMO_DATA', () => {
         expect(r.stats[2]).toEqual(['divergence', `${d.span.toFixed(2)} — global max`]);
     });
 
-    test('overview and summary interpolate the DERIVED category count — no hardcoded editorial claims', () => {
-        // The payload cannot support "50 sources" / "7 categories" claims;
-        // the count must come from ribbonRows (6 categories in the generated
-        // registry demo set).
-        const catCount = insightsMod.ribbonRows(demoCities).length;
-        expect(catCount).toBe(6); // fixture sanity — demo is NOT 7 categories
+    test('overview and summary interpolate the CANONICAL category count (still derived, never hardcoded)', () => {
+        // The count comes from allCategoryRows — the canonical taxonomy
+        // (design.config CATEGORIES) padded over the data — so the copy
+        // matches the taxonomy the ribbon/chips/legend enumerate even when
+        // some categories have no posts this hour. "50 sources" remains an
+        // editorial claim the payload cannot back and stays banned.
+        const catCount = insightsMod.allCategoryRows(demoCities).length;
+        expect(catCount).toBe(design.CATEGORIES.length); // 7 — full taxonomy
 
         const overview = resolveChapter(beat('overview'), demoInsights, demoCities);
         expect(overview.cardBody).not.toContain('50 sources');
-        expect(overview.cardBody).not.toContain('7 categories');
         expect(overview.cardBody).toContain(`${catCount} source categories`);
 
         const summary = resolveChapter(beat('summary'), demoInsights, demoCities);
-        expect(summary.cardBody).not.toContain('7 source categories');
         expect(summary.cardBody).toContain(`${catCount} source categories`);
+    });
+
+    test('drivers "categories tracked" stat reports the canonical count', () => {
+        const r = resolveChapter(beat('drivers'), demoInsights, demoCities);
+        const tracked = r.stats.find(([label]) => label === 'categories');
+        expect(tracked).toEqual(
+            ['categories', `${design.CATEGORIES.length} tracked`]);
     });
 
     test('positivity interpolates the warmest city\'s dominant category (mirrors negativity)', () => {

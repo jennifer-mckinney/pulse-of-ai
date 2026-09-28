@@ -69,7 +69,7 @@
     'use strict';
 
     const { fmtNet, netSentiment } = utils;
-    const { computeInsights, ribbonRows, partitionThemes } = insightsMod;
+    const { computeInsights, allCategoryRows, partitionThemes } = insightsMod;
     const { STORY, resolveChapter } = chaptersMod;
     const gmath = globeMod.math;
     const GLOBE = designConfig.GLOBE;
@@ -660,10 +660,12 @@
         state.legendMode = flavor;
         while (els.legend.firstChild) els.legend.removeChild(els.legend.firstChild);
         if (flavor === 'category') {
-            // One swatch per category actually present this hour (the
-            // prototype's fixed 7-name list is replaced by the live ribbon
-            // model, same as the resolver's derived category count).
-            for (const row of ribbonRows(state.cities)) {
+            // One swatch per CANONICAL category, always (allCategoryRows
+            // pads the live ribbon model with zero rows — spec §17 taxonomy),
+            // so quiet categories never vanish from the legend. Same
+            // enumeration as the chips, ribbon and the resolver's
+            // "categories tracked" count.
+            for (const row of allCategoryRows(state.cities)) {
                 const slug = gmath.normalizeCategorySlug(row.category);
                 const span = el('span', null, '● ' + String(row.category).toLowerCase());
                 span.style.color = (slug && CAT_COLORS[slug])

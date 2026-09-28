@@ -64,7 +64,7 @@
     'use strict';
 
     const { fmtNet, netSentiment, sentimentBucket } = utils;
-    const { catBreakdown, ribbonRows } = insightsMod;
+    const { catBreakdown, allCategoryRows } = insightsMod;
     const gmath = globeMod.math;
     const CAT_COLORS = designConfig.CAT_COLORS;
     const SENTIMENT_PALETTE = designConfig.SENTIMENT_PALETTE;
@@ -108,6 +108,9 @@
     const DETAIL_CATS_MAX = 4;      // top-4 category share bars
     const SPARK_W = 100;            // ribbon sparkline viewBox (prototype)
     const SPARK_H = 30;
+    // Minimum flex share for a ribbon segment: a zero-volume category still
+    // gets ~6% of the strip so its dot, label and "0/hr · 0%" are readable.
+    const RIBBON_MIN_FLEX_SHARE = 0.06;
 
     // catLabel: API slug → display label ('social' → 'Social').
     function catLabel(slug) {
@@ -533,14 +536,17 @@
     }
 
     // ribbonModel: marimekko segment rows. The base comes from the SNAPSHOT
-    // aggregation (insights.ribbonRows — every category present this hour),
-    // with the 12h series / top_site / cue words attached from
-    // /api/sources/timeseries where available (the timeseries omits
-    // zero-post categories, audit G23 — a missing series is tolerated).
+    // aggregation padded to the CANONICAL taxonomy (insights.allCategoryRows
+    // — one segment per spec-§17 category, ALWAYS, plus any extra category
+    // present in the data), with the 12h series / top_site / cue words
+    // attached from /api/sources/timeseries where available (the timeseries
+    // omits zero-post categories, audit G23 — a missing series is
+    // tolerated). Zero-volume categories stay honest: flat zero series
+    // (never a synthesized walk), no cue words, no lead site.
     // opts.demo=true synthesizes deterministic series instead (FR-22).
     function ribbonModel(cities, timeseries, opts) {
         const demo = !!(opts && opts.demo);
-        const base = ribbonRows(cities);
+        const base = allCategoryRows(cities);
         const tsByCat = {};
         for (const row of (Array.isArray(timeseries) ? timeseries : [])) {
             if (row && typeof row.category === 'string') tsByCat[row.category] = row;
@@ -548,14 +554,22 @@
         return base.map((row) => {
             const slug = gmath.normalizeCategorySlug(row.category);
             const ts = tsByCat[row.category] || (slug && tsByCat[slug]) || null;
+            const zero = !(row.volume > 0);
             let series = null;
-            if (ts && Array.isArray(ts.series)) {
-                series = normalizeSeries(ts.series.map((b) => b && b.total));
-            } else if (demo) {
-                series = demoSeries(row.category, TIMESERIES_HOURS);
+            let words = [];
+            if (zero) {
+                // Flat baseline sparkline for a quiet category — visible,
+                // and honest about the zero volume.
+                series = new Array(TIMESERIES_HOURS).fill(0);
+            } else {
+                if (ts && Array.isArray(ts.series)) {
+                    series = normalizeSeries(ts.series.map((b) => b && b.total));
+                } else if (demo) {
+                    series = demoSeries(row.category, TIMESERIES_HOURS);
+                }
+                words = ts && Array.isArray(ts.words) ? ts.words.slice(0, 2)
+                    : (demo ? ['AI', 'models'] : []);
             }
-            const words = ts && Array.isArray(ts.words) ? ts.words.slice(0, 2)
-                : (demo ? ['AI', 'models'] : []);
             return {
                 category: row.category,
                 slug,
@@ -564,11 +578,28 @@
                 volume: row.volume,
                 net: row.net,
                 split: row.split,
-                site: (ts && ts.top_site) || row.topSource || null,
+                site: zero ? null
+                    : ((ts && ts.top_site) || row.topSource || null),
                 words,
                 series,
             };
         });
+    }
+
+    // ribbonFlexPercents: flex-basis percentages for the marimekko
+    // segments. Proportional to share, but zero/near-zero segments keep a
+    // minimum sliver (RIBBON_MIN_FLEX_SHARE) so their dot + label + "0/hr ·
+    // 0%" stay readable — the displayed percentage still reports the REAL
+    // share. Percentages are renormalized to sum to 100.
+    function ribbonFlexPercents(rows) {
+        if (!Array.isArray(rows) || rows.length === 0) return [];
+        const weights = rows.map((r) => {
+            const share = Number(r && r.share);
+            return Math.max(Number.isFinite(share) ? share : 0,
+                RIBBON_MIN_FLEX_SHARE);
+        });
+        const total = weights.reduce((a, b) => a + b, 0);
+        return weights.map((w) => (w / total) * 100);
     }
 
     // ── Demo fallback: deterministic posts + receipts (FR-22) ───────────────
@@ -599,9 +630,9 @@
         return s;
     }
 
-    // Fictional post templates per category slug, with sentiment cue tokens
-    // (prototype POST_POOL; Forums texts carry the 'tech' slug per the
-    // design.config CAT_COLORS mapping).
+    // Fictional post templates per CANONICAL category slug (design.config
+    // CATEGORIES — one pool per taxonomy category), with sentiment cue
+    // tokens (prototype POST_POOL, re-keyed onto the real API slugs).
     const DEMO_POST_POOL = {
         social: [
             { text: 'Tried the on-device assistant for a full week. Honestly can’t go back — though the battery cost is real.', cues: [['can’t go back', 0.42], ['battery cost', -0.18]] },
@@ -623,24 +654,27 @@
             { text: 'Shipped an agent that files our compliance paperwork end-to-end. Two days of glue code. Wild.', cues: [['shipped', 0.35], ['wild', 0.29]] },
             { text: 'Latency on the new inference runtime is genuinely absurd (good absurd). Halved our serving bill.', cues: [['genuinely absurd (good absurd)', 0.44], ['halved our serving bill', 0.38]] },
         ],
-        tech: [
-            { text: 'Is anyone else’s team quietly rolling back AI code review? Curious what changed for you.', cues: [['rolling back', -0.27], ['curious', 0.06]] },
-            { text: 'Hot take: local models finally crossed the "good enough" line for 80% of my daily tasks.', cues: [['good enough', 0.33], ['finally', 0.15]] },
+        nonprofit: [
+            { text: 'Our digital-rights clinic helped 40 people appeal automated benefit denials this month. Documentation wins cases.', cues: [['wins cases', 0.36], ['denials', -0.22]] },
+            { text: 'New watchdog audit: only 12 of 60 public-sector chatbots disclose that users are talking to a machine.', cues: [['only 12 of 60', -0.30], ['disclose', 0.08]] },
         ],
         blog: [
             { text: 'Six months of running a local LLM stack: the costs, the surprises, and the two things I regret.', cues: [['surprises', 0.09], ['regret', -0.29]] },
             { text: 'Why our newsroom now publishes the prompt alongside every AI-assisted chart.', cues: [['publishes', 0.21], ['alongside', 0.04]] },
         ],
     };
-    const DEMO_POOL_ORDER = ['social', 'news', 'academic', 'policy',
-        'developer', 'tech', 'blog'];
+    // Rotation over the canonical taxonomy (design.config CATEGORIES) —
+    // demo posts draw from the same 7 categories every other surface
+    // enumerates. A city whose dominant category has no pool (a legacy /
+    // unknown slug) falls back to the canonical rotation.
+    const DEMO_POOL_ORDER = designConfig.CATEGORIES;
     const DEMO_SOURCES = {
         social: 'firehose.social',
         news: 'wireservice.example',
         academic: 'openpreprints.example',
         policy: 'policytracker.example',
+        nonprofit: 'civicwatch.example',
         developer: 'devlog.example',
-        tech: 'boards.example',
         blog: 'longform.example',
     };
 
@@ -840,6 +874,7 @@
         sparklinePoints,
         demoSeries,
         ribbonModel,
+        ribbonFlexPercents,
         seed,
         pseudoHash,
         demoPostsForCity,
@@ -961,9 +996,12 @@
                 renderExplorePanel();
             }));
 
-        // Category chips with color dots (categories present this hour).
+        // Category chips with color dots — the FULL canonical taxonomy,
+        // always (allCategoryRows pads quiet categories with zero rows), so
+        // Social / Nonprofit / Academic never vanish when they have no
+        // posts in the current window.
         const chips = el('div', 'chips');
-        const cats = ribbonRows(state.cities)
+        const cats = allCategoryRows(state.cities)
             .map((r) => gmath.normalizeCategorySlug(r.category))
             .filter((s) => s !== null);
         for (const cat of ['All'].concat(cats)) {
@@ -1271,13 +1309,17 @@
         const rows = ribbonModel(state.cities, state.timeseries,
             { demo: state.isDemo || state.timeseries === null });
         const totShare = rows.reduce((a, r) => a + r.share, 0) || 1;
+        // Flex widths carry a minimum sliver for zero-volume segments; the
+        // DISPLAYED percentage stays the real share (0% for a quiet
+        // category — honest, but still visible).
+        const flexPcts = ribbonFlexPercents(rows);
         rows.forEach((row, ri) => {
             const pct = (row.share / totShare) * 100;
             const color = (row.slug && CAT_COLORS[row.slug])
                 || SENTIMENT_PALETTE.neutral;
             const seg = el('button', 'strip-seg');
             seg.type = 'button';
-            seg.style.flexBasis = pct + '%';
+            seg.style.flexBasis = flexPcts[ri] + '%';
             seg.title = row.label + ' · ' + row.volume + '/hr ('
                 + Math.round(pct) + '% of volume) · ' + fmtNet(row.net) + ' · '
                 + Math.round(row.split.pos * 100) + '% pos / '

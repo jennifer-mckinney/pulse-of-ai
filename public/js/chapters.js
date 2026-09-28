@@ -33,7 +33,7 @@
     const { esc, fmtPct, fmtCount, fmtNet, netSentiment } = utils;
     const {
         TEMPLATES, renderTemplate, MIN_TOTAL,
-        catBreakdown, widestCategoryDivide, ribbonRows,
+        catBreakdown, widestCategoryDivide, ribbonRows, allCategoryRows,
     } = insightsMod;
     const { STORY } = storyConfig;
 
@@ -128,9 +128,12 @@
                 cityCount: fmtCount(ins.cityCount),
                 totalPosts: fmtCount(ins.globalTotals.total),
                 globalNet: fmtNet(netSentiment(ins.globalTotals)),
-                // Derived category count — replaces the prototype's
-                // hardcoded "50 sources. 7 categories." editorial claim.
-                categoryCount: fmtCount(ribbonRows(cities).length),
+                // Canonical category count (taxonomy padded over the data) —
+                // still derived, never the prototype's hardcoded "50
+                // sources. 7 categories." editorial claim, but it always
+                // matches the full taxonomy the ribbon/chips/legend show,
+                // even when some categories have no posts this hour.
+                categoryCount: fmtCount(allCategoryRows(cities).length),
             };
         },
         volume(ins, cities) {
@@ -193,8 +196,10 @@
             };
         },
         drivers(ins, cities) {
-            // Global leader from the insights aggregation; runner-up and
-            // category count from the ribbon model (same source totals).
+            // Global leader from the insights aggregation; the runner-up
+            // from the DATA-derived ribbon rows (a padded zero row must
+            // never be named a driver); the tracked count from the
+            // canonical taxonomy enumeration.
             const dom = ins.dominantSourceCategoryGlobal;
             const rows = ribbonRows(cities);
             if (!dom || rows.length < 2) return null;
@@ -205,7 +210,7 @@
                 catShare1Pct: fmtPct(dom.share),
                 catShare2Category: esc(second.category),
                 catShare2Pct: fmtPct(second.share),
-                categoryCount: fmtCount(rows.length),
+                categoryCount: fmtCount(allCategoryRows(cities).length),
             };
         },
         'themes-warm'(ins) {
@@ -247,9 +252,9 @@
             return {
                 totalPosts: fmtCount(ins.globalTotals.total),
                 globalNet: fmtNet(netSentiment(ins.globalTotals)),
-                // Derived category count — replaces the prototype's
-                // hardcoded "7 source categories".
-                categoryCount: fmtCount(ribbonRows(cities).length),
+                // Canonical category count — same derivation as the
+                // overview card (allCategoryRows), never hardcoded.
+                categoryCount: fmtCount(allCategoryRows(cities).length),
                 warmestCity: esc(warmest.city),
                 warmestNet: fmtNet(netSentiment(warmest)),
                 coolestCity: esc(coolest.city),
