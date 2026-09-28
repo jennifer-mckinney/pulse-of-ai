@@ -90,7 +90,7 @@ jobs:
         run: npm run test:cov
 
   lint-python:
-    name: Python lint (black)
+    name: Python (black + pytest)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -100,9 +100,98 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: python/requirements.txt
 
-      - name: Install black
-        run: pip install black>=24.0.0
+      # Full service requirements: the pytest suite imports the FastAPI app
+      # and exercises the real sentence-transformers model (384-dim vectors).
+      - name: Install dependencies
+        run: pip install -r python/requirements.txt
 
       - name: Check black formatting
         run: black --check python/
+
+      # Cache the Hugging Face model download between runs.
+      - name: Cache Hugging Face models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ runner.os }}-${{ hashFiles('python/requirements.txt') }}
+
+      # Run from the repo root so the tests' `python.*` package imports
+      # resolve (same invocation as scripts/test/run-all.sh).
+      - name: Run pytest
+        run: python -m pytest python/tests
+
+  e2e:
+    name: E2E (Playwright)
+    runs-on: ubuntu-latest
+
+    # Dev-DB service container on the dev port. The Playwright globalSetup
+    # (tests/e2e/global-setup.js) creates the isolated pulse_of_ai_e2e
+    # database on it, then migrates, seeds (sources + methodology registry),
+    # loads the deterministic e2e fixture (seed:e2e) and freshens its
+    # timestamps before any spec runs.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: pulse_of_ai
+          POSTGRES_USER: pulse_user
+          POSTGRES_PASSWORD: ci_password
+        ports:
+          - 5434:5432
+        options: >-
+          --health-cmd "pg_isready -U pulse_user -d pulse_of_ai"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      POSTGRES_HOST:     localhost
+      POSTGRES_PORT:     5434
+      POSTGRES_DB:       pulse_of_ai
+      POSTGRES_USER:     pulse_user
+      POSTGRES_PASSWORD: ci_password
+      NODE_ENV:          development
+      # CI-only HMAC key (see the test job) so /api/audit serves input_hash.
+      AUDIT_HASH_KEY: 'ci-only-0f3a9c2e7b514d86a1c0e9d2b7f4a8c3'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+
+      # The same chain globalSetup runs (against pulse_of_ai_e2e), made
+      # visible as steps against the dev DB: a failing migration or seed
+      # surfaces here with its own log instead of inside the test run.
+      - name: Migrate dev DB
+        run: npm run migrate
+
+      - name: Seed dev DB
+        run: npm run seed && npm run seed:e2e
+
+      - name: Freshen seed timestamps
+        run: bash scripts/test/freshen-seed.sh
+
+      - name: Run Playwright
+        run: npx playwright test
+
+      - name: Upload Playwright artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-results
+          path: test-results/
+          retention-days: 7

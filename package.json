@@ -19,6 +19,7 @@
     "test:pure": "jest --config jest.pure.config.js",
     "test:int": "jest tests/integration",
     "test:cov": "jest --coverage",
+    "coverage:frontend": "jest --config jest.pure.config.js --coverage --collectCoverageFrom=public/js/globe.js --collectCoverageFrom=public/js/story.js --collectCoverageFrom=public/js/ui.js --collectCoverageFrom=public/js/main.js --coverageDirectory=coverage/frontend --coverageReporters=text --coverageReporters=text-summary",
     "test:watch": "jest --watch",
     "test:quick": "bash scripts/test/run-unit.sh",
     "test:e2e": "playwright test",
