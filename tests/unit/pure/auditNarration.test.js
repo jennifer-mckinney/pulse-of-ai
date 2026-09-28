@@ -78,7 +78,7 @@ describe('audit-narration renderAudiences', () => {
         expect(views.researcher).toContain('+“shipped”');
         expect(views.researcher).toContain('−“regret”');
         expect(views.researcher).toContain(
-            `pulse replay --post ${POST_ID} --methodology sentiment@1.0.0`,
+            `npm run replay -- --post ${POST_ID}`,
         );
     });
 
@@ -93,7 +93,7 @@ describe('audit-narration renderAudiences', () => {
         expect(views.plain).toContain('60%');
         expect(views.plain).toContain('ai');
         expect(views.config).toMatchObject({ observed_score: 0.6, matched_terms: ['ai', 'llm'] });
-        expect(views.researcher).toContain('--methodology relevance@1.0.0');
+        expect(views.researcher).toContain(`Reproduce: npm run replay -- --post ${POST_ID}`);
     });
 
     it('discourse: renders DQI total and dimensions', () => {
@@ -121,7 +121,7 @@ describe('audit-narration renderAudiences', () => {
         expect(views.public).toEqual(expect.any(String));
         expect(views.plain).toBe('Registered justification.');
         expect(views.config).toMatchObject({ a: 1 });
-        expect(views.researcher).toContain('--methodology demographic@0.1.0');
+        expect(views.researcher).toContain(`Reproduce: npm run replay -- --post ${POST_ID}`);
     });
 
     it('never crashes on empty output/config (sparse stored rows)', () => {
@@ -131,7 +131,7 @@ describe('audit-narration renderAudiences', () => {
                 config: null, output: null,
             }, POST_ID);
             expect(views.public.length).toBeGreaterThan(0);
-            expect(views.researcher).toContain('pulse replay');
+            expect(views.researcher).toContain('npm run replay -- --post');
         }
     });
 });

@@ -806,8 +806,8 @@
                         benchmark_accuracy: '87.4% (labeled set n=4,120)',
                     },
                     researcher: 'Cue weights: ' + cueLines.join(' · ')
-                        + '. Reproduce: pulse replay --post ' + post.id
-                        + ' --methodology sentiment@1.3.0',
+                        + '. Reproduce: npm run replay -- --post ' + post.id
+                        + ' (fictional demo post — nothing stored to replay)',
                 },
                 layers: null,
             },

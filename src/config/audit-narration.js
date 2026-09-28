@@ -21,12 +21,17 @@
 
 // Registered in methodology_versions — keep in sync with scripts/seed.js
 const NARRATION_COMPONENT = 'audit_narration';
-const NARRATION_VERSION   = '1.0.0';
+// 1.1.0: the researcher view's reproduce command is now REAL — it names the
+// shipped `npm run replay` script (scripts/replay.js) instead of the
+// never-implemented `pulse replay` CLI of 1.0.0.
+const NARRATION_VERSION   = '1.1.0';
 const NARRATION_MODEL     = 'pulse-narration-templates-v1';
 
-// Reproduce-command template surfaced in every researcher view.
-// <post_id> / component@version are substituted per decision.
-const REPRODUCE_COMMAND = 'pulse replay --post {post_id} --methodology {component}@{version}';
+// Reproduce-command template surfaced in every researcher view. It runs
+// scripts/replay.js, which re-scores EVERY stored decision of the post with
+// the deterministic src/pipeline modules against the methodology version
+// each decision references, and prints PASS / DIVERGENCE per stage.
+const REPRODUCE_COMMAND = 'npm run replay -- --post {post_id}';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -42,12 +47,9 @@ function fmtSigned(value) {
     return (n >= 0 ? '+' : '−') + Math.abs(n).toFixed(2);
 }
 
-/** Build the researcher reproduce command for one decision. */
-function reproduceCommand(postId, component, version) {
-    return REPRODUCE_COMMAND
-        .replace('{post_id}', postId)
-        .replace('{component}', component)
-        .replace('{version}', version);
+/** Build the researcher reproduce command for one post. */
+function reproduceCommand(postId) {
+    return REPRODUCE_COMMAND.replace('{post_id}', postId);
 }
 
 /** Quote a list of cue words for prose: “a”, “b”, “c”. */
@@ -105,7 +107,7 @@ function renderSentiment(decision, postId) {
     ].join(' · ');
     const researcherText = (cueSummary ? `Cue words (signed by lexicon list): ${cueSummary}. ` : 'No lexicon cues matched. ')
         + `Comparative = raw_score / token_count = ${comparative === null ? 'n/a' : fmtSigned(comparative)}. `
-        + `Reproduce: ${reproduceCommand(postId, 'sentiment', decision.methodology_version)}`;
+        + `Reproduce: ${reproduceCommand(postId)}`;
 
     return { public: publicText, plain: plainText, config: configView, researcher: researcherText };
 }
@@ -134,7 +136,7 @@ function renderRelevance(decision, postId) {
 
     const researcherText = `Keyword-overlap score against the versioned term list `
         + `(${matched.length} matched). `
-        + `Reproduce: ${reproduceCommand(postId, 'relevance', decision.methodology_version)}`;
+        + `Reproduce: ${reproduceCommand(postId)}`;
 
     return { public: publicText, plain: plainText, config: configView, researcher: researcherText };
 }
@@ -163,7 +165,7 @@ function renderDiscourse(decision, postId) {
     };
 
     const researcherText = `DQI dimension vector: ${dimSummary || 'none stored'}. `
-        + `Reproduce: ${reproduceCommand(postId, 'discourse', decision.methodology_version)}`;
+        + `Reproduce: ${reproduceCommand(postId)}`;
 
     return { public: publicText, plain: plainText, config: configView, researcher: researcherText };
 }
@@ -180,7 +182,7 @@ function renderGeneric(decision, postId) {
         plain:      decision.justification || 'Automated inference step; see the registered methodology for details.',
         config:     configView,
         researcher: `Stored output: ${JSON.stringify(decision.output || {})}. `
-            + `Reproduce: ${reproduceCommand(postId, decision.decision_type, decision.methodology_version)}`,
+            + `Reproduce: ${reproduceCommand(postId)}`,
     };
 }
 

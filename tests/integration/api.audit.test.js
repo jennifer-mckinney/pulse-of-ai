@@ -113,7 +113,7 @@ describe('GET /api/audit/:post_id', () => {
                     researcher: expect.any(String),
                 });
                 // Researcher view always carries the reproduce command
-                expect(decision.audiences.researcher).toContain(`pulse replay --post ${postId}`);
+                expect(decision.audiences.researcher).toContain(`npm run replay -- --post ${postId}`);
             }
         });
 

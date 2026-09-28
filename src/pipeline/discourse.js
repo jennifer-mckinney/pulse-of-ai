@@ -214,4 +214,5 @@ async function saveDQI(postId, jobId, mvId) {
     });
 }
 
-module.exports = { computeDQI, saveDQI, DQI_DIMENSIONS };
+// MODEL_NAME exported for scripts/replay.js (code identity of a replay).
+module.exports = { computeDQI, saveDQI, DQI_DIMENSIONS, MODEL_NAME };

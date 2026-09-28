@@ -556,15 +556,17 @@ const METHODOLOGY_VERSIONS = [
     },
     {
         component: 'audit_narration',
-        version: '1.0.0',
+        // 1.1.0: reproduce_command names the real replay script
+        // (scripts/replay.js) — 1.0.0 advertised a CLI that never existed.
+        version: '1.1.0',
         model_name: 'pulse-narration-templates-v1',
         config: {
             audiences: ['public', 'plain', 'config', 'researcher'],
             renderer:  'src/config/audit-narration.js',
             rendering: 'read-time deterministic templates over stored decision_audit_log output + methodology config; no per-post prose is generated or persisted',
-            reproduce_command: 'pulse replay --post {post_id} --methodology {component}@{version}',
+            reproduce_command: 'npm run replay -- --post {post_id}',
         },
-        justification: 'The audit endpoint serves four audience representations (public, journalist, regulator, researcher) of every decision step. The wording is part of the auditable surface, so the template set is registered here and version-bumped on any change — the API reports which narration version rendered a receipt. Templates only restate stored facts (cue words, scores, thresholds, versions); they never invent per-post content.',
+        justification: 'The audit endpoint serves four audience representations (public, journalist, regulator, researcher) of every decision step. The wording is part of the auditable surface, so the template set is registered here and version-bumped on any change — the API reports which narration version rendered a receipt. Templates only restate stored facts (cue words, scores, thresholds, versions); they never invent per-post content. 1.1.0 makes the researcher reproduce command real: npm run replay -- --post {post_id} re-runs the deterministic pipeline scorers over the stored content, diffs against the stored outputs, and reports PASS, DIVERGENCE or NOT RE-RUNNABLE per stage.',
     },
 ];
 
