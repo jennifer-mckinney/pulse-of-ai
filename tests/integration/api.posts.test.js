@@ -99,6 +99,28 @@ describe('GET /api/posts/aggregated-by-location', () => {
         expect(cities).not.toContain('Sydney');
     });
 
+    it('returns 400 for a non-canonical platform value', async () => {
+        // platform validates against the canonical taxonomy
+        // (src/config/categories) — including the retired 'tech' slug
+        // (residual data is remapped to developer by migration 007).
+        for (const bad of ['tech', 'zines']) {
+            const res = await request(app)
+                .get('/api/posts/aggregated-by-location?platform=' + bad);
+            expect(res.status).toBe(400);
+            expect(res.body.error).toContain('canonical source category');
+        }
+    });
+
+    it('accepts every canonical platform value (forums included — 200, honest empty)', async () => {
+        const { CATEGORY_SLUGS } = require('../../src/config/categories');
+        for (const slug of CATEGORY_SLUGS) {
+            const res = await request(app)
+                .get('/api/posts/aggregated-by-location?platform=' + slug);
+            expect(res.status).toBe(200);
+            expect(Array.isArray(res.body)).toBe(true);
+        }
+    });
+
     it('excludes posts with empty or null location', async () => {
         const srcId = await insertSource('loc-posts-src-4');
         const jobId = await insertJob();

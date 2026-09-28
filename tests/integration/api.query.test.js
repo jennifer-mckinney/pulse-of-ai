@@ -207,6 +207,26 @@ describe('POST /api/query', () => {
         expect(res.body).toEqual({ error: 'limit must be a positive integer' });
     });
 
+    it('returns 400 for a non-canonical platform value', async () => {
+        // platform validates against the canonical taxonomy
+        // (src/config/categories): 'tech' is retired and free-text values
+        // are caller errors, not empty result sets.
+        for (const bad of ['tech', 'zines']) {
+            const res = await request(app).post('/api/query').send({ platform: bad });
+            expect(res.status).toBe(400);
+            expect(res.body.error).toContain('canonical source category');
+        }
+    });
+
+    it('accepts every canonical platform value (forums included — 200, honest empty)', async () => {
+        const { CATEGORY_SLUGS } = require('../../src/config/categories');
+        for (const slug of CATEGORY_SLUGS) {
+            const res = await request(app).post('/api/query').send({ platform: slug });
+            expect(res.status).toBe(200);
+            expect(Array.isArray(res.body.results)).toBe(true);
+        }
+    });
+
     it('returns 400 when limit is not numeric', async () => {
         const res = await request(app).post('/api/query').send({ limit: 'not-a-number' });
         expect(res.status).toBe(400);

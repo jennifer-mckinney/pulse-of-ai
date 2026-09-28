@@ -25,6 +25,7 @@ const { dbAll }    = require('../db/connection');
 // shared src/config file into public/. The registry file is the source of
 // record for both consumers.
 const { findCity } = require('../../public/js/config/cities.config.js');
+const { CATEGORY_SLUGS, isCanonicalCategory } = require('../config/categories');
 
 const router = Router();
 
@@ -74,6 +75,15 @@ router.get('/posts/aggregated-by-location', async (req, res) => {
         const params = [];
 
         if (platform) {
+            // Validate against the canonical taxonomy (src/config/categories
+            // — the same registry the frontend renders): a non-canon value
+            // is a caller error, not an empty result set.
+            if (!isCanonicalCategory(platform)) {
+                return res.status(400).json({
+                    error: 'platform must be a canonical source category: '
+                        + CATEGORY_SLUGS.join(', '),
+                });
+            }
             params.push(platform);
             conditions.push(`ds.category = $${params.length}`);
         }

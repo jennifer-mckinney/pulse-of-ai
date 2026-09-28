@@ -1,12 +1,15 @@
 // tests/integration/api.sources.timeseries.test.js
 // Tests for GET /api/sources/timeseries
-// Verifies: hourly buckets per source category, zero-fill, hours clamp, validation.
+// Verifies: canonical category enumeration (one row per canon category,
+// always — forums honest zero), hourly buckets, zero-fill, hours clamp,
+// validation.
 
 'use strict';
 
 const request = require('supertest');
 const app     = require('../../src/server');
 const { insertSource, insertJob, insertMethodologyVersions, insertPostWithFullPipeline } = require('./helpers');
+const { CATEGORY_SLUGS } = require('../../src/config/categories');
 
 // Floor a Date to the start of its hour — mirrors PostgreSQL date_trunc('hour', ...)
 function hourFloor(date) {
@@ -21,10 +24,19 @@ function minutesAgo(mins) {
 }
 
 describe('GET /api/sources/timeseries', () => {
-    it('returns 200 with an empty array when no posts exist', async () => {
+    it('enumerates every canonical category (all-zero series) even when no posts exist', async () => {
+        // Enumeration comes from the canon config, never SELECT DISTINCT
+        // over the data — an empty DB still serves the full taxonomy as
+        // honest zeros.
         const res = await request(app).get('/api/sources/timeseries');
         expect(res.status).toBe(200);
-        expect(res.body).toEqual([]);
+        expect(res.body.map(e => e.category)).toEqual(CATEGORY_SLUGS);
+        for (const entry of res.body) {
+            expect(entry.top_site).toBeNull();
+            expect(entry.words).toEqual([]);
+            expect(entry.series).toHaveLength(12);
+            expect(entry.series.every(b => b.total === 0)).toBe(true);
+        }
     });
 
     it('groups sentiment counts into hourly buckets per category', async () => {
@@ -51,8 +63,8 @@ describe('GET /api/sources/timeseries', () => {
         const res = await request(app).get('/api/sources/timeseries');
         expect(res.status).toBe(200);
 
-        // Categories ordered alphabetically: news before social
-        expect(res.body.map(e => e.category)).toEqual(['news', 'social']);
+        // One row per canonical category, in canon (registry) order
+        expect(res.body.map(e => e.category)).toEqual(CATEGORY_SLUGS);
 
         const socialEntry = res.body.find(e => e.category === 'social');
         const newsEntry   = res.body.find(e => e.category === 'news');
@@ -121,7 +133,7 @@ describe('GET /api/sources/timeseries', () => {
         expect(totals).toBe(1);   // only the recent post is inside the window
     });
 
-    it('omits categories with zero posts in the window', async () => {
+    it('serves categories with zero posts in the window as honest all-zero series', async () => {
         const academic = await insertSource('ts-academic', 'academic');
         const social   = await insertSource('ts-social-2', 'social');
         const jobId    = await insertJob();
@@ -135,18 +147,46 @@ describe('GET /api/sources/timeseries', () => {
 
         const res = await request(app).get('/api/sources/timeseries');
         expect(res.status).toBe(200);
-        expect(res.body.map(e => e.category)).toEqual(['social']);
+        expect(res.body.map(e => e.category)).toEqual(CATEGORY_SLUGS);
+        const academicEntry = res.body.find(e => e.category === 'academic');
+        expect(academicEntry.series.every(b => b.total === 0)).toBe(true);
+        expect(academicEntry.top_site).toBeNull();
+        const socialEntry = res.body.find(e => e.category === 'social');
+        expect(socialEntry.series.some(b => b.total > 0)).toBe(true);
     });
 
-    it('omits categories whose only posts are future-timestamped (no all-zero resurrection)', async () => {
+    it('forums is first-class canon with honest zeros — never invented volume', async () => {
+        // Forums has ZERO seeded sources by design (the prototype renders
+        // the category; the top-50 registry carries no forum source). It
+        // must still enumerate — all-zero series, no top_site, no words.
+        const social = await insertSource('ts-forums-peer', 'social');
+        const jobId  = await insertJob();
+        const mvIds  = await insertMethodologyVersions();
+        await insertPostWithFullPipeline(social, jobId, mvIds,
+            { externalId: 'ts-fz1', collectedAt: minutesAgo(5) });
+
+        const res = await request(app).get('/api/sources/timeseries');
+        expect(res.status).toBe(200);
+        const forums = res.body.find(e => e.category === 'forums');
+        expect(forums).toBeDefined();
+        expect(forums.top_site).toBeNull();
+        expect(forums.words).toEqual([]);
+        expect(forums.series).toHaveLength(12);
+        expect(forums.series.every(
+            b => b.positive === 0 && b.neutral === 0 && b.negative === 0
+                && b.total === 0)).toBe(true);
+    });
+
+    it('never serves a non-canonical category (and future rows cannot leak counts)', async () => {
         const future = await insertSource('ts-future',  'futurecat');
         const social = await insertSource('ts-present', 'social');
         const jobId  = await insertJob();
         const mvIds  = await insertMethodologyVersions();
 
-        // Future-timestamped row (bad upstream clock / ingestion bug), 2h ahead:
-        // it can never match a returned bucket, so without an upper bound on the
-        // counts window its category came back as an all-zero series.
+        // Future-timestamped row (bad upstream clock / ingestion bug), 2h
+        // ahead, in a NON-canonical category: the canon enumeration never
+        // serves 'futurecat', and the counts upper bound keeps the future
+        // row out of every returned bucket.
         await insertPostWithFullPipeline(future, jobId, mvIds,
             { externalId: 'ts-f1', collectedAt: new Date(Date.now() + 2 * 60 * 60 * 1000) });
         await insertPostWithFullPipeline(social, jobId, mvIds,
@@ -154,7 +194,8 @@ describe('GET /api/sources/timeseries', () => {
 
         const res = await request(app).get('/api/sources/timeseries');
         expect(res.status).toBe(200);
-        expect(res.body.map(e => e.category)).toEqual(['social']);
+        expect(res.body.map(e => e.category)).toEqual(CATEGORY_SLUGS);
+        expect(res.body.some(e => e.category === 'futurecat')).toBe(false);
     });
 
     it('clamps hours above 48 down to 48', async () => {

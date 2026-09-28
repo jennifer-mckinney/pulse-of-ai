@@ -15,6 +15,7 @@
 
 const { Router } = require('express');
 const { dbAll }  = require('../db/connection');
+const { CATEGORY_SLUGS, isCanonicalCategory } = require('../config/categories');
 
 const router = Router();
 
@@ -40,6 +41,17 @@ router.post('/query', async (req, res) => {
         // instead of the (impossible) exact match the caller asked for.
         if (typeof location === 'string' && location.trim() === '') {
             return res.status(400).json({ error: 'location must be a non-empty string' });
+        }
+
+        // platform filters on data_sources.category — validate against the
+        // canonical taxonomy (src/config/categories): a non-canon value is a
+        // caller error, not an empty result set. null/undefined = no filter.
+        if (platform !== null && platform !== undefined
+            && !isCanonicalCategory(platform)) {
+            return res.status(400).json({
+                error: 'platform must be a canonical source category: '
+                    + CATEGORY_SLUGS.join(', '),
+            });
         }
 
         const parsedLimit = parseInt(limit, 10);

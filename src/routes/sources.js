@@ -19,8 +19,13 @@
 // Returns:
 //   200 [ { category, top_site, words,
 //           series: [ { hour, positive, neutral, negative, total } ] } ]
+//        one row per CANONICAL category (src/config/categories.js — the
+//        prototype's 8-category taxonomy), ALWAYS, in canon order: the
+//        enumeration comes from the canon config, never SELECT DISTINCT
+//        over the data, so a category with no posts in the window (or no
+//        sources at all — forums) is served as an honest all-zero series
+//        with top_site null and words [];
 //        series has EXACTLY `hours` buckets (oldest → newest, zero-filled);
-//        categories with no posts in the window are omitted entirely;
 //        top_site = display_name of the category's busiest source in the
 //        window (post count DESC, name ASC tie-break);
 //        words = up to 2 most-matched relevance keywords for the category's
@@ -31,6 +36,7 @@
 
 const { Router } = require('express');
 const { dbAll }  = require('../db/connection');
+const { CATEGORY_SLUGS } = require('../config/categories');
 
 const router = Router();
 
@@ -85,6 +91,13 @@ router.get('/sources/timeseries', async (req, res) => {
         // drop their counts. generate_series × category cross join produces the
         // zero-filled buckets; NOW() is evaluated once per query, so bucket
         // boundaries and the row window can never disagree (no app/DB clock skew).
+        //
+        // Category enumeration is the CANON (unnest over the canonical slug
+        // array, ordinality preserving canon order) — never SELECT DISTINCT
+        // over the data: every canonical category gets a row, and a quiet or
+        // source-less category (forums) is an honest all-zero series. A
+        // non-canonical category in the data (impossible after migration
+        // 007) would be excluded rather than served.
         const rows = await dbAll(
             `WITH buckets AS (
                 SELECT generate_series(
@@ -120,11 +133,11 @@ router.get('/sources/timeseries', async (req, res) => {
                 COALESCE(c.neutral,  0) AS neutral,
                 COALESCE(c.negative, 0) AS negative,
                 COALESCE(c.total,    0) AS total
-            FROM (SELECT DISTINCT category FROM counts) cat
+            FROM unnest($2::text[]) WITH ORDINALITY AS cat(category, ord)
             CROSS JOIN buckets b
             LEFT JOIN counts c ON c.category = cat.category AND c.hour = b.hour
-            ORDER BY cat.category ASC, b.hour ASC`,
-            [hours],
+            ORDER BY cat.ord ASC, b.hour ASC`,
+            [hours, CATEGORY_SLUGS],
         );
 
         // ─── Ribbon metadata: busiest source + cue words per category ────────
