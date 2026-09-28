@@ -37,6 +37,7 @@
 const { Router } = require('express');
 const { dbAll }  = require('../db/connection');
 const { CATEGORY_SLUGS } = require('../config/categories');
+const { responseCache } = require('../middleware/response-cache');
 
 const router = Router();
 
@@ -66,14 +67,17 @@ router.get('/sources', async (req, res) => {
     /* istanbul ignore end */
 });
 
-router.get('/sources/timeseries', async (req, res) => {
+// F3: 10s in-process cache, keyed per query-string (each hours= window caches
+// independently). Three window-scoped aggregations per request otherwise.
+router.get('/sources/timeseries', responseCache(10000), async (req, res) => {
     try {
         // ─── Validate + clamp the window size ─────────────────────────────────
         let hours = 12;
         if (req.query.hours !== undefined) {
             // Strict integer check: parseInt would silently accept '1.5' as 1,
-            // so validate the raw string before parsing
-            if (!/^-?\d+$/.test(req.query.hours)) {
+            // so validate the raw string before parsing. Digits only (F5) — a
+            // negative window is a caller error, not a value to clamp.
+            if (!/^\d+$/.test(req.query.hours)) {
                 return res.status(400).json({ error: 'hours must be an integer' });
             }
             hours = parseInt(req.query.hours, 10);

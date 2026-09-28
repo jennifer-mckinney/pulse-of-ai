@@ -25,10 +25,13 @@
 
 const { Router } = require('express');
 const { dbAll }  = require('../db/connection');
+const { responseCache } = require('../middleware/response-cache');
 
 const router = Router();
 
-router.get('/themes', async (req, res) => {
+// F3: 10s in-process cache — this multi-CTE aggregation is identical for
+// every caller and the pipeline only changes it every 2-3 minutes.
+router.get('/themes', responseCache(10000), async (req, res) => {
     try {
         // ::int casts everywhere — pg returns COUNT() (bigint) as a string,
         // and the frontend needs real numbers.

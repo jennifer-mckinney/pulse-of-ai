@@ -26,6 +26,7 @@ const { dbAll }    = require('../db/connection');
 // record for both consumers.
 const { findCity } = require('../../public/js/config/cities.config.js');
 const { CATEGORY_SLUGS, isCanonicalCategory } = require('../config/categories');
+const { responseCache } = require('../middleware/response-cache');
 
 const router = Router();
 
@@ -63,7 +64,10 @@ function getDominant(row) {
     return Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
 }
 
-router.get('/posts/aggregated-by-location', async (req, res) => {
+// F3: 10s in-process cache, keyed per query-string (platform/from/to windows
+// cache independently). The story frontend re-requests this snapshot on every
+// poll and beat change; the underlying data moves on the 2-3 minute cycle.
+router.get('/posts/aggregated-by-location', responseCache(10000), async (req, res) => {
     try {
         const { platform, from, to } = req.query;
 
