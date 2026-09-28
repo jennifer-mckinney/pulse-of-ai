@@ -100,19 +100,31 @@ router.post('/query', async (req, res) => {
         params.push(parsedLimit);
         const limitClause = `LIMIT $${params.length}`;
 
+        // comparative is CLAMPED to [-1, 1] at the API boundary: the raw
+        // sentiment-lib value is score/token_count and is unbounded for very
+        // short posts, but every frontend consumer renders it on a −1…+1 scale.
+        // relevance comes from relevance_results via LEFT JOIN (one row per
+        // post — saveRelevance is idempotent) and is null for posts that were
+        // never relevance-scored. positive_words / negative_words are the
+        // stored sentiment cue words (city drill-down cue phrases, gap G21).
         const results = await dbAll(
             `SELECT
                 rp.id,
                 LEFT(rp.content, 120)   AS content_snippet,
                 sr.indicator,
                 sr.score,
-                sr.comparative,
+                GREATEST(-1, LEAST(1, sr.comparative))::real AS comparative,
+                sr.positive_words,
+                sr.negative_words,
+                rr.score                AS relevance,
                 rp.location,
+                ds.name                 AS source_name,
                 ds.category             AS platform,
                 rp.collected_at
              FROM sentiment_results sr
              JOIN raw_posts rp    ON rp.id = sr.raw_post_id
              JOIN data_sources ds ON ds.id = rp.source_id
+             LEFT JOIN relevance_results rr ON rr.raw_post_id = rp.id
              ${whereClause}
              ORDER BY rp.collected_at DESC
              ${limitClause}`,
