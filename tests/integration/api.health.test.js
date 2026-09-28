@@ -88,4 +88,5 @@ describe('GET /api/health', () => {
         const [a0, a1] = res.body.active_alerts;
         expect(new Date(a0.created_at).getTime())
             .toBeGreaterThanOrEqual(new Date(a1.created_at).getTime());
+    });
 });
