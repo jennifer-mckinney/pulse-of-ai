@@ -54,13 +54,20 @@ router.post('/query', async (req, res) => {
             });
         }
 
-        const parsedLimit = parseInt(limit, 10);
-        if (isNaN(parsedLimit) || parsedLimit < 1) {
+        // F4: strict integer check BEFORE the range checks — the same pattern
+        // as bias.js/sources.js hours validation. parseInt silently accepted
+        // 1.5 (as 1) and '20abc' (as 20); a non-integer limit is a caller
+        // error, not something to round.
+        if (!Number.isInteger(limit)) {
             return res.status(400).json({ error: 'limit must be a positive integer' });
         }
-        if (parsedLimit > 100) {
+        if (limit < 1) {
+            return res.status(400).json({ error: 'limit must be a positive integer' });
+        }
+        if (limit > 100) {
             return res.status(400).json({ error: 'limit must be <= 100' });
         }
+        const parsedLimit = limit;
 
         let fromDate = null;
         if (from !== null && from !== undefined) {

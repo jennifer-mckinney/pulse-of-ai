@@ -108,13 +108,16 @@ describe('GET /api/bias/history', () => {
         expect(res.body).toHaveProperty('error');
     });
 
-    it('clamps out-of-range hours instead of rejecting them', async () => {
+    it('clamps out-of-range positive hours instead of rejecting them', async () => {
         const res = await request(app).get('/api/bias/history?hours=500');
         expect(res.status).toBe(200);
         expect(res.body.window_hours).toBe(48);
+    });
 
-        const res2 = await request(app).get('/api/bias/history?hours=-3');
-        expect(res2.body.window_hours).toBe(1);
+    it('rejects negative hours as 400 (F5 — a negative window is malformed, not clampable)', async () => {
+        const res = await request(app).get('/api/bias/history?hours=-3');
+        expect(res.status).toBe(400);
+        expect(res.body).toHaveProperty('error');
     });
 
     it('maps stored severities to the alert|watch|pass vocabulary with layer + citation', async () => {

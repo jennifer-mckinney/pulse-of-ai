@@ -47,9 +47,11 @@ router.get('/bias/history', async (req, res) => {
         // Same validate-then-clamp pattern as /api/sources/timeseries: strict
         // integer check first (parseInt would silently accept '1.5'), then
         // clamp — window size is a display preference, not a correctness input.
+        // F5: digits only — a negative window is meaningless, so '-5' is a
+        // 400 like any other malformed value instead of clamping to 1.
         let hours = 12;
         if (req.query.hours !== undefined) {
-            if (!/^-?\d+$/.test(req.query.hours)) {
+            if (!/^\d+$/.test(req.query.hours)) {
                 return res.status(400).json({ error: 'hours must be an integer' });
             }
             hours = parseInt(req.query.hours, 10);

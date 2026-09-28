@@ -233,6 +233,19 @@ describe('POST /api/query', () => {
         expect(res.body).toEqual({ error: 'limit must be a positive integer' });
     });
 
+    it('returns 400 when limit is a non-integer number or a numeric string (F4)', async () => {
+        // parseInt used to silently truncate 1.5 → 1 and coerce '20' → 20;
+        // Number.isInteger runs BEFORE the range checks now, so both are
+        // caller errors (same strict-integer pattern as the hours params).
+        const fractional = await request(app).post('/api/query').send({ limit: 1.5 });
+        expect(fractional.status).toBe(400);
+        expect(fractional.body).toEqual({ error: 'limit must be a positive integer' });
+
+        const stringy = await request(app).post('/api/query').send({ limit: '20' });
+        expect(stringy.status).toBe(400);
+        expect(stringy.body).toEqual({ error: 'limit must be a positive integer' });
+    });
+
     it('filters by from date only', async () => {
         const srcId = await insertSource('query-from');
         const jobId = await insertJob();

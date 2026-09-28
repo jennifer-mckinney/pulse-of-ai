@@ -235,6 +235,11 @@ describe('GET /api/sources/timeseries', () => {
         const bad2 = await request(app).get('/api/sources/timeseries?hours=1.5');
         expect(bad2.status).toBe(400);
         expect(bad2.body).toHaveProperty('error');
+
+        // F5: negative windows are malformed, not clampable.
+        const bad3 = await request(app).get('/api/sources/timeseries?hours=-5');
+        expect(bad3.status).toBe(400);
+        expect(bad3.body).toHaveProperty('error');
     });
 
     // ─── Ribbon metadata: busiest source + cue words per category ─────────────
