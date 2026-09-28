@@ -168,7 +168,10 @@
             : null;
 
         return {
-            cityCount: list.length,
+            // Cities REPORTING, not cities rendered: the live globe shows a
+            // zero-count baseline row for every launch city (registry
+            // merge), and a city with no posts this hour is not "reporting".
+            cityCount: list.filter((c) => c.total > 0).length,
             globalTotals,
             globalShares,
             highestVolumeCity,

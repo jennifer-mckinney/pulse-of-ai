@@ -1,108 +1,193 @@
 // PulseData — city sentiment data for the Pulse of AI frontend.
-// DEMO_DATA originated in the legacy map shell (removed in C5) and now lives
-// here so the globe.gl storytelling modules own the demo fallback path.
 //
 // Exports:
-//   - DEMO_DATA:            12-city demo fallback set (DB not yet seeded).
+//   - DEMO_DATA:            demo fallback set for the 30 launch cities, built
+//                           deterministically from the canonical city registry
+//                           (cities.config.js) by buildDemoData — demo and
+//                           live render the SAME 30 cities by construction.
+//   - buildDemoData(cities): deterministic generator (seeded pseudo-random,
+//                           region-keyed source templates) — a registry edit
+//                           changes the demo set, never a code edit.
 //   - normalizeCities(raw): pure adapter — validates lat/lng, coerces counts,
 //                           recomputes total/dominant, computes sentiment
 //                           shares, drops rows with unusable coordinates.
-//   - loadCityData():       fetch /api/posts/aggregated-by-location, returns
-//                           { cities, isDemo } — isDemo is true when the demo
-//                           fallback was used (error/non-OK/empty/no fetch),
-//                           so consumers can visibly label demo numbers;
-//                           browser-guarded so it is safe to require in Node.
+//   - mergeWithBaseline(rows): overlays live rows onto the zero-count launch-
+//                           city baseline so every registry launch city
+//                           renders (zeros are honest, not hidden).
+//   - loadCityData():       fetch the aggregation WINDOWED to the trailing
+//                           hour (so "posts/hr" labels are truthful — G16),
+//                           returns { cities, isDemo }. Demo fallback only
+//                           when the UNWINDOWED probe is also empty: an empty
+//                           hour over a non-empty DB renders honest zeros
+//                           instead of flipping to fictional demo numbers.
 //
 // Dual export guard: CommonJS (module.exports) for jest, window.PulseData
-// for browser script tags. Same pattern as public/js/utils.js.
+// for browser script tags. The registry dependency is injected the same way
+// (require in Node, window.PulseCityRegistry in the browser — index.html
+// loads cities.config.js before this file).
 (function (root, factory) {
     if (typeof module === 'object' && module.exports) {
-        module.exports = factory();          // Node / jest
+        module.exports = factory(require('./config/cities.config.js')); // Node / jest
     } else {
         /* istanbul ignore next -- Browser UMD global; unreachable in Node tests */
-        root.PulseData = factory();          // browser global
+        root.PulseData = factory(root.PulseCityRegistry);                // browser global
     }
-}(typeof self !== 'undefined' ? self : this, function () {
+}(typeof self !== 'undefined' ? self : this, function (cityRegistry) {
     'use strict';
 
-    // ── Demo fallback data (from map.js; C4 added ISO country codes to match
-    //    the live aggregation payload's city-registry `country` field) ────────────
-    // Used when the API returns empty (DB not yet seeded). Showcases all visual elements.
-    const DEMO_DATA = [
-        { city:'San Francisco', lat:37.7749,  lng:-122.4194, country:'US', positive:142, neutral:89,  negative:47,  total:278, dominant:'positive', last_updated:new Date().toISOString(),
-            sources:[
-                { source_name:'reddit',      source_category:'social',   positive:65, neutral:40, negative:20, total:125 },
-                { source_name:'hacker_news', source_category:'tech',     positive:50, neutral:30, negative:15, total:95  },
-                { source_name:'arxiv',       source_category:'academic', positive:27, neutral:19, negative:12, total:58  },
-            ]},
-        { city:'New York',      lat:40.7128,  lng:-74.0060, country:'US',  positive:178, neutral:134, negative:88,  total:400, dominant:'positive', last_updated:new Date().toISOString(),
-            sources:[
-                { source_name:'reddit',       source_category:'social',   positive:70, neutral:55, negative:35, total:160 },
-                { source_name:'nytimes_tech', source_category:'news',     positive:50, neutral:45, negative:30, total:125 },
-                { source_name:'hacker_news',  source_category:'tech',     positive:38, neutral:24, negative:15, total:77  },
-                { source_name:'arxiv',        source_category:'academic', positive:20, neutral:10, negative:8,  total:38  },
-            ]},
-        { city:'London',        lat:51.5074,  lng:-0.1278, country:'GB',   positive:88,  neutral:112, negative:67,  total:267, dominant:'neutral',  last_updated:new Date().toISOString(),
-            sources:[
-                { source_name:'guardian_tech', source_category:'news',   positive:30, neutral:55, negative:32, total:117 },
-                { source_name:'reddit',        source_category:'social', positive:38, neutral:40, negative:22, total:100 },
-                { source_name:'bbc_tech',      source_category:'news',   positive:20, neutral:17, negative:13, total:50  },
-            ]},
-        { city:'Berlin',        lat:52.5200,  lng:13.4050, country:'DE',   positive:55,  neutral:78,  negative:102, total:235, dominant:'negative', last_updated:new Date().toISOString(),
-            sources:[
-                { source_name:'reddit',        source_category:'social',   positive:20, neutral:35, negative:45, total:100 },
-                { source_name:'eu_commission', source_category:'policy',   positive:10, neutral:30, negative:42, total:82  },
-                { source_name:'arxiv',         source_category:'academic', positive:25, neutral:13, negative:15, total:53  },
-            ]},
-        { city:'Tokyo',         lat:35.6762,  lng:139.6503, country:'JP',  positive:195, neutral:67,  negative:30,  total:292, dominant:'positive', last_updated:new Date().toISOString(),
-            sources:[
-                { source_name:'reddit',  source_category:'social',   positive:80, neutral:30, negative:15, total:125 },
-                { source_name:'twitter', source_category:'social',   positive:75, neutral:25, negative:8,  total:108 },
-                { source_name:'arxiv',   source_category:'academic', positive:40, neutral:12, negative:7,  total:59  },
-            ]},
-        { city:'Beijing',       lat:39.9042,  lng:116.4074, country:'CN',  positive:210, neutral:80,  negative:40,  total:330, dominant:'positive', last_updated:new Date().toISOString(),
-            sources:[
-                { source_name:'weibo',  source_category:'social',   positive:90, neutral:35, negative:20, total:145 },
-                { source_name:'arxiv',  source_category:'academic', positive:75, neutral:25, negative:10, total:110 },
-                { source_name:'xinhua', source_category:'news',     positive:45, neutral:20, negative:10, total:75  },
-            ]},
-        { city:'Singapore',     lat:1.3521,   lng:103.8198, country:'SG',  positive:120, neutral:55,  negative:25,  total:200, dominant:'positive', last_updated:new Date().toISOString(),
-            sources:[
-                { source_name:'reddit',        source_category:'social',   positive:60, neutral:25, negative:10, total:95  },
-                { source_name:'arxiv',         source_category:'academic', positive:40, neutral:20, negative:10, total:70  },
-                { source_name:'straits_times', source_category:'news',     positive:20, neutral:10, negative:5,  total:35  },
-            ]},
-        { city:'Seoul',         lat:37.5665,  lng:126.9780, country:'KR',  positive:155, neutral:60,  negative:25,  total:240, dominant:'positive', last_updated:new Date().toISOString(),
-            sources:[
-                { source_name:'reddit',      source_category:'social',   positive:70, neutral:28, negative:12, total:110 },
-                { source_name:'korea_times', source_category:'news',     positive:55, neutral:20, negative:8,  total:83  },
-                { source_name:'arxiv',       source_category:'academic', positive:30, neutral:12, negative:5,  total:47  },
-            ]},
-        { city:'São Paulo',     lat:-23.5505, lng:-46.6333, country:'BR',  positive:65,  neutral:88,  negative:47,  total:200, dominant:'neutral',  last_updated:new Date().toISOString(),
-            sources:[
-                { source_name:'reddit', source_category:'social',   positive:35, neutral:40, negative:20, total:95 },
-                { source_name:'folha',  source_category:'news',     positive:20, neutral:35, negative:20, total:75 },
-                { source_name:'arxiv',  source_category:'academic', positive:10, neutral:13, negative:7,  total:30 },
-            ]},
-        { city:'Bangalore',     lat:12.9716,  lng:77.5946, country:'IN',   positive:145, neutral:55,  negative:20,  total:220, dominant:'positive', last_updated:new Date().toISOString(),
-            sources:[
-                { source_name:'reddit',         source_category:'social',   positive:70, neutral:28, negative:10, total:108 },
-                { source_name:'times_of_india', source_category:'news',     positive:45, neutral:17, negative:6,  total:68  },
-                { source_name:'arxiv',          source_category:'academic', positive:30, neutral:10, negative:4,  total:44  },
-            ]},
-        { city:'Sydney',        lat:-33.8688, lng:151.2093, country:'AU',  positive:98,  neutral:67,  negative:35,  total:200, dominant:'positive', last_updated:new Date().toISOString(),
-            sources:[
-                { source_name:'reddit',   source_category:'social',   positive:55, neutral:35, negative:15, total:105 },
-                { source_name:'abc_tech', source_category:'news',     positive:30, neutral:22, negative:13, total:65  },
-                { source_name:'arxiv',    source_category:'academic', positive:13, neutral:10, negative:7,  total:30  },
-            ]},
-        { city:'Toronto',       lat:43.6532,  lng:-79.3832, country:'CA',  positive:88,  neutral:72,  negative:40,  total:200, dominant:'positive', last_updated:new Date().toISOString(),
-            sources:[
-                { source_name:'reddit',   source_category:'social',   positive:45, neutral:35, negative:20, total:100 },
-                { source_name:'cbc_tech', source_category:'news',     positive:30, neutral:25, negative:15, total:70  },
-                { source_name:'arxiv',    source_category:'academic', positive:13, neutral:12, negative:5,  total:30  },
-            ]},
-    ];
+    // Trailing aggregation window (G16): the story's volume labels say
+    // "posts/hr", so the snapshot request asks for exactly the last hour.
+    const TRAILING_WINDOW_MS = 3600000;
+
+    const AGGREGATED_ENDPOINT = '/api/posts/aggregated-by-location';
+
+    // Launch cities from the canonical registry (tier 1 — the prototype's
+    // 30). Tolerate a missing registry (broken script order) as [] so the
+    // module never throws at load time; the demo set is then empty and the
+    // live path renders served rows only.
+    const LAUNCH_CITIES = (cityRegistry
+        && typeof cityRegistry.launchCities === 'function')
+        ? cityRegistry.launchCities() : [];
+    const findCity = (cityRegistry && typeof cityRegistry.findCity === 'function')
+        ? cityRegistry.findCity : function () { return null; };
+
+    // ── Deterministic demo generator ────────────────────────────────────────
+
+    // Seeded pseudo-random from string (FNV-1a walk — same algorithm the C4
+    // ui.js demo synthesis uses, so all demo surfaces are reproducible).
+    function seededRandom(str) {
+        let h = 2166136261;
+        for (let i = 0; i < str.length; i++) {
+            h ^= str.charCodeAt(i);
+            h = Math.imul(h, 16777619);
+        }
+        return () => {
+            h = Math.imul(h ^ (h >>> 15), 2246822507);
+            h = Math.imul(h ^ (h >>> 13), 3266489909);
+            return ((h ^= h >>> 16) >>> 0) / 4294967296;
+        };
+    }
+
+    // Region-keyed source templates: which sources plausibly appear per
+    // region (names match the seeded data_sources registry where one exists).
+    // Union of categories across regions is 6 — the demo must showcase the
+    // category palette without hardcoding the editorial "7 categories" claim
+    // (chapters derive the count from the data).
+    const REGION_SOURCES = {
+        north_america: [
+            { source_name: 'reddit',        source_category: 'social' },
+            { source_name: 'hacker_news',   source_category: 'tech' },
+            { source_name: 'nytimes_tech',  source_category: 'news' },
+            { source_name: 'arxiv',         source_category: 'academic' },
+            { source_name: 'github_blog',   source_category: 'developer' },
+        ],
+        south_america: [
+            { source_name: 'reddit',        source_category: 'social' },
+            { source_name: 'folha_tech',    source_category: 'news' },
+            { source_name: 'arxiv',         source_category: 'academic' },
+            { source_name: 'hacker_news',   source_category: 'tech' },
+        ],
+        europe: [
+            { source_name: 'guardian_tech', source_category: 'news' },
+            { source_name: 'eu_commission', source_category: 'policy' },
+            { source_name: 'reddit',        source_category: 'social' },
+            { source_name: 'arxiv',         source_category: 'academic' },
+            { source_name: 'github_blog',   source_category: 'developer' },
+        ],
+        africa: [
+            { source_name: 'reddit',        source_category: 'social' },
+            { source_name: 'techcabal',     source_category: 'news' },
+            { source_name: 'arxiv',         source_category: 'academic' },
+            { source_name: 'github_blog',   source_category: 'developer' },
+        ],
+        middle_east: [
+            { source_name: 'reddit',        source_category: 'social' },
+            { source_name: 'haaretz_tech',  source_category: 'news' },
+            { source_name: 'hacker_news',   source_category: 'tech' },
+            { source_name: 'arxiv',         source_category: 'academic' },
+        ],
+        asia: [
+            { source_name: 'weibo',         source_category: 'social' },
+            { source_name: 'nikkei_tech',   source_category: 'news' },
+            { source_name: 'arxiv',         source_category: 'academic' },
+            { source_name: 'hacker_news',   source_category: 'tech' },
+            { source_name: 'gov_policy',    source_category: 'policy' },
+        ],
+        oceania: [
+            { source_name: 'reddit',        source_category: 'social' },
+            { source_name: 'abc_tech',      source_category: 'news' },
+            { source_name: 'arxiv',         source_category: 'academic' },
+            { source_name: 'github_blog',   source_category: 'developer' },
+        ],
+    };
+
+    // buildDemoData: registry entries → demo rows in the exact shape the
+    // aggregation endpoint serves. Deterministic (seeded by city id): the
+    // same registry always yields the same demo globe, so tests can assert
+    // exact values and reloads don't reshuffle the story.
+    function buildDemoData(cities) {
+        const list = Array.isArray(cities) ? cities : [];
+        const now = new Date().toISOString();
+        return list.map((entry) => {
+            const r = seededRandom('pulse-demo-' + entry.id);
+            const templates = REGION_SOURCES[entry.region]
+                || REGION_SOURCES.north_america;
+
+            // City personality: net sentiment in [-0.35, +0.50] and a
+            // 3–4-source mix — enough spread for positive/neutral/negative
+            // dominants and every chapter's leaders/hotspots to exist.
+            const net = -0.35 + r() * 0.85;
+            const sourceCount = 3 + (r() < 0.5 ? 1 : 0);
+            const offset = Math.floor(r() * templates.length);
+
+            let positive = 0, neutral = 0, negative = 0;
+            const sources = [];
+            for (let i = 0; i < sourceCount; i++) {
+                const tpl = templates[(offset + i) % templates.length];
+                const srcTotal = 15 + Math.floor(r() * 110);
+                // Per-source sentiment split around the city net, jittered.
+                const srcNet = Math.max(-0.9, Math.min(0.9, net + (r() - 0.5) * 0.3));
+                const neuShare = 0.25 + r() * 0.2;
+                let srcPos = Math.round(srcTotal * ((1 - neuShare) + srcNet) / 2);
+                srcPos = Math.max(0, Math.min(srcTotal, srcPos));
+                let srcNeu = Math.round(srcTotal * neuShare);
+                srcNeu = Math.min(srcNeu, srcTotal - srcPos);
+                const srcNeg = srcTotal - srcPos - srcNeu;
+                sources.push({
+                    source_name:     tpl.source_name,
+                    source_category: tpl.source_category,
+                    positive:        srcPos,
+                    neutral:         srcNeu,
+                    negative:        srcNeg,
+                    total:           srcTotal,
+                });
+                positive += srcPos;
+                neutral  += srcNeu;
+                negative += srcNeg;
+            }
+
+            const total = positive + neutral + negative;
+            const dominant = (positive >= neutral && positive >= negative)
+                ? 'positive' : (neutral >= negative ? 'neutral' : 'negative');
+            return {
+                city:         entry.name,
+                lat:          entry.lat,
+                lng:          entry.lng,
+                country:      entry.country,
+                positive:     positive,
+                neutral:      neutral,
+                negative:     negative,
+                total:        total,
+                dominant:     dominant,
+                last_updated: now,
+                sources:      sources,
+            };
+        });
+    }
+
+    // The demo fallback set: the registry's 30 launch cities, generated once
+    // at module load (DB not yet seeded / backend unreachable — FR-22).
+    const DEMO_DATA = buildDemoData(LAUNCH_CITIES);
 
     // ── Internal coercion helpers ───────────────────────────────────────────────
 
@@ -174,10 +259,10 @@
         const out = [];
         // Loud-drop accounting (backend-flagged): rows with unusable
         // coordinates are still dropped (they cannot be plotted), but the
-        // drop is no longer SILENT — cities missing from the CITY_COORDS
-        // registry (audit G26) used to just vanish from the globe with no
-        // trace. The console.warn below names every dropped city so the
-        // registry hole is visible in the devtools the moment it happens.
+        // drop is no longer SILENT — cities missing from the registry
+        // (audit G26) used to just vanish from the globe with no trace.
+        // The console.warn below names every dropped city so the registry
+        // hole is visible in the devtools the moment it happens.
         const dropped = [];
         for (const row of raw) {
             if (!row || typeof row !== 'object') continue;
@@ -198,16 +283,20 @@
                 city: row.city,
                 lat,
                 lng,
-                // ISO country code from the backend city registry (C4: the
-                // explore city-detail header shows it). Optional — absent
-                // or non-string values become null, never rendered.
+                // ISO country code from the city registry (C4: the explore
+                // city-detail header shows it). Optional — absent or
+                // non-string values become null, never rendered.
                 country: typeof row.country === 'string' && row.country !== ''
                     ? row.country : null,
                 positive,
                 neutral,
                 negative,
                 total,
-                dominant: dominantOf(positive, neutral, negative),
+                // A zero-count city has no dominant sentiment — 'neutral' is
+                // the honest label (the positive-preferring tie-break is for
+                // real ties, not for "no data this hour").
+                dominant: total > 0
+                    ? dominantOf(positive, neutral, negative) : 'neutral',
                 shares: total > 0
                     ? { positive: positive / total, neutral: neutral / total, negative: negative / total }
                     : { positive: 0, neutral: 0, negative: 0 },
@@ -220,15 +309,63 @@
             console.warn(
                 '[pulse] normalizeCities: dropped ' + dropped.length
                 + ' row(s) with unusable coordinates (missing from the city'
-                + ' registry? — see src/routes/posts.js CITY_COORDS): '
+                + ' registry? — see public/js/config/cities.config.js): '
                 + dropped.join(', '));
         }
         return out;
     }
 
-    // Fetch live city data; fall back to normalized DEMO_DATA if the endpoint
-    // errors, returns non-OK, returns nothing usable, or fetch does not exist
-    // (Node safety guard — this module is also required by jest without a DOM).
+    // mergeWithBaseline: overlay served rows onto a zero-count baseline of
+    // every registry launch city, so live mode renders all 30 launch cities
+    // — cities with no posts in the window show honest zero/low bars instead
+    // of silently disappearing. Served rows for registry cities replace the
+    // baseline row (matched via findCity: case-insensitive + aliases);
+    // served rows for non-registry locations are appended unchanged.
+    function mergeWithBaseline(rows) {
+        const list = Array.isArray(rows) ? rows : [];
+        const byId = new Map();   // registry id → served row
+        const extras = [];
+        for (const row of list) {
+            const entry = row && typeof row === 'object'
+                ? findCity(row.city) : null;
+            if (entry && !byId.has(entry.id)) {
+                byId.set(entry.id, row);
+            } else {
+                extras.push(row);
+            }
+        }
+        const merged = LAUNCH_CITIES.map((entry) => byId.get(entry.id) || {
+            city:         entry.name,
+            lat:          entry.lat,
+            lng:          entry.lng,
+            country:      entry.country,
+            positive:     0,
+            neutral:      0,
+            negative:     0,
+            total:        0,
+            dominant:     'neutral',
+            last_updated: null,
+            sources:      [],
+        });
+        // Served rows for tier-2 / unknown locations still render (or warn
+        // loudly in normalizeCities when their coordinates are unusable).
+        for (const id of byId.keys()) {
+            if (!LAUNCH_CITIES.some((entry) => entry.id === id)) {
+                merged.push(byId.get(id));
+            }
+        }
+        return merged.concat(extras);
+    }
+
+    // Fetch live city data windowed to the trailing hour (G16 — the UI labels
+    // volumes "posts/hr", so the window must actually be an hour), overlay it
+    // on the launch-city baseline, and fall back to normalized DEMO_DATA ONLY
+    // when the backend genuinely has nothing:
+    //   windowed rows present            → live data (merged, isDemo false)
+    //   windowed empty, unwindowed rows  → honest zeros (merged, isDemo false)
+    //     — a quiet hour over a seeded DB must NOT flip the page to fictional
+    //       demo numbers (the demo-flip risk from the C4 review)
+    //   both empty / error / non-OK / no fetch → demo (isDemo true)
     //
     // Returns { cities, isDemo }: isDemo is TRUE whenever the demo fallback
     // was used, so consumers (resolveChapter → insight cards) can visibly
@@ -236,15 +373,34 @@
     async function loadCityData() {
         if (typeof fetch !== 'undefined') {
             try {
-                const res = await fetch('/api/posts/aggregated-by-location');
+                const from = new Date(Date.now() - TRAILING_WINDOW_MS).toISOString();
+                const res = await fetch(
+                    AGGREGATED_ENDPOINT + '?from=' + encodeURIComponent(from));
                 if (res && res.ok) {
-                    const cities = normalizeCities(await res.json());
-                    if (cities.length > 0) return { cities, isDemo: false };
+                    const windowed = await res.json();
+                    if (Array.isArray(windowed) && windowed.length > 0) {
+                        return {
+                            cities: normalizeCities(mergeWithBaseline(windowed)),
+                            isDemo: false,
+                        };
+                    }
+                    // Empty hour — probe UNWINDOWED before concluding the DB
+                    // is empty (demo-flip guard).
+                    const probe = await fetch(AGGREGATED_ENDPOINT);
+                    if (probe && probe.ok) {
+                        const total = await probe.json();
+                        if (Array.isArray(total) && total.length > 0) {
+                            return {
+                                cities: normalizeCities(mergeWithBaseline([])),
+                                isDemo: false,
+                            };
+                        }
+                    }
                 }
             } catch (_) { /* network error — fall through to demo data */ }
         }
         return { cities: normalizeCities(DEMO_DATA), isDemo: true };
     }
 
-    return { DEMO_DATA, normalizeCities, loadCityData };
+    return { DEMO_DATA, buildDemoData, normalizeCities, mergeWithBaseline, loadCityData };
 }));

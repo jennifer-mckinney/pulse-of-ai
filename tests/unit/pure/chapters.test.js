@@ -111,19 +111,19 @@ describe('resolveChapter() over DEMO_DATA', () => {
     test('volumeTop3: the three highest-volume demo cities in order', () => {
         const r = resolveChapter(beat('volume'), demoInsights, demoCities);
         expect(r.highlightCities.map(c => c.city))
-            .toEqual(['New York', 'Beijing', 'Tokyo']); // 400, 330, 292
+            .toEqual(['New York', 'Singapore', 'Amsterdam']); // 409, 370, 364
     });
 
     test('negativeTop3: the three coolest eligible cities, coolest first', () => {
         const r = resolveChapter(beat('negativity'), demoInsights, demoCities);
         expect(r.highlightCities.map(c => c.city))
-            .toEqual(['Berlin', 'London', 'São Paulo']); // −0.20, +0.08, +0.09
+            .toEqual(['Dubai', 'Beijing', 'London']); // −0.43, −0.39, −0.34
     });
 
     test('positiveTop3: the three warmest eligible cities, warmest first', () => {
         const r = resolveChapter(beat('positivity'), demoInsights, demoCities);
         expect(r.highlightCities.map(c => c.city))
-            .toEqual(['Bangalore', 'Tokyo', 'Seoul']); // +0.57, +0.57, +0.54
+            .toEqual(['Paris', 'Tel Aviv', 'Warsaw']); // +0.47, +0.45, +0.43
         // independent check against netSentiment itself
         const ranked = demoCities.filter(c => c.total >= MIN_TOTAL)
             .sort((a, b) => netSentiment(b) - netSentiment(a));
@@ -139,7 +139,7 @@ describe('resolveChapter() over DEMO_DATA', () => {
     test('summaryTrio: warmest + coolest + volume leader, deduplicated', () => {
         const r = resolveChapter(beat('summary'), demoInsights, demoCities);
         expect(r.highlightCities.map(c => c.city))
-            .toEqual(['Bangalore', 'Berlin', 'New York']);
+            .toEqual(['Paris', 'Dubai', 'New York']);
         expect(new Set(r.highlightCities).size).toBe(r.highlightCities.length);
     });
 
@@ -171,22 +171,23 @@ describe('resolveChapter() over DEMO_DATA', () => {
 
     test('overview stats resolve to the hand-computed demo values', () => {
         const r = resolveChapter(beat('overview'), demoInsights, demoCities);
-        // DEMO_DATA sums: total 3,062; net (1539 − 566) / 3062 ≈ +0.32
+        // Generated DEMO_DATA sums (deterministic — seeded by registry city
+        // ids): total 7,816; net (2953 − 2148) / 7816 ≈ +0.10
         expect(r.stats).toEqual([
-            ['posts / hour', '3,062'],
-            ['global sentiment', '+0.32'],
-            ['cities reporting', '12'],
+            ['posts / hour', '7,816'],
+            ['global sentiment', '+0.10'],
+            ['cities reporting', '30'],
         ]);
-        expect(fmtCount(demoInsights.globalTotals.total)).toBe('3,062');
-        expect(fmtNet(netSentiment(demoInsights.globalTotals))).toBe('+0.32');
+        expect(fmtCount(demoInsights.globalTotals.total)).toBe('7,816');
+        expect(fmtNet(netSentiment(demoInsights.globalTotals))).toBe('+0.10');
     });
 
     test('volume stats are the top-three city/volume pairs', () => {
         const r = resolveChapter(beat('volume'), demoInsights, demoCities);
         expect(r.stats).toEqual([
-            ['New York', '400/hr'],
-            ['Beijing', '330/hr'],
-            ['Tokyo', '292/hr'],
+            ['New York', '409/hr'],
+            ['Singapore', '370/hr'],
+            ['Amsterdam', '364/hr'],
         ]);
     });
 
@@ -200,9 +201,10 @@ describe('resolveChapter() over DEMO_DATA', () => {
 
     test('overview and summary interpolate the DERIVED category count — no hardcoded editorial claims', () => {
         // The payload cannot support "50 sources" / "7 categories" claims;
-        // the count must come from ribbonRows (5 categories in DEMO_DATA).
+        // the count must come from ribbonRows (6 categories in the generated
+        // registry demo set).
         const catCount = insightsMod.ribbonRows(demoCities).length;
-        expect(catCount).toBe(5); // fixture sanity — demo is NOT 7 categories
+        expect(catCount).toBe(6); // fixture sanity — demo is NOT 7 categories
 
         const overview = resolveChapter(beat('overview'), demoInsights, demoCities);
         expect(overview.cardBody).not.toContain('50 sources');

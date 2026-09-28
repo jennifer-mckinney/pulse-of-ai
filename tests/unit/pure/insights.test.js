@@ -80,6 +80,16 @@ describe('computeInsights() — global totals', () => {
         });
     });
 
+    test('cityCount counts cities REPORTING (total > 0), not zero-baseline rows', () => {
+        // The live globe renders a zero-count baseline row for every launch
+        // city (registry merge in data.js) — those are not "reporting".
+        const rows = rawFixture();
+        rows.push({ city: 'Quiet City', lat: 5, lng: 5,
+            positive: 0, neutral: 0, negative: 0, total: 0, sources: [] });
+        const out = computeInsights(data.normalizeCities(rows));
+        expect(out.cityCount).toBe(4);
+    });
+
     test('computes global shares from the totals', () => {
         const out = fixtureInsights();
         expect(out.globalShares.positive).toBeCloseTo(204 / 404, 10);
