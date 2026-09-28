@@ -181,7 +181,9 @@ describe('story.config — STORY beat sequence', () => {
         expect(byId['drivers'].title).toBe('Who’s driving the conversation?');
         expect(byId['themes-warm'].title).toBe('What the world is excited about.');
         expect(byId['themes-cold'].title).toBe('What the world is worried about.');
-        expect(byId['messengers'].title).toBe('Don’t shoot the messenger — score them.');
+        // ZIP-revision title (audit G15): the handoff's later pass shortened
+        // the original "— score them." suffix.
+        expect(byId['messengers'].title).toBe('Don’t shoot the messenger.');
         expect(byId['summary'].title).toBe('The hour, on one card.');
         expect(byId['explore'].title).toBe('Now you drive.');
     });

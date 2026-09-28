@@ -171,11 +171,22 @@
     function normalizeCities(raw) {
         if (!Array.isArray(raw)) return [];
         const out = [];
+        // Loud-drop accounting (backend-flagged): rows with unusable
+        // coordinates are still dropped (they cannot be plotted), but the
+        // drop is no longer SILENT — cities missing from the CITY_COORDS
+        // registry (audit G26) used to just vanish from the globe with no
+        // trace. The console.warn below names every dropped city so the
+        // registry hole is visible in the devtools the moment it happens.
+        const dropped = [];
         for (const row of raw) {
             if (!row || typeof row !== 'object') continue;
             const lat = toCoord(row.lat, 90);
             const lng = toCoord(row.lng, 180);
-            if (lat === null || lng === null) continue;
+            if (lat === null || lng === null) {
+                dropped.push(typeof row.city === 'string' && row.city !== ''
+                    ? row.city : '<unnamed row>');
+                continue;
+            }
 
             const positive = toCount(row.positive);
             const neutral  = toCount(row.neutral);
@@ -197,6 +208,14 @@
                 sources: normalizeSources(row.sources),
                 last_updated: row.last_updated,
             });
+        }
+        if (dropped.length > 0 && typeof console !== 'undefined'
+            && typeof console.warn === 'function') {
+            console.warn(
+                '[pulse] normalizeCities: dropped ' + dropped.length
+                + ' row(s) with unusable coordinates (missing from the city'
+                + ' registry? — see src/routes/posts.js CITY_COORDS): '
+                + dropped.join(', '));
         }
         return out;
     }

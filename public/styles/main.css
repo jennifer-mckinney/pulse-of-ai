@@ -76,6 +76,11 @@ body {
   overflow-x: hidden;
 }
 .mono { font-family: "IBM Plex Mono", monospace; }
+/* The JS modules toggle visibility via the `hidden` attribute; without this
+   rule any element that also carries a display: flex/grid class (card-col,
+   explore, strip, legend, …) would override the UA's [hidden] style and
+   stay visible. */
+[hidden] { display: none !important; }
 ::selection { background: rgba(59,220,178,0.3); }
 
 /* scroll spacer — main.js sets the exact height from the beat count:

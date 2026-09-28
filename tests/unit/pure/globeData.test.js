@@ -13,6 +13,17 @@
 
 const data = require('../../../public/js/data');
 
+// normalizeCities warns loudly when it drops rows (see the loud-drop
+// contract below); silence the noise for every test while still recording
+// the calls so the contract tests can assert on them.
+let warnSpy;
+beforeEach(() => {
+    warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+});
+afterEach(() => {
+    warnSpy.mockRestore();
+});
+
 // A fully valid raw row used as the baseline in several tests.
 function validRow(overrides = {}) {
     return Object.assign({
@@ -110,6 +121,34 @@ describe('normalizeCities() — bad coordinates are dropped', () => {
         ];
         const out = data.normalizeCities(rows);
         expect(out.map(c => c.city)).toEqual(['Good A', 'Good B']);
+    });
+});
+
+describe('normalizeCities() — loud-drop contract (backend-flagged)', () => {
+    test('warns once, naming every dropped city and the count', () => {
+        data.normalizeCities([
+            validRow({ city: 'Good A' }),
+            validRow({ city: 'Mexico City', lat: null, lng: null }),
+            validRow({ city: 'Brussels', lat: 999 }),
+        ]);
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        const msg = warnSpy.mock.calls[0][0];
+        expect(msg).toContain('dropped 2 row(s)');
+        expect(msg).toContain('Mexico City');
+        expect(msg).toContain('Brussels');
+        expect(msg).not.toContain('Good A');
+    });
+
+    test('labels rows without a usable city name', () => {
+        data.normalizeCities([validRow({ city: undefined, lat: null })]);
+        expect(warnSpy).toHaveBeenCalledTimes(1);
+        expect(warnSpy.mock.calls[0][0]).toContain('<unnamed row>');
+    });
+
+    test('stays silent when nothing is dropped', () => {
+        data.normalizeCities([validRow()]);
+        data.normalizeCities([]);
+        expect(warnSpy).not.toHaveBeenCalled();
     });
 });
 
