@@ -9,6 +9,9 @@
 //
 // Returns:
 //   200 { results: [...], total: number, query: { platform, location, from, to, limit } }
+//     total = the number of rows MATCHING the filters (COUNT(*) OVER() in
+//     the query), not the page size — results.length can be smaller when
+//     limit truncates. Callers page honestly against total.
 //   400 on validation errors (limit > 100, invalid dates, non-string location)
 
 'use strict';
@@ -126,8 +129,12 @@ router.post('/query', async (req, res) => {
         // post — saveRelevance is idempotent) and is null for posts that were
         // never relevance-scored. positive_words / negative_words are the
         // stored sentiment cue words (city drill-down cue phrases, gap G21).
-        const results = await dbAll(
+        // full_count: COUNT(*) OVER() = total rows matching the filters,
+        // window-computed on every returned row (stripped before serving) —
+        // so `total` is the true match count, not the truncated page size.
+        const rows = await dbAll(
             `SELECT
+                COUNT(*) OVER()::int    AS full_count,
                 rp.id,
                 LEFT(rp.content, 120)   AS content_snippet,
                 sr.indicator,
@@ -150,9 +157,12 @@ router.post('/query', async (req, res) => {
             params,
         );
 
+        const total = rows.length > 0 ? rows[0].full_count : 0;
+        const results = rows.map(({ full_count, ...row }) => row);
+
         return res.json({
             results,
-            total: results.length,
+            total,
             query: {
                 platform: platform ?? null,
                 location: location ?? null,

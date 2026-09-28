@@ -1026,10 +1026,16 @@
 
         // setState: shallow-merge a prop subset; `cities` is adapted once
         // here so the render loop never re-derives shapes per frame.
+        // Unknown keys warn loudly (a typo'd prop name must not fail
+        // silently) and are ignored.
         function setState(partial) {
             if (!partial || typeof partial !== 'object') return;
             for (const key of Object.keys(partial)) {
-                if (!Object.prototype.hasOwnProperty.call(p, key)) continue;
+                if (!Object.prototype.hasOwnProperty.call(p, key)) {
+                    console.warn('[pulse] PulseGlobe.setState: unknown prop "'
+                        + key + '" ignored');
+                    continue;
+                }
                 p[key] = key === 'cities' ? adaptCities(partial.cities) : partial[key];
             }
             if ('interactive' in partial) applyInteractive();

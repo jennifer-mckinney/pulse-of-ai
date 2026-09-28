@@ -2,8 +2,9 @@
 // scripts/seed.js
 // Seeds the database with:
 //   1. All 50 data_sources (7 categories) — config includes poll_interval_sec, URL/subreddit
-//   2. Initial methodology_versions: sentiment, relevance, discourse, bias,
-//      ingest, and audit_narration (all v1.0.0; discourse is v1.0.0-DQI)
+//   2. Methodology_versions: sentiment 1.0.0, relevance 1.0.0, discourse
+//      1.0.0-DQI, bias 1.1.0 (presentation-config bump — see the entry's
+//      comment), ingest 1.0.0, audit_narration (latest version below)
 // Safe to re-run: uses INSERT ... ON CONFLICT DO NOTHING
 
 'use strict';

@@ -72,6 +72,7 @@
     const ENDPOINTS = apiConfig.ENDPOINTS;
     const CITY_POSTS_LIMIT = apiConfig.CITY_POSTS_LIMIT;
     const TIMESERIES_HOURS = apiConfig.TIMESERIES_HOURS;
+    const REFRESH_MS = apiConfig.REFRESH_MS;
     const minutesAgoFrom = storyMod.pure.minutesAgoFrom;
 
     // Sentiment palette in the prototype's [neg, neu, pos] array form.
@@ -1863,12 +1864,24 @@
         state.cities = Array.isArray(cities) ? cities : [];
         state.isDemo = !!isDemo;
         if (state.selectedId && !findCity(state.selectedId)) {
-            state.selectedId = null;
-            renderDetail(null);
+            // Selected city vanished from the snapshot: route the cleanup
+            // through selectCity(null) (grumpy #7) so the globe selection /
+            // focus / zoom and the story's next-steps handshake reset too —
+            // not just the local panel.
+            selectCity(null);
         }
         if (state.exploring) {
             renderExplorePanel();
-            renderRibbon();
+            // Ribbon data ages with the snapshot: re-fetch the timeseries on
+            // the same cadence as the snapshot poll (grumpy #6 — the
+            // timeseriesAt stamp gates it so a mid-window pulse:data, e.g.
+            // entering explore right after a poll, never double-fetches).
+            if (!state.isDemo
+                && Date.now() - state.timeseriesAt >= REFRESH_MS) {
+                loadTimeseries();   // renders the ribbon when it settles
+            } else {
+                renderRibbon();
+            }
             if (state.selectedId) renderDetail(findCity(state.selectedId));
         }
     }

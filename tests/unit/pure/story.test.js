@@ -408,6 +408,29 @@ describe('themeNet — /api/themes row net-sentiment ladder', () => {
     });
 });
 
+describe('snapshotsEqual — quiet-poll gate for globe city pushes (grumpy #9)', () => {
+    const row = () => ({ city: 'A', lat: 1, lng: 2, positive: 3, neutral: 2,
+        negative: 1, total: 6, sources: [] });
+
+    test('identical content (different identity) is equal', () => {
+        expect(pure.snapshotsEqual([row()], [row()])).toBe(true);
+        expect(pure.snapshotsEqual([], [])).toBe(true);
+    });
+
+    test('same identity is trivially equal', () => {
+        const a = [row()];
+        expect(pure.snapshotsEqual(a, a)).toBe(true);
+    });
+
+    test('any changed field, length, or non-array input is unequal', () => {
+        const changed = row();
+        changed.positive = 4;
+        expect(pure.snapshotsEqual([row()], [changed])).toBe(false);
+        expect(pure.snapshotsEqual([row()], [row(), row()])).toBe(false);
+        expect(pure.snapshotsEqual(null, [])).toBe(false);
+    });
+});
+
 describe('extraSlugs — shared canon-plus-extras enumeration (grumpy #4)', () => {
     const cityWith = (cat) => ({
         city: 'X', lat: 1, lng: 1, positive: 5, neutral: 3, negative: 2,

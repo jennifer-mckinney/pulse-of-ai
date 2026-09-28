@@ -332,6 +332,28 @@
     // of silently disappearing. Served rows for registry cities replace the
     // baseline row (matched via findCity: case-insensitive + aliases);
     // served rows for non-registry locations are appended unchanged.
+    //
+    // Alias collisions: when a SECOND served row resolves to a registry id
+    // another row already claimed (e.g. 'New York' and 'NYC' both served),
+    // its counts are SUMMED into the claimed row and the collision is
+    // console.warn'd (the loud-drop pattern) — the old behavior appended it
+    // as a duplicate marker at the same coordinates.
+    function combineAliasRows(prev, row) {
+        return Object.assign({}, prev, {
+            positive: (Number(prev.positive) || 0) + (Number(row.positive) || 0),
+            neutral:  (Number(prev.neutral)  || 0) + (Number(row.neutral)  || 0),
+            negative: (Number(prev.negative) || 0) + (Number(row.negative) || 0),
+            // total/dominant/shares are recomputed by normalizeCities from
+            // the summed counts — the served values are advisory anyway.
+            total: (Number(prev.total) || 0) + (Number(row.total) || 0),
+            sources: (Array.isArray(prev.sources) ? prev.sources : [])
+                .concat(Array.isArray(row.sources) ? row.sources : []),
+            last_updated: (Date.parse(row.last_updated) || 0)
+                > (Date.parse(prev.last_updated) || 0)
+                ? row.last_updated : prev.last_updated,
+        });
+    }
+
     function mergeWithBaseline(rows) {
         const list = Array.isArray(rows) ? rows : [];
         const byId = new Map();   // registry id → served row
@@ -339,10 +361,21 @@
         for (const row of list) {
             const entry = row && typeof row === 'object'
                 ? findCity(row.city) : null;
-            if (entry && !byId.has(entry.id)) {
+            if (!entry) {
+                extras.push(row);
+            } else if (!byId.has(entry.id)) {
                 byId.set(entry.id, row);
             } else {
-                extras.push(row);
+                const prev = byId.get(entry.id);
+                if (typeof console !== 'undefined'
+                    && typeof console.warn === 'function') {
+                    console.warn('[pulse] mergeWithBaseline: served rows "'
+                        + prev.city + '" and "' + row.city
+                        + '" both resolve to registry city "' + entry.name
+                        + '" — summing their counts (upstream should '
+                        + 'normalize location names before aggregation).');
+                }
+                byId.set(entry.id, combineAliasRows(prev, row));
             }
         }
         const merged = LAUNCH_CITIES.map((entry) => byId.get(entry.id) || {

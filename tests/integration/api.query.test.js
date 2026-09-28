@@ -62,6 +62,10 @@ describe('POST /api/query', () => {
 
         const res = await request(app).post('/api/query').send({ limit: 2 });
         expect(res.body.results).toHaveLength(2);
+        // total is the TRUE match count (COUNT(*) OVER()), not the page size.
+        expect(res.body.total).toBe(5);
+        // The window-count helper column never leaks into the response rows.
+        expect(res.body.results[0]).not.toHaveProperty('full_count');
     });
 
     it('returns 400 when limit exceeds 100', async () => {

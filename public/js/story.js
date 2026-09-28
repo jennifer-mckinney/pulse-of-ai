@@ -300,6 +300,20 @@
         return out;
     }
 
+    // snapshotsEqual: deep equality over two normalized city snapshots
+    // (grumpy #9). Snapshots are small (≤ ~50 plain-JSON rows) and compared
+    // once per 150s poll, so JSON serialization is the simplest correct
+    // check. An unchanged snapshot keeps its array identity, so the globe
+    // never re-adapts cities / re-memoizes the land-heat assignment for a
+    // poll that changed nothing.
+    function snapshotsEqual(a, b) {
+        if (a === b) return true;
+        if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) {
+            return false;
+        }
+        return JSON.stringify(a) === JSON.stringify(b);
+    }
+
     // extraSlugs: the NON-canonical category slugs present in a snapshot,
     // deduped, in allCategoryRows order. THE shared helper behind every
     // canon-plus-extras enumeration surface (grumpy #4): the CH05 legend
@@ -348,6 +362,7 @@
         // kept on the story pure surface for its existing consumers/tests.
         themeNet,
         extraSlugs,
+        snapshotsEqual,
     };
 
     // ═══ DOM orchestration (browser only — everything below needs a page) ═══
@@ -359,6 +374,7 @@
         activeIndex: -1,     // last beat applied to the globe (−1 = none yet)
         cities: [],
         isDemo: false,
+        citiesDirty: false,  // snapshot changed since the globe last got it (#9)
         resolved: [],        // resolveChapter output per beat
         themes: [],          // raw /api/themes rows
         themeHighlights: { 'themes-warm': [], 'themes-cold': [] },
@@ -736,13 +752,22 @@
 
     // ── Globe state per beat ────────────────────────────────────────────────
 
+    // citiesPartial: {cities} ONLY when the snapshot changed since the last
+    // push (grumpy #9) — every globe.setState({cities}) re-adapts the rows
+    // and invalidates the land-heat memo, so an unchanged snapshot must not
+    // be re-sent on every beat change.
+    function citiesPartial() {
+        if (!state.citiesDirty) return {};
+        state.citiesDirty = false;
+        return { cities: state.cities };
+    }
+
     function applyBeatToGlobe(index) {
         if (!globe) return;
         const resolved = state.resolved[index];
         const beat = STORY[index];
         if (!resolved || !beat) return;
-        globe.setState({
-            cities: state.cities,
+        globe.setState(Object.assign(citiesPartial(), {
             palette: PALETTE,
             colorMode: resolved.colorMode,
             barMetric: barMetricFor(resolved.barMetric, maxVolumeOf(state.cities)),
@@ -754,14 +779,13 @@
             dimTest: null,
             interactive: false,
             labels: false,
-        });
+        }));
     }
 
     function enterExplore() {
         if (globe) {
             const exploreBeat = state.resolved[N - 1];
-            globe.setState({
-                cities: state.cities,
+            globe.setState(Object.assign(citiesPartial(), {
                 palette: PALETTE,
                 colorMode: 'sentiment',
                 barMetric: barMetricFor('volume', maxVolumeOf(state.cities)),
@@ -774,7 +798,7 @@
                 dimTest: null,
                 interactive: true,
                 labels: true,
-            });
+            }));
         }
         if (els.explore) els.explore.hidden = false;
         if (els.strip) els.strip.hidden = false;
@@ -868,22 +892,35 @@
         state.loading = true;
         return dataMod.loadCityData()
             .then(({ cities, isDemo }) => {
-                state.cities = cities;
+                // Snapshot-change gate (grumpy #9): an unchanged poll keeps
+                // the OLD array identity and never re-sends cities to the
+                // globe (citiesDirty stays false), so the land-heat memo and
+                // adapted rows survive quiet polls. Cards / cadence-driven
+                // consumers still refresh below.
+                const changed = state.isDemo !== isDemo
+                    || !snapshotsEqual(state.cities, cities);
+                if (changed) {
+                    state.cities = cities;
+                    state.citiesDirty = true;
+                }
                 state.isDemo = isDemo;
-                const insights = computeInsights(cities);
+                const insights = computeInsights(state.cities);
                 state.resolved = STORY.map(
-                    (beat) => resolveChapter(beat, insights, cities, { isDemo }));
+                    (beat) => resolveChapter(beat, insights, state.cities,
+                        { isDemo }));
                 rebuildCards();
                 state.legendMode = null;   // category list may have changed
                 state.activeIndex = -1;    // force globe re-apply on new data
-                if (state.exploring && globe) {
+                if (state.exploring && globe && state.citiesDirty) {
                     // Refresh the interactive globe's data without yanking
                     // the camera away from the user.
-                    globe.setState({ cities: state.cities });
+                    globe.setState(citiesPartial());
                 }
                 apply();
                 // C4 hand-off: ui.js re-renders its explore chrome from the
-                // fresh snapshot (list, detail, ribbon) on every (re)load.
+                // (possibly identical) snapshot on every (re)load — the
+                // event also drives its timeseries refresh cadence, so it
+                // fires even when nothing changed.
                 dispatch('pulse:data', {
                     cities: state.cities,
                     isDemo: state.isDemo,

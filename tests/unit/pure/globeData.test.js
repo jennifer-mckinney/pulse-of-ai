@@ -351,6 +351,36 @@ describe('mergeWithBaseline() — zero-count launch-city baseline', () => {
         expect(merged[30].city).toBe('Atlantis');
     });
 
+    test('a second alias row for a claimed registry city SUMS in with a loud warn (grumpy #8)', () => {
+        const nyRow = { city: 'New York', lat: 40.7128, lng: -74.006,
+            positive: 3, neutral: 1, negative: 0, total: 4,
+            last_updated: '2026-09-28T10:00:00Z',
+            sources: [{ source_name: 'a', source_category: 'social',
+                positive: 3, neutral: 1, negative: 0, total: 4 }] };
+        const aliasRow = { city: 'NYC', lat: 40.7128, lng: -74.006,
+            positive: 2, neutral: 0, negative: 1, total: 3,
+            last_updated: '2026-09-28T11:00:00Z',
+            sources: [{ source_name: 'b', source_category: 'news',
+                positive: 2, neutral: 0, negative: 1, total: 3 }] };
+        const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            const merged = data.mergeWithBaseline([nyRow, aliasRow]);
+            expect(merged).toHaveLength(30);                    // no duplicate marker
+            expect(merged.some(c => c.city === 'NYC')).toBe(false);
+            const ny = merged.find(c => c.city === 'New York');
+            expect(ny.positive).toBe(5);
+            expect(ny.neutral).toBe(1);
+            expect(ny.negative).toBe(1);
+            expect(ny.total).toBe(7);
+            expect(ny.sources).toHaveLength(2);                 // both source rows kept
+            expect(ny.last_updated).toBe('2026-09-28T11:00:00Z'); // newer wins
+            expect(warn).toHaveBeenCalledTimes(1);
+            expect(warn.mock.calls[0][0]).toContain('both resolve to registry city');
+        } finally {
+            warn.mockRestore();
+        }
+    });
+
     test('tier-2 registry rows (e.g. Seattle) ride along after the launch set', () => {
         const served = { city: 'Seattle', lat: 47.6062, lng: -122.3321,
             positive: 2, neutral: 1, negative: 0, total: 3, sources: [] };
