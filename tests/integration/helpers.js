@@ -76,7 +76,7 @@ async function insertBiasMethodology() {
         negative_dominance_max:     0.60,
         layer_names: {
             location_concentration:    'Location concentration',
-            platform_sentiment_parity: 'Demographic parity (source category)',
+            platform_sentiment_parity: 'Demographic parity',
             negative_dominance:        'Negative dominance',
         },
         citations: {
@@ -88,11 +88,18 @@ async function insertBiasMethodology() {
             { id: 'equalized_odds',          name: 'Equalized odds',          citation: 'Hardt et al. (2016)',  note: 'Phase 3 — not yet enforced' },
             { id: 'counterfactual_fairness', name: 'Counterfactual fairness', citation: 'Kusner et al. (2017)', note: 'Phase 3 — not yet enforced' },
         ],
+        // Presentation order — prototype's three named layers first, extra
+        // real checks after (mirrors scripts/seed.js bias@1.1.0)
+        layer_order: [
+            'platform_sentiment_parity',
+            'equalized_odds',
+            'counterfactual_fairness',
+        ],
         legal_basis: 'EU AI Act Article 13 - Transparency and provision of information',
     };
     const row = await dbRun(
         `INSERT INTO methodology_versions (component, version, model_name, config, justification)
-         VALUES ('bias', '1.0.0', 'pulse-bias-monitor-v1', $1::jsonb, 'Automated post-job fairness checks.')
+         VALUES ('bias', '1.1.0', 'pulse-bias-monitor-v1', $1::jsonb, 'Automated post-job fairness checks.')
          ON CONFLICT (component, version) DO UPDATE SET config = EXCLUDED.config
          RETURNING id`,
         [JSON.stringify(config)],

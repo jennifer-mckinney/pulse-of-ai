@@ -112,6 +112,30 @@ function buildLayers(assessments, biasConfig) {
         });
     }
 
+    // Presentation order from the versioned config (layer_order): the
+    // prototype's three literature-named fairness layers lead — Demographic
+    // parity, Equalized odds, Counterfactual fairness — and every
+    // additional real check follows as an extra row in its original
+    // (assessment) order. Stable sort: unordered layers keep their relative
+    // order after the ordered ones. No layer_order in the config → the
+    // assembled order stands (graceful degradation like every other
+    // config-driven field here).
+    const order = (biasConfig && Array.isArray(biasConfig.layer_order))
+        ? biasConfig.layer_order
+        : [];
+    if (order.length > 0) {
+        const rank = new Map(order.map((id, i) => [id, i]));
+        return layers
+            .map((layer, i) => ({
+                layer,
+                key: rank.has(layer.assessment_type)
+                    ? rank.get(layer.assessment_type)
+                    : order.length + i,
+            }))
+            .sort((a, b) => a.key - b.key)
+            .map(entry => entry.layer);
+    }
+
     return layers;
 }
 

@@ -12,10 +12,15 @@ const {
     buildLayers,
 } = require('../../../src/config/bias-vocabulary');
 
+// Mirrors the seeded bias@1.1.0 shape (scripts/seed.js): the prototype's
+// three literature-named layers — the computed platform_sentiment_parity IS
+// demographic parity (outcome gap across source categories) and carries the
+// prototype's exact name; equalized odds / counterfactual fairness are
+// planned n-a; layer_order presents the named three first.
 const BIAS_CONFIG = {
     layer_names: {
         location_concentration:    'Location concentration',
-        platform_sentiment_parity: 'Demographic parity (source category)',
+        platform_sentiment_parity: 'Demographic parity',
     },
     citations: {
         location_concentration:    'Suresh & Guttag (2021)',
@@ -23,6 +28,12 @@ const BIAS_CONFIG = {
     },
     planned_layers: [
         { id: 'equalized_odds', name: 'Equalized odds', citation: 'Hardt et al. (2016)', note: 'Phase 3 — not yet enforced' },
+        { id: 'counterfactual_fairness', name: 'Counterfactual fairness', citation: 'Kusner et al. (2017)', note: 'Phase 3 — not yet enforced' },
+    ],
+    layer_order: [
+        'platform_sentiment_parity',
+        'equalized_odds',
+        'counterfactual_fairness',
     ],
 };
 
@@ -41,7 +52,7 @@ describe('severityLabel — stored → alert|watch|pass vocabulary', () => {
 describe('layerName / citationFor — versioned-config lookups', () => {
     it('reads display names and citations from the bias methodology config', () => {
         expect(layerName('platform_sentiment_parity', BIAS_CONFIG))
-            .toBe('Demographic parity (source category)');
+            .toBe('Demographic parity');
         expect(citationFor('location_concentration', BIAS_CONFIG))
             .toBe('Suresh & Guttag (2021)');
     });
@@ -137,7 +148,43 @@ describe('buildLayers — per-job fairness layers for the audit receipt', () => 
     it('returns only planned layers (or []) when nothing was assessed', () => {
         expect(buildLayers([], null)).toEqual([]);
         const layers = buildLayers([], BIAS_CONFIG);
-        expect(layers).toHaveLength(1);
-        expect(layers[0].status).toBe('n-a');
+        expect(layers).toHaveLength(2);
+        expect(layers.every(l => l.status === 'n-a')).toBe(true);
+    });
+
+    it('presents the prototype\'s three named layers first (layer_order), extra real checks after', () => {
+        // Assessment order is location → parity → negative dominance (the
+        // pipeline's run order); the receipt must lead with Demographic
+        // parity / Equalized odds / Counterfactual fairness and keep the
+        // additional real checks after, in their original relative order.
+        const layers = buildLayers([
+            { assessment_type: 'location_concentration',    metric_value: 0.2,   threshold: 0.35, is_violation: false, severity: null },
+            { assessment_type: 'platform_sentiment_parity', metric_value: 0.031, threshold: 0.30, is_violation: false, severity: null },
+            { assessment_type: 'negative_dominance',        metric_value: 0.4,   threshold: 0.60, is_violation: false, severity: null },
+        ], BIAS_CONFIG);
+        expect(layers.map(l => l.name)).toEqual([
+            'Demographic parity',
+            'Equalized odds',
+            'Counterfactual fairness',
+            'Location concentration',
+            'Negative dominance',
+        ]);
+        // The demographic-parity row carries REAL value + τ (semantically
+        // equivalent computed check); the two planned rows are honest n-a.
+        expect(layers[0]).toMatchObject({
+            value: 0.031, threshold: 0.30,
+            citation: 'Barocas & Selbst (2016)', status: 'pass',
+        });
+        expect(layers[1].status).toBe('n-a');
+        expect(layers[2].status).toBe('n-a');
+        expect(layers[1].value).toBeNull();
+        expect(layers[2].value).toBeNull();
+    });
+
+    it('keeps assembled order when the config declares no layer_order', () => {
+        const layers = buildLayers([
+            { assessment_type: 'negative_dominance', metric_value: 0.4, threshold: 0.6, is_violation: false, severity: null },
+        ], null);
+        expect(layers.map(l => l.assessment_type)).toEqual(['negative_dominance']);
     });
 });

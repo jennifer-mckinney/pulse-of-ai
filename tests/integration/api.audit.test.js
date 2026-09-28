@@ -214,7 +214,7 @@ describe('GET /api/audit/:post_id', () => {
             expect(res.body.bias.assessed_at).toEqual(expect.any(String));
             // Versioned bias-monitor identity for the drawer's model pill
             expect(res.body.bias.model_name).toBe('pulse-bias-monitor-v1');
-            expect(res.body.bias.version).toBe('1.0.0');
+            expect(res.body.bias.version).toBe('1.1.0');
 
             const loc = res.body.bias.layers.find(l => l.assessment_type === 'location_concentration');
             expect(loc).toMatchObject({
@@ -228,10 +228,22 @@ describe('GET /api/audit/:post_id', () => {
 
             const parity = res.body.bias.layers.find(l => l.assessment_type === 'platform_sentiment_parity');
             expect(parity).toMatchObject({
-                name:     'Demographic parity (source category)',
+                name:     'Demographic parity',   // prototype's exact layer name
+                value:    0.031,                   // REAL computed value + τ
+                threshold: 0.30,
                 citation: 'Barocas & Selbst (2016)',
                 status:   'pass',
             });
+
+            // Prototype presentation order: the three literature-named
+            // layers lead (Demographic parity real, Equalized odds /
+            // Counterfactual fairness honest n-a), extra real checks after.
+            expect(res.body.bias.layers.map(l => l.name)).toEqual([
+                'Demographic parity',
+                'Equalized odds',
+                'Counterfactual fairness',
+                'Location concentration',
+            ]);
         });
 
         it('includes planned-but-not-enforced layers as n-a (honest coverage)', async () => {

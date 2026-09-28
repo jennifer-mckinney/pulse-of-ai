@@ -161,7 +161,7 @@ describe('GET /api/bias/history', () => {
         const ok = res.body.alerts.find(a => a.assessment_type === 'platform_sentiment_parity');
         expect(ok).toMatchObject({
             severity: 'pass',
-            layer:    'Demographic parity (source category)',
+            layer:    'Demographic parity',   // prototype's exact layer name
             citation: 'Barocas & Selbst (2016)',
         });
     });

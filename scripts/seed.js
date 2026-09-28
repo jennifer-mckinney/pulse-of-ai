@@ -484,17 +484,26 @@ const METHODOLOGY_VERSIONS = [
     },
     {
         component: 'bias',
-        version: '1.0.0',
+        // 1.1.0: presentation config change (prototype layer naming +
+        // layer_order) — versioned methodology convention: config changes
+        // ship as a NEW version row, never an in-place mutation, so already-
+        // seeded databases pick up the change on re-seed (latest
+        // effective_from wins) and old receipts stay reproducible.
+        version: '1.1.0',
         model_name: 'pulse-bias-monitor-v1',
         config: {
             // Thresholds read by src/pipeline/bias.js (DB-driven, no code deploy to change)
             location_concentration_max: 0.35,
             platform_parity_max_diff:   0.30,
             negative_dominance_max:     0.60,
-            // Frontend display names for stored assessment_type values
+            // Frontend display names for stored assessment_type values.
+            // platform_sentiment_parity IS the demographic-parity check
+            // (outcome-rate gap across source categories — Barocas & Selbst
+            // 2016), so it carries the prototype's exact layer name and
+            // serves REAL value + τ under it.
             layer_names: {
                 location_concentration:    'Location concentration',
-                platform_sentiment_parity: 'Demographic parity (source category)',
+                platform_sentiment_parity: 'Demographic parity',
                 negative_dominance:        'Negative dominance',
             },
             // Literature/spec citations rendered next to each layer (audit
@@ -505,14 +514,24 @@ const METHODOLOGY_VERSIONS = [
                 negative_dominance:        'Suresh & Guttag (2021)',
             },
             // Declared-but-not-yet-computed layers: surfaced as N/A on the
-            // audit receipt so coverage claims stay honest
+            // audit receipt so coverage claims stay honest (never fabricated
+            // values — the prototype's own layer-3 pattern)
             planned_layers: [
                 { id: 'equalized_odds',          name: 'Equalized odds',          citation: 'Hardt et al. (2016)',  note: 'Phase 3 — not yet enforced' },
                 { id: 'counterfactual_fairness', name: 'Counterfactual fairness', citation: 'Kusner et al. (2017)', note: 'Phase 3 — not yet enforced' },
             ],
+            // Presentation order (audit drawer): the prototype's three named
+            // layers first — Demographic parity, Equalized odds,
+            // Counterfactual fairness — then every additional real check
+            // (location concentration, negative dominance) as extra rows.
+            layer_order: [
+                'platform_sentiment_parity',
+                'equalized_odds',
+                'counterfactual_fairness',
+            ],
             legal_basis: 'EU AI Act Article 13 - Transparency and provision of information',
         },
-        justification: 'Three fairness checks run automatically after every processing job: location concentration (representation bias — Suresh & Guttag 2021), platform sentiment parity (demographic-parity-style outcome gap across source categories — Barocas & Selbst 2016), and negative dominance (selection bias toward controversy). Thresholds live in this config so they are auditable, versioned, and adjustable without a code change (AI Act §13). Equalized odds and counterfactual fairness are declared planned layers and reported as not-yet-enforced rather than omitted.',
+        justification: 'Three fairness checks run automatically after every processing job: platform sentiment parity (the demographic-parity outcome gap across source categories — Barocas & Selbst 2016), location concentration (representation bias — Suresh & Guttag 2021), and negative dominance (selection bias toward controversy). Thresholds live in this config so they are auditable, versioned, and adjustable without a code change (AI Act §13). Equalized odds and counterfactual fairness are declared planned layers and reported as not-yet-enforced rather than omitted; the receipt presents the three literature-named fairness layers first, then the additional checks.',
     },
     {
         component: 'ingest',
