@@ -15,6 +15,10 @@ const { defineConfig } = require('@playwright/test');
 
 module.exports = defineConfig({
     testDir: 'tests/e2e',
+
+    // Re-freshen dev-seed collected_at before every run so the suite never
+    // decays out of the trailing-hour window (see tests/e2e/global-setup.js).
+    globalSetup: require.resolve('./tests/e2e/global-setup.js'),
     timeout: 90000,
     expect: { timeout: 10000 },
 

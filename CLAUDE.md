@@ -7,6 +7,8 @@ npm run migrate        # Run pending SQL migrations against dev DB
 npm run dev            # Express server on port 3000
 ```
 
+- **Compose project name is `pulse-of-ai`** — pinned by `name:` in `docker-compose.yml` AND `COMPOSE_PROJECT_NAME` in `.env`, so every worktree/checkout owns the SAME containers and volumes. Never start the stack with an ad-hoc `-p` project name: that strands the DB data in project-scoped volumes a later run can't adopt.
+
 ## Key Commands
 | Command | Purpose |
 |---|---|
