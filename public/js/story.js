@@ -24,6 +24,10 @@
 //         fired by the featured-post "Why does it say that? →" button when
 //         window.PulseUI.openAudit is absent; when present it is called
 //         directly with the same post row instead.
+//   - CustomEvent 'pulse:data'               detail {cities, isDemo}
+//         fired after every successful snapshot (re)load, so ui.js can
+//         re-render the explore list / detail / ribbon from fresh data.
+//   - PulseStory.getCities() → the current normalized city snapshot (copy)
 //   - PulseStory.consumePendingCity() → cityId|null (clears it)
 //   - PulseStory.setExploreSelection(cityId|null) — ui.js reports its city
 //         selection so the next-steps card hides while a city is open
@@ -860,6 +864,12 @@
                     globe.setState({ cities: state.cities });
                 }
                 apply();
+                // C4 hand-off: ui.js re-renders its explore chrome from the
+                // fresh snapshot (list, detail, ribbon) on every (re)load.
+                dispatch('pulse:data', {
+                    cities: state.cities,
+                    isDemo: state.isDemo,
+                });
                 return Promise.all([loadThemes(), loadFeaturedPosts()]);
             })
             .catch((err) => {
@@ -935,6 +945,13 @@
         };
     }
 
+    // getCities: the current normalized city snapshot (copy — callers must
+    // not mutate the shared rows). ui.js pulls this at init in case it
+    // missed the pulse:data event.
+    function getCities() {
+        return state.cities.slice();
+    }
+
     // consumePendingCity: the drill-chip selection, delivered exactly once.
     function consumePendingCity() {
         const id = state.pendingCityId;
@@ -953,6 +970,7 @@
         pure,
         init,
         getState,
+        getCities,
         consumePendingCity,
         setExploreSelection,
     };
