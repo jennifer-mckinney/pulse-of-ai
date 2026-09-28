@@ -73,8 +73,18 @@ test('explore: threshold, partitioned filters, sort, detail panel, close', async
     // Back to All.
     await seg.locator('.seg-btn', { hasText: 'All' }).click();
 
-    // ── Category chips: pick the first real category chip; every listed
-    // city's dominant category must match.
+    // ── Category chips: All + the FULL canonical taxonomy (8), in registry
+    // order with the prototype's exact display labels — quiet categories
+    // (forums on the live seed) never vanish from the chips.
+    const chipTexts = (await page.locator('#exp-filters .chips .chip').allInnerTexts())
+        .map((t) => t.trim());
+    expect(chipTexts).toEqual([
+        'All', 'Social', 'News', 'Academic', 'Policy',
+        'Non-profit', 'Developer', 'Forums', 'Blogs',
+    ]);
+
+    // Pick the first real category chip; every listed city's dominant
+    // category must match.
     const chip = page.locator('#exp-filters .chips .chip').nth(1);
     const chipLabel = (await chip.innerText()).trim();
     await chip.click();

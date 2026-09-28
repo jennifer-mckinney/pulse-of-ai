@@ -68,14 +68,27 @@ test('audit drawer: audiences, bias layers, timer freeze, close restores view', 
     const researcherText = await drawer.locator('.steps').innerText();
     expect(researcherText).not.toBe(publicText);
 
-    // Bias fairness layers: PASS and N-A rows, τ thresholds on computed rows.
+    // Bias fairness layers: the prototype's three literature-named layers
+    // lead — Demographic parity (real value + τ; the computed platform-
+    // sentiment-parity check), Equalized odds and Counterfactual fairness
+    // (honest N-A, never fabricated) — with citations; extra real checks
+    // (Location concentration, Negative dominance) follow.
     const layers = drawer.locator('.layers .layer');
-    expect(await layers.count()).toBeGreaterThanOrEqual(2);
+    expect(await layers.count()).toBeGreaterThanOrEqual(3);
+    const layerNames = await drawer.locator('.layers .layer-name').allInnerTexts();
+    expect(layerNames.slice(0, 3)).toEqual([
+        'Demographic parity', 'Equalized odds', 'Counterfactual fairness',
+    ]);
+    const layerCites = await drawer.locator('.layers .layer-cite').allInnerTexts();
+    expect(layerCites.slice(0, 3)).toEqual([
+        'Barocas & Selbst (2016)', 'Hardt et al. (2016)', 'Kusner et al. (2017)',
+    ]);
     expect(await drawer.locator('.layer-ok.ok').count(), 'PASS rows')
         .toBeGreaterThanOrEqual(1);
-    expect(await drawer.locator('.layer-ok.na').count(), 'N-A rows')
-        .toBeGreaterThanOrEqual(1);
+    expect(await drawer.locator('.layer-ok.na').count(), 'N-A rows (the two planned layers)')
+        .toBeGreaterThanOrEqual(2);
     const layerVals = await drawer.locator('.layer-val').allInnerTexts();
+    expect(layerVals[0], 'Demographic parity carries a REAL value + τ').toContain('τ');
     expect(layerVals.some((t) => t.includes('τ')), 'τ threshold values').toBe(true);
 
     // Timer froze at the FIRST receipt (US-1) and stays frozen.

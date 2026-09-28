@@ -19,33 +19,46 @@ test('ribbon: explore-only, proportional segments, sparklines, 12h label, hover 
     await scrollToProg(page, 5);
     await expect(page.locator('#strip')).toBeHidden();
 
-    // Explore: ribbon visible with one segment per category present.
+    // Explore: ribbon visible with one segment per CANONICAL category,
+    // always (allCategoryRows pads quiet categories with zero rows — the
+    // prototype marimekko's "all categories, always" contract). Live DB:
+    // forums renders as an honest zero segment (no seeded forum sources).
     await enterExplore(page);
     const strip = page.locator('#strip');
     await expect(strip).toBeVisible();
     const segs = strip.locator('.strip-seg');
-    const expectedRows: Array<{ category: string; slug: string; sharePct: number }> =
+    const expectedRows: Array<{ category: string; slug: string; flexPct: number; volume: number }> =
         await page.evaluate(() => {
             const w = window as any;
-            const rows = w.PulseInsights.ribbonRows(w.PulseStory.getCities());
-            const tot = rows.reduce((a: number, r: any) => a + r.share, 0) || 1;
-            return rows.map((r: any) => ({
+            const rows = w.PulseInsights.allCategoryRows(w.PulseStory.getCities());
+            const flex = w.PulseUI.pure.ribbonFlexPercents(rows);
+            return rows.map((r: any, i: number) => ({
                 category: r.category,
                 slug: w.PulseGlobe.math.normalizeCategorySlug(r.category),
-                sharePct: (r.share / tot) * 100,
+                flexPct: flex[i],
+                volume: r.volume,
             }));
         });
-    expect(expectedRows.length).toBeGreaterThanOrEqual(2);
-    await expect(segs).toHaveCount(expectedRows.length);
+    expect(expectedRows.length, 'full canonical taxonomy').toBe(8);
+    await expect(segs).toHaveCount(8);
+    // Forums enumerated with an honest zero on the live seed.
+    const forumsRow = expectedRows.find((r) => r.slug === 'forums');
+    expect(forumsRow, 'forums segment present').toBeTruthy();
+    expect(forumsRow!.volume).toBe(0);
 
-    // flex-basis proportional widths.
+    // flex-basis widths follow ribbonFlexPercents (share-proportional with
+    // a minimum readable sliver for zero segments, renormalized to 100).
     for (let i = 0; i < expectedRows.length; i++) {
         const basis = await segs.nth(i).evaluate((el) =>
             (el as HTMLElement).style.flexBasis);
         expect(basis.endsWith('%')).toBe(true);
-        expect(Math.abs(parseFloat(basis) - expectedRows[i].sharePct),
+        expect(Math.abs(parseFloat(basis) - expectedRows[i].flexPct),
             `segment ${i} width`).toBeLessThan(0.01);
     }
+    // The displayed percentage stays the REAL share: a zero segment reads 0%.
+    const forumsIdx = expectedRows.findIndex((r) => r.slug === 'forums');
+    await expect(segs.nth(forumsIdx).locator('.seg-vol')).toHaveText('0/hr · 0%');
+    await expect(segs.nth(forumsIdx).locator('.seg-cat')).toHaveText('Forums');
 
     // Sparkline SVGs: the live 12h timeseries feeds them (categories the
     // timeseries omits fall back gracefully — require at least one).

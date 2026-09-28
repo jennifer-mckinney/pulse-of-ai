@@ -85,9 +85,17 @@ test('story: 11 beats — cards match resolver, rail advances, CH05 legend flips
     await scrollToBeat(page, 5);
     await expect(page.locator('#legend')).toBeVisible();
     await expect(page.locator('#legend .legend-grad')).toHaveCount(0);
+    // One swatch per CANONICAL category, always (8 — quiet categories never
+    // vanish), labeled with the display name lowercased (prototype casing).
     const swatches = page.locator('#legend > span');
-    expect(await swatches.count()).toBeGreaterThanOrEqual(2);
+    expect(await swatches.count()).toBe(8);
     await expect(swatches.first()).toContainText('●');
+    const swatchTexts = (await swatches.allInnerTexts())
+        .map((t) => t.replace('●', '').trim());
+    expect(swatchTexts, 'registry order, display labels lowercased').toEqual([
+        'social', 'news', 'academic', 'policy',
+        'non-profit', 'developer', 'forums', 'blogs',
+    ]);
     await evidence(page, '02-story-ch05-legend');
 
     // Beat 10: explore threshold — cards hide, last rail dot active.

@@ -52,7 +52,16 @@ test('demo fallback: /api/** blocked → 30-city demo, DEMO badges, local receip
     await expect(page.locator('#strip')).toBeVisible();
     // Demo sparklines are synthesized deterministically — every segment has one.
     const segCount = await page.locator('#strip .strip-seg').count();
+    expect(segCount, 'full canonical taxonomy in demo').toBe(8);
     expect(await page.locator('#strip svg.seg-area').count()).toBe(segCount);
+    // The demo world keeps the prototype's Forums presence (FR-22): the
+    // forums segment carries real demo volume (unlike the live honest zero).
+    const forumsSeg = page.locator('#strip .strip-seg', {
+        has: page.locator('.seg-cat', { hasText: /^Forums$/ }),
+    });
+    await expect(forumsSeg).toHaveCount(1);
+    const forumsVol = (await forumsSeg.locator('.seg-vol').innerText()).trim();
+    expect(forumsVol, 'forums demo volume is non-zero').not.toMatch(/^0\/hr/);
 
     // City detail: demo posts, honestly labeled.
     await page.locator('#exp-filters .exp-list .city-row').first().click();
