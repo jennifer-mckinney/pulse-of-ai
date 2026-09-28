@@ -481,3 +481,17 @@ describe('integration: resolved demo beats drive coherent globe state', () => {
         }
     });
 });
+
+describe('demoFlipWarning — live → demo flips are never silent (principal #20)', () => {
+    test('warns only when a load lands in demo after live data was served', () => {
+        const msg = pure.demoFlipWarning(true, false, true);
+        expect(msg).toMatch(/flipped from LIVE to fictional DEMO data/);
+        expect(msg.startsWith('[pulse]')).toBe(true);
+    });
+
+    test('no warning for live loads, repeated demo loads, or a demo cold start', () => {
+        expect(pure.demoFlipWarning(true, false, false)).toBeNull();   // live → live
+        expect(pure.demoFlipWarning(true, true, true)).toBeNull();     // already demo
+        expect(pure.demoFlipWarning(false, false, true)).toBeNull();   // never live
+    });
+});

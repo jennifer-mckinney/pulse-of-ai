@@ -333,6 +333,16 @@
         return out;
     }
 
+    // demoFlipWarning: the console.warn text for a load that lands in demo
+    // mode after live data had been served (live → demo flip), else null.
+    // The page already labels demo numbers visibly; this makes the flip
+    // loud for operators too, instead of a silent downgrade to fiction.
+    function demoFlipWarning(liveSeen, wasDemo, isDemo) {
+        if (!isDemo || wasDemo || !liveSeen) return null;
+        return '[pulse] live data unavailable — the story flipped from LIVE to '
+            + 'fictional DEMO data (API error, non-OK response, or an empty backend).';
+    }
+
     const pure = {
         N,
         EXPLORE_OFFSET,
@@ -363,6 +373,7 @@
         themeNet,
         extraSlugs,
         snapshotsEqual,
+        demoFlipWarning,
     };
 
     // ═══ DOM orchestration (browser only — everything below needs a page) ═══
@@ -374,6 +385,7 @@
         activeIndex: -1,     // last beat applied to the globe (−1 = none yet)
         cities: [],
         isDemo: false,
+        liveSeen: false,     // a live snapshot has been served at least once
         citiesDirty: false,  // snapshot changed since the globe last got it (#9)
         resolved: [],        // resolveChapter output per beat
         themes: [],          // raw /api/themes rows
@@ -903,6 +915,10 @@
                     state.cities = cities;
                     state.citiesDirty = true;
                 }
+                // Live → demo flip is never silent (principal #20).
+                const flipWarning = demoFlipWarning(state.liveSeen, state.isDemo, isDemo);
+                if (flipWarning) console.warn(flipWarning);
+                if (!isDemo) state.liveSeen = true;
                 state.isDemo = isDemo;
                 const insights = computeInsights(state.cities);
                 state.resolved = STORY.map(
