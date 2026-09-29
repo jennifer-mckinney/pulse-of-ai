@@ -27,8 +27,13 @@ const Parser = require('rss-parser');
 const { toPayload } = require('./normalize');
 const { isAiRelated } = require('./ai-filter');
 const { GateClosedError, ParseError } = require('./errors');
+const { routeAllowedHosts } = require('../config/source-registry');
+const { ResponseTooLargeError } = require('./transport');
 
 const DEFAULT_MAX_AGE_DAYS = 7;
+// F10-4: one dataset file is read whole, so it is capped (route
+// params.maxFileBytes overrides). A larger delivery must be split.
+const BULK_MAX_FILE_BYTES = 50 * 1024 * 1024;
 const nonEmpty = v => typeof v === 'string' && v.trim() !== '';
 
 class Collector {
@@ -64,12 +69,19 @@ class Collector {
     }
 
     /** Request options shared by every call of this collector. */
+    /**
+     * Request options shared by every call of this collector: politeness,
+     * robots, the route's allowed hosts (F10-2: every hop must stay on them)
+     * and the route's response-size cap (F10-4; default in transport.js).
+     */
     requestOptions(extra = {}) {
         const robotsLiteral = this.source.robots && nonEmpty(this.env[this.source.robots.literalWhenEnv]);
         return {
             minIntervalMs: this.source.rateLimit ? this.source.rateLimit.minIntervalMs : 1000,
             robots: this.constructor.robotsGated,
             robotsConservative: !robotsLiteral,
+            allowedHosts: routeAllowedHosts(this.route, this.env),
+            ...(this.route.maxResponseBytes ? { maxBytes: this.route.maxResponseBytes } : {}),
             ...extra,
         };
     }
@@ -235,9 +247,14 @@ class BulkFileCollector extends Collector {
     async fetchItems() {
         const out = [];
         const seenFiles = this.cursor.files || {};
+        const cap = this.params.maxFileBytes || BULK_MAX_FILE_BYTES;
         for (const file of this.listFiles()) {
-            const mtime = fs.statSync(file).mtimeMs;
+            const stat = fs.statSync(file);
+            const mtime = stat.mtimeMs;
             if (seenFiles[file] === mtime) continue;   // unchanged since the last run
+            if (stat.size > cap) {
+                throw new ResponseTooLargeError(`dataset file ${path.basename(file)} is ${stat.size} bytes, over the ${cap}-byte cap — split the delivery`);
+            }
             const text = fs.readFileSync(file, 'utf8');
             let records;
             try {
@@ -264,4 +281,5 @@ module.exports = {
     BulkFileCollector,
     rssItem,
     DEFAULT_MAX_AGE_DAYS,
+    BULK_MAX_FILE_BYTES,
 };

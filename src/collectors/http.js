@@ -14,13 +14,24 @@
 //     (redirects are followed manually so a hop into a disallowed path is
 //     refused, never fetched);
 //   - error messages carry REDACTED URLs only (F10-1: API keys travel in
-//     query strings) and never quote a response body (F10-13).
+//     query strings) and never quote a response body (F10-13);
+//   - every hop (the first request, each redirect, robots.txt) is checked
+//     BEFORE it is sent (F10-2, src/collectors/netguard.js): https only (so
+//     never a downgrade), no local / internal / private host, and — for
+//     collector requests — only the route's allowed hosts. A request that
+//     carries credentials (an Authorization / token / API-key header, a
+//     cookie, or a body) is NEVER sent across origins: a cross-origin
+//     redirect of it is refused (RedirectRefusedError). An uncredentialed
+//     GET may follow one, with every credential header dropped anyway;
+//   - responses are size-capped (F10-4): 5 MB decoded by default
+//     (o.maxBytes per route), 500 KiB for robots.txt.
 //
-// Transport: an injectable function (url, { method, headers, body, signal })
-// → { status, headers, body }. The default uses global fetch. Under
-// NODE_ENV=test the default REFUSES the network unless
-// PULSE_ALLOW_NETWORK=1 — unit and integration tests run on recorded
-// fixtures (tests/fixtures/collectors), so CI never hits the network.
+// Transport: an injectable function (url, { method, headers, body, signal,
+// maxBytes }) → { status, headers, body }. The default is the guarded
+// node:https transport (src/collectors/transport.js: DNS answers checked and
+// pinned, streaming size cap). Under NODE_ENV=test the default REFUSES the
+// network unless PULSE_ALLOW_NETWORK=1 — unit and integration tests run on
+// recorded fixtures (tests/fixtures/collectors), so CI never hits the network.
 
 'use strict';
 
@@ -28,6 +39,8 @@ const { version } = require('../../package.json');
 const { AccessDeniedError, HttpError, RobotsDisallowedError, ParseError } = require('./errors');
 const { RobotsPolicy } = require('./robots');
 const { redactUrl, redactUrlsIn } = require('./redact');
+const { checkUrl, RedirectRefusedError } = require('./netguard');
+const { createNetworkTransport, ROBOTS_MAX_BYTES } = require('./transport');
 
 const DEFAULT_TIMEOUT_MS = 20000;
 const MAX_RETRIES = 2;
@@ -41,20 +54,30 @@ function userAgent(env = process.env) {
     return `PulseOfAI/${version} (+${contact}; non-commercial AI discourse research)`;
 }
 
-async function fetchTransport(url, { method = 'GET', headers = {}, body, signal }) {
-    const res = await fetch(url, { method, headers, body, signal, redirect: 'manual' });
-    const out = {};
-    res.headers.forEach((v, k) => { out[k.toLowerCase()] = v; });
-    return { status: res.status, headers: out, body: await res.text() };
-}
+let networkTransport = null;
 
-/** Default transport: real network, except under tests. */
+/** Default transport: the guarded network transport, except under tests. */
 function defaultTransport(url, opts) {
     if (process.env.NODE_ENV === 'test' && process.env.PULSE_ALLOW_NETWORK !== '1') {
         return Promise.reject(new Error(`network disabled under NODE_ENV=test (${redactUrl(url)}) — use a fixture transport`));
     }
-    return fetchTransport(url, opts);
+    networkTransport = networkTransport || createNetworkTransport();
+    return networkTransport(url, opts);
 }
+
+// Headers that carry a credential. Never sent across origins; a request that
+// has one (or a body) is refused a cross-origin redirect altogether.
+const SENSITIVE_HEADERS = Object.freeze([
+    'authorization', 'proxy-authorization', 'cookie', 'private-token', 'x-api-key', 'x-els-apikey',
+    'api-key', 'x-goog-api-key',
+]);
+
+function isSensitive(name, extra) {
+    const n = name.toLowerCase();
+    return SENSITIVE_HEADERS.includes(n) || (extra || []).some(x => x.toLowerCase() === n);
+}
+
+const REDIRECTS = [301, 302, 303, 307, 308];
 
 /** Per-host spacing: resolves when `minIntervalMs` has passed since the last request to the host. */
 class HostLimiter {
@@ -105,25 +128,32 @@ class HttpClient {
         this.robots = new RobotsPolicy({ fetchRobots: url => this.fetchRobots(url) });
     }
 
-    /** robots.txt itself: follows up to 3 redirects (http→https, apex→www). */
+    /**
+     * robots.txt itself: follows up to 5 redirects (RFC 9309 §2.3.1.2 — they
+     * may cross authorities; no credential is ever sent). Every hop is
+     * checked: https, public host (F10-2). Capped at 500 KiB (F10-4).
+     */
     async fetchRobots(url) {
         let current = url;
-        for (let hop = 0; hop < 3; hop++) {
-            const res = await this.raw(current, { headers: {} }, 0);
-            if (![301, 302, 303, 307, 308].includes(res.status) || !res.headers.location) return res;
+        for (let hop = 0; hop < 5; hop++) {
+            checkUrl(current);
+            const res = await this.raw(current, { headers: {}, maxBytes: ROBOTS_MAX_BYTES }, 0);
+            if (!REDIRECTS.includes(res.status) || !res.headers.location) return res;
             current = new URL(res.headers.location, current).toString();
         }
         return { status: 508, headers: {}, body: '' };
     }
 
     /** One transport call with UA + timeout (no retries, no robots). */
-    async raw(url, { method = 'GET', headers = {}, body }, minIntervalMs = 0) {
+    async raw(url, { method = 'GET', headers = {}, body, maxBytes }, minIntervalMs = 0) {
+        checkUrl(url);
         await this.limiter.wait(new URL(url).host, minIntervalMs);
         this.requests++;
         return this.transport(url, {
             method,
             headers: { 'User-Agent': this.ua, ...headers },
             body,
+            maxBytes,
             signal: AbortSignal.timeout(this.timeoutMs),
         });
     }
@@ -138,27 +168,49 @@ class HttpClient {
      * @param {boolean} [o.robots]        check robots.txt (publisher-site routes)
      * @param {boolean} [o.robotsConservative]  default true
      * @param {number} [o.minIntervalMs]  per-host spacing
+     * @param {string[]} [o.allowedHosts] every hop must be on these hosts (F10-2)
+     * @param {string[]} [o.sensitiveHeaders] extra credential header names
+     * @param {number} [o.maxBytes]       decoded response cap (F10-4)
      * @returns {Promise<{ status, headers, body, notModified, url }>}
      */
     async request(url, o = {}) {
         let current = url;
         let method = o.method || 'GET';
         let body = o.body;
+        let baseHeaders = { ...(o.headers || {}) };
+        const credentialed = body !== undefined && body !== null
+            || Object.keys(baseHeaders).some(h => isSensitive(h, o.sensitiveHeaders));
+        let origin = null;
         for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+            const u = checkUrl(current, { allowedHosts: o.allowedHosts });
+            if (origin && u.origin !== origin) {
+                if (credentialed) {
+                    throw new RedirectRefusedError(`refused: cross-origin redirect to ${u.host} of a request carrying credentials`,
+                        { url: redactUrl(current) });
+                }
+                // Uncredentialed GET: follow, but never forward a credential.
+                baseHeaders = Object.fromEntries(Object.entries(baseHeaders).filter(([h]) => !isSensitive(h, o.sensitiveHeaders)));
+                method = 'GET';
+                body = undefined;
+            }
+            origin = u.origin;
             if (o.robots) {
                 const verdict = await this.robots.check(current, { conservative: o.robotsConservative !== false });
                 if (!verdict.allowed) throw new RobotsDisallowedError(verdict.reason, { url: redactUrl(current) });
             }
-            const headers = { ...(o.headers || {}) };
+            const headers = { ...baseHeaders };
             const validators = o.cache && o.cache[current];
             if (validators && method === 'GET') {
                 if (validators.etag) headers['If-None-Match'] = validators.etag;
                 if (validators.last_modified) headers['If-Modified-Since'] = validators.last_modified;
             }
-            const res = await this.withRetries(current, { method, headers, body }, o.minIntervalMs);
-            if ([301, 302, 303, 307, 308].includes(res.status) && res.headers.location) {
+            const res = await this.withRetries(current, { method, headers, body, maxBytes: o.maxBytes }, o.minIntervalMs);
+            if (REDIRECTS.includes(res.status) && res.headers.location) {
                 current = new URL(res.headers.location, current).toString();
-                if (res.status === 303) { method = 'GET'; body = undefined; }
+                if (res.status === 303 || ((res.status === 301 || res.status === 302) && method === 'POST')) {
+                    method = 'GET';
+                    body = undefined;
+                }
                 continue;
             }
             if (res.status === 304) return { ...res, notModified: true, url: current };
@@ -221,4 +273,4 @@ class HttpClient {
     }
 }
 
-module.exports = { HttpClient, HostLimiter, userAgent, defaultTransport, fetchTransport, retryAfterMs, CHALLENGE_RE, redactUrl };
+module.exports = { HttpClient, HostLimiter, userAgent, defaultTransport, retryAfterMs, CHALLENGE_RE, redactUrl, SENSITIVE_HEADERS };

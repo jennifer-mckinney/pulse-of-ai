@@ -1057,6 +1057,92 @@ function registryEnvVars() {
     return [...names];
 }
 
+// ─── Allowed hosts (F10-2) ───────────────────────────────────────────────────
+// Every request and every redirect hop of a route must stay on the route's
+// own hosts (src/collectors/http.js; a leading "www." is ignored both ways).
+// They are DERIVED, never free-form: the hosts of the route's own URLs
+// (params.urls, params.baseUrl), the documented API host of its adapter
+// (ADAPTER_HOSTS below), and — for contract or permission routes whose
+// endpoint comes from env — the host of that env URL. This also hard-enforces
+// the blocked-4 boundary: a redirect from any other feed into cato.org,
+// researchgate.net, telegram.org or weixin.qq.com is refused.
+const ADAPTER_HOSTS = Object.freeze({
+    youtube: ['www.googleapis.com'],
+    'tiktok-research': ['open.tiktokapis.com'],
+    'x-recent-search': ['api.x.com'],
+    'meta-content-library': [],
+    'nyt-article-search': ['api.nytimes.com'],
+    'guardian-content-api': ['content.guardianapis.com'],
+    'ap-media': ['api.ap.org'],
+    'reuters-connect': ['auth.thomsonreuters.com', 'api.reutersconnect.com'],
+    'licensed-feed': [],
+    arxiv: ['export.arxiv.org'],
+    pubmed: ['eutils.ncbi.nlm.nih.gov'],
+    springer: ['api.springernature.com'],
+    elsevier: ['api.elsevier.com'],
+    ieee: ['ieeexploreapi.ieee.org'],
+    'jstor-dataset': [],
+    'scholar-imap': [],
+    'govinfo-search': ['api.govinfo.gov'],
+    congress: ['api.congress.gov'],
+    pew: ['www.pewresearch.org'],
+    'wikipedia-talk': ['en.wikipedia.org'],
+    'internet-archive': ['archive.org'],
+    'github-search': ['api.github.com'],
+    'gitlab-projects': ['gitlab.com'],
+    'dockerhub-namespace': ['hub.docker.com'],
+    'hf-daily-papers': ['huggingface.co'],
+    discourse: [],
+    stackexchange: ['api.stackexchange.com'],
+    'hn-algolia': ['hn.algolia.com'],
+    rss: [],
+    'blocked-wechat': [],
+    'blocked-telegram': ['api.telegram.org'],
+    'blocked-researchgate': [],
+    'blocked-cato': [],
+});
+
+// Env URLs that name a route's endpoint (contract feeds, overrides).
+const ROUTE_URL_ENV = Object.freeze({
+    'licensed-feed': route => (route.requires || []).filter(k => k.endsWith('_FEED_URL')),
+    'blocked-wechat': () => ['WECHAT_AUTHORIZED_FEED_URL'],
+    'reuters-connect': () => ['REUTERS_CONNECT_TOKEN_URL', 'REUTERS_CONNECT_API_URL'],
+});
+
+const hostOf = (u) => {
+    try {
+        return new URL(u).hostname.toLowerCase();
+    } catch {
+        return null;
+    }
+};
+
+/**
+ * The hosts one route may contact.
+ * @param {object} route
+ * @param {object} [env]
+ * @returns {string[]}
+ */
+function routeAllowedHosts(route, env = process.env) {
+    const hosts = new Set(ADAPTER_HOSTS[route.adapter] || []);
+    const p = route.params || {};
+    for (const u of [...(p.urls || []), ...(p.baseUrl ? [p.baseUrl] : [])]) {
+        const h = hostOf(u);
+        if (h) hosts.add(h);
+    }
+    const envNames = ROUTE_URL_ENV[route.adapter] ? ROUTE_URL_ENV[route.adapter](route) : [];
+    for (const k of envNames) {
+        const h = nonEmpty(env[k]) ? hostOf(env[k].trim()) : null;
+        if (h) hosts.add(h);
+    }
+    return [...hosts].sort();
+}
+
+/** Union of a source's route hosts (the registry's per-source allowedHosts). */
+function allowedHosts(src, env = process.env) {
+    return [...new Set(src.routes.flatMap(r => routeAllowedHosts(r, env)))].sort();
+}
+
 // ─── Env classes (F9-2) ──────────────────────────────────────────────────────
 // Which process may hold which collector variable (docker-compose.yml):
 //   setting     non-secret configuration and permission / licence REFERENCES
@@ -1081,6 +1167,9 @@ function envClass(name) {
 }
 
 module.exports = {
+    ADAPTER_HOSTS,
+    routeAllowedHosts,
+    allowedHosts,
     PERMISSION_GATED_ACK_ENV,
     SETTING_ENV,
     envClass,
