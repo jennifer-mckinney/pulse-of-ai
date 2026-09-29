@@ -328,4 +328,64 @@ describe('GET /api/sources/timeseries', () => {
             expect(policy.words).toEqual([]);
         });
     });
+
+    // ─── One window anchor for series + metadata (PR #8 review) ───────────────
+    // The counts, top-site and cue-word queries used to evaluate NOW()
+    // independently, so an hour boundary between them described different
+    // windows. The route now reads ONE hour anchor (src/db/clock.js) and
+    // passes it to all three. Pinning that anchor 3 hours in the past proves
+    // every query uses it: posts after the anchored window vanish from the
+    // series AND the metadata, even though they are "recent" by real NOW().
+    describe('single window anchor', () => {
+        const clock = require('../../src/db/clock');
+        afterEach(() => jest.restoreAllMocks());
+
+        it('series, top_site and words all describe the same anchored window, with exact boundaries', async () => {
+            const inside  = await insertSource('ts-anchor-in',  'social');
+            const outside = await insertSource('ts-anchor-out', 'social');
+            const jobId = await insertJob();
+            const mvIds = await insertMethodologyVersions();
+
+            const anchor = hourFloor(new Date(Date.now() - 3 * 3600 * 1000));
+            const at = (ms) => new Date(anchor.getTime() + ms);
+            const HOUR = 3600 * 1000;
+            const hours = 4;
+
+            // Inside: first instant of the oldest bucket, and the last
+            // millisecond of the newest (anchor) bucket.
+            await insertPostWithFullPipeline(inside, jobId, mvIds, {
+                externalId: 'tsa-in-1', collectedAt: at(-(hours - 1) * HOUR), keywords: ['anchored'],
+            });
+            await insertPostWithFullPipeline(inside, jobId, mvIds, {
+                externalId: 'tsa-in-2', collectedAt: at(HOUR - 1), keywords: ['anchored'],
+            });
+            // Outside: one ms before the window, and the first instant after
+            // the newest bucket (+ plenty of "real now" posts after it).
+            await insertPostWithFullPipeline(outside, jobId, mvIds, {
+                externalId: 'tsa-out-0', collectedAt: at(-(hours - 1) * HOUR - 1), keywords: ['late'],
+            });
+            for (let i = 0; i < 3; i++) {
+                await insertPostWithFullPipeline(outside, jobId, mvIds, {
+                    externalId: `tsa-out-${i + 1}`,
+                    collectedAt: i === 0 ? at(HOUR) : minutesAgo(5 + i),
+                    keywords: ['late'],
+                });
+            }
+
+            const spy = jest.spyOn(clock, 'hourAnchor').mockResolvedValue(anchor);
+            const res = await request(app).get(`/api/sources/timeseries?hours=${hours}`);
+            expect(res.status).toBe(200);
+            expect(spy).toHaveBeenCalledTimes(1);
+
+            const social = res.body.find(e => e.category === 'social');
+            expect(social.series).toHaveLength(hours);
+            expect(social.series[hours - 1].hour).toBe(anchor.toISOString());
+            expect(social.series[0].hour).toBe(at(-(hours - 1) * HOUR).toISOString());
+            expect(social.series.reduce((n, b) => n + b.total, 0)).toBe(2);
+            // Metadata agrees with the series: the busier-by-real-NOW source
+            // and its keyword are outside the anchored window.
+            expect(social.top_site).toBe('ts-anchor-in');
+            expect(social.words).toEqual(['anchored']);
+        });
+    });
 });

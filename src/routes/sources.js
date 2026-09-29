@@ -35,7 +35,8 @@
 'use strict';
 
 const { Router } = require('express');
-const { dbGet, dbAll }  = require('../db/connection');
+const { dbAll }  = require('../db/connection');
+const clock      = require('../db/clock');
 const { CATEGORY_SLUGS } = require('../config/categories');
 const { responseCache } = require('../middleware/response-cache');
 
@@ -85,13 +86,16 @@ router.get('/sources/timeseries', responseCache(10000), async (req, res) => {
         // Out-of-range values are clamped rather than rejected: the window size
         // is a display preference, not a correctness input
         hours = Math.min(48, Math.max(1, hours));
-        const anchorRow = await dbGet('SELECT date_trunc(\'hour\', NOW()) AS anchor');
-        const anchor = anchorRow.anchor;
+        // ONE window anchor — date_trunc('hour', NOW()) read once from the
+        // database (src/db/clock.js) — shared by the counts, top-site and
+        // cue-word queries below, so an hour boundary can never fall
+        // between them (PR #8 review).
+        const anchor = await clock.hourAnchor();
 
         // ─── Bucketed counts, zero-filled in SQL ──────────────────────────────
-        // Buckets are the last `hours` whole clock-hours ending at
-        // date_trunc('hour', NOW()). The row window starts at the OLDEST bucket
-        // (date_trunc('hour', NOW()) - (hours-1)h) rather than a raw
+        // Buckets are the last `hours` whole clock-hours ending at the anchor
+        // (date_trunc('hour', NOW())). The row window starts at the OLDEST
+        // bucket (anchor - (hours-1)h) rather than a raw
         // NOW() - hours interval — a raw interval can pick up rows that truncate
         // to an hour older than the oldest returned bucket, which would silently
         // drop their counts. generate_series × category cross join produces the
