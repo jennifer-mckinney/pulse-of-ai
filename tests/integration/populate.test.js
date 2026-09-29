@@ -6,9 +6,9 @@
 // functions (so `npm run replay` reproduces it to PASS), the job-level bias
 // checks run with recorded methodology lineage, and the demo is labelled in
 // the data (inactive demo_<category> sources, "[Demo]" content, job
-// triggered_by 'demo'). Embeddings are exercised by the standup end-to-end
-// run (they need Redis + the embeddings container), so every call here
-// passes embed: false.
+// triggered_by 'demo'). The embeddings service and the BullMQ embed queue
+// are replaced by fakes (runOnce's `deps`) where embedding is exercised; the
+// real worker path is covered by the standup end-to-end run.
 
 'use strict';
 
@@ -130,6 +130,105 @@ describe('scripts/populate.js — demo population through the real pipeline', ()
         expect(await count()).toBe(4);
         await populate.runOnce({ ...opts, force: true });          // --force adds a batch
         expect(await count()).toBe(8);
+    });
+
+    // Copilot 4129574047: an offline first run leaves posts unembedded; the
+    // idempotent re-run (batch skipped) must backfill them and wait for them.
+    describe('embedding backfill on --once', () => {
+        // Stand-in for the embed worker: records what was queued and stores
+        // a post_embeddings row per post, as the worker would.
+        function fakeWorker({ store = true } = {}) {
+            const calls = [];
+            return {
+                calls,
+                enqueueEmbeddings: async (ids) => {
+                    calls.push([...ids]);
+                    if (!store) return;
+                    for (const id of ids) {
+                        await db.dbRun(
+                            `INSERT INTO post_embeddings (raw_post_id) VALUES ($1)
+                             ON CONFLICT (raw_post_id) DO NOTHING`, [id]);
+                    }
+                },
+            };
+        }
+        const embeddedCount = async () =>
+            (await db.dbGet('SELECT COUNT(*)::int AS n FROM post_embeddings')).n;
+        const postCount = async () => (await db.dbGet('SELECT COUNT(*)::int AS n FROM raw_posts')).n;
+        const base = { mode: 'once', size: 4, embed: true, waitEmbeddings: 5, force: false };
+
+        beforeEach(async () => {
+            await insertSource('real-social', 'social');
+            await registerPipelineMethodology();
+        });
+
+        it('re-run with embeddings healthy backfills the skipped batch and waits for it', async () => {
+            // First run: embeddings unavailable (standup passes --no-embed).
+            await populate.runOnce({ ...base, embed: false });
+            expect(await postCount()).toBe(4);
+            expect(await embeddedCount()).toBe(0);
+
+            const worker = fakeWorker();
+            await populate.runOnce(base, {
+                embeddingsReady: async () => true,
+                enqueueEmbeddings: worker.enqueueEmbeddings,
+            });
+
+            expect(await postCount()).toBe(4);                      // batch still skipped
+            expect(worker.calls).toHaveLength(1);
+            expect(worker.calls[0]).toHaveLength(4);
+            expect(await embeddedCount()).toBe(4);                  // waited until stored
+            expect(await populate.unembeddedDemoPostsInLastHour()).toEqual([]);
+
+            // Nothing left to backfill on a third run.
+            const again = fakeWorker();
+            await populate.runOnce(base, { embeddingsReady: async () => true, enqueueEmbeddings: again.enqueueEmbeddings });
+            expect(again.calls).toEqual([]);
+        });
+
+        it('does not backfill while embeddings are not ready, or with --no-embed', async () => {
+            await populate.runOnce({ ...base, embed: false });
+            const worker = fakeWorker();
+            await populate.runOnce(base, { embeddingsReady: async () => false, enqueueEmbeddings: worker.enqueueEmbeddings });
+            const ready = jest.fn(async () => true);
+            await populate.runOnce({ ...base, embed: false }, { embeddingsReady: ready, enqueueEmbeddings: worker.enqueueEmbeddings });
+            expect(ready).not.toHaveBeenCalled();
+            expect(worker.calls).toEqual([]);
+            expect(await embeddedCount()).toBe(0);
+        });
+
+        it('--force queues the new batch and the backlog once each, and skips posts outside the hour', async () => {
+            await populate.runOnce({ ...base, size: 3, embed: false });
+            const old = await db.dbGet('SELECT id FROM raw_posts ORDER BY id LIMIT 1');
+            await db.dbRun(`UPDATE raw_posts SET collected_at = NOW() - INTERVAL '2 hours' WHERE id = $1`, [old.id]);
+
+            const worker = fakeWorker();
+            await populate.runOnce({ ...base, size: 3, force: true }, {
+                embeddingsReady: async () => true,
+                enqueueEmbeddings: worker.enqueueEmbeddings,
+            });
+
+            const queued = worker.calls.flat();
+            expect(worker.calls).toHaveLength(2);                   // new batch, then backfill
+            expect(worker.calls[0]).toHaveLength(3);
+            expect(worker.calls[1]).toHaveLength(2);                // 3 old - 1 aged out
+            expect(new Set(queued).size).toBe(queued.length);       // no post queued twice
+            expect(queued).not.toContain(old.id);
+        });
+
+        it('bounds the wait when the worker never stores the embeddings', async () => {
+            await populate.runOnce({ ...base, embed: false });
+            const worker = fakeWorker({ store: false });
+            const t0 = Date.now();
+            await expect(populate.runOnce({ ...base, waitEmbeddings: 1 }, {
+                embeddingsReady: async () => true,
+                enqueueEmbeddings: worker.enqueueEmbeddings,
+            })).resolves.toBe(0);
+            expect(Date.now() - t0).toBeLessThan(6000);
+            expect(worker.calls[0]).toHaveLength(4);
+            const lines = stdoutSpy.mock.calls.map(c => String(c[0])).join('');
+            expect(lines).toMatch(/embeddings stored: 0\/4 \(timed out/);
+        });
     });
 
     it('fails clearly, without creating a job, when the methodology is not registered', async () => {

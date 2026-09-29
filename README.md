@@ -137,7 +137,7 @@ The script checks these first and prints how to fix anything that is missing.
 
 `GET /api/health` also reports `redis.reachable` and `worker.alive` / `worker.last_heartbeat`, and every container's logs rotate (json-file, 5 × 10 MB).
 
-Re-running is safe. The images come from the build cache, running containers are kept, and a second population batch is skipped while the trailing hour is still full.
+Re-running is safe. The images come from the build cache, running containers are kept, and a second population batch is skipped while the trailing hour is still full. If an earlier run had no embeddings (the model could not be downloaded), a re-run with the embeddings service healthy queues embed jobs for every trailing-hour demo post that has none and waits for them (up to 180 s) before the smoke check.
 
 ### What runs where
 
