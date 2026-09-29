@@ -10,16 +10,24 @@
 //   4. Delete post_embeddings for those posts (large, re-computable)
 //   5. Write data_retention_log: action='compacted' for each affected post
 //   6. Write compaction_log row
+//
+// Demo posts (P9-3): posts of data_sources.source_type = 'demo' are the
+// standup's FICTIONAL population (scripts/populate.js). They are EXCLUDED
+// from both rollups, so invented discourse never enters the long-term
+// Tier 2 record. (Removing the demo posts themselves at compaction, and
+// scheduling this job in the worker, are tracked separately.)
 
 'use strict';
 
 require('dotenv').config();
-const { dbAll, dbGet, dbRun, dbTransaction, closePool } = require('../src/db/connection');
+const { dbAll, dbTransaction, closePool } = require('../src/db/connection');
+const { DEMO_SOURCE_TYPE } = require('../src/config/data-mode');
 
 const RETENTION_DAYS = parseInt(process.env.RETENTION_DETAIL_DAYS || '90', 10);
 
 // Optional CLI argument: compact a specific month (YYYY-MM), else auto-detect
-const targetMonth = process.argv[2] || null;
+// Optional CLI argument (read in main, so requiring this module has no effect).
+let targetMonth = null;
 
 function getCutoffDate() {
     const d = new Date();
@@ -56,8 +64,8 @@ async function getMonthsToCompact() {
     return rows.map(r => r.rollup_month);
 }
 
-async function compactMonth(client, rollupMonth) {
-    console.log(`  Compacting ${rollupMonth}...`);
+async function compactMonth(client, rollupMonth, { log = console.log } = {}) {
+    log(`  Compacting ${rollupMonth}...`);
     const monthStart = rollupMonth;
     const monthEnd   = new Date(new Date(rollupMonth).setMonth(new Date(rollupMonth).getMonth() + 1))
                            .toISOString().split('T')[0];
@@ -89,10 +97,11 @@ async function compactMonth(client, rollupMonth) {
         ) kw ON TRUE
         WHERE rp.collected_at >= $2 AND rp.collected_at < $3
           AND rp.content IS NOT NULL
+          AND ds.source_type <> $4          -- P9-3: demo feeds never rolled up
         GROUP BY rollup_month, topic_label, source_category, location, language
         -- Expression-based unique index; ON CONFLICT requires no target when index uses COALESCE
         ON CONFLICT DO NOTHING
-    `, [monthStart, monthStart, monthEnd]);
+    `, [monthStart, monthStart, monthEnd, DEMO_SOURCE_TYPE]);
 
     // Step 2: Aggregate source rollups
     await client.query(`
@@ -113,9 +122,10 @@ async function compactMonth(client, rollupMonth) {
         JOIN sentiment_results sr  ON sr.raw_post_id = rp.id
         WHERE rp.collected_at >= $2 AND rp.collected_at < $3
           AND rp.content IS NOT NULL
+          AND ds.source_type <> $4          -- P9-3: demo feeds never rolled up
         GROUP BY rollup_month, rp.source_id, source_category
         ON CONFLICT (rollup_month, source_id) DO NOTHING
-    `, [monthStart, monthStart, monthEnd]);
+    `, [monthStart, monthStart, monthEnd, DEMO_SOURCE_TYPE]);
 
     // Step 3: Count posts to compact (for log)
     const { count } = await client.query(`
@@ -162,6 +172,7 @@ async function compactMonth(client, rollupMonth) {
 }
 
 async function main() {
+    targetMonth = process.argv[2] || null;
     const months = await getMonthsToCompact();
 
     if (months.length === 0) {
@@ -190,7 +201,12 @@ async function main() {
     await closePool();
 }
 
-main().catch(err => {
-    console.error('✗ Compaction failed:', err.message);
-    process.exit(1);
-});
+/* istanbul ignore next -- CLI entry point */
+if (require.main === module) {
+    main().catch(err => {
+        console.error('✗ Compaction failed:', err.message);
+        process.exit(1);
+    });
+}
+
+module.exports = { getMonthsToCompact, compactMonth };
