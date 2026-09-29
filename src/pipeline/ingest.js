@@ -43,6 +43,24 @@ const PII_FIELDS = [
 ];
 
 /**
+ * G10-5: PostgreSQL TEXT and JSONB reject the NUL character (U+0000), so one
+ * upstream item carrying it failed its whole store. Removed from every
+ * string of the payload before normalising.
+ * @param {unknown} v
+ * @returns {unknown}
+ */
+function stripNul(v) {
+    if (typeof v === 'string') return v.includes('\u0000') ? v.replace(/\u0000/g, '') : v;
+    if (Array.isArray(v)) return v.map(stripNul);
+    if (v && typeof v === 'object') {
+        const out = {};
+        for (const [k, x] of Object.entries(v)) out[stripNul(k)] = stripNul(x);
+        return out;
+    }
+    return v;
+}
+
+/**
  * City-level location of a payload: the registry's canonical city name when
  * the payload's location resolves to a registry city, else ''.
  * @param {unknown} location
@@ -121,7 +139,8 @@ function normalisePost(rawPayload, sourceType) {
  * @param {string} sourceId    UUID of data_sources row
  * @returns {Promise<{ postId: string, isNew: boolean }>}
  */
-async function storeRawPost(rawPayload, sourceId) {
+async function storeRawPost(rawPayloadIn, sourceId) {
+    const rawPayload = stripNul(rawPayloadIn);
     // Fetch source_type to drive normalisation logic
     const source = await dbGet(
         'SELECT source_type FROM data_sources WHERE id = $1',
@@ -257,6 +276,7 @@ async function ingestBatch(payloads, sourceId, jobId, mvIds) {
 module.exports = {
     normalisePost,
     storeRawPost,
+    stripNul,
     scorePost,
     ingestPost,
     ingestBatch,

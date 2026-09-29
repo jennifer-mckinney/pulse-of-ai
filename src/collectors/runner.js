@@ -171,7 +171,15 @@ async function runCollection(o = {}) {
             } catch (err) {
                 fail(err.message, err);
             }
+            let storeFailed = false;
             for (const c of collectors) {
+                // G10-5: the route's cursor and HTTP validators as they were
+                // before it ran. If any of its items fails to store, they are
+                // restored, so the next run fetches those items again (a
+                // moved since-id or an ETag / 304 would otherwise skip them
+                // for good; a bulk file would be marked seen unstored).
+                const snapshot = JSON.stringify({ cursor, httpCache });
+                let routeStoreFailed = false;
                 let result;
                 try {
                     result = await c.collect();
@@ -191,6 +199,7 @@ async function runCollection(o = {}) {
                     try {
                         stored = await storeRawPost(payload, sourceId);
                     } catch (err) {
+                        routeStoreFailed = true;
                         fail(`${c.route.id}: store failed: ${err.message}`, Object.assign(new Error('store'), { kind: 'store' }));
                         continue;
                     }
@@ -215,11 +224,20 @@ async function runCollection(o = {}) {
                         }
                     }
                 }
+                if (routeStoreFailed) {
+                    storeFailed = true;
+                    const prev = JSON.parse(snapshot);
+                    for (const k of Object.keys(cursor)) delete cursor[k];
+                    Object.assign(cursor, prev.cursor);
+                    for (const k of Object.keys(httpCache)) delete httpCache[k];
+                    Object.assign(httpCache, prev.httpCache);
+                }
             }
             const classified = routeErrors.map(e => classifyError(e.err));
             // F10-5: any refused route refuses the source (the source said no).
             const refused = refusalOf(classified);
-            const ok = okRoutes > 0 && !refused && !queueFailed;
+            // G10-5: a store failure makes the run an error too.
+            const ok = okRoutes > 0 && !refused && !queueFailed && !storeFailed;
             row.outcome = ok ? 'ok' : 'error';
             row.error = routeErrors.length ? scrub(routeErrors.map(e => e.text).join('; '), env) : null;
             const refusedIdx = refused ? classified.findIndex(c => c.error_kind === refused.kind) : -1;
