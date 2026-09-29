@@ -137,9 +137,10 @@ function normalisePost(rawPayload, sourceType) {
  *
  * @param {object} rawPayload  Raw collector payload
  * @param {string} sourceId    UUID of data_sources row
+ * @param {{ ingestMvId?: string }} [o]  methodology_versions.id of the ingest version (G10-11)
  * @returns {Promise<{ postId: string, isNew: boolean }>}
  */
-async function storeRawPost(rawPayloadIn, sourceId) {
+async function storeRawPost(rawPayloadIn, sourceId, { ingestMvId = null } = {}) {
     const rawPayload = stripNul(rawPayloadIn);
     // Fetch source_type to drive normalisation logic
     const source = await dbGet(
@@ -177,8 +178,8 @@ async function storeRawPost(rawPayloadIn, sourceId) {
     const post = await dbRun(
         `INSERT INTO raw_posts
             (source_id, external_id, content, content_hash, raw_payload, location, language,
-             provenance_fingerprint)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             provenance_fingerprint, ingest_mv_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          ON CONFLICT (source_id, external_id) DO NOTHING
          RETURNING id`,
         [
@@ -190,6 +191,9 @@ async function storeRawPost(rawPayloadIn, sourceId) {
             cityLocation(rawPayload.location),
             language,
             provenanceFingerprint,
+            // G10-11: the ingest methodology version this post was stored
+            // under (the receipt shows it); null when the caller has none.
+            ingestMvId,
         ],
     );
     if (!post) {

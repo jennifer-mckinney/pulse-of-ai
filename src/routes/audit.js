@@ -88,6 +88,7 @@ router.get('/audit/:post_id', async (req, res) => {
                 rp.collected_at,
                 rp.external_id,
                 rp.provenance_fingerprint,
+                rp.ingest_mv_id,
                 rp.raw_payload->>'url'          AS permalink,
                 rp.raw_payload->>'published_at' AS published_at,
                 ds.category    AS source_category,
@@ -217,12 +218,32 @@ router.get('/audit/:post_id', async (req, res) => {
         // Ingestion is not an inference so it has no decision_audit_log rows;
         // its regulator-relevant facts (PII fields stripped, city granularity,
         // legal basis) live in the registered methodology config.
-        const ingestMv = await dbGet(
-            `SELECT model_name, version, config FROM methodology_versions
-             WHERE component = 'ingest' AND deprecated_at IS NULL
-             ORDER BY effective_from DESC
-             LIMIT 1`,
-        );
+        // G10-11: the version the post was STORED under (raw_posts.
+        // ingest_mv_id, lineage 'recorded'); for rows stored before
+        // migration 022, the ingest version effective at collected_at
+        // (lineage 'inferred'; the earliest one when the post predates
+        // every registered version).
+        let ingestMv = null;
+        let ingestLineage = null;
+        if (post.ingest_mv_id) {
+            ingestMv = await dbGet(
+                `SELECT model_name, version, config FROM methodology_versions WHERE id = $1 AND component = 'ingest'`,
+                [post.ingest_mv_id],
+            );
+            if (ingestMv) ingestLineage = 'recorded';
+        }
+        if (!ingestMv) {
+            ingestMv = await dbGet(
+                `SELECT model_name, version, config FROM methodology_versions
+                 WHERE component = 'ingest'
+                 ORDER BY (effective_from <= $1) DESC,
+                          CASE WHEN effective_from <= $1 THEN effective_from END DESC NULLS LAST,
+                          effective_from ASC
+                 LIMIT 1`,
+                [post.collected_at],
+            );
+            if (ingestMv) ingestLineage = 'inferred';
+        }
 
         // ── Provenance (decision D2) ───────────────────────────────────────
         // Traceability back to the source without storing identity: the
@@ -260,7 +281,9 @@ router.get('/audit/:post_id', async (req, res) => {
             narration: { component: NARRATION_COMPONENT, version: NARRATION_VERSION },
             // Demo-feed posts get the fictional-content ingestion wording
             // (audit_narration 1.2.0 — src/config/data-mode.js defines demo).
-            ingest:    renderIngestStep(ingestMv, { demo, provenance, postId: post.id }),
+            ingest:    ingestMv
+                ? { ...renderIngestStep(ingestMv, { demo, provenance, postId: post.id }), lineage: ingestLineage }
+                : null,
             decisions: exposed,
             bias:      biasBlock,
         });

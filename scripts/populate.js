@@ -182,7 +182,7 @@ function liveCollectionStatus(env = process.env) {
  */
 async function currentMethodology() {
     const mv = await resolveCurrentMethodology();
-    return { sentiment: mv.sentimentMvId, relevance: mv.relevanceMvId, discourse: mv.discourseMvId, bias: mv.biasMvId };
+    return { sentiment: mv.sentimentMvId, relevance: mv.relevanceMvId, discourse: mv.discourseMvId, bias: mv.biasMvId, ingest: mv.ingestMvId };
 }
 
 /**
@@ -355,8 +355,8 @@ async function runDemoBatch({ size, embed, seed }) {
 
             const post = await db.dbGet(
                 `INSERT INTO raw_posts
-                    (source_id, external_id, content, content_hash, raw_payload, location)
-                 VALUES ($1, $2, $3, $4, $5::jsonb, $6)
+                    (source_id, external_id, content, content_hash, raw_payload, location, ingest_mv_id)
+                 VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
                  ON CONFLICT (source_id, external_id) DO NOTHING
                  RETURNING id`,
                 [
@@ -366,6 +366,7 @@ async function runDemoBatch({ size, embed, seed }) {
                     normalised.contentHash,
                     JSON.stringify(normalised.rawPayload),
                     city.name,
+                    mv.ingest,   // G10-11: the ingest version this demo post was stored under
                 ],
             );
             if (!post) continue;
