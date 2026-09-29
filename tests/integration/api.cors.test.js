@@ -2,7 +2,9 @@
 // F2 — CORS scoping: the read-only API surface is world-readable
 // (Access-Control-Allow-Origin present), while the mutating POST /api/refresh
 // endpoint is mounted WITHOUT cors() so cross-origin pages cannot read its
-// responses and its preflight is never approved.
+// responses and its preflight is never approved. CORS alone does not stop a
+// cross-site simple POST from being SENT — the server-side guard that does is
+// covered in api.refresh.csrf.test.js.
 
 'use strict';
 
@@ -32,7 +34,9 @@ describe('CORS scoping (F2)', () => {
 
     it('does NOT serve CORS headers on POST /api/refresh', async () => {
         const res = await request(app).post('/api/refresh').set('Origin', ORIGIN);
-        expect([201, 429]).toContain(res.status); // handled by the route itself
+        // Rejected server-side by the cross-site guard (see
+        // api.refresh.csrf.test.js) — and still no CORS headers.
+        expect(res.status).toBe(403);
         expect(res.headers['access-control-allow-origin']).toBeUndefined();
     });
 

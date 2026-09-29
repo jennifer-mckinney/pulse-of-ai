@@ -10,11 +10,20 @@
 // gate subsumes it: one collection cycle per minute is the whole budget.
 // The frontend's 150s poll cadence sits comfortably outside the window.
 // Exports _resetRateLimiter() for test isolation.
+//
+// Cross-site guard (PR #8 review): the endpoint is unauthenticated and
+// state-changing, and a cross-site "simple" POST (HTML form) needs no CORS
+// preflight — so requireSameOrigin rejects it with 403 BEFORE the debounce
+// runs (a rejected request never consumes the global budget). See
+// src/middleware/same-origin.js for the Sec-Fetch-Site / Origin / Referer
+// rules. OPTIONS /api/refresh is answered by this router's implicit
+// Allow: POST response and never reaches the read-only surface's cors().
 
 'use strict';
 
 const { Router } = require('express');
 const { dbRun }  = require('../db/connection');
+const { requireSameOrigin } = require('../middleware/same-origin');
 
 const router = Router();
 
@@ -97,7 +106,7 @@ async function runCollection(jobId) {
 
 // ─── Route ────────────────────────────────────────────────────────────────────
 
-router.post('/refresh', async (req, res) => {
+router.post('/refresh', requireSameOrigin, async (req, res) => {
     try {
         // Global debounce: one refresh per minute TOTAL — caller-independent.
         const now = Date.now();

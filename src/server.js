@@ -75,6 +75,10 @@ app.use(express.static(path.join(__dirname, '../public')));
 // headers alone would not stop a simple cross-origin POST from being sent.
 // Everything below serves read-only data
 // (POST /api/query is a read-only search) and stays world-readable.
+// Withholding CORS headers only hides the response; the route itself rejects
+// cross-site POSTs with 403 (src/middleware/same-origin.js), and its OPTIONS
+// preflight is answered inside refreshRouter (Allow: POST, no CORS headers)
+// so it never falls through to readOnlyApi's cors().
 app.use('/api', refreshRouter);
 
 const readOnlyApi = express.Router();
