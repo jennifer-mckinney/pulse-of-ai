@@ -9,6 +9,8 @@
 //   ingest    — scoring retries (ingest.worker.js)
 //   embed     — embeddings via the Python service (embed.worker.js)
 //   correlate — reserved (collectors store no identity signals)
+// and the Reddit maintenance timer (48 h text retention, deletion re-check,
+// subreddit discovery — src/collectors/reddit/maintenance.js),
 // and starts the collection scheduler (collector.scheduler.js): at start and
 // every RESCHEDULE_MS it (re)schedules every collecting registry source, so a
 // kill switch or a new credential takes effect without a code change.
@@ -33,6 +35,7 @@ const { processCorrelateJob }= require('./correlate.worker');
 const { scheduleAllSources } = require('./collector.scheduler');
 const { collectWindowMs } = require('../config/source-registry');
 const { closeCycles } = require('../collectors/cycle');
+const { runRedditMaintenance, MAINTENANCE_MS } = require('../collectors/reddit/maintenance');
 
 const int = (v, d) => { const n = parseInt(v || '', 10); return Number.isFinite(n) && n > 0 ? n : d; };
 const COLLECT_CONCURRENCY   = int(process.env.COLLECT_CONCURRENCY, 4);
@@ -106,9 +109,27 @@ async function closeDueCycles() {
     }
 }
 
+// Reddit (#52): the 48 h text retention always, and — while Reddit's gate is
+// open — the 6-hourly deletion re-check and the daily subreddit discovery
+// (src/collectors/reddit/maintenance.js; ADR 0001 rulings 8 and 9).
+let redditRunning = false;
+async function redditMaintenance() {
+    if (redditRunning) return;
+    redditRunning = true;
+    try {
+        await runRedditMaintenance({ log });
+    } catch (err) {
+        logError(`[reddit] maintenance failed: ${err.message}`);
+    } finally {
+        redditRunning = false;
+    }
+}
+
 schedule();
+redditMaintenance();
 const timer = setInterval(schedule, RESCHEDULE_MS);
 const cycleTimer = setInterval(closeDueCycles, 30 * 1000);
+const redditTimer = setInterval(redditMaintenance, MAINTENANCE_MS);
 
 log(
     `Workers started — collect:${COLLECT_CONCURRENCY}/type ingest:${INGEST_CONCURRENCY} `
@@ -136,6 +157,7 @@ async function shutdown() {
     stopHeartbeat();
     clearInterval(timer);
     clearInterval(cycleTimer);
+    clearInterval(redditTimer);
     await Promise.all(workers.map(w => w.close()));
     await heartbeatRedis.quit().catch(() => {});
     process.exit(0);

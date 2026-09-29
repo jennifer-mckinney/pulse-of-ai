@@ -393,8 +393,11 @@
             fingerprint: str(p.fingerprint),
             published_at: str(p.published_at),
             verifiable: str(p.verifiable),
+            // Platform-terms retention (Reddit, ADR 0001 ruling 9): when the
+            // text will be / was removed, and that scores were retained.
+            retention: p.retention && typeof p.retention === 'object' ? str(p.retention.notice) : null,
         };
-        return out.permalink || out.fingerprint || out.verifiable ? out : null;
+        return out.permalink || out.fingerprint || out.verifiable || out.retention ? out : null;
     }
 
     // provenanceLine: one mono line for the drawer post block.
@@ -404,6 +407,7 @@
         if (prov.permalink) parts.push('source ' + prov.permalink);
         if (prov.fingerprint) parts.push('provenance ' + prov.fingerprint.slice(0, 12) + '…');
         if (prov.verifiable) parts.push(prov.verifiable);
+        if (prov.retention) parts.push(prov.retention);
         return parts.join(' · ');
     }
 
@@ -592,11 +596,11 @@
 
     // sourcesStat: GET /api/sources?include_inactive=true rows →
     // { active, total, demoFeeds, registry, collecting, online }.
-    // registry  — the source registry of record (the workbook's 51); rows
+    // registry  — the source registry of record (the workbook's 52); rows
     //             the API flags registry: true
     // online    — registry sources whose gate is 'collecting' AND that
     //             collected successfully in the last hour (the API's
-    //             `online`): "Sources online N/51" counts ONLY these
+    //             `online`): "Sources online N/<registry size>" counts ONLY these
     // collecting — registry sources whose gate would collect now
     // active / total — non-demo, non-retired rows flagged active / all
     // Demo feeds (source_type 'demo', the standup's fictional population)
@@ -1945,7 +1949,7 @@
         inner.appendChild(bannerEl);
 
         // Sources — the registry of record with each source's live status
-        // (/api/sources). "Sources online N/51" counts ONLY sources that
+        // (/api/sources). "Sources online N/<registry size>" counts ONLY sources that
         // collected successfully in the last hour (G20: never configured
         // flags passed off as liveness). Blocked and waiting sources cite
         // their terms.

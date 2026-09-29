@@ -21,7 +21,12 @@
 //
 // Returns:
 //   200 { provenance: { source, published_at, permalink, external_id,
-//                       fingerprint, verifiable },            (decision D2)
+//                       fingerprint, verifiable,              (decision D2)
+//                       retention? },   platform-terms sources (Reddit):
+//                                       { status: 'live', removes_at, notice }
+//                                       or { status: 'text_removed',
+//                                       removed_at, reason, notice } (ADR
+//                                       0001 ruling 9)
 //         post: {...}, narration: {...}, ingest: {...}|null,
 //         decisions: [...],
 //         bias: { job_id, assessed_at, model_name, version,
@@ -48,6 +53,7 @@ const {
 const { buildLayers } = require('../config/bias-vocabulary');
 const { DEMO_SOURCE_TYPE } = require('../config/data-mode');
 const { attributionFor } = require('../config/source-registry');
+const { retentionStatus } = require('../collectors/retention');
 const {
     resolveBiasLineage,
     currentBiasVersion,
@@ -89,6 +95,8 @@ router.get('/audit/:post_id', async (req, res) => {
                 rp.external_id,
                 rp.provenance_fingerprint,
                 rp.ingest_mv_id,
+                rp.text_removed_at,
+                rp.text_removed_reason,
                 rp.raw_payload->>'url'          AS permalink,
                 rp.raw_payload->>'published_at' AS published_at,
                 ds.category    AS source_category,
@@ -263,6 +271,16 @@ router.get('/audit/:post_id', async (req, res) => {
                     ? 'not applicable: fictional demo content, never collected from a source'
                     : 'no provenance fingerprint was recorded for this post (collected before ingest@1.3.0, or no provenance key was configured)'),
         };
+        // ADR 0001 ruling 9: platform-terms retention (Reddit). A live post
+        // says when its text will be removed; a blanked one shows the removal
+        // notice as its text and says why, and that its scores and audit rows
+        // were retained by owner decision.
+        const retention = retentionStatus(post.source_name, {
+            collectedAt: post.collected_at,
+            textRemovedAt: post.text_removed_at,
+            textRemovedReason: post.text_removed_reason,
+        });
+        if (retention) provenance.retention = retention;
 
         return res.json({
             provenance,

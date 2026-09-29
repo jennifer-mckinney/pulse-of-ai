@@ -157,7 +157,7 @@ function show(value) {
  *                      component, version, registered_model, config }
  * @returns {{ stage, version, model, status, reason, diffs, notCompared, caveats }}
  */
-function replayDecision(content, d) {
+function replayDecision(content, d, removal = null) {
     const result = {
         stage: d.decision_type,
         version: d.version || null,
@@ -176,6 +176,16 @@ function replayDecision(content, d) {
     }
     if (typeof content !== 'string' || content === '') {
         result.reason = 'stored post content is no longer available (retention compaction or erasure)';
+        return result;
+    }
+    // ADR 0001 ruling 9: a platform-terms post (Reddit) whose text was
+    // replaced by the removal notice cannot be re-run — the content no
+    // longer hashes to the input that was scored.
+    if (removal && removal.removedAt) {
+        result.reason = `post text removed under platform terms (${removal.reason || 'retention'}) at `
+            + `${new Date(removal.removedAt).toISOString()}: the Reddit Data API Terms allow keeping it at most 48 hours or `
+            + 'until it is deleted upstream, so the content hash no longer matches; scores and audit rows are retained by '
+            + 'owner decision (ADR 0001 ruling 9)';
         return result;
     }
 
@@ -231,7 +241,8 @@ function replayDecision(content, d) {
  *           re-run, or the post has no decisions — exit 3; never a pass).
  */
 function replayPost({ post, decisions }) {
-    const stages = (decisions || []).map(d => replayDecision(post.content, d));
+    const removal = post.text_removed_at ? { removedAt: post.text_removed_at, reason: post.text_removed_reason } : null;
+    const stages = (decisions || []).map(d => replayDecision(post.content, d, removal));
     const diverged = stages.some(s => s.status === STATUS.DIVERGENCE);
     const unrun = stages.some(s => s.status === STATUS.NOT_RERUNNABLE);
     let result;

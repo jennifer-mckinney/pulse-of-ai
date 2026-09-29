@@ -39,7 +39,7 @@ function parseArgs(argv) {
  * @returns {Promise<{ post, decisions } | null>}  null when the post does not exist
  */
 async function loadReplayInput(db, postId) {
-    const post = await db.dbGet('SELECT id, content FROM raw_posts WHERE id = $1', [postId]);
+    const post = await db.dbGet('SELECT id, content, text_removed_at, text_removed_reason FROM raw_posts WHERE id = $1', [postId]);
     if (!post) return null;
     const decisions = await db.dbAll(
         `SELECT dal.decision_type,

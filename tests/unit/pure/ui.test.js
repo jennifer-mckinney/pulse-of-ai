@@ -241,12 +241,26 @@ describe('mapAuditResponse — served audit shape → drawer model', () => {
             permalink: 'https://news.ycombinator.com/item?id=1', fingerprint: fp,
             published_at: '2026-09-29T10:00:00.000Z',
             verifiable: 'verifiable: provide the original URL or id to reproduce the fingerprint',
+            retention: null,
         });
         expect(P.provenanceLine(m.provenance)).toBe(
             'source https://news.ycombinator.com/item?id=1 · provenance aaaaaaaaaaaa… · verifiable: provide the original URL or id to reproduce the fingerprint');
         expect(P.mapAuditResponse(auditPayload()).provenance).toBeNull();
         expect(P.provenanceFrom({ permalink: '', fingerprint: null })).toBeNull();
         expect(P.provenanceLine(null)).toBe('');
+    });
+
+    test('ruling 9: a Reddit receipt carries its retention notice (live or text removed)', () => {
+        const removed = P.mapAuditResponse(auditPayload({ provenance: {
+            source: 'reddit', permalink: 'https://www.reddit.com/r/OpenAI/comments/abc/',
+            retention: { status: 'text_removed', notice: 'Text removed per the Reddit Data API Terms (48-hour retention window ended): after 48 hours or on deletion upstream. Scores and audit rows retained by owner decision.' },
+        } }));
+        expect(removed.provenance.retention).toMatch(/^Text removed per the Reddit Data API Terms/);
+        expect(P.provenanceLine(removed.provenance)).toBe('source https://www.reddit.com/r/OpenAI/comments/abc/ · '
+            + removed.provenance.retention);
+        // A retention notice alone still yields a provenance line.
+        expect(P.provenanceFrom({ retention: { notice: 'n' } })).toEqual(expect.objectContaining({ retention: 'n' }));
+        expect(P.provenanceFrom({ retention: { notice: '' } })).toBeNull();
     });
 
     test('builds ingest + decisions + bias steps in order', () => {
