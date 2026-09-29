@@ -16,8 +16,8 @@
 // preflight — so requireSameOrigin rejects it with 403 BEFORE the debounce
 // runs (a rejected request never consumes the global budget). See
 // src/middleware/same-origin.js for the Sec-Fetch-Site / Origin / Referer
-// rules. OPTIONS /api/refresh is answered by this router's implicit
-// Allow: POST response and never reaches the read-only surface's cors().
+// rules. OPTIONS /api/refresh is answered here with an explicit 403 and
+// never reaches the read-only surface's cors().
 
 'use strict';
 
@@ -27,25 +27,12 @@ const { requireSameOrigin } = require('../middleware/same-origin');
 
 const router = Router();
 
-function isSameOrigin(req) {
-    const origin = req.get('Origin');
-    if (!origin) return true;
-    try {
-        const url = new URL(origin);
-        return url.protocol === `${req.protocol}:` && url.host === req.get('host');
-    } catch {
-        return false;
-    }
-}
-
-router.use('/refresh', (req, res, next) => {
-    if (req.method === 'OPTIONS') {
-        return res.status(403).json({ error: 'Refresh preflight is not allowed' });
-    }
-    if (!isSameOrigin(req)) {
-        return res.status(403).json({ error: 'Cross-origin refresh is not allowed' });
-    }
-    return next();
+// Preflight: never approved. Answered here with an explicit 403 (no
+// Access-Control-Allow-* headers) so it can never fall through to the
+// read-only surface's cors() handler.
+router.options('/refresh', (req, res) => {
+    res.set('Allow', 'POST');
+    return res.status(403).json({ error: 'Refresh preflight is not allowed' });
 });
 
 // ─── In-process global debounce ──────────────────────────────────────────────

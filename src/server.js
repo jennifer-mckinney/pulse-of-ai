@@ -71,14 +71,12 @@ app.use(express.static(path.join(__dirname, '../public')));
 // ─── API routes ───────────────────────────────────────────────────────────────
 // F2: CORS is scoped to the READ-ONLY surface only. POST /api/refresh mutates
 // state (creates a processing job), so it is mounted FIRST and without cors().
-// The route also rejects cross-origin requests and preflights; omitting CORS
-// headers alone would not stop a simple cross-origin POST from being sent.
-// Everything below serves read-only data
-// (POST /api/query is a read-only search) and stays world-readable.
-// Withholding CORS headers only hides the response; the route itself rejects
-// cross-site POSTs with 403 (src/middleware/same-origin.js), and its OPTIONS
-// preflight is answered inside refreshRouter (Allow: POST, no CORS headers)
-// so it never falls through to readOnlyApi's cors().
+// Withholding CORS headers only hides the response — a simple cross-site POST
+// is still sent — so the route itself rejects cross-site POSTs with 403
+// (src/middleware/same-origin.js), and its OPTIONS preflight is answered
+// inside refreshRouter with a 403 (no CORS headers) so it never falls through
+// to readOnlyApi's cors(). Everything below serves read-only data (POST
+// /api/query is a read-only search) and stays world-readable.
 app.use('/api', refreshRouter);
 
 const readOnlyApi = express.Router();

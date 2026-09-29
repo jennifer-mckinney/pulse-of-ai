@@ -37,6 +37,22 @@ describe('POST /api/refresh — cross-site request guard', () => {
         expect(await jobCount()).toBe(0);
     });
 
+    it('rejects Sec-Fetch-Site: cross-site even when no Origin header is sent', async () => {
+        // A missing Origin must never be a free pass: the unforgeable
+        // Sec-Fetch-Site header decides whenever the browser sends it.
+        const res = await post().set('Sec-Fetch-Site', 'cross-site');
+        expect(res.status).toBe(403);
+        expect(await jobCount()).toBe(0);
+    });
+
+    it('rejects Sec-Fetch-Site: cross-site even when Origin/Referer claim this host', async () => {
+        const res = await post()
+            .set('Sec-Fetch-Site', 'cross-site')
+            .set('Origin', `http://${HOST}`)
+            .set('Referer', `http://${HOST}/`);
+        expect(res.status).toBe(403);
+    });
+
     it('rejects a same-site (sibling subdomain) POST with 403', async () => {
         const res = await post().set('Sec-Fetch-Site', 'same-site');
         expect(res.status).toBe(403);
@@ -113,8 +129,9 @@ describe('OPTIONS /api/refresh — preflight is never approved', () => {
             .set('Origin', 'https://evil.example')
             .set('Access-Control-Request-Method', 'POST')
             .set('Access-Control-Request-Headers', 'content-type');
-        // Answered by the refresh router itself (Allow: POST), never by the
-        // read-only surface's cors() handler.
+        // Answered by the refresh router itself (explicit 403), never by
+        // the read-only surface's cors() handler.
+        expect(res.status).toBe(403);
         expect(res.headers.allow).toBe('POST');
         expect(res.headers['access-control-allow-origin']).toBeUndefined();
         expect(res.headers['access-control-allow-methods']).toBeUndefined();
