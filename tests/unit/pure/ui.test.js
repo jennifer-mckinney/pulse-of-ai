@@ -485,8 +485,16 @@ describe('healthBanner / sourcesStat / methodologyModel', () => {
     test('sourcesStat counts registry-active flags', () => {
         expect(P.sourcesStat([
             { active: true }, { active: true }, { active: false }, null,
-        ])).toEqual({ active: 2, total: 4 });
-        expect(P.sourcesStat(null)).toEqual({ active: 0, total: 0 });
+        ])).toEqual({ active: 2, total: 4, demoFeeds: 0 });
+        expect(P.sourcesStat(null)).toEqual({ active: 0, total: 0, demoFeeds: 0 });
+    });
+    test('sourcesStat never counts demo feeds as sources — separate figure', () => {
+        expect(P.sourcesStat([
+            { active: true, source_type: 'rss' },
+            { active: false, source_type: 'api' },
+            { active: false, source_type: 'demo' },
+            { active: true, source_type: 'demo' },   // even if flagged active
+        ])).toEqual({ active: 1, total: 2, demoFeeds: 2 });
     });
     test('methodologyModel: latest row per component, model@version keys', () => {
         const rows = P.methodologyModel([

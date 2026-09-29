@@ -19,7 +19,7 @@ import pytest
 from httpx import AsyncClient, ASGITransport
 
 # Import the FastAPI app directly — no running server required
-from python.embeddings_service import app, BATCH_SIZE
+from python.embeddings_service import app, BATCH_SIZE, MODEL_REVISION
 
 # ─── Client fixture ───────────────────────────────────────────────────────────
 
@@ -49,6 +49,15 @@ async def test_health_returns_correct_shape(client):
     assert "model" in body
     assert "model_loaded" in body
     assert "embedding_dims" in body
+
+
+@pytest.mark.asyncio
+async def test_health_reports_pinned_model_revision(client):
+    """P9-5: the model is loaded at a pinned commit SHA, and /health says which."""
+    body = (await client.get("/health")).json()
+    assert body["revision"] == MODEL_REVISION
+    assert len(MODEL_REVISION) == 40
+    assert all(c in "0123456789abcdef" for c in MODEL_REVISION)
 
 
 @pytest.mark.asyncio

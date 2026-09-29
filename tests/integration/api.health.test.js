@@ -113,3 +113,48 @@ describe('GET /api/health', () => {
         expect(healthState(res.body).state).toBe('green');
     });
 });
+
+// P9-7: /api/health reports Redis reachability and worker liveness (the
+// worker's heartbeat, src/workers/heartbeat.js). A fake Redis client is
+// injected so the suite never depends on — or writes to — a shared Redis.
+describe('GET /api/health — redis and worker (P9-7)', () => {
+    const health = require('../../src/routes/health');
+    const { HEARTBEAT_KEY } = require('../../src/workers/heartbeat');
+    afterEach(() => health._setRedisClientForTests(null));
+
+    it('reports a reachable Redis and a live worker', async () => {
+        const at = new Date().toISOString();
+        const get = jest.fn(async () => at);
+        health._setRedisClientForTests({ ping: async () => 'PONG', get });
+        const res = await request(app).get('/api/health');
+        expect(res.body.redis).toEqual({ reachable: true });
+        expect(res.body.worker).toEqual({ alive: true, last_heartbeat: at });
+        expect(get).toHaveBeenCalledWith(HEARTBEAT_KEY);
+    });
+
+    it('reports a dead worker when no heartbeat is stored', async () => {
+        health._setRedisClientForTests({ ping: async () => 'PONG', get: async () => null });
+        const res = await request(app).get('/api/health');
+        expect(res.body.worker).toEqual({ alive: false, last_heartbeat: null });
+    });
+
+    it('reports Redis unreachable (and the worker unknown) without failing the endpoint', async () => {
+        health._setRedisClientForTests({
+            ping: async () => { throw new Error('ECONNREFUSED'); },
+            get: async () => { throw new Error('ECONNREFUSED'); },
+        });
+        const res = await request(app).get('/api/health');
+        expect(res.status).toBe(200);
+        expect(res.body.db_connected).toBe(true);
+        expect(res.body.redis).toEqual({ reachable: false });
+        expect(res.body.worker).toEqual({ alive: false, last_heartbeat: null });
+    });
+
+    it('a hanging Redis times out instead of hanging the endpoint', async () => {
+        health._setRedisClientForTests({ ping: () => new Promise(() => {}), get: () => new Promise(() => {}) });
+        const t0 = Date.now();
+        const res = await request(app).get('/api/health');
+        expect(Date.now() - t0).toBeLessThan(5000);
+        expect(res.body.redis).toEqual({ reachable: false });
+    });
+});

@@ -14,7 +14,7 @@
 // builders over stored facts. Because the wording itself is part of the
 // auditable surface, this module is registered in methodology_versions
 // (component 'audit_narration') via src/config/methodology-registry.js
-// (seed.js + migration 009) — changes to the wording
+// (seed.js + migrations 009 / 011) — changes to the wording
 // MUST bump NARRATION_VERSION and add a new methodology row, never edit the
 // registered version in place.
 
@@ -26,7 +26,11 @@ const NARRATION_COMPONENT = 'audit_narration';
 // 1.1.0: the researcher view's reproduce command is now REAL — it names the
 // shipped `npm run replay` script (scripts/replay.js) instead of the
 // never-implemented `pulse replay` CLI of 1.0.0.
-const NARRATION_VERSION   = '1.1.0';
+// 1.2.0: the ingestion step has a DEMO branch — posts from demo feeds
+// (data_sources.source_type 'demo', written by scripts/populate.js) are
+// described as fictional demo content generated for this installation, never
+// as "came from a public source". Live-source wording is unchanged.
+const NARRATION_VERSION   = '1.2.0';
 const NARRATION_MODEL     = 'pulse-narration-templates-v1';
 
 // Reproduce-command template surfaced in every researcher view. It runs
@@ -240,31 +244,53 @@ function deriveStatus() {
  * @param {object|null} ingestMv  methodology_versions row (component='ingest') or null
  * @returns {object|null}  step object, or null when no ingest methodology is registered
  */
-function renderIngestStep(ingestMv) {
+function renderIngestStep(ingestMv, opts) {
     if (!ingestMv) return null;
     const cfg = ingestMv.config || {};
     const piiFields = cfg.pii_fields_removed || [];
     const granularity = cfg.location_granularity || 'city';
+    // opts.demo: the post's source is a demo feed (source_type 'demo').
+    const demo = Boolean(opts && opts.demo);
+
+    const researcher = 'Raw content is SHA-256 hashed at ingest; the hash is the immutable join key '
+        + 'across the decision audit log (exposed keyed via AUDIT_HASH_KEY).';
+    const config = {
+        model:                `${ingestMv.model_name}@${ingestMv.version}`,
+        methodology_version:  ingestMv.version,
+        ...cfg,
+    };
+
+    const audiences = demo
+        ? {
+            // 1.2.0 demo branch: fictional content, stated plainly. The
+            // scoring steps that follow are still the real pipeline.
+            public: 'This is a fictional demo post generated for this installation — no real '
+                + 'person wrote it and it was not collected from any public source. It was scored '
+                + 'by the same pipeline as real posts, so every step below is genuine.',
+            plain: 'Demo content: written for this installation by its demo feed (scripts/populate.js), '
+                + 'not collected from a source’s public API. It passed through the same ingest '
+                + `normaliser (${piiFields.length} identifying field(s) checked: ${piiFields.join(', ')}) `
+                + `and the location is a demo ${granularity}.`,
+            config: { ...config, content_origin: 'demo_feed', fictional: true },
+            researcher: `${researcher} Content origin: demo feed (data_sources.source_type = 'demo'); `
+                + 'the text is fictional and was never collected.',
+        }
+        : {
+            public: 'This post came from a public source. Before it was saved, anything that could '
+                + `identify who wrote it was removed. Only the ${granularity} it came from is kept.`,
+            plain: `Collected via the source’s public API. ${piiFields.length} identifying field(s)`
+                + ` (${piiFields.join(', ')}) were stripped before anything was stored.`
+                + ` Location was kept at ${granularity} level only.`,
+            config,
+            researcher,
+        };
 
     return {
         stage:               'ingestion',
         model_name:          ingestMv.model_name,
         methodology_version: ingestMv.version,
         status:              'pass',
-        audiences: {
-            public: 'This post came from a public source. Before it was saved, anything that could '
-                + `identify who wrote it was removed. Only the ${granularity} it came from is kept.`,
-            plain: `Collected via the source’s public API. ${piiFields.length} identifying field(s)`
-                + ` (${piiFields.join(', ')}) were stripped before anything was stored.`
-                + ` Location was kept at ${granularity} level only.`,
-            config: {
-                model:                `${ingestMv.model_name}@${ingestMv.version}`,
-                methodology_version:  ingestMv.version,
-                ...cfg,
-            },
-            researcher: 'Raw content is SHA-256 hashed at ingest; the hash is the immutable join key '
-                + 'across the decision audit log (exposed keyed via AUDIT_HASH_KEY).',
-        },
+        audiences,
     };
 }
 

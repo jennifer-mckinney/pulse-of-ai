@@ -36,8 +36,11 @@ describe('migration 009_methodology_registration.sql', () => {
     it('registers bias, ingest and audit_narration exactly as the registry defines them', async () => {
         await run009();
         const rows = await registeredRows();
+        // 009 is released: it registers exactly these versions (later ones,
+        // e.g. audit_narration@1.2.0, ship in later migrations).
+        const REGISTERED_BY_009 = ['bias@1.1.0', 'ingest@1.0.0', 'audit_narration@1.1.0'];
         const expected = METHODOLOGY_VERSIONS
-            .filter(m => COMPONENTS.includes(m.component))
+            .filter(m => REGISTERED_BY_009.includes(`${m.component}@${m.version}`))
             .sort((a, b) => a.component.localeCompare(b.component))
             .map(m => ({
                 component: m.component,

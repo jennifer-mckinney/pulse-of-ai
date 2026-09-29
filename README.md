@@ -11,6 +11,7 @@ Pulse of AI aggregates AI-related posts from the top 50 online sources across 7 
 - [Features](#features)
 - [Architecture](#architecture)
 - [Tech Stack](#tech-stack)
+- [Stand it up](#stand-it-up)
 - [Quick Start](#quick-start)
 - [Environment Variables](#environment-variables)
 - [Database](#database)
@@ -105,7 +106,118 @@ For the complete technical specification see [`docs/TECHNICAL_SPEC.md`](docs/TEC
 
 ---
 
+## Stand it up
+
+One command builds and starts the whole solution (frontend, API, workers, embeddings service, databases), fills it with data and checks that it works:
+
+```bash
+git clone https://github.com/jennifer-mckinney/pulse-of-ai.git
+cd pulse-of-ai
+bash scripts/standup.sh  # needs Bash + Docker only
+# or: npm run standup    # the same script, launched by npm (also needs Node.js/npm)
+```
+
+When it finishes, open **http://localhost:3000**: the globe, the eleven chapters with their numbers, and a "why?" receipt on any post that opens its real audit trail.
+
+### Prerequisites
+
+- Docker Desktop (macOS / Windows) or Docker Engine with the Compose plugin (Linux), with the daemon running. **Docker Compose 2.39.0 or newer** (`docker compose version`): `docker-compose.yml` uses `build.provenance` / `build.sbom`, which Compose added in 2.39.0, and older versions reject the file. Standup checks the version and stops with upgrade instructions if it is too old.
+- **Bash 3.2 or newer.** macOS's `/bin/bash` (3.2) and any Linux bash work. On **Windows**, run it from **WSL 2** (recommended, with Docker Desktop's WSL integration turned on) or **Git Bash**. PowerShell and `cmd.exe` cannot run the script themselves: `npm run standup` from them works only when one of those `bash` executables is on `PATH`. Under Git Bash, NTFS does not enforce the `chmod 600` standup applies to `.env`, so restrict that file with Windows permissions yourself.
+- `curl` (used by the smoke check), plus the standard tools every macOS, Linux, WSL and Git Bash install has: `awk`, `sed`, `grep`, `find`, and `openssl` (or `/dev/urandom` with `od`) for the generated secrets.
+
+Two ways to start it, same script:
+
+| Command | Needs on the host |
+|---|---|
+| `bash scripts/standup.sh` | Bash, Docker (Compose 2.39.0+), `curl` |
+| `npm run standup` | all of the above, plus Node.js and npm (npm only launches `bash scripts/standup.sh`; no `npm install` needed) |
+
+Neither runs Node.js or Python on the host: those run only inside the containers. The same goes for teardown (`bash scripts/teardown.sh` or `npm run teardown`). The hints the scripts print use whichever form you started them with.
+
+The script checks Docker, the Compose version, the daemon and `curl` first, and prints how to fix anything that is missing.
+
+### What it does
+
+1. Creates `.env` from `.env.example` if you don't have one, generating strong random `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `AUDIT_HASH_KEY` and `CORRELATION_SALT` values. It never prints them. An existing `.env` keeps its values: only keys that are missing get added (standup refuses to add secrets to a group- or world-writable file), and the file is set to mode 600. If a secret is empty or still has its `.env.example` placeholder, standup stops and names it.
+2. Builds two images: `pulse-of-ai/app` (Node 22; one image for web, worker, migrate and populate) and `pulse-of-ai/embeddings` (Python 3.13, FastAPI and sentence-transformers, CPU only). Both run as non-root users.
+3. Starts the compose `full` profile. A one-shot `migrate` job applies migrations 001–012 and the seed, and web and the worker start only after it exits successfully.
+4. Waits for health, with timeouts. If a service fails, its logs are printed.
+5. Populates data (see below) and starts the `populate` feed.
+6. Runs a smoke check. It looks at the API, the page, and the page's own data calls (globe, themes, bias, ribbon, drill-down). It counts posts, audit decisions, bias assessments and embeddings, opens one receipt and checks its four audience views and bias lineage, and runs `npm run replay` on that post, which must PASS. It ends with a population summary.
+
+`GET /api/health` also reports `redis.reachable` and `worker.alive` / `worker.last_heartbeat`, and every container's logs rotate (json-file, 5 × 10 MB).
+
+Re-running is safe. The images come from the build cache, running containers are kept, and a second population batch is skipped while the trailing hour is still full. If an earlier run had no embeddings (the model could not be downloaded), a re-run with the embeddings service healthy queues embed jobs for every trailing-hour demo post that has none and waits for them (up to 180 s) before the smoke check.
+
+### What runs where
+
+| Service | Host port (override) | Role |
+|---|---|---|
+| `web` | `3000` (`WEB_PORT`) | Express API and the static frontend (`public/`) |
+| `worker` | none | BullMQ workers for ingest, embed and correlate (`src/workers/start.js`). Healthy while its Redis heartbeat is fresh; `docker stop` gives it 180 s to finish in-flight jobs |
+| `embeddings` | none (compose network only: `embeddings:8000`) | `/embeddings` and `/health`, unauthenticated, so never published; standup checks it with `compose exec`. The model downloads once into the `hf_cache` volume |
+| `populate` | none | Demo feed. Adds a batch of fictional posts every 150 s (profile `demo`) |
+| `migrate` | none | One-shot job: migrations and seed |
+| `postgres` | `5434` in `.env` (`POSTGRES_PORT`) | PostgreSQL 16 + pgvector (`postgres_data` volume) |
+| `postgres_test` | `5433` (`POSTGRES_TEST_PORT`) | Test database (not used by the running app) |
+| `redis` | `6379` (`REDIS_PORT`) | BullMQ queue backend (`redis_data` volume). Password required (`REDIS_PASSWORD`) |
+
+Every published port (web and the databases and redis) binds to `127.0.0.1` by default (`PULSE_BIND_ADDR`). Setting `PULSE_BIND_ADDR=0.0.0.0` exposes all of them to your network, databases included. To run a second stack beside this one, give it its own project name and ports:
+
+```bash
+COMPOSE_PROJECT_NAME=pulse-demo WEB_PORT=3200 \
+POSTGRES_PORT=5534 POSTGRES_TEST_PORT=5533 REDIS_PORT=6479 npm run standup
+```
+
+`npm run docker:up` hasn't changed. It still starts only `postgres`, `postgres_test` and `redis`, for host-side development.
+
+### Live vs demo data
+
+**Live collection is not implemented yet.** Nothing consumes the `collect.*` queues, the collector scheduler is not wired in, and `POST /api/refresh` is a placeholder that completes its job with 0 posts. So standup always populates **demo** data, and it says so in its output and in the smoke-check summary.
+
+The demo data is honest about what it is:
+
+- **Real pipeline, fictional input.** The posts are invented text with no people, handles or personal data. They go through the real ingest normaliser, the real sentiment, relevance and discourse scorers, the real job-level bias checks, and the real embed worker, which calls the embeddings container. No score is made up: every one has a genuine audit trail, and `npm run replay -- --post <id>` reports PASS.
+- **Labelled in the data.** Posts belong to inactive `demo_<category>` sources named "Demo feed — <Category> (fictional)", and that name shows up in the source ribbon. Every text starts with `[Demo]`, and the processing jobs are recorded as `triggered_by = 'demo'`.
+- **Real timestamps, kept current.** The page shows the trailing hour. Every demo post is stamped with the time it was actually ingested, and nothing is backdated or re-stamped. The `populate` service ingests 14 more every 150 s (`DEMO_FEED_BATCH`, `DEMO_FEED_INTERVAL_MS`), which keeps the hour full. If you stop that service, the demo posts age out of the window on their own.
+- **Shown as DEMO on the page.** The API reports the data origin (`data_mode` on `GET /api/health`, `demo_posts` / `data_mode` on every aggregated row, `data_origin` on each receipt), classified by source. `data_mode` on `/api/health` classifies exactly what the globe shows for the trailing hour (scored posts at a city in the registry), and `data_window` reports those counts next to all posts stored in that hour (`stored_posts`, `stored_demo_posts`). With demo data the intro kicker reads **DEMO**, the intro numbers are computed from the data the globe renders, chapter titles carry the same "— Demo data" marker as the bundled fallback, receipts say the post is fictional demo content generated for this installation (audit narration 1.2.0), and the health drawer counts demo feeds separately from the registry's sources.
+
+`scripts/populate.js` is the seam for real collectors. When they exist, the population step becomes "collect live, with demo as the fallback".
+
+### Embeddings
+
+The first start downloads the ~90 MB `all-MiniLM-L6-v2` model into the `hf_cache` volume. Later starts and rebuilds reuse it. If the download fails (you're offline, behind a proxy, or Hugging Face is unreachable), standup says so clearly and carries on without embeddings: posts are still scored and audited, but vector search stays empty. Fix the network and run `npm run standup` again.
+
+### Tear it down
+
+```bash
+npm run teardown                    # stop and remove containers, keep the data volumes
+npm run teardown -- --purge         # also delete the volumes (database, redis, model cache); asks first
+npm run teardown -- --purge --yes   # non-interactive purge
+bash scripts/teardown.sh --purge    # the same without Node.js/npm on the host
+```
+
+Both act on one compose project only: `COMPOSE_PROJECT_NAME` if it's set, otherwise the one in `.env`, otherwise `pulse-of-ai`. The first line of output says which one it used and where the name came from (shell env, env file or default).
+
+- If `COMPOSE_PROJECT_NAME` comes from your shell and differs from the project in `.env` (for example, it's still exported for another app), teardown asks you to type the project name before it stops anything, even without `--purge`. `--yes` confirms non-interactively.
+- Containers that carry the project's name but aren't defined in this compose file (orphans) are left alone. They may belong to another app.
+- `pulse-of-ai` is the shared dev project that `npm run docker:up` and `npm run dev` use. Tearing it down also stops `postgres_test` on port 5433, the test database every jest run uses, so teardown warns before it does.
+
+### Upgrading an existing dev database
+
+- **Standup applies migrations for you.** The `migrate` job runs every pending migration and the idempotent seed before web and the worker start, on every `npm run standup`.
+- **Host-side development (`npm run dev`)**: after pulling, run `npm run migrate && npm run seed` against your dev database.
+- **Migrations are forward-only.** There are no down migrations, and older code isn't guaranteed to run against a newer schema. Take a backup first if you may need to go back: `docker compose exec postgres pg_dump -U pulse_user pulse_of_ai > backup.sql`.
+- **New secrets.** Standup adds keys that are missing from an existing `.env` (such as `REDIS_PASSWORD`) and stops if a secret is empty or still has its `.env.example` placeholder. If you only use `npm run docker:up`, add `REDIS_PASSWORD=$(openssl rand -hex 32)` to `.env` yourself: the redis service now requires a password.
+- **A placeholder `POSTGRES_PASSWORD` on an existing volume.** Postgres reads `POSTGRES_PASSWORD` only when it first creates the database, so editing `.env` alone breaks the connection. Change it inside Postgres as well, without putting it on a command line: run `docker compose exec postgres psql -U pulse_user -d pulse_of_ai`, then `\password pulse_user`, and put the same value in `.env`. Or start over with `npm run teardown -- --purge`, which deletes the data.
+
+Flags: `bash scripts/standup.sh --help` (or `npm run standup -- --help`). `--no-build` skips the image build, and `--demo` adds a fresh demo batch even when the hour is already full. Timeouts: `STANDUP_TIMEOUT` (core services, default 300 s) and `STANDUP_EMBEDDINGS_TIMEOUT` (first model download, default 900 s).
+
+---
+
 ## Quick Start
+
+For host-side development: Node and Python run on your machine, and only the databases and redis run in Docker. For the all-in-Docker path, see [Stand it up](#stand-it-up).
 
 ### Prerequisites
 
@@ -183,6 +295,12 @@ Copy `.env.example` to `.env` and fill in the values below.
 | `CORRELATION_SALT` | Yes | 64-hex-char salt for verb-noun pseudonymous IDs — generate once, never change |
 | `CORRELATION_MIN_CONFIDENCE` | No | Min confidence to assign a cross-platform ID (default `0.85`) |
 | `RETENTION_DETAIL_DAYS` | No | Days before compaction (default `90`) |
+| `REDIS_PORT` | No | Redis host port (default `6379`) |
+| `WEB_PORT` | No | Standup: host port of the web service (default `3000`) |
+| `PULSE_BIND_ADDR` | No | Interface every published port binds to: web, postgres, postgres_test, redis (default `127.0.0.1`) |
+| `REDIS_PASSWORD` | Yes (Docker) | Redis `requirepass`; BullMQ, the worker and `/api/health` authenticate with it. Standup generates it |
+| `DEMO_FEED_INTERVAL_MS` | No | Standup demo feed: ms between fictional batches (default `150000`) |
+| `DEMO_FEED_BATCH` | No | Standup demo feed: posts per batch (default `14`) |
 
 Generate secrets:
 
@@ -322,7 +440,8 @@ pulse-of-ai/
 │   ├── unit/                   Unit tests (no DB)
 │   └── integration/            API integration tests
 ├── .env.example                Environment variable template
-├── docker-compose.yml          PostgreSQL + test DB + Redis
+├── docker-compose.yml          PostgreSQL + test DB + Redis; profile "full" adds web, worker, embeddings, migrate
+├── Dockerfile                  Node 22 app image (web / worker / migrate / populate)
 ├── jest.config.js
 └── package.json
 ```

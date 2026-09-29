@@ -30,9 +30,11 @@ describe('src/queues/index.js', () => {
         const saved = {
             REDIS_HOST: process.env.REDIS_HOST,
             REDIS_PORT: process.env.REDIS_PORT,
+            REDIS_PASSWORD: process.env.REDIS_PASSWORD,
         };
         delete process.env.REDIS_HOST;
         delete process.env.REDIS_PORT;
+        delete process.env.REDIS_PASSWORD;
         Object.assign(process.env, env);
         try {
             const { Queue } = require('bullmq');
@@ -59,6 +61,24 @@ describe('src/queues/index.js', () => {
                 REDIS_PORT: '6380',
             });
             expect(registry.connection).toEqual({ host: 'redis.internal', port: 6380 });
+        });
+
+        // F9-1: compose runs Redis with --requirepass; every BullMQ queue,
+        // worker and the health probe authenticate with REDIS_PASSWORD.
+        it('authenticates with REDIS_PASSWORD when it is set', () => {
+            const { registry } = loadRegistry({ REDIS_PASSWORD: 's3cret' });
+            expect(registry.connection).toEqual({ host: '127.0.0.1', port: 6379, password: 's3cret' });
+        });
+
+        it('sends no password when REDIS_PASSWORD is empty', () => {
+            const { registry } = loadRegistry({ REDIS_PASSWORD: '' });
+            expect(registry.connection).not.toHaveProperty('password');
+        });
+
+        it('redisConnection() builds the same config from any env object', () => {
+            const { registry } = loadRegistry();
+            expect(registry.redisConnection({ REDIS_HOST: 'r', REDIS_PORT: '1', REDIS_PASSWORD: 'p' }))
+                .toEqual({ host: 'r', port: 1, password: 'p' });
         });
     });
 

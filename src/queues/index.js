@@ -28,14 +28,13 @@ const { Queue } = require('bullmq');
 
 // ─── Connection ───────────────────────────────────────────────────────────────
 
-/**
- * Shared Redis connection config used by all queues and workers.
- * In production override with REDIS_URL (e.g. redis://user:pass@host:6379).
- */
-const connection = {
-    host: process.env.REDIS_HOST || '127.0.0.1',
-    port: parseInt(process.env.REDIS_PORT || '6379', 10),
-};
+// redisConnection (REDIS_HOST / REDIS_PORT / REDIS_PASSWORD) lives in
+// ./connection so the web process can build a probe client without opening
+// these queues.
+const { redisConnection } = require('./connection');
+
+/** Shared Redis connection config used by all queues and workers. */
+const connection = redisConnection(process.env);
 
 // ─── Default job options ──────────────────────────────────────────────────────
 
@@ -87,6 +86,7 @@ const correlateQueue = new Queue('correlate', { connection, defaultJobOptions: B
 
 module.exports = {
     connection,
+    redisConnection,
     BASE_JOB_OPTIONS,
     collectRedditQueue,
     collectRssQueue,

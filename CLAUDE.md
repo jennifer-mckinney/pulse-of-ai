@@ -7,9 +7,12 @@ npm run migrate        # Run pending SQL migrations against dev DB
 npm run seed           # Data sources + methodology registry (idempotent)
 npm run seed:e2e       # Deterministic e2e fixture dataset (idempotent) — needed by `npm run test:e2e`
 npm run dev            # Express server on port 3000
+npm run standup        # OR the whole solution in Docker, one command: build, profile "full" (web/worker/embeddings/migrate), demo population, smoke check
+npm run teardown       # stop it (keeps volumes); `-- --purge` deletes volumes after confirmation (`--yes` non-interactive)
 ```
 
 - **Compose project name is `pulse-of-ai`** — pinned by `name:` in `docker-compose.yml` AND `COMPOSE_PROJECT_NAME` in `.env`, so every worktree/checkout owns the SAME containers and volumes. Never start the stack with an ad-hoc `-p` project name: that strands the DB data in project-scoped volumes a later run can't adopt.
+- **Standup** (`scripts/standup.sh`, `scripts/lib/stack.sh`): the default compose profile is unchanged (`docker:up` = databases + redis only); `full` adds web (3000), worker, embeddings (8000, model cached in the `hf_cache` volume), one-shot `migrate`; `demo` adds the `populate` feed. Data is always DEMO today (fictional posts through the real pipeline, `scripts/populate.js`) because no live collectors exist. A deliberate throwaway second stack is fine with its own `COMPOSE_PROJECT_NAME` + ports (`WEB_PORT`, `EMBEDDINGS_PORT`, `POSTGRES_PORT`, `POSTGRES_TEST_PORT`, `REDIS_PORT`) and `PULSE_ENV_FILE`; purge it afterwards and never `teardown --purge` the `pulse-of-ai` project unless you mean to wipe the dev data.
 
 ## Key Commands
 | Command | Purpose |
@@ -17,6 +20,7 @@ npm run dev            # Express server on port 3000
 | `npm run db:reset` | Drop + re-migrate + seed dev DB |
 | `npm run seed` | Load 50 data sources + methodology versions (from `src/config/methodology-registry.js`) |
 | `npm run seed:e2e` | Load the deterministic Playwright fixture dataset (`scripts/test/seed-e2e.js`) |
+| `npm run standup` / `npm run teardown` | One-command Docker standup of the whole solution / stop it (see README "Stand it up") |
 | `npm run replay -- --post <id>` | Re-run a post's stored decisions through `src/pipeline` and print PASS / DIVERGENCE / NOT RE-RUNNABLE per stage |
 | `npm run verify` | Full gate: Jest + coverage, pytest, black (needs `python/.venv`) |
 | `npm run test:e2e` | Playwright suite (dev DB migrated + seeded + `seed:e2e`; globalSetup freshens timestamps) |
@@ -27,7 +31,8 @@ npm run dev            # Express server on port 3000
 | `black python/` | Format Python files |
 
 ## Architecture
-- **DB:** PostgreSQL 16 + pgvector — 9 migrations in `src/db/migrations/` (009 registers the bias / ingest / audit_narration methodology rows; it must stay field-for-field equal to `src/config/methodology-registry.js`)
+- **DB:** PostgreSQL 16 + pgvector — 12 migrations in `src/db/migrations/` (009 registers the bias / ingest / audit_narration methodology rows; it must stay field-for-field equal to `src/config/methodology-registry.js`; 010 adds per-assessment bias methodology lineage — `bias_assessments.methodology_version_id`, resolved at read time as recorded, inferred or current by `src/config/bias-lineage.js`; 011 registers audit_narration@1.2.0 — 009 is released and never edited, later methodology versions ship as new migrations; 012 registers embedding@1.0.0 — the embedding model pinned to a Hugging Face commit via EMBED_MODEL_REVISION — and adds `post_embeddings.methodology_version`)
+- **Data mode:** `src/config/data-mode.js` classifies posts by source (`data_sources.source_type = 'demo'` = standup demo feed): `/api/health` reports `data_mode` (demo / live / mixed / none, trailing hour), `active_sources` (demo feeds excluded) and `demo_feeds`; aggregated rows carry `demo_posts` + `data_mode`; receipts carry `post.data_origin`. The frontend (`data.js dataModeOf`, `chapters.js resolveIntro`) turns it into the intro kicker (LIVE / DEMO / LIVE + DEMO), interpolated intro numbers and the "— Demo data" markers; `isDemo` still means only the bundled fallback (no fetches)
 - **Pipeline:** `src/pipeline/` — sentiment → relevance → discourse → embeddings → correlation
 - **Workers:** BullMQ queues backed by Redis; worker files mirror pipeline modules
 - **Routes:** `src/routes/` — health, posts, sentiment, refresh, audit, bias, methodology, sources, query, themes. `src/server.js` sets the CSP/security headers, applies CORS to the read-only routers only, and mounts `POST /api/refresh` (60 s global debounce) without CORS

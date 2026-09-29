@@ -4,16 +4,84 @@
 # (without this file's directory as cwd) resolve to the same project.
 name: pulse-of-ai
 
+# Log rotation for EVERY service (P9-7): Docker's json-file driver keeps
+# logs forever by default, and a long-running demo feed or a crash-looping
+# service would fill the disk. 5 files × 10 MB per container.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+# Environment of every Node role (migrate, web, worker, populate): the
+# database, Redis, and the two base secrets (AUDIT_HASH_KEY,
+# CORRELATION_SALT). Container-side connection settings are fixed to the
+# compose network; the host-side .env values (POSTGRES_HOST=localhost,
+# POSTGRES_PORT=5434, ...) are for `npm run dev` on the host and are
+# deliberately overridden here.
+x-app-env: &app-env
+  NODE_ENV: production
+  PORT: "3000"
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: ${POSTGRES_DB:-pulse_of_ai}
+  POSTGRES_USER: ${POSTGRES_USER:-pulse_user}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required (npm run standup generates it)}
+  EMBEDDINGS_SERVICE_URL: http://embeddings:8000
+  EMBED_MODEL: ${EMBED_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+  # Pinned model commit (P9-5); the worker records embedding@<ver> only when
+  # model + revision are the registered ones.
+  EMBED_MODEL_REVISION: ${EMBED_MODEL_REVISION:-1110a243fdf4706b3f48f1d95db1a4f5529b4d41}
+  AUDIT_HASH_KEY: ${AUDIT_HASH_KEY:-}
+  CORRELATION_SALT: ${CORRELATION_SALT:-}
+  CORRELATION_MIN_CONFIDENCE: ${CORRELATION_MIN_CONFIDENCE:-0.85}
+  RETENTION_DETAIL_DAYS: ${RETENTION_DETAIL_DAYS:-90}
+  DEMO_FEED_INTERVAL_MS: ${DEMO_FEED_INTERVAL_MS:-150000}
+  DEMO_FEED_BATCH: ${DEMO_FEED_BATCH:-14}
+
+# Third-party collector credentials and settings — merged into `worker`
+# ONLY (F9-2). web is the internet-facing process: an RCE or debug leak
+# there must not expose paid API keys via /proc/self/environ, and migrate /
+# populate never collect. Collector code runs in the worker; anything web
+# needs for source STATUS is a non-secret name or flag, never a credential.
+# scripts/test/check-compose.sh fails if a credential reaches another role.
+x-collector-env: &collector-env
+  REDDIT_USER_AGENT: ${REDDIT_USER_AGENT:-}
+  TWITTER_BEARER_TOKEN: ${TWITTER_BEARER_TOKEN:-}
+  GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+  SEMANTIC_SCHOLAR_API_KEY: ${SEMANTIC_SCHOLAR_API_KEY:-}
+
+# Shared definition for every Node service of the full solution (migrate,
+# web, worker, populate): ONE image (./Dockerfile), role picked by `command`.
+x-app: &app
+  image: ${PULSE_APP_IMAGE:-pulse-of-ai/app:local}
+  # Built ONCE, by the web service (see there); the other roles reuse the tag
+  # and never try to pull it from a registry.
+  pull_policy: never
+  profiles: ["full"]
+  restart: unless-stopped
+  logging: *logging
+  environment:
+    <<: *app-env
+
 services:
   # Primary database — PostgreSQL 16 with pgvector extension
   postgres:
-    image: pgvector/pgvector:pg16
+    logging: *logging
+    # pgvector/pgvector:pg16, pinned by digest (F9-6); bump deliberately.
+    image: pgvector/pgvector:pg16@sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-pulse_of_ai}
       POSTGRES_USER: ${POSTGRES_USER:-pulse_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    # Host port on loopback by default (F9-1): Docker publishes a port with
+    # no host IP on EVERY interface (and bypasses ufw on Linux).
+    # PULSE_BIND_ADDR=0.0.0.0 opts in to exposing it, together with web.
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "${PULSE_BIND_ADDR:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -24,13 +92,15 @@ services:
 
   # Isolated test database — separate port, separate volume, wiped per test suite
   postgres_test:
-    image: pgvector/pgvector:pg16
+    logging: *logging
+    # pgvector/pgvector:pg16, pinned by digest (F9-6); bump deliberately.
+    image: pgvector/pgvector:pg16@sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b
     environment:
       POSTGRES_DB: ${POSTGRES_TEST_DB:-pulse_of_ai_test}
       POSTGRES_USER: ${POSTGRES_USER:-pulse_user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
     ports:
-      - "${POSTGRES_TEST_PORT:-5433}:5432"
+      - "${PULSE_BIND_ADDR:-127.0.0.1}:${POSTGRES_TEST_PORT:-5433}:5432"
     # No volume mount — ephemeral; data lost on container restart (intentional for tests)
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pulse_user} -d ${POSTGRES_TEST_DB:-pulse_of_ai_test}"]
@@ -41,21 +111,168 @@ services:
   # Redis — BullMQ job queue backend for the event-driven pipeline.
   # AOF persistence (appendonly yes) ensures in-flight jobs survive container restarts.
   # At 10K+ events per 2-3 minute cycle across 50 sources, job durability is non-negotiable.
+  #
+  # Password required (F9-1): REDIS_PASSWORD (generated by npm run standup)
+  # is written to a config file instead of redis-server's argv, so `ps` on
+  # the host never shows it; the image's own entrypoint then starts
+  # redis-server with its usual privilege drop to the `redis` user.
+  # Backslashes and double quotes are escaped for redis.conf quoting.
   redis:
-    image: redis:7-alpine
-    command: redis-server --appendonly yes --appendfsync everysec
+    logging: *logging
+    # redis:7-alpine, pinned by digest (F9-6); bump deliberately.
+    image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required (npm run standup generates it)}
+    command:
+      - sh
+      - -c
+      - |
+        umask 077
+        pw=$$(printf '%s' "$$REDIS_PASSWORD" | sed 's/[\\"]/\\&/g')
+        printf 'requirepass "%s"\n' "$$pw" > /tmp/redis-auth.conf
+        chown redis:redis /tmp/redis-auth.conf
+        exec docker-entrypoint.sh redis-server /tmp/redis-auth.conf --appendonly yes --appendfsync everysec
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "${PULSE_BIND_ADDR:-127.0.0.1}:${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
+    # Authenticated ping; REDISCLI_AUTH keeps the password out of argv.
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
       interval: 5s
       timeout: 5s
       retries: 10
+
+  # ─── Full solution (profile "full") ──────────────────────────────────────
+  # Everything below is OPT-IN. The default profile (`npm run docker:up`,
+  # bare `docker compose up -d`) still starts only postgres, postgres_test and
+  # redis. `npm run standup` (scripts/standup.sh) activates "full" (and
+  # "demo" for the population feed) and waits for health.
+  #
+  # Inside the compose network the app reaches postgres:5432 and redis:6379
+  # directly; the *_PORT host-port variables above only move the published
+  # ports, so a second stack can run beside the dev one.
+
+  # One-shot: apply pending migrations, then the idempotent registry seed.
+  # web, worker and the population feed wait for it to EXIT 0.
+  migrate:
+    <<: *app
+    command: ["sh", "-c", "node scripts/migrate.js && node scripts/seed.js"]
+    restart: "no"
+    healthcheck:
+      disable: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Express API + the static frontend (public/) on one port.
+  web:
+    <<: *app
+    # The only build definition for the app image. One build target (not one
+    # per role) plus no provenance/SBOM attestations (standup also sets
+    # BUILDX_NO_DEFAULT_ATTESTATIONS=1) keeps the image ID stable across cached
+    # rebuilds, so re-running standup leaves running containers alone instead
+    # of recreating them.
+    build:
+      context: .
+      dockerfile: Dockerfile
+      provenance: false
+      sbom: false
+    pull_policy: missing
+    command: ["node", "src/server.js"]
+    ports:
+      - "${PULSE_BIND_ADDR:-127.0.0.1}:${WEB_PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # BullMQ workers (ingest / embed / correlate) — src/workers/start.js is the
+  # only worker entry point. Depends on embeddings being STARTED, not healthy:
+  # if the model download fails the rest of the stack still comes up (embed
+  # jobs retry with backoff), and standup reports embeddings as unavailable.
+  worker:
+    <<: *app
+    command: ["node", "src/workers/start.js"]
+    # The only role with collector credentials (F9-2).
+    environment:
+      <<: [*app-env, *collector-env]
+    # Healthy = the worker's heartbeat file is fresh (P9-7). It is written
+    # every 15 s only after the heartbeat reached Redis, so a stuck worker or
+    # one that lost Redis turns unhealthy (src/workers/heartbeat.js).
+    healthcheck:
+      test: ["CMD", "node", "src/workers/healthcheck.js"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    # SIGTERM → w.close() waits for in-flight jobs; an embed job retrying
+    # with exponential backoff can take minutes, so give it 3 minutes
+    # before SIGKILL (P9-7).
+    stop_grace_period: 180s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      embeddings:
+        condition: service_started
+
+  # FastAPI + sentence-transformers. The model downloads on first start into
+  # the hf_cache volume and is reused by every later start / rebuild.
+  embeddings:
+    logging: *logging
+    image: ${PULSE_EMBEDDINGS_IMAGE:-pulse-of-ai/embeddings:local}
+    build:
+      context: ./python
+      dockerfile: Dockerfile
+      provenance: false   # see x-app: stable image IDs across cached rebuilds
+      sbom: false
+    profiles: ["full"]
+    restart: unless-stopped
+    environment:
+      EMBED_MODEL: ${EMBED_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+      EMBED_MODEL_REVISION: ${EMBED_MODEL_REVISION:-1110a243fdf4706b3f48f1d95db1a4f5529b4d41}
+      EMBED_BATCH_SIZE: ${EMBED_BATCH_SIZE:-64}
+    # No `ports:` (F9-8): the API is unauthenticated and only the worker
+    # needs it (embeddings:8000 on the compose network). Publishing it —
+    # even behind PULSE_BIND_ADDR — would let anyone who can reach the host
+    # burn its CPU through /embeddings. standup checks it via compose exec.
+    volumes:
+      - hf_cache:/home/app/.cache/huggingface
+
+  # Data population loop (profile "demo"). Live collectors are not
+  # implemented yet, so this feeds FICTIONAL demo posts through the real
+  # pipeline every DEMO_FEED_INTERVAL_MS — see scripts/populate.js for why
+  # and how it is labelled. Started by scripts/standup.sh.
+  populate:
+    <<: *app
+    profiles: ["demo"]
+    command: ["node", "scripts/populate.js", "--loop"]
+    healthcheck:
+      disable: true
+    # SIGTERM lets an in-flight batch finish (its job row completes), then
+    # the feed exits without sleeping and closes Redis + the DB pool. 30 s
+    # covers a batch; the default 10 s could SIGKILL it mid-cleanup.
+    stop_grace_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
 volumes:
   postgres_data:
     driver: local
   redis_data:
+    driver: local
+  # sentence-transformers model cache (embeddings service, profile "full")
+  hf_cache:
     driver: local

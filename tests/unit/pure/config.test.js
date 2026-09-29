@@ -158,7 +158,9 @@ describe('story.config — STORY beat sequence', () => {
 
     test('kickers carry the verbatim prototype chapter labels', () => {
         const byId = Object.fromEntries(STORY.map(b => [b.id, b]));
-        expect(byId['overview'].kicker).toBe('LIVE · REFRESH CYCLE 2–3 MIN');
+        // G9-5: the overview's base kicker is the NEUTRAL (unknown-mode)
+        // text; the prototype's "LIVE · …" label is the live entry below.
+        expect(byId['overview'].kicker).toBe('REFRESH CYCLE 2–3 MIN');
         expect(byId['volume'].kicker).toBe('CHAPTER 01 · VOLUME LEADERS');
         expect(byId['divide'].kicker).toBe('CHAPTER 02 · THE DIVIDE');
         expect(byId['negativity'].kicker).toBe('CHAPTER 03 · NEGATIVITY HOTSPOTS');
@@ -169,6 +171,32 @@ describe('story.config — STORY beat sequence', () => {
         expect(byId['messengers'].kicker).toBe('CHAPTER 08 · THE MESSENGERS');
         expect(byId['summary'].kicker).toBe('CHAPTER 09 · THE HOUR IN REVIEW');
         expect(byId['explore'].kicker).toBe('CHAPTER 10 · YOUR TURN · NEXT STEPS');
+    });
+
+    // G9-5: the overview card states its data origin like the intro kicker.
+    test('overview kickerByMode: one kicker per data mode, LIVE only for live data', () => {
+        const byId = Object.fromEntries(STORY.map(b => [b.id, b]));
+        expect(byId['overview'].kickerByMode).toEqual({
+            live:     'LIVE · REFRESH CYCLE 2–3 MIN',
+            demo:     'DEMO · REFRESH CYCLE 2–3 MIN',
+            mixed:    'LIVE + DEMO',
+            none:     'NO POSTS IN THE LAST HOUR',
+            fallback: 'DEMO · BUNDLED SAMPLE DATA',
+        });
+    });
+
+    test('no beat hard-codes LIVE or DEMO in its base kicker (G9-5)', () => {
+        for (const b of STORY) {
+            expect(b.kicker).not.toMatch(/LIVE|DEMO/);
+            if (b.kickerByMode !== undefined) {
+                expect(Object.keys(b.kickerByMode).sort())
+                    .toEqual(['demo', 'fallback', 'live', 'mixed', 'none']);
+                for (const [mode, k] of Object.entries(b.kickerByMode)) {
+                    if (mode === 'live' || mode === 'mixed') expect(k).toMatch(/^LIVE/);
+                    else expect(k).not.toMatch(/LIVE/);
+                }
+            }
+        }
     });
 
     test('titles carry the verbatim prototype copy', () => {
@@ -253,7 +281,9 @@ describe('config exports are deeply frozen', () => {
         expect(() => { STORY[STORY.length - 1].nextSteps.push('rogue'); }).toThrow(TypeError);
         expect(() => { STORY[0].statsSpec[0][0] = 'rogue'; }).toThrow(TypeError);
         // values unchanged
-        expect(STORY[0].kicker).toBe('LIVE · REFRESH CYCLE 2–3 MIN');
+        expect(STORY[0].kicker).toBe('REFRESH CYCLE 2–3 MIN');
+        expect(() => { STORY[0].kickerByMode.none = 'LIVE'; }).toThrow(TypeError);
+        expect(STORY[0].kickerByMode.none).toBe('NO POSTS IN THE LAST HOUR');
         expect(STORY).toHaveLength(11);
         expect(STORY[STORY.length - 1].nextSteps).toHaveLength(5);
     });

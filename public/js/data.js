@@ -16,10 +16,17 @@
 //                           renders (zeros are honest, not hidden).
 //   - loadCityData():       fetch the aggregation WINDOWED to the trailing
 //                           hour (so "posts/hr" labels are truthful — G16),
-//                           returns { cities, isDemo }. Demo fallback only
+//                           returns { cities, isDemo, dataMode }. Demo fallback only
 //                           when the UNWINDOWED probe is also empty: an empty
 //                           hour over a non-empty DB renders honest zeros
 //                           instead of flipping to fictional demo numbers.
+//   - dataModeOf(rows):     'demo' | 'live' | 'mixed' | 'none' from the
+//                           served rows' demo_posts counts (posts from the
+//                           backend's demo feed — src/config/data-mode.js
+//                           classifies the same way).
+//   - labelsAsDemo(mode):   true for 'demo', 'mixed' and 'fallback' — every
+//                           mode whose numbers include demo posts, so the
+//                           existing "Demo data" markers are shown.
 //
 // Dual export guard: CommonJS (module.exports) for jest, window.PulseData
 // for browser script tags. The registry dependency is injected the same way
@@ -414,6 +421,43 @@
     // Returns { cities, isDemo }: isDemo is TRUE whenever the demo fallback
     // was used, so consumers (resolveChapter → insight cards) can visibly
     // mark the numbers as demo data instead of passing them off as live.
+    // dataModeOf: where the served rows' posts came from. Sums demo_posts
+    // (posts from the backend's demo feed) against total across the rows the
+    // globe renders — the same table as src/config/data-mode.js
+    // deriveDataMode (pinned by tests/unit/pure/dataMode.test.js). A row
+    // without demo_posts (an older API) counts as live: absence of a demo
+    // signal is never read as demo.
+    // G9-2: only rows the globe PLACES count — a registry city, or a row
+    // with usable coordinates (mergeWithBaseline + normalizeCities keep
+    // exactly those). The API serves coordinates only for registry cities,
+    // so for served data this is the registry rule GET /api/health applies:
+    // the kicker, the markers and the health drawer classify the same posts.
+    function dataModeOf(rows) {
+        if (!Array.isArray(rows)) return 'none';
+        let total = 0;
+        let demo = 0;
+        for (const row of rows) {
+            if (!row || typeof row !== 'object') continue;
+            const placed = findCity(row.city)
+                || (toCoord(row.lat, 90) !== null && toCoord(row.lng, 180) !== null);
+            if (!placed) continue;
+            const t = toCount(row.total);
+            total += t;
+            demo += Math.min(toCount(row.demo_posts), t);
+        }
+        if (total === 0) return 'none';
+        if (demo === total) return 'demo';
+        if (demo === 0) return 'live';
+        return 'mixed';
+    }
+
+    // labelsAsDemo: every mode whose numbers include demo posts carries the
+    // visible demo markers — the bundled fallback ('fallback') and backend
+    // demo-feed data ('demo', 'mixed') are labeled the same way.
+    function labelsAsDemo(dataMode) {
+        return dataMode === 'demo' || dataMode === 'mixed' || dataMode === 'fallback';
+    }
+
     async function loadCityData() {
         if (typeof fetch !== 'undefined') {
             try {
@@ -426,6 +470,7 @@
                         return {
                             cities: normalizeCities(mergeWithBaseline(windowed)),
                             isDemo: false,
+                            dataMode: dataModeOf(windowed),
                         };
                     }
                     // Empty hour — probe UNWINDOWED before concluding the DB
@@ -437,14 +482,18 @@
                             return {
                                 cities: normalizeCities(mergeWithBaseline([])),
                                 isDemo: false,
+                                dataMode: 'none',
                             };
                         }
                     }
                 }
             } catch (_) { /* network error — fall through to demo data */ }
         }
-        return { cities: normalizeCities(DEMO_DATA), isDemo: true };
+        return { cities: normalizeCities(DEMO_DATA), isDemo: true, dataMode: 'fallback' };
     }
 
-    return { DEMO_DATA, buildDemoData, normalizeCities, mergeWithBaseline, loadCityData };
+    return {
+        DEMO_DATA, buildDemoData, normalizeCities, mergeWithBaseline, loadCityData,
+        dataModeOf, labelsAsDemo,
+    };
 }));

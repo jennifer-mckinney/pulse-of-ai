@@ -1,10 +1,12 @@
 name: CI
 
+# P9-1: every pull request runs CI, whatever its base branch (stacked PRs
+# target feature branches, and a main/master-only filter never ran them),
+# and so does every push to main/master or a feature branch.
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, 'feature/**']
   pull_request:
-    branches: [main, master]
 
 jobs:
   test:
@@ -20,7 +22,7 @@ jobs:
     # Isolated test DB on port 5433 — never touches prod data.
     services:
       postgres_test:
-        image: pgvector/pgvector:pg16
+        image: pgvector/pgvector:pg16@sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b   # pgvector/pgvector:pg16
         env:
           POSTGRES_DB: pulse_of_ai_test
           POSTGRES_USER: pulse_user
@@ -34,7 +36,7 @@ jobs:
           --health-retries 10
 
       redis:
-        image: redis:7-alpine
+        image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499   # redis:7-alpine
         ports:
           - 6379:6379
         options: >-
@@ -76,6 +78,11 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      # tests/integration/composeConfig.test.js resolves docker-compose.yml,
+      # which needs Compose 2.39.0+; the runner image ships 2.38.2.
+      - name: Docker Compose >= 2.39.0 (pinned, SHA-256 verified)
+        run: bash scripts/test/ci-install-compose.sh
 
       - name: Run migrations on test DB
         run: npm run migrate
@@ -123,6 +130,109 @@ jobs:
       - name: Run pytest
         run: python -m pytest python/tests
 
+  # Build-only check for the one-command standup (scripts/standup.sh). Images
+  # are built and sanity-checked on the runner and then discarded — nothing is
+  # pushed to any registry.
+  # P9-1: the images are built for linux/amd64 explicitly — local builds on
+  # Apple Silicon produce arm64, so this is the job that proves the amd64
+  # images (and the amd64 CPU torch wheel of the hash lock) build.
+  # P9-1: the embeddings IMAGE runs Python 3.13 with the hash-locked
+  # requirements-service.txt; the lint-python job above uses 3.11 and the
+  # dev requirements. This job runs the pytest suite on the image's Python
+  # and exact dependency set.
+  python-image-deps:
+    name: Python 3.13 (image dependencies) pytest
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install the image's hash-locked dependencies
+        run: |
+          python -m pip install --require-hashes -r python/requirements-service.txt
+          python -m pip install pytest pytest-asyncio httpx
+
+      - name: Cache Hugging Face models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ runner.os }}-py313-${{ hashFiles('python/requirements-service.txt') }}
+
+      - name: Run pytest
+        run: python -m pytest python/tests
+
+  docker-images:
+    name: Docker images (linux/amd64 build)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # docker-compose.yml needs Compose 2.39.0+ (build.provenance / sbom);
+      # the runner image ships 2.38.2, which rejects the file.
+      - name: Docker Compose >= 2.39.0 (pinned, SHA-256 verified)
+        run: bash scripts/test/ci-install-compose.sh
+
+      # The default profile must stay databases + redis only (npm run docker:up);
+      # the full/demo profiles must parse. The password is a CI-only dummy.
+      - name: Validate docker-compose.yml profiles
+        env:
+          POSTGRES_PASSWORD: ci_password
+          REDIS_PASSWORD: ci_password
+        run: |
+          docker compose config --quiet
+          docker compose --profile full --profile demo config --quiet
+          default_services="$(docker compose config --services | sort | tr '\n' ' ')"
+          echo "default profile: ${default_services}"
+          test "${default_services}" = "postgres postgres_test redis "
+
+      # Security / operations policy on the resolved config: no port without
+      # an explicit host IP (loopback by default), and the checks listed in
+      # the script header.
+      - name: Compose policy checks
+        run: bash scripts/test/check-compose.sh
+
+      - name: Lint standup / teardown scripts
+        run: |
+          for f in scripts/standup.sh scripts/teardown.sh scripts/lib/stack.sh \
+                   scripts/test/stack-lib.test.sh scripts/test/check-compose.sh \
+                   scripts/test/ci-install-compose.sh; do
+            bash -n "$f"
+          done
+          docker run --rm -v "$PWD:/mnt" -w /mnt \
+            koalaman/shellcheck:v0.10.0@sha256:2097951f02e735b613f4a34de20c40f937a6c8f18ecb170612c88c34517221fb \
+            -x scripts/standup.sh scripts/teardown.sh scripts/lib/stack.sh \
+               scripts/test/stack-lib.test.sh scripts/test/check-compose.sh \
+               scripts/test/ci-install-compose.sh
+
+      # The scripts must work on macOS's /bin/bash 3.2 (G9-3): run the
+      # library's behaviour tests under bash 3.2 and under the runner's bash.
+      - name: Shell library tests (bash 3.2 and current bash)
+        run: |
+          bash scripts/test/stack-lib.test.sh
+          docker run --rm -v "$PWD:/w" -w /w \
+            bash:3.2@sha256:0fd7cb8499c63a3c9345e7088a9cd83bb69f6e895e83833859aff838a0312091 \
+            bash scripts/test/stack-lib.test.sh
+
+      - name: Build app image (web / worker / migrate / populate), linux/amd64
+        run: docker buildx build --platform linux/amd64 --load --tag pulse-of-ai/app:ci .
+
+      - name: Build embeddings image, linux/amd64
+        run: docker buildx build --platform linux/amd64 --load --tag pulse-of-ai/embeddings:ci python
+
+      - name: Image sanity (non-root users, entry points load)
+        run: |
+          test "$(docker run --rm pulse-of-ai/app:ci id -u)" != "0"
+          test "$(docker run --rm --entrypoint id pulse-of-ai/embeddings:ci -u)" != "0"
+          docker run --rm pulse-of-ai/app:ci node -e "require('./scripts/populate.js'); require('./scripts/smoke-check.js')"
+          docker run --rm --entrypoint python pulse-of-ai/embeddings:ci -c "import embeddings_service"
+          docker image ls --format '{{.Repository}}:{{.Tag}} {{.Size}}' | grep ':ci '
+
   e2e:
     name: E2E (Playwright)
     runs-on: ubuntu-latest
@@ -134,7 +244,7 @@ jobs:
     # timestamps before any spec runs.
     services:
       postgres:
-        image: pgvector/pgvector:pg16
+        image: pgvector/pgvector:pg16@sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b   # pgvector/pgvector:pg16
         env:
           POSTGRES_DB: pulse_of_ai
           POSTGRES_USER: pulse_user

@@ -17,9 +17,30 @@
 
 const axios = require('axios');
 const { dbGet, dbRun } = require('../db/connection');
+const { METHODOLOGY_VERSIONS } = require('../config/methodology-registry');
 
 const EMBEDDINGS_SERVICE_URL = process.env.EMBEDDINGS_SERVICE_URL || 'http://localhost:8000';
 const MODEL_NAME             = process.env.EMBED_MODEL || 'sentence-transformers/all-MiniLM-L6-v2';
+
+// P9-5: the registered embedding methodology (model + pinned revision) —
+// the LAST 'embedding' entry of the registry, as for every component.
+const EMBEDDING_METHODOLOGY = METHODOLOGY_VERSIONS.filter(m => m.component === 'embedding').pop();
+
+/**
+ * The embedding methodology version to record on a stored vector: the
+ * registered version when the configured model AND revision are the
+ * registered ones (the defaults), else null — a vector produced under an
+ * override must not claim a methodology it may not match.
+ * @param {NodeJS.ProcessEnv} env
+ * @returns {string|null}
+ */
+function embeddingMethodologyVersion(env) {
+    const model = env.EMBED_MODEL || EMBEDDING_METHODOLOGY.model_name;
+    const revision = env.EMBED_MODEL_REVISION || EMBEDDING_METHODOLOGY.config.revision;
+    return model === EMBEDDING_METHODOLOGY.model_name && revision === EMBEDDING_METHODOLOGY.config.revision
+        ? EMBEDDING_METHODOLOGY.version : null;
+}
+const METHODOLOGY_VERSION = embeddingMethodologyVersion(process.env);
 
 // all-MiniLM-L6-v2 produces 384-dimensional embeddings
 const EMBEDDING_DIMENSIONS = 384;
@@ -57,14 +78,17 @@ async function saveEmbedding(postId, embedding, modelName = MODEL_NAME) {
     // pgvector expects vector in '[f1,f2,...,fn]' string format
     const vectorStr = `[${embedding.join(',')}]`;
 
+    // methodology_version (P9-5): which registered embedding methodology
+    // (model + pinned revision, migration 012) produced this vector.
     const row = await dbRun(
-        `INSERT INTO post_embeddings (raw_post_id, embedding, model_name)
-         VALUES ($1, $2::vector, $3)
+        `INSERT INTO post_embeddings (raw_post_id, embedding, model_name, methodology_version)
+         VALUES ($1, $2::vector, $3, $4)
          ON CONFLICT (raw_post_id) DO UPDATE
-            SET embedding  = EXCLUDED.embedding,
-                model_name = EXCLUDED.model_name
+            SET embedding           = EXCLUDED.embedding,
+                model_name          = EXCLUDED.model_name,
+                methodology_version = EXCLUDED.methodology_version
          RETURNING id`,
-        [postId, vectorStr, modelName],
+        [postId, vectorStr, modelName, METHODOLOGY_VERSION],
     );
     return row.id;
 }
@@ -98,4 +122,5 @@ module.exports = {
     saveEmbedding,
     embedPost,
     EMBEDDING_DIMENSIONS,
+    embeddingMethodologyVersion,
 };

@@ -425,6 +425,10 @@
             postId: payload.post.id,
             inputHash,
             isDemo: false,
+            // A stored post from the backend's demo feed (fictional content,
+            // real pipeline): labeled like demo data, but it is fetched and
+            // replayable, so it is NOT isDemo (the local-synthesis flag).
+            demoOrigin: payload.post.data_origin === 'demo',
             post: {
                 content_snippet: payload.post.content_snippet || '',
                 source_name: payload.post.source_name || null,
@@ -559,13 +563,17 @@
     }
 
     // sourcesStat: GET /api/sources?include_inactive=true rows →
-    // {active, total}. This is REGISTRY-active (configured on/off flags),
-    // not liveness — label it honestly (audit G20).
+    // {active, total, demoFeeds}. This is REGISTRY-active (configured on/off
+    // flags), not liveness — label it honestly (audit G20). Demo feeds
+    // (source_type 'demo', the standup's fictional population) are NOT
+    // sources: they are excluded from active/total and counted separately.
     function sourcesStat(rows) {
         const list = Array.isArray(rows) ? rows : [];
+        const real = list.filter((r) => !(r && r.source_type === 'demo'));
         return {
-            active: list.filter((r) => r && r.active === true).length,
-            total: list.length,
+            active: real.filter((r) => r && r.active === true).length,
+            total: real.length,
+            demoFeeds: list.length - real.length,
         };
     }
 
@@ -997,6 +1005,7 @@
         initialized: false,
         cities: [],
         isDemo: false,
+        dataMode: 'unknown',   // PulseStory data mode (see story.js state); never assumed live (G9-5)
         exploring: false,
         filters: { sent: 'All', cat: 'All' },
         colorMode: 'sentiment',
@@ -1269,7 +1278,9 @@
 
         const foot = el('div', 'det-foot mono',
             'no PII stored · location capped at city'
-            + (state.isDemo ? ' · all posts fictional demo data' : ''));
+            + (state.isDemo || state.dataMode === 'demo'
+                ? ' · all posts fictional demo data'
+                : state.dataMode === 'mixed' ? ' · includes fictional demo posts' : ''));
         els.expDetail.appendChild(foot);
 
         loadCityPosts(sel, postsWrap);
@@ -1648,7 +1659,7 @@
 
         inner.appendChild(buildDrawerHead(
             'AUDIT TRAIL · ' + model.postId
-            + (model.isDemo ? ' · DEMO DATA' : ''),
+            + (model.isDemo || model.demoOrigin ? ' · DEMO DATA' : ''),
             'Why does it say that?', closeAudit));
 
         // Post block: source / minutes / input fingerprint (HMAC field may
@@ -1805,7 +1816,9 @@
         const inner = els.healthInner;
         if (!inner) return;
         clear(inner);
-        inner.appendChild(buildDrawerHead('MODEL HEALTH · LIVE',
+        // Nothing is known yet: neither LIVE nor DEMO until /api/health
+        // answers (G9-5 — renderHealthDrawer derives the label).
+        inner.appendChild(buildDrawerHead('MODEL HEALTH',
             'The watchdog watches itself.', closeHealth));
         inner.appendChild(el('div', 'empty mono', 'checking the watchdog…'));
     }
@@ -1816,8 +1829,13 @@
         clear(inner);
 
         const liveHealth = health !== null;
+        // The backend answers (LIVE health), but the posts it scores may be
+        // the demo feed's — say so, from /api/health data_mode.
+        const demoPosts = liveHealth
+            && (health.data_mode === 'demo' || health.data_mode === 'mixed');
         inner.appendChild(buildDrawerHead(
-            'MODEL HEALTH' + (liveHealth ? ' · LIVE' : ' · DEMO DATA'),
+            'MODEL HEALTH' + (liveHealth ? ' · LIVE' : ' · DEMO DATA')
+            + (demoPosts ? ' · DEMO DATA' : ''),
             'The watchdog watches itself.', closeHealth));
 
         // Status banner from /api/health.
@@ -1844,6 +1862,14 @@
                 stat.active + ' / ' + stat.total
                 + ' (configured active, not liveness)'));
             kv.appendChild(row);
+            if (stat.demoFeeds > 0) {
+                // Separate figure: demo feeds are never counted as sources.
+                const demoRow = el('div', 'kv-row');
+                demoRow.appendChild(el('span', 'kv-k', 'demo feeds'));
+                demoRow.appendChild(el('span', 'kv-v',
+                    stat.demoFeeds + ' (fictional demo population, not sources)'));
+                kv.appendChild(demoRow);
+            }
             inner.appendChild(kv);
         }
 
@@ -1949,9 +1975,11 @@
 
     // ── Init ────────────────────────────────────────────────────────────────
 
-    function onCitiesData(cities, isDemo) {
+    function onCitiesData(cities, isDemo, dataMode) {
         state.cities = Array.isArray(cities) ? cities : [];
         state.isDemo = !!isDemo;
+        // A missing mode is unknown, never live (G9-5).
+        state.dataMode = dataMode || (state.isDemo ? 'fallback' : 'unknown');
         if (state.selectedId && !findCity(state.selectedId)) {
             // Selected city vanished from the snapshot: route the cleanup
             // through selectCity(null) (grumpy #7) so the globe selection /
@@ -2033,7 +2061,7 @@
             if (e.detail && e.detail.post) openAudit(e.detail.post);
         });
         document.addEventListener('pulse:data', (e) => {
-            if (e.detail) onCitiesData(e.detail.cities, e.detail.isDemo);
+            if (e.detail) onCitiesData(e.detail.cities, e.detail.isDemo, e.detail.dataMode);
         });
 
         if (els.healthChip) {
@@ -2053,7 +2081,7 @@
         const s = story();
         if (s && typeof s.getCities === 'function') {
             const st = typeof s.getState === 'function' ? s.getState() : {};
-            onCitiesData(s.getCities(), st.isDemo);
+            onCitiesData(s.getCities(), st.isDemo, st.dataMode);
             if (st.exploring) enterExplore();
         }
     }

@@ -42,6 +42,7 @@ const {
     renderIngestStep,
 } = require('../config/audit-narration');
 const { buildLayers } = require('../config/bias-vocabulary');
+const { DEMO_SOURCE_TYPE } = require('../config/data-mode');
 const {
     resolveBiasLineage,
     currentBiasVersion,
@@ -80,8 +81,9 @@ router.get('/audit/:post_id', async (req, res) => {
                 rp.content,
                 rp.location,
                 rp.collected_at,
-                ds.category AS source_category,
-                ds.name     AS source_name
+                ds.category    AS source_category,
+                ds.name        AS source_name,
+                ds.source_type AS source_type
              FROM raw_posts rp
              JOIN data_sources ds ON ds.id = rp.source_id
              WHERE rp.id = $1`,
@@ -220,10 +222,14 @@ router.get('/audit/:post_id', async (req, res) => {
                 location:        post.location,
                 source_category: post.source_category,
                 source_name:     post.source_name,
+                // 'demo' for fictional demo-feed posts, else 'live'
+                data_origin:     post.source_type === DEMO_SOURCE_TYPE ? 'demo' : 'live',
                 collected_at:    post.collected_at,
             },
             narration: { component: NARRATION_COMPONENT, version: NARRATION_VERSION },
-            ingest:    renderIngestStep(ingestMv),
+            // Demo-feed posts get the fictional-content ingestion wording
+            // (audit_narration 1.2.0 — src/config/data-mode.js defines demo).
+            ingest:    renderIngestStep(ingestMv, { demo: post.source_type === DEMO_SOURCE_TYPE }),
             decisions: exposed,
             bias:      biasBlock,
         });

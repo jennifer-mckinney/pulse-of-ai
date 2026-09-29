@@ -484,8 +484,160 @@ describe('module export shape', () => {
     test('exports exactly the documented public API', () => {
         expect(Object.keys(chapters).sort()).toEqual([
             'FALLBACK_COPY',
+            'INTRO_KICKERS',
             'STORY',
+            'introFacts',
             'resolveChapter',
+            'resolveIntro',
         ]);
+    });
+});
+
+describe('demoLabel — backend demo data labeled like the bundled fallback', () => {
+    test('demoLabel adds the SAME "— Demo data" marker without claiming the bundled fallback', () => {
+        for (const beat of STORY) {
+            const r = resolveChapter(beat, demoInsights, demoCities, { isDemo: false, demoLabel: true });
+            expect(r.cardTitle).toBe(beat.title + ' — Demo data');
+            expect(r.demoLabel).toBe(true);
+            expect(r.isDemo).toBe(false);      // still fetched: receipts are real
+        }
+    });
+
+    test('bundled fallback implies the label; live has neither', () => {
+        const beat = STORY[0];
+        expect(resolveChapter(beat, demoInsights, demoCities, { isDemo: true }))
+            .toMatchObject({ isDemo: true, demoLabel: true });
+        expect(resolveChapter(beat, demoInsights, demoCities, {}))
+            .toMatchObject({ isDemo: false, demoLabel: false, cardTitle: beat.title });
+    });
+});
+
+// G9-5: the chapter-one (overview) card's kicker follows data_mode exactly
+// like the intro kicker — it used to read "LIVE · REFRESH CYCLE 2–3 MIN" for
+// demo data, the bundled fallback and an empty hour alike.
+describe('resolveChapter — overview kicker follows the data mode (G9-5)', () => {
+    const overview = STORY.find(b => b.id === 'overview');
+    const kickerFor = (opts) => resolveChapter(overview, demoInsights, demoCities, opts).kicker;
+
+    test.each([
+        ['live',     'LIVE · REFRESH CYCLE 2–3 MIN'],
+        ['demo',     'DEMO · REFRESH CYCLE 2–3 MIN'],
+        ['mixed',    'LIVE + DEMO'],
+        ['none',     'NO POSTS IN THE LAST HOUR'],
+        ['fallback', 'DEMO · BUNDLED SAMPLE DATA'],
+    ])('%s → %s', (mode, want) => {
+        expect(kickerFor({ dataMode: mode, isDemo: mode === 'fallback' })).toBe(want);
+    });
+
+    test.each([undefined, null, '', 'unknown', 'bogus', 'LIVE'])(
+        'unknown mode %p: neutral kicker, never LIVE or DEMO', (mode) => {
+            const k = kickerFor({ dataMode: mode });
+            expect(k).toBe('REFRESH CYCLE 2–3 MIN');
+            expect(k).not.toMatch(/LIVE|DEMO/);
+        });
+
+    test('no options at all: neutral, never LIVE', () => {
+        expect(resolveChapter(overview, demoInsights, demoCities).kicker).toBe('REFRESH CYCLE 2–3 MIN');
+    });
+
+    test('a bundled fallback without a mode is labeled as the fallback', () => {
+        expect(kickerFor({ isDemo: true })).toBe('DEMO · BUNDLED SAMPLE DATA');
+    });
+
+    test('the chapter card and the intro agree on LIVE for every mode', () => {
+        const { resolveIntro } = chapters;
+        for (const mode of ['live', 'demo', 'mixed', 'none', 'fallback', 'unknown', undefined]) {
+            const card = kickerFor({ dataMode: mode, isDemo: mode === 'fallback' });
+            const intro = resolveIntro(demoInsights, demoCities, mode).kicker;
+            expect(/^LIVE/.test(card)).toBe(/^LIVE/.test(intro));
+            expect(/DEMO/.test(card)).toBe(/DEMO/.test(intro));
+        }
+    });
+
+    test('beats without kickerByMode keep their chapter label in every mode', () => {
+        for (const b of STORY.filter(x => !x.kickerByMode)) {
+            for (const mode of ['live', 'demo', 'mixed', 'none', 'fallback']) {
+                const k = resolveChapter(b, demoInsights, demoCities, { dataMode: mode }).kicker;
+                expect(k).toBe(b.kicker);
+                expect(k).not.toMatch(/LIVE/);
+            }
+        }
+    });
+});
+
+describe('resolveIntro — kicker by data origin, numbers interpolated (FR-19)', () => {
+    const { resolveIntro, introFacts, INTRO_KICKERS } = chapters;
+
+    function citiesWith(rows) {
+        return data.normalizeCities(rows.map(([city, lat, lng, total, sources]) => ({
+            city, lat, lng, positive: total, neutral: 0, negative: 0,
+            sources: sources.map(([name, n]) => ({
+                source_name: name, source_category: 'news', positive: n, neutral: 0, negative: 0,
+            })),
+        })));
+    }
+    const cities = citiesWith([
+        ['A', 10, 10, 5, [['feed_x', 3], ['feed_y', 2]]],
+        ['B', 20, 20, 7, [['feed_x', 7]]],
+        ['C', 30, 30, 0, []],                     // zero-count baseline: not reporting
+    ]);
+    const ins = computeInsights(cities);
+
+    test('introFacts: posts, reporting cities and distinct sources come from the rendered snapshot', () => {
+        expect(introFacts(ins, cities)).toEqual({ postCount: 12, cityCount: 2, sourceCount: 2 });
+    });
+
+    test('demo mode: DEMO kicker and fictional wording with the computed numbers', () => {
+        const intro = resolveIntro(ins, cities, 'demo');
+        expect(intro.kicker).toBe('DEMO · UPDATED EVERY 2–3 MINUTES');
+        expect(intro.demoLabel).toBe(true);
+        expect(intro.sub).toContain('12 fictional posts an hour across 2 demo feeds and 2 cities');
+        expect(intro.sub).not.toMatch(/4,500|50 sources|30 cities/);
+    });
+
+    test('live mode keeps the prototype wording with computed numbers', () => {
+        const intro = resolveIntro(ins, cities, 'live');
+        expect(intro.kicker).toBe('LIVE · UPDATED EVERY 2–3 MINUTES');
+        expect(intro.demoLabel).toBe(false);
+        expect(intro.sub).toBe('Everyone has an opinion about artificial intelligence. Right now you '
+            + 'can watch all of them move — 12 posts an hour across 2 sources and 2 cities, every '
+            + 'score traceable to the model that made it.');
+    });
+
+    test('mixed, fallback and none each say what they are', () => {
+        expect(resolveIntro(ins, cities, 'mixed')).toMatchObject({
+            kicker: 'LIVE + DEMO · UPDATED EVERY 2–3 MINUTES', demoLabel: true });
+        expect(resolveIntro(ins, cities, 'mixed').sub).toContain('some of them fictional demo posts');
+        expect(resolveIntro(ins, cities, 'fallback')).toMatchObject({
+            kicker: 'DEMO · BUNDLED SAMPLE DATA', demoLabel: true });
+    });
+
+    // G9-5: an empty trailing hour is not "LIVE" — nothing is moving.
+    test("none: its own kicker, never LIVE, and copy that says the hour is empty", () => {
+        const intro = resolveIntro(computeInsights([]), [], 'none');
+        expect(intro.kicker).toBe('NO POSTS IN THE LAST HOUR');
+        expect(intro.kicker).not.toMatch(/LIVE/);
+        expect(intro.demoLabel).toBe(false);
+        expect(intro.sub).toContain('No posts have arrived in the last hour');
+        expect(intro.sub).not.toMatch(/Right now you can watch/);
+    });
+
+    test('every kicker names what it is: LIVE only for live data', () => {
+        for (const [mode, k] of Object.entries(INTRO_KICKERS)) {
+            if (['demo', 'mixed', 'fallback'].includes(mode)) expect(k).toMatch(/DEMO/);
+            if (mode === 'live' || mode === 'mixed') expect(k).toMatch(/^LIVE/);
+            else expect(k).not.toMatch(/^LIVE/);
+        }
+    });
+
+    // G9-5: an unknown or missing mode never falls back to the LIVE copy —
+    // it gets the neutral static text index.html ships with.
+    test.each([undefined, null, '', 'bogus', 'LIVE'])('unknown mode %p: neutral copy, never live', (mode) => {
+        const intro = resolveIntro(ins, cities, mode);
+        expect(intro.dataMode).toBe('unknown');
+        expect(intro.kicker).toBe('UPDATED EVERY 2–3 MINUTES');
+        expect(intro.kicker).not.toMatch(/LIVE|DEMO/);
+        expect(intro.sub).not.toMatch(/Right now/);
+        expect(intro.demoLabel).toBe(false);
     });
 });

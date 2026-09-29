@@ -4,8 +4,9 @@
 //   1. All 50 data_sources (7 categories) — config includes poll_interval_sec, URL/subreddit
 //   2. Methodology_versions: sentiment 1.0.0, relevance 1.0.0, discourse
 //      1.0.0-DQI, bias 1.1.0 (presentation-config bump — see the entry's
-//      comment), ingest 1.0.0, audit_narration 1.1.0 — rows defined in
-//      src/config/methodology-registry.js (shared with migration 009)
+//      comment), ingest 1.0.0, audit_narration 1.2.0 (demo ingestion
+//      wording), embedding 1.0.0 (pinned model revision) — rows defined in
+//      src/config/methodology-registry.js (shared with migrations 009–012)
 // Safe to re-run: uses INSERT ... ON CONFLICT DO NOTHING
 
 'use strict';
