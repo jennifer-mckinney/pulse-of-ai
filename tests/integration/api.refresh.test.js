@@ -1,24 +1,36 @@
 // tests/integration/api.refresh.test.js
 // Tests for POST /api/refresh
-// Verifies: 201 response, job creation, rate limiting (429).
+// Verifies: 202 + job row + enqueue to the worker (F10-3, F10-8), 409 while
+// a refresh is in flight, REFRESH_TOKEN, rate limiting (429), and the
+// worker's processRefreshJob running the REAL collection.
 
 'use strict';
 
 const request = require('supertest');
 const app     = require('../../src/server');
-const { dbGet } = require('../../src/db/connection');
+const { dbGet, dbRun } = require('../../src/db/connection');
 
 // Reset rate limiter between tests so tests don't bleed into each other
-const { _resetRateLimiter, _setCollectionOptions } = require('../../src/routes/refresh');
+const { _resetRateLimiter, _setEnqueue, boundBeyondLoopback } = require('../../src/routes/refresh');
+const { processRefreshJob } = require('../../src/workers/collect.worker');
 const { seedSources, seedMethodology } = require('../../scripts/seed');
 const { fixtureTransport, RECORDED_AT, TEST_ENV } = require('../helpers/fixtureTransport');
 
-// Every accepted refresh in this file collects nothing unless a test opts
-// in to fixtures (no network, no background writes outliving the test).
-beforeAll(() => _setCollectionOptions({ slugs: [], queues: { enqueueEmbeds: async () => {}, enqueueIngestRetry: async () => {} } }));
+// Default stand-in for the worker: it picks the job up and finishes at once
+// (no network, no background writes outliving the test).
+const enqueued = [];
+async function fastWorker(jobId) {
+    enqueued.push(jobId);
+    await dbRun(`UPDATE processing_jobs SET status = 'completed', completed_at = NOW() WHERE id = $1`, [jobId]);
+}
 
-beforeEach(() => {
+beforeAll(() => _setEnqueue(fastWorker));
+afterAll(() => _setEnqueue(null));
+
+beforeEach(async () => {
     _resetRateLimiter();
+    enqueued.length = 0;
+    await dbRun(`UPDATE processing_jobs SET status = 'completed' WHERE triggered_by = 'api' AND status = 'running'`);
 });
 
 // The same-origin frontend path: browsers stamp Sec-Fetch-Site on every
@@ -29,14 +41,90 @@ function refresh() {
 }
 
 describe('POST /api/refresh', () => {
-    it('returns 201 with the correct response shape', async () => {
+    it('returns 202 queued and enqueues the job to the worker (the web process collects nothing)', async () => {
         const res = await refresh();
 
-        expect(res.status).toBe(201);
+        expect(res.status).toBe(202);
         expect(res.body).toMatchObject({
             job_id:        expect.any(String),
-            status:        'started',
+            status:        'queued',
             triggered_by:  'api',
+        });
+        expect(enqueued).toEqual([res.body.job_id]);
+    });
+
+    it('409 with the running job_id while a refresh is in flight; the budget is not spent', async () => {
+        _setEnqueue(async (jobId) => { enqueued.push(jobId); });   // the worker has not finished
+        try {
+            const first = await refresh();
+            expect(first.status).toBe(202);
+            _resetRateLimiter();
+            const second = await refresh();
+            expect(second.status).toBe(409);
+            expect(second.body).toEqual({ error: 'A refresh collection is already running', job_id: first.body.job_id });
+            expect(enqueued).toHaveLength(1);
+            // A concurrent insert is refused by migration 019's unique index.
+            await expect(dbRun(`INSERT INTO processing_jobs (triggered_by, status) VALUES ('api', 'running')`))
+                .rejects.toMatchObject({ code: '23505' });
+        } finally {
+            _setEnqueue(fastWorker);
+        }
+    });
+
+    it('a refresh row left running past REFRESH_STALE_MINUTES is failed as stale, then a new one starts', async () => {
+        const stale = await dbRun(`INSERT INTO processing_jobs (triggered_by, status, started_at)
+            VALUES ('api', 'running', NOW() - interval '2 hours') RETURNING id`);
+        const res = await refresh();
+        expect(res.status).toBe(202);
+        const row = await dbGet('SELECT status, error_details FROM processing_jobs WHERE id = $1', [stale.id]);
+        expect(row).toEqual({ status: 'failed', error_details: 'stale: the refresh job did not complete within 30 minutes' });
+    });
+
+    it('an enqueue failure fails the job, answers 503 and does not spend the budget', async () => {
+        _setEnqueue(async () => { throw new Error('ECONNREFUSED redis'); });
+        try {
+            const res = await refresh();
+            expect(res.status).toBe(503);
+            const row = await dbGet('SELECT status, error_details FROM processing_jobs WHERE id = $1', [res.body.job_id]);
+            expect(row).toEqual({ status: 'failed', error_details: 'collection queue unavailable' });
+        } finally {
+            _setEnqueue(fastWorker);
+        }
+        expect((await refresh()).status).toBe(202);
+    });
+
+    describe('REFRESH_TOKEN (F10-8)', () => {
+        const saved = {};
+        const setEnv = (vars) => { for (const [k, v] of Object.entries(vars)) { saved[k] = process.env[k]; if (v === undefined) delete process.env[k]; else process.env[k] = v; } };
+        afterEach(() => { for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } });
+
+        it('bound beyond loopback with no token: refused (403) before any job is created', async () => {
+            setEnv({ PULSE_BIND_ADDR: '0.0.0.0', REFRESH_TOKEN: undefined, HOST: undefined });
+            const res = await refresh();
+            expect(res.status).toBe(403);
+            expect(res.body.error).toMatch(/bound beyond loopback and no REFRESH_TOKEN/);
+            expect(enqueued).toHaveLength(0);
+        });
+
+        it('with a token set: the header must match (timing-safe)', async () => {
+            setEnv({ PULSE_BIND_ADDR: '0.0.0.0', REFRESH_TOKEN: 's3cret-token', HOST: undefined });
+            expect((await refresh()).status).toBe(403);
+            expect((await refresh().set('X-Refresh-Token', 'wrong')).status).toBe(403);
+            expect((await refresh().set('X-Refresh-Token', 's3cret-token')).status).toBe(202);
+        });
+
+        it('loopback without a token: allowed (local use)', async () => {
+            setEnv({ PULSE_BIND_ADDR: '127.0.0.1', REFRESH_TOKEN: undefined, HOST: undefined });
+            expect((await refresh()).status).toBe(202);
+        });
+
+        it('boundBeyondLoopback reads PULSE_BIND_ADDR and HOST', () => {
+            expect(boundBeyondLoopback({})).toBe(false);
+            expect(boundBeyondLoopback({ PULSE_BIND_ADDR: '127.0.0.1' })).toBe(false);
+            expect(boundBeyondLoopback({ PULSE_BIND_ADDR: '::1' })).toBe(false);
+            expect(boundBeyondLoopback({ HOST: 'localhost' })).toBe(false);
+            expect(boundBeyondLoopback({ PULSE_BIND_ADDR: '0.0.0.0' })).toBe(true);
+            expect(boundBeyondLoopback({ HOST: '192.168.1.5' })).toBe(true);
         });
     });
 
@@ -51,6 +139,7 @@ describe('POST /api/refresh', () => {
         expect(job).toBeDefined();
         expect(job.triggered_by).toBe('api');
         expect(['running', 'completed', 'failed']).toContain(job.status);
+        expect(enqueued).toContain(job.id);
     });
 
     it('returns 429 when called a second time within the rate limit window', async () => {
@@ -107,7 +196,7 @@ describe('POST /api/refresh', () => {
         _resetRateLimiter();
         const res = await refresh();
 
-        expect(res.status).toBe(201);
+        expect(res.status).toBe(202);
     });
 
     // ─── The background job is a REAL collection (ADR 0001) ─────────────────
@@ -124,19 +213,24 @@ describe('POST /api/refresh', () => {
         return job;
     }
 
+    // The worker's side: processRefreshJob runs the collection for the job
+    // the route enqueued (no network — recorded fixtures).
     function useFixtures(slugs) {
-        _setCollectionOptions({
-            slugs, env: TEST_ENV, now: () => Date.parse(RECORDED_AT),
-            queues: { enqueueEmbeds: async () => {}, enqueueIngestRetry: async () => {} },
-            transport: fixtureTransport([
-                ['https://feeds.bbci.co.uk/robots.txt', 'recorded/bbc-robots.txt'],
-                ['https://feeds.bbci.co.uk/news/technology/rss.xml', 'recorded/bbc-technology.xml'],
-                [/hn\.algolia\.com/, 'recorded/hn-algolia.json'],
-            ]),
+        _setEnqueue(async (jobId) => {
+            enqueued.push(jobId);
+            await processRefreshJob({ data: { jobId } }, {
+                slugs, env: TEST_ENV, now: () => Date.parse(RECORDED_AT),
+                queues: { enqueueEmbeds: async () => {}, enqueueIngestRetry: async () => {} },
+                transport: fixtureTransport([
+                    ['https://feeds.bbci.co.uk/robots.txt', 'recorded/bbc-robots.txt'],
+                    ['https://feeds.bbci.co.uk/news/technology/rss.xml', 'recorded/bbc-technology.xml'],
+                    [/hn\.algolia\.com/, 'recorded/hn-algolia.json'],
+                ]),
+            }).catch(() => {});   // runCollection marks the job failed itself
         });
     }
 
-    afterAll(() => _setCollectionOptions({}));
+    afterAll(() => _setEnqueue(fastWorker));
 
     it('runs a real collection job and completes it with GENUINE counts', async () => {
         await seedSources();
@@ -144,7 +238,7 @@ describe('POST /api/refresh', () => {
         useFixtures(['bbc_news', 'hacker_news']);
 
         const res = await refresh();
-        expect(res.status).toBe(201);
+        expect(res.status).toBe(202);
         const job = await waitForJob(res.body.job_id);
 
         expect(job.status).toBe('completed');
@@ -166,6 +260,12 @@ describe('POST /api/refresh', () => {
         const res = await refresh();
         const job = await waitForJob(res.body.job_id);
         expect(job).toMatchObject({ status: 'completed', posts_processed: 0, sources_queried: 0 });
+    });
+
+    it('the worker does not re-run a job that is no longer running', async () => {
+        const done = await dbRun(`INSERT INTO processing_jobs (triggered_by, status) VALUES ('api', 'failed') RETURNING id`);
+        expect(await processRefreshJob({ data: { jobId: done.id } })).toEqual({ jobId: done.id, skipped: true, status: 'failed' });
+        await expect(processRefreshJob({ data: {} })).rejects.toThrow(/without a processing job id/);
     });
 
     it('fails the job loudly when the methodology is not registered', async () => {

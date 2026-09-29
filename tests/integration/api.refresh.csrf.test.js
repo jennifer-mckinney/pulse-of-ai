@@ -10,12 +10,14 @@
 const request = require('supertest');
 const app     = require('../../src/server');
 const { dbGet } = require('../../src/db/connection');
-const { _resetRateLimiter, _setCollectionOptions } = require('../../src/routes/refresh');
+const { _resetRateLimiter, _setEnqueue } = require('../../src/routes/refresh');
+const { dbRun } = require('../../src/db/connection');
 
 // Accepted refreshes run a real collection; here it is scoped to no sources
 // so no request ever leaves the test (the guard, not collection, is tested).
-beforeAll(() => _setCollectionOptions({ slugs: [], queues: { enqueueEmbeds: async () => {}, enqueueIngestRetry: async () => {} } }));
-afterAll(() => _setCollectionOptions({}));
+// A stand-in worker that finishes at once (no network, nothing in flight).
+beforeAll(() => _setEnqueue(jobId => dbRun(`UPDATE processing_jobs SET status = 'completed' WHERE id = $1`, [jobId])));
+afterAll(() => _setEnqueue(null));
 
 const HOST = 'pulse.test:3000';
 
@@ -66,32 +68,32 @@ describe('POST /api/refresh — cross-site request guard', () => {
     it('a rejected cross-site POST does not consume the global refresh budget', async () => {
         await post().set('Sec-Fetch-Site', 'cross-site');
         const res = await post().set('Sec-Fetch-Site', 'same-origin');
-        expect(res.status).toBe(201);
+        expect(res.status).toBe(202);
     });
 
     it('accepts a same-origin POST (Sec-Fetch-Site: same-origin) — the frontend path', async () => {
         const res = await post()
             .set('Sec-Fetch-Site', 'same-origin')
             .set('Origin', `http://${HOST}`);
-        expect(res.status).toBe(201);
-        expect(res.body.status).toBe('started');
+        expect(res.status).toBe(202);
+        expect(res.body.status).toBe('queued');
         expect(await jobCount()).toBe(1);
     });
 
     it('accepts a user-initiated request (Sec-Fetch-Site: none)', async () => {
         const res = await post().set('Sec-Fetch-Site', 'none');
-        expect(res.status).toBe(201);
+        expect(res.status).toBe(202);
     });
 
     describe('without Sec-Fetch-Site (older browsers / non-browser clients)', () => {
         it('accepts when Origin matches the server host', async () => {
             const res = await post().set('Origin', `http://${HOST}`);
-            expect(res.status).toBe(201);
+            expect(res.status).toBe(202);
         });
 
         it('accepts when Origin matches behind a TLS-terminating proxy (scheme differs)', async () => {
             const res = await post().set('Origin', `https://${HOST}`);
-            expect(res.status).toBe(201);
+            expect(res.status).toBe(202);
         });
 
         it('rejects when Origin is a different host', async () => {
@@ -113,7 +115,7 @@ describe('POST /api/refresh — cross-site request guard', () => {
 
         it('falls back to Referer when Origin is absent', async () => {
             const ok = await post().set('Referer', `http://${HOST}/explore`);
-            expect(ok.status).toBe(201);
+            expect(ok.status).toBe(202);
             _resetRateLimiter();
             const bad = await post().set('Referer', 'https://evil.example/page');
             expect(bad.status).toBe(403);

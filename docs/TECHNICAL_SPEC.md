@@ -558,13 +558,19 @@ Aggregate summary + recent posts for dashboard refresh panel.
 ---
 
 ### `POST /api/refresh`
-Triggers a data collection + processing run. Rate limited: 1 request per minute per IP.
+Requests a collection + processing run over the source registry. The web process only creates the `processing_jobs` row and enqueues one `collect-all` job on the `collect.refresh` queue; the worker runs the collection (F10-3, F10-8). Guards in order: same-origin (403), `REFRESH_TOKEN` (403), one refresh in flight (409), a global 60 s debounce (429).
 
-**Response 200:**
+**Response 202:**
 ```json
-{ "job_id": "uuid", "status": "started", "triggered_by": "api" }
+{ "job_id": "uuid", "status": "queued", "triggered_by": "api" }
 ```
-**Response 429:** `{ "error": "Rate limit exceeded. Try again in 60 seconds." }`
+**Response 409:** `{ "error": "A refresh collection is already running", "job_id": "uuid" }` while a refresh job is running (migration 019's partial unique index holds this across processes; a row still running after `REFRESH_STALE_MINUTES`, default 30, is marked failed as stale).
+
+**Response 403 (token):** when `REFRESH_TOKEN` is set, the request must carry it as `X-Refresh-Token`; when the site is bound beyond loopback (`PULSE_BIND_ADDR` or `HOST` not a loopback address) a token is required and refresh is refused without one.
+
+**Response 429:** `{ "error": "Rate limit exceeded: 1 refresh per minute (global)", "retry_after_seconds": n }` with `Retry-After`.
+
+**Response 503:** `{ "error": "Collection queue unavailable", "job_id": "uuid" }` — the job row is marked failed and the debounce budget is not spent.
 
 **Response 403:** `{ "error": "Cross-site request rejected" }`. The endpoint is unauthenticated and changes state, and a cross-site "simple" POST needs no CORS preflight, so the server checks where each request came from. It allows `Sec-Fetch-Site: same-origin | none`. When that header is absent, it allows the request only if `Origin` (or, failing that, `Referer`) names the server's own host. Every other request is rejected before the rate limiter runs. The endpoint never serves CORS headers, and its `OPTIONS` preflight gets a 403.
 
@@ -831,7 +837,7 @@ All route inputs are validated before reaching the DB layer:
 | `?platform` query param | Allowlist check | Ignored if unknown |
 
 ### Rate Limiting
-- `POST /api/refresh`: 1 request per minute per IP. In-memory counter (no Redis for MVP). Resets on server restart — acceptable for v1.
+- `POST /api/refresh`: one accepted refresh per minute globally (in-process debounce), one refresh job in flight at a time (409), and a shared-secret `X-Refresh-Token` required when the site is bound beyond loopback. The collection itself runs in the worker.
 - All GET endpoints: no rate limit (public read-only dashboard).
 
 ### Error Responses — No Information Leakage

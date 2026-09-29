@@ -339,6 +339,11 @@ services:
     # Source status only: settings plus presence markers, never a credential.
     environment:
       <<: [*app-env, *collector-settings, *collector-presence]
+      # F10-8: POST /api/refresh requires REFRESH_TOKEN (X-Refresh-Token)
+      # when the published address is beyond loopback.
+      PULSE_BIND_ADDR: ${PULSE_BIND_ADDR:-127.0.0.1}
+      REFRESH_TOKEN: ${REFRESH_TOKEN:-}
+      REFRESH_STALE_MINUTES: ${REFRESH_STALE_MINUTES:-30}
     ports:
       - "${PULSE_BIND_ADDR:-127.0.0.1}:${WEB_PORT:-3000}:3000"
     depends_on:

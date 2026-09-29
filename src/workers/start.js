@@ -5,6 +5,7 @@
 //
 // Registers a Worker for every queue and keeps running until killed:
 //   collect.rss / collect.api / collect.bulk — source runs (collect.worker.js)
+//   collect.refresh — POST /api/refresh collections (processRefreshJob)
 //   ingest    — scoring retries (ingest.worker.js)
 //   embed     — embeddings via the Python service (embed.worker.js)
 //   correlate — reserved (collectors store no identity signals)
@@ -24,7 +25,7 @@ const { Worker } = require('bullmq');
 const { connection } = require('../queues/index');
 const { createRedisClient } = require('../queues/connection');
 const { startHeartbeat } = require('./heartbeat');
-const { processCollectJob }  = require('./collect.worker');
+const { processCollectJob, processRefreshJob } = require('./collect.worker');
 const { processIngestJob }   = require('./ingest.worker');
 const { processEmbedJob }    = require('./embed.worker');
 const { processCorrelateJob }= require('./correlate.worker');
@@ -46,6 +47,8 @@ const workers = [
     new Worker('collect.rss',  job => processCollectJob(job), { connection, concurrency: COLLECT_CONCURRENCY }),
     new Worker('collect.api',  job => processCollectJob(job), { connection, concurrency: COLLECT_CONCURRENCY }),
     new Worker('collect.bulk', job => processCollectJob(job), { connection, concurrency: 1 }),
+    // POST /api/refresh collections (F10-3, F10-8): one at a time.
+    new Worker('collect.refresh', job => processRefreshJob(job), { connection, concurrency: 1 }),
     new Worker('ingest',    processIngestJob,    { connection, concurrency: INGEST_CONCURRENCY }),
     new Worker('embed',     processEmbedJob,     { connection, concurrency: EMBED_CONCURRENCY }),
     new Worker('correlate', processCorrelateJob, { connection, concurrency: CORRELATE_CONCURRENCY }),
@@ -54,7 +57,7 @@ const workers = [
 workers.forEach(w => {
     w.on('completed', (job, result) => {
         if (process.env.NODE_ENV === 'test') return;
-        if (w.name.startsWith('collect.') && result) {
+        if (w.name.startsWith('collect.') && result && result.slug) {
             log(`[${w.name}] ${result.slug}: ${result.outcome}${result.reason ? ` (${result.reason})` : ''} — `
                 + `fetched ${result.fetched}, kept ${result.kept}, new ${result.newPosts}${result.error ? ` — ${result.error}` : ''}`);
         } else {

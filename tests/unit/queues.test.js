@@ -96,19 +96,20 @@ describe('src/queues/index.js', () => {
     });
 
     describe('queue topology', () => {
-        it('creates exactly the six pipeline queues; collect queues use the DB source_type vocabulary', () => {
+        it('creates exactly the seven pipeline queues; collect queues use the DB source_type vocabulary', () => {
             const { Queue } = loadRegistry();
             const names = Queue.mock.calls.map(([name]) => name).sort();
             expect(names).toEqual([
                 'collect.api',
                 'collect.bulk',
+                'collect.refresh',
                 'collect.rss',
                 'correlate',
                 'embed',
                 'ingest',
             ]);
             const { SOURCE_TYPES } = require('../../src/config/source-registry');
-            expect(names.filter(n => n.startsWith('collect.')).map(n => n.slice(8)).sort()).toEqual([...SOURCE_TYPES].sort());
+            expect(names.filter(n => n.startsWith('collect.') && n !== 'collect.refresh').map(n => n.slice(8)).sort()).toEqual([...SOURCE_TYPES].sort());
         });
 
         it('exports each queue keyed by pipeline stage', () => {
@@ -116,6 +117,8 @@ describe('src/queues/index.js', () => {
             expect(registry.collectRssQueue.name).toBe('collect.rss');
             expect(registry.collectApiQueue.name).toBe('collect.api');
             expect(registry.collectBulkQueue.name).toBe('collect.bulk');
+            // F10-3 / F10-8: POST /api/refresh enqueues here; the worker collects.
+            expect(registry.refreshQueue.name).toBe('collect.refresh');
             expect(registry.COLLECT_QUEUES.rss).toBe(registry.collectRssQueue);
             expect(registry.ingestQueue.name).toBe('ingest');
             expect(registry.embedQueue.name).toBe('embed');
@@ -124,7 +127,7 @@ describe('src/queues/index.js', () => {
 
         it('reuses the single shared connection object for every queue', () => {
             const { Queue, registry } = loadRegistry();
-            expect(Queue.mock.calls).toHaveLength(6);  // guard: loop below must not be vacuous
+            expect(Queue.mock.calls).toHaveLength(7);  // guard: loop below must not be vacuous
             for (const [, opts] of Queue.mock.calls) {
                 expect(opts.connection).toBe(registry.connection);  // identity, not equality
             }
@@ -163,7 +166,7 @@ describe('src/queues/index.js', () => {
         it('runs each collection once: the next scheduled run is the retry', () => {
             const { Queue, registry } = loadRegistry();
             const calls = Queue.mock.calls.filter(([name]) => name.startsWith('collect.'));
-            expect(calls).toHaveLength(3);
+            expect(calls).toHaveLength(4);
             for (const [, opts] of calls) {
                 expect(opts.defaultJobOptions).toBe(registry.COLLECT_JOB_OPTIONS);
                 expect(opts.defaultJobOptions.attempts).toBe(1);

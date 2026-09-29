@@ -66,6 +66,12 @@ const collectRssQueue  = new Queue('collect.rss',  { connection, defaultJobOptio
 const collectApiQueue  = new Queue('collect.api',  { connection, defaultJobOptions: COLLECT_JOB_OPTIONS });
 const collectBulkQueue = new Queue('collect.bulk', { connection, defaultJobOptions: COLLECT_JOB_OPTIONS });
 
+// Refresh queue (F10-3, F10-8) — POST /api/refresh enqueues ONE 'collect-all'
+// job carrying { jobId } (the processing_jobs row the route created); the
+// worker runs the collection (src/workers/collect.worker.js
+// processRefreshJob), so the public web process does no network work.
+const refreshQueue = new Queue('collect.refresh', { connection, defaultJobOptions: COLLECT_JOB_OPTIONS });
+
 /** source_type → collect queue (the DB vocabulary). */
 const COLLECT_QUEUES = Object.freeze({ rss: collectRssQueue, api: collectApiQueue, bulk: collectBulkQueue });
 
@@ -103,6 +109,7 @@ module.exports = {
     collectRssQueue,
     collectApiQueue,
     collectBulkQueue,
+    refreshQueue,
     ingestQueue,
     embedQueue,
     correlateQueue,
