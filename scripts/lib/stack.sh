@@ -30,17 +30,47 @@ die()  { printf '\n%sERROR%s  %s\n' "$_R" "$_N" "$*" >&2; exit 1; }
 
 # ─── Env file ────────────────────────────────────────────────────────────────
 
-# Value of KEY in the env file (last assignment wins, inline comment and
-# surrounding quotes stripped). Prints nothing when absent. Never echo the
-# result of this for secret keys.
-env_file_value() {
-    local key=$1
-    [[ -f "$STACK_ENV_FILE" ]] || return 0
-    grep -E "^(export[[:space:]]+)?${key}=" "$STACK_ENV_FILE" | tail -n 1 \
-        | cut -d= -f2- \
-        | sed -E 's/[[:space:]]+#.*$//; s/^[[:space:]]+//; s/[[:space:]]+$//; s/^"(.*)"$/\1/; s/^'"'"'(.*)'"'"'$/\1/' \
-        || true
+# env_value_body RAW: the value compose would read from the text after
+# `KEY=` (F9-5). Quoted values yield their body — a ' #' INSIDE quotes is
+# data, and anything after the closing quote (e.g. an inline comment) is
+# ignored; in double quotes \" and \\ are unescaped. Only an UNQUOTED value
+# has an inline comment (whitespace then '#') stripped. Surrounding blanks
+# are trimmed. Bash 3.2 compatible (no associative arrays, no ${x,,}).
+env_value_body() {
+    local raw=$1 out='' c q i=1 n
+    raw="${raw#"${raw%%[![:space:]]*}"}"          # trim leading blanks
+    q=${raw:0:1}
+    if [[ "$q" == '"' || "$q" == "'" ]]; then
+        n=${#raw}
+        while (( i < n )); do
+            c=${raw:i:1}
+            if [[ "$q" == '"' && "$c" == '\' ]] && (( i + 1 < n )); then
+                case "${raw:i+1:1}" in
+                    '"'|'\') out+=${raw:i+1:1}; i=$((i + 2)); continue ;;
+                esac
+            fi
+            [[ "$c" == "$q" ]] && break
+            out+=$c
+            i=$((i + 1))
+        done
+        printf '%s' "$out"
+        return 0
+    fi
+    # Unquoted: strip an inline comment, then trailing blanks.
+    printf '%s' "$raw" | sed -E 's/[[:space:]]+#.*$//; s/[[:space:]]+$//'
 }
+
+# Value of KEY in the env file (last assignment wins; parsed by
+# env_value_body). Prints nothing when absent. Never echo the result of this
+# for secret keys.
+env_file_value() {
+    local key=$1 line
+    [[ -f "$STACK_ENV_FILE" ]] || return 0
+    line=$(grep -E "^(export[[:space:]]+)?${key}=" "$STACK_ENV_FILE" | tail -n 1 || true)
+    [[ -n "$line" ]] || return 0
+    env_value_body "${line#*=}"
+}
+
 
 # Effective setting: shell environment first (compose gives it precedence
 # too), then the env file, then the supplied default.
