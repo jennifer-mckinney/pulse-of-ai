@@ -76,6 +76,8 @@ function defaultQueues() {
  * @param {object}   [o.queues]       { enqueueEmbeds, enqueueIngestRetry }
  * @param {Function} [o.now]
  * @param {Function} [o.log]
+ * @param {AbortSignal} [o.signal]    collection deadline (G10-9)
+ * @param {number}   [o.deadlineMs]   deadline from now, when no signal
  * @param {object}   [o.collectorCtx] extra collector context (imapFactory, sleep)
  * @param {{ windowMs: number }} [o.cycle]  scheduled per-source run: score
  *                    under the shared collection-cycle job (src/collectors/
@@ -88,6 +90,9 @@ async function runCollection(o = {}) {
     const log = (m) => rawLog(scrub(m, env));
     const slugs = o.slugs || SOURCES.map(s => s.slug);
     const queues = o.queues || defaultQueues();
+    // G10-9: an optional collection deadline (o.signal, or o.deadlineMs).
+    // Once it fires no further source starts and in-flight requests abort.
+    const signal = o.signal || (o.deadlineMs ? AbortSignal.timeout(o.deadlineMs) : null);
 
     let jobId = o.jobId || null;
     let joinedCycle = false;   // G10-2: this run is in the cycle's inflight_runs
@@ -126,6 +131,11 @@ async function runCollection(o = {}) {
             const row = { slug, category: src.category, status: st.status, outcome: 'skipped', fetched: 0, kept: 0, new: 0, error: null };
             summary.sources.push(row);
             if (st.status !== 'collecting') { row.reason = st.reason; continue; }
+            if (signal && signal.aborted) {
+                row.reason = 'collection deadline reached before this source started';
+                log(`[collect] ${slug}: skipped — ${row.reason}`);
+                continue;
+            }
             const sourceId = ids.get(slug);
             if (!sourceId) { row.outcome = 'error'; row.error = 'data_sources row missing — run `npm run seed`'; continue; }
 
@@ -152,7 +162,7 @@ async function runCollection(o = {}) {
             const claimed = await state.claim(sourceId, pollIntervalSec(src, env));
             if (!claimed) { row.reason = 'collected within its poll interval (rate limit)'; continue; }
             queried++;
-            http = http || new HttpClient({ env, transport: o.transport, sleep: o.collectorCtx && o.collectorCtx.sleep });
+            http = http || new HttpClient({ env, transport: o.transport, sleep: o.collectorCtx && o.collectorCtx.sleep, signal });
             const startedAt = new Date();
             const before = http.requests;
             const cursor = claimed.cursor || {};

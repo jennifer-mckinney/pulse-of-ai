@@ -133,6 +133,9 @@ class RobotsPolicy {
             else if (res.status >= 400 && res.status < 500 && res.status !== 429) entry = { allowAll: true };
             else entry = { denyAll: true, unreachable: true, reason: `robots.txt unreachable (HTTP ${res.status}) — complete disallow` };
         } catch (err) {
+            // The run's deadline is not an answer from the origin: nothing
+            // is cached (G10-9).
+            if (err && err.kind === 'deadline') throw err;
             entry = { denyAll: true, unreachable: true, reason: `robots.txt unreachable: ${err.message}` };
         }
         entry.at = this.now();

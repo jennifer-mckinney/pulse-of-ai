@@ -129,8 +129,12 @@ function log(msg) {
 }
 
 /** Parse CLI flags. @returns {object} */
+// G10-9: the live collection of `--once` (standup) stops starting sources
+// after this many seconds; in-flight requests are aborted.
+const DEFAULT_COLLECT_DEADLINE_SEC = 240;
+
 function parseArgs(argv) {
-    const opts = { mode: 'once', size: null, embed: true, waitEmbeddings: 180, force: false };
+    const opts = { mode: 'once', size: null, embed: true, waitEmbeddings: 180, force: false, deadlineSec: DEFAULT_COLLECT_DEADLINE_SEC };
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
         if (a === '--once') opts.mode = 'once';
@@ -139,6 +143,7 @@ function parseArgs(argv) {
         else if (a === '--force') opts.force = true;
         else if (a === '--size') opts.size = positiveInt(argv[++i], null);
         else if (a === '--wait-embeddings') opts.waitEmbeddings = Math.max(0, parseInt(argv[++i], 10) || 0);
+        else if (a === '--collect-deadline') opts.deadlineSec = positiveInt(argv[++i], DEFAULT_COLLECT_DEADLINE_SEC);
         else if (a === '--help' || a === '-h') opts.help = true;
         else throw new Error(`unknown argument '${a}'`);
     }
@@ -409,10 +414,13 @@ async function collectLive(opts, embed) {
     if (opts.collect) return opts.collect({ embed });
     const { runCollection, defaultQueues } = require('../src/collectors/runner');
     const q = defaultQueues();
+    // G10-9: every source's progress is logged (the old verbose-only path
+    // was never switched on), and the collection has a deadline.
     return runCollection({
         triggeredBy: 'standup',
         queues: { enqueueEmbeds: embed ? q.enqueueEmbeds : async () => {}, enqueueIngestRetry: q.enqueueIngestRetry },
-        log: opts.verbose ? log : undefined,
+        log,
+        deadlineMs: (opts.deadlineSec || DEFAULT_COLLECT_DEADLINE_SEC) * 1000,
     });
 }
 
@@ -566,6 +574,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+    DEFAULT_COLLECT_DEADLINE_SEC,
     parseArgs,
     liveCollectionStatus,
     currentMethodology,

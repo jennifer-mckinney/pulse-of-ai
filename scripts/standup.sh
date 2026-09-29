@@ -217,8 +217,18 @@ step "Populating data (collect live first; demo only as the fallback)"
 populate_args=(--once)
 (( EMBEDDINGS_OK )) || populate_args+=(--no-embed)
 (( FORCE_DEMO )) && populate_args+=(--force)
-compose_all run --rm --no-deps -T populate node scripts/populate.js "${populate_args[@]}" \
-    || { show_failure web worker; die "data population failed"; }
+# G10-9: the collection itself stops starting sources after 240 s; the whole
+# step (collection, scoring, demo fallback, embeddings wait) is bounded too.
+POPULATE_TIMEOUT_SEC=${POPULATE_TIMEOUT_SEC:-900}
+rc=0
+run_with_timeout "$POPULATE_TIMEOUT_SEC" compose_all run --rm --no-deps -T populate node scripts/populate.js "${populate_args[@]}" || rc=$?
+if (( rc == 124 )); then
+    show_failure web worker
+    die "data population did not finish within ${POPULATE_TIMEOUT_SEC}s (POPULATE_TIMEOUT_SEC)"
+elif (( rc != 0 )); then
+    show_failure web worker
+    die "data population failed"
+fi
 
 compose_all up -d --no-build --no-deps populate >/dev/null 2>&1 \
     || { show_failure populate; die "could not start the demo fallback (service populate)"; }

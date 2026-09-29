@@ -178,4 +178,21 @@ describe('runCollection', () => {
         expect(lines.join('\n')).not.toMatch(/config drift/);
         expect(code).toBe(0);
     });
+
+    it('G10-9: after the collection deadline no further source starts, and each skip is logged', async () => {
+        const ac = new AbortController();
+        const lines = [];
+        const transport = fixtureTransport(ROUTES);
+        const first = [/hn\.algolia\.com/, 'recorded/hn-algolia.json'];
+        const summary = await runCollection({
+            slugs: ['hacker_news', 'arxiv'], triggeredBy: 'test', env: TEST_ENV, now: NOW, signal: ac.signal,
+            transport: (url, init) => { if (/hn\.algolia/.test(url)) ac.abort(); return transport(url, init); },
+            queues: queuesMock(), log: l => lines.push(l), collectorCtx: { sleep: () => Promise.resolve() },
+        });
+        expect(first).toBeDefined();
+        expect(summary.sources[1]).toMatchObject({ slug: 'arxiv', outcome: 'skipped', reason: 'collection deadline reached before this source started' });
+        expect(lines.join('\n')).toMatch(/arxiv: skipped — collection deadline/);
+        expect(transport.calls.some(c => /arxiv/.test(c.url))).toBe(false);
+    });
 });
+

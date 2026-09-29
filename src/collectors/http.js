@@ -118,7 +118,10 @@ class HttpClient {
      * @param {Function} [opts.sleep]
      * @param {number}   [opts.timeoutMs]
      */
-    constructor({ transport = defaultTransport, env = process.env, limiter, sleep, timeoutMs = DEFAULT_TIMEOUT_MS, robotsCache } = {}) {
+    constructor({ transport = defaultTransport, env = process.env, limiter, sleep, timeoutMs = DEFAULT_TIMEOUT_MS, robotsCache, signal } = {}) {
+        // G10-9 / G10-16: the run's deadline. Once it fires no new request
+        // starts and in-flight ones are aborted (error kind 'deadline').
+        this.signal = signal || null;
         this.transport = transport;
         this.ua = userAgent(env);
         this.sleep = sleep || (ms => new Promise(r => setTimeout(r, ms)));
@@ -149,17 +152,32 @@ class HttpClient {
     }
 
     /** One transport call with UA + timeout (no retries, no robots). */
+    /** Throw when the run's deadline has passed (never retried). */
+    checkDeadline() {
+        if (this.signal && this.signal.aborted) {
+            throw new HttpError('collection deadline reached — the rest of this run is skipped', { kind: 'deadline' });
+        }
+    }
+
     async raw(url, { method = 'GET', headers = {}, body, maxBytes }, minIntervalMs = 0) {
         checkUrl(url);
+        this.checkDeadline();
         await this.limiter.wait(new URL(url).host, minIntervalMs);
+        this.checkDeadline();
         this.requests++;
-        return this.transport(url, {
-            method,
-            headers: { 'User-Agent': this.ua, ...headers },
-            body,
-            maxBytes,
-            signal: AbortSignal.timeout(this.timeoutMs),
-        });
+        const timeout = AbortSignal.timeout(this.timeoutMs);
+        try {
+            return await this.transport(url, {
+                method,
+                headers: { 'User-Agent': this.ua, ...headers },
+                body,
+                maxBytes,
+                signal: this.signal ? AbortSignal.any([timeout, this.signal]) : timeout,
+            });
+        } catch (err) {
+            this.checkDeadline();   // aborted by the deadline: report it as such
+            throw err;
+        }
     }
 
     /**
@@ -248,6 +266,7 @@ class HttpClient {
                 res = await this.raw(url, init, minIntervalMs);
             } catch (err) {
                 lastErr = err;
+                if (err && err.kind === 'deadline') throw err;
                 if (attempt < MAX_RETRIES && !/network disabled/.test(err.message)) {
                     await this.sleep(1000 * 2 ** attempt);
                     continue;
