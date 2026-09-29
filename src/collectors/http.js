@@ -37,7 +37,7 @@
 
 const { version } = require('../../package.json');
 const { AccessDeniedError, HttpError, RobotsDisallowedError, ParseError } = require('./errors');
-const { RobotsPolicy } = require('./robots');
+const { RobotsPolicy, SHARED_CACHE } = require('./robots');
 const { redactUrl, redactUrlsIn } = require('./redact');
 const { checkUrl, RedirectRefusedError } = require('./netguard');
 const { createNetworkTransport, ROBOTS_MAX_BYTES } = require('./transport');
@@ -118,14 +118,18 @@ class HttpClient {
      * @param {Function} [opts.sleep]
      * @param {number}   [opts.timeoutMs]
      */
-    constructor({ transport = defaultTransport, env = process.env, limiter, sleep, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+    constructor({ transport = defaultTransport, env = process.env, limiter, sleep, timeoutMs = DEFAULT_TIMEOUT_MS, robotsCache } = {}) {
         this.transport = transport;
         this.ua = userAgent(env);
         this.sleep = sleep || (ms => new Promise(r => setTimeout(r, ms)));
         this.limiter = limiter || new HostLimiter({ sleep: this.sleep });
         this.timeoutMs = timeoutMs;
         this.requests = 0;
-        this.robots = new RobotsPolicy({ fetchRobots: url => this.fetchRobots(url) });
+        // F10-9: the network transport shares the process-level robots cache
+        // across runs; an injected (fixture) transport gets its own unless a
+        // cache is passed, so recorded fixtures never leak between tests.
+        const cache = robotsCache || (transport === defaultTransport ? SHARED_CACHE : new Map());
+        this.robots = new RobotsPolicy({ fetchRobots: url => this.fetchRobots(url), cache });
     }
 
     /**
@@ -196,7 +200,14 @@ class HttpClient {
             origin = u.origin;
             if (o.robots) {
                 const verdict = await this.robots.check(current, { conservative: o.robotsConservative !== false });
-                if (!verdict.allowed) throw new RobotsDisallowedError(verdict.reason, { url: redactUrl(current) });
+                // An unreachable robots.txt blocks this run (RFC 9309) but is
+                // not the source refusing us: it is classified apart from a
+                // real disallow and does not enter the refused state (F10-5).
+                if (!verdict.allowed) {
+                    throw new RobotsDisallowedError(verdict.reason, {
+                        url: redactUrl(current), ...(verdict.unreachable ? { kind: 'robots_unreachable' } : {}),
+                    });
+                }
             }
             const headers = { ...baseHeaders };
             const validators = o.cache && o.cache[current];

@@ -101,25 +101,39 @@ function isAllowed(groups, path, { conservative = true } = {}) {
  * Per-origin robots cache. `fetchRobots(url)` must fetch WITHOUT robots
  * gating and resolve { status, body }.
  */
+// F10-9: ONE robots cache per process, shared by every HttpClient (a
+// client is created per collection run, so a per-client cache refetched
+// robots.txt on every run). Keyed by origin; entries live TTL_MS (24 h).
+// An UNREACHABLE robots.txt (5xx, 429, network) is a complete disallow for
+// this run but is cached only UNREACHABLE_TTL_MS, so a transient outage is
+// re-checked soon instead of blocking the origin for a day.
+const UNREACHABLE_TTL_MS = 10 * 60 * 1000;
+const SHARED_CACHE = new Map();
+
 class RobotsPolicy {
-    constructor({ fetchRobots, now = () => Date.now(), ttlMs = TTL_MS }) {
+    /**
+     * @param {object} o
+     * @param {Function} o.fetchRobots
+     * @param {Map} [o.cache]  defaults to the process-level cache
+     */
+    constructor({ fetchRobots, now = () => Date.now(), ttlMs = TTL_MS, cache = SHARED_CACHE }) {
         this.fetchRobots = fetchRobots;
         this.now = now;
         this.ttlMs = ttlMs;
-        this.cache = new Map();   // origin → { groups | null, allowAll, denyAll, at }
+        this.cache = cache;   // origin → { groups | null, allowAll, denyAll, unreachable, at }
     }
 
     async policyFor(origin) {
         const hit = this.cache.get(origin);
-        if (hit && this.now() - hit.at < this.ttlMs) return hit;
+        if (hit && this.now() - hit.at < (hit.unreachable ? Math.min(UNREACHABLE_TTL_MS, this.ttlMs) : this.ttlMs)) return hit;
         let entry;
         try {
             const res = await this.fetchRobots(`${origin}/robots.txt`);
             if (res.status >= 200 && res.status < 300) entry = { groups: parseRobots(res.body) };
             else if (res.status >= 400 && res.status < 500 && res.status !== 429) entry = { allowAll: true };
-            else entry = { denyAll: true, reason: `robots.txt unreachable (HTTP ${res.status}) — complete disallow` };
+            else entry = { denyAll: true, unreachable: true, reason: `robots.txt unreachable (HTTP ${res.status}) — complete disallow` };
         } catch (err) {
-            entry = { denyAll: true, reason: `robots.txt unreachable: ${err.message}` };
+            entry = { denyAll: true, unreachable: true, reason: `robots.txt unreachable: ${err.message}` };
         }
         entry.at = this.now();
         this.cache.set(origin, entry);
@@ -136,10 +150,13 @@ class RobotsPolicy {
         if (u.pathname === '/robots.txt') return { allowed: true, reason: null };
         const p = await this.policyFor(u.origin);
         if (p.allowAll) return { allowed: true, reason: null };
-        if (p.denyAll) return { allowed: false, reason: p.reason };
+        if (p.denyAll) return { allowed: false, reason: p.reason, unreachable: !!p.unreachable };
         const allowed = isAllowed(p.groups, u.pathname + u.search, opts);
         return { allowed, reason: allowed ? null : `robots.txt disallows ${u.pathname}${opts.conservative === false ? '' : ' (conservative reading)'}` };
     }
 }
 
-module.exports = { parseRobots, isAllowed, RobotsPolicy, PRODUCT_TOKEN };
+/** Empty the process-level cache (tests). */
+function clearSharedRobotsCache() { SHARED_CACHE.clear(); }
+
+module.exports = { parseRobots, isAllowed, RobotsPolicy, PRODUCT_TOKEN, SHARED_CACHE, UNREACHABLE_TTL_MS, clearSharedRobotsCache };
