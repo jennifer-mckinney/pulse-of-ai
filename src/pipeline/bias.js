@@ -261,8 +261,8 @@ async function checkPlatformSentimentParity(jobId, biasMvId) {
     const threshold = config.platform_parity_max_diff;
 
     // Average comparative sentiment per source category for posts in this job
-    const rows = await dbAll(
-        `SELECT ds.category, AVG(sr.comparative) AS avg_comparative
+    const allRows = await dbAll(
+        `SELECT ds.category, AVG(sr.comparative) AS avg_comparative, COUNT(DISTINCT sr.raw_post_id)::int AS n
          FROM sentiment_results sr
          JOIN raw_posts rp     ON rp.id      = sr.raw_post_id
          JOIN data_sources ds  ON ds.id      = rp.source_id
@@ -274,6 +274,29 @@ async function checkPlatformSentimentParity(jobId, biasMvId) {
          GROUP BY ds.category`,
         [jobId],
     );
+    // bias@1.4.0: only categories with at least parity_min_per_category
+    // posts are compared (an average over three posts is noise); with fewer
+    // than two such categories the check records "insufficient sample" and
+    // raises no alert. Older versions compare every category.
+    const minPer = Number.isInteger(config.parity_min_per_category) && config.parity_min_per_category > 0
+        ? config.parity_min_per_category : 0;
+    const rows = allRows.filter(r => r.n >= minPer);
+    if (minPer > 0 && rows.length < 2 && allRows.length >= 2) {
+        await writeBiasAssessment({
+            jobId,
+            assessmentType: 'platform_sentiment_parity',
+            groupField:     'platform',
+            groupValue:     INSUFFICIENT_SAMPLE,
+            metricName:     'max_comparative_diff',
+            metricValue:    0,
+            threshold,
+            isViolation:    false,
+            severity:       null,
+            evidence:       { rows: allRows, insufficient_sample: true, min_per_category: minPer, compared: rows.map(r => r.category) },
+            biasMvId,
+        });
+        return { isViolation: false, metricValue: 0, groupValue: INSUFFICIENT_SAMPLE, insufficientSample: true };
+    }
 
     // Parity requires at least two distinct platforms to compare
     if (rows.length < 2) {
@@ -319,7 +342,7 @@ async function checkPlatformSentimentParity(jobId, biasMvId) {
         threshold,
         isViolation,
         severity,
-        evidence:       { rows, maxDiff, worstPair },
+        evidence:       { rows, maxDiff, worstPair, ...(minPer > 0 ? { min_per_category: minPer, excluded_small: allRows.filter(r => r.n < minPer) } : {}) },
         biasMvId,
     });
 
@@ -390,6 +413,25 @@ async function checkNegativeDominance(jobId, biasMvId) {
     const negRow     = rows.find(r => r.indicator === 'negative');
     const negCount   = negRow ? negRow.count : 0;
     const metricValue = negCount / total;
+    // bias@1.4.0: a negative share over a handful of posts is noise —
+    // below negative_min_sample the check records "insufficient sample".
+    const minNeg = Number.isInteger(config.negative_min_sample) && config.negative_min_sample > 0 ? config.negative_min_sample : 0;
+    if (total < minNeg) {
+        await writeBiasAssessment({
+            jobId,
+            assessmentType: 'negative_dominance',
+            groupField:     'global',
+            groupValue:     INSUFFICIENT_SAMPLE,
+            metricName:     'negative_share',
+            metricValue,
+            threshold,
+            isViolation:    false,
+            severity:       null,
+            evidence:       { rows, total, negCount, insufficient_sample: true, min_sample: minNeg },
+            biasMvId,
+        });
+        return { isViolation: false, metricValue, insufficientSample: true };
+    }
     const isViolation = metricValue > threshold;
     const severity    = isViolation ? 'warning' : null;
 

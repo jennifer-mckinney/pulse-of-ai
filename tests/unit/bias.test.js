@@ -499,3 +499,86 @@ describe('checkLocationConcentration() — minimum sample (bias@1.3.0)', () => {
         expect(await dbGet(`SELECT 1 AS ok FROM alert_events WHERE alert_type = 'location_concentration'`)).toEqual({ ok: 1 });
     });
 });
+
+// ─── bias@1.4.0: a minimum sample for every check ────────────────────────────
+
+describe('bias@1.4.0 — minimum samples (parity per category, negative dominance, location)', () => {
+    const { METHODOLOGY_VERSIONS } = require('../../src/config/methodology-registry');
+    const V14 = METHODOLOGY_VERSIONS.find(m => m.component === 'bias' && m.version === '1.4.0').config;
+    const mv14 = () => insertBiasMv(V14);
+
+    it('a single-post cycle raises no alert at all', async () => {
+        const src = await insertSource('one-post', 'news');
+        const jobId = await insertJob();
+        const mvIds = await insertMethodologyVersions();
+        const biasMv = await mv14();
+        await insertPostWithSentiment(src, jobId, mvIds.sentimentMvId, { location: 'New York', indicator: 'negative', comparative: -0.5, externalId: 'solo' });
+        const r = await runBiasChecks(jobId, biasMv);
+        expect(r.violationsFound).toBe(0);
+        expect(await dbAll('SELECT id FROM alert_events')).toEqual([]);
+        const rows = await dbAll('SELECT assessment_type, group_value FROM bias_assessments WHERE job_id = $1 ORDER BY assessment_type', [jobId]);
+        expect(rows).toEqual([
+            { assessment_type: 'location_concentration', group_value: 'insufficient sample' },
+            { assessment_type: 'negative_dominance', group_value: 'insufficient sample' },
+            { assessment_type: 'platform_sentiment_parity', group_value: 'none' },
+        ]);
+    });
+
+    it('parity compares only categories with >= 10 posts: small categories give "insufficient sample", no alert', async () => {
+        const dev = await insertSource('p-dev', 'developer');
+        const forums = await insertSource('p-forums', 'forums');
+        const jobId = await insertJob();
+        const mvIds = await insertMethodologyVersions();
+        const biasMv = await mv14();
+        for (let i = 0; i < 4; i++) await insertPostWithSentiment(dev, jobId, mvIds.sentimentMvId, { comparative: 0.4, externalId: `d${i}` });
+        for (let i = 0; i < 3; i++) await insertPostWithSentiment(forums, jobId, mvIds.sentimentMvId, { comparative: -0.1, externalId: `f${i}` });
+        const r = await checkPlatformSentimentParity(jobId, biasMv);
+        expect(r).toMatchObject({ isViolation: false, insufficientSample: true, groupValue: 'insufficient sample' });
+        const a = await dbGet(`SELECT evidence FROM bias_assessments WHERE job_id = $1`, [jobId]);
+        expect(a.evidence).toMatchObject({ insufficient_sample: true, min_per_category: 10, compared: [] });
+        expect(await dbAll('SELECT id FROM alert_events')).toEqual([]);
+    });
+
+    it('parity with >= 10 posts in two categories still alerts on a real gap', async () => {
+        const dev = await insertSource('q-dev', 'developer');
+        const forums = await insertSource('q-forums', 'forums');
+        const tiny = await insertSource('q-tiny', 'news');
+        const jobId = await insertJob();
+        const mvIds = await insertMethodologyVersions();
+        const biasMv = await mv14();
+        for (let i = 0; i < 10; i++) await insertPostWithSentiment(dev, jobId, mvIds.sentimentMvId, { comparative: 0.4, externalId: `qd${i}` });
+        for (let i = 0; i < 10; i++) await insertPostWithSentiment(forums, jobId, mvIds.sentimentMvId, { comparative: -0.1, externalId: `qf${i}` });
+        await insertPostWithSentiment(tiny, jobId, mvIds.sentimentMvId, { comparative: -0.9, externalId: 'qt' });
+        const r = await checkPlatformSentimentParity(jobId, biasMv);
+        expect(r.isViolation).toBe(true);
+        expect(r.metricValue).toBeCloseTo(0.5, 5);           // the 1-post news category is not compared
+        expect(await dbGet(`SELECT alert_type FROM alert_events`)).toEqual({ alert_type: 'platform_sentiment_parity' });
+    });
+
+    it('negative dominance needs >= 30 posts', async () => {
+        const src = await insertSource('n-src', 'news');
+        const jobId = await insertJob();
+        const mvIds = await insertMethodologyVersions();
+        const biasMv = await mv14();
+        for (let i = 0; i < 5; i++) await insertPostWithSentiment(src, jobId, mvIds.sentimentMvId, { indicator: 'negative', comparative: -0.5, externalId: `n${i}` });
+        expect(await checkNegativeDominance(jobId, biasMv)).toMatchObject({ isViolation: false, metricValue: 1, insufficientSample: true });
+        const job2 = await insertJob();
+        for (let i = 0; i < 30; i++) await insertPostWithSentiment(src, job2, mvIds.sentimentMvId, { indicator: 'negative', comparative: -0.5, externalId: `m${i}` });
+        expect((await checkNegativeDominance(job2, biasMv)).isViolation).toBe(true);
+    });
+
+    it('a 30+ post content-located concentration alerts; publisher-located posts are ignored', async () => {
+        const src = await insertSource('l-src', 'news');
+        const jobId = await insertJob();
+        const mvIds = await insertMethodologyVersions();
+        const biasMv = await mv14();
+        for (let i = 0; i < 40; i++) {
+            const id = await insertPostWithSentiment(src, jobId, mvIds.sentimentMvId, { location: 'London', externalId: `pub${i}` });
+            await dbRun(`UPDATE raw_posts SET raw_payload = '{"location_basis":"publisher"}'::jsonb WHERE id = $1`, [id]);
+        }
+        expect((await checkLocationConcentration(jobId, biasMv)).isViolation).toBe(false);
+        const job2 = await insertJob();
+        for (let i = 0; i < 30; i++) await insertPostWithSentiment(src, job2, mvIds.sentimentMvId, { location: i < 25 ? 'Tokyo' : 'Paris', externalId: `c${i}` });
+        expect((await checkLocationConcentration(job2, biasMv)).isViolation).toBe(true);
+    });
+});

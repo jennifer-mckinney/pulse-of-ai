@@ -68,7 +68,7 @@ stale AS (
            CASE WHEN e.content_located < 30 THEN 'insufficient sample'
                 ELSE 'within threshold once publisher-located posts are excluded' END AS verdict
     FROM evaluated e
-    WHERE e.content_located < 30 OR e.dominant::float8 / e.content_located <= 0.35
+    WHERE e.content_located < 30 OR e.dominant::float8 / NULLIF(e.content_located, 0) <= 0.35
 ),
 recorded AS (
     INSERT INTO alert_resolutions (alert_id, resolved_by, resolution, basis)

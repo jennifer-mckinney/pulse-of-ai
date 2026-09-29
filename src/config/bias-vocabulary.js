@@ -136,7 +136,12 @@ function buildLayers(assessments, biasConfig) {
         // P10-5 (bias@1.3.0): too few located posts to judge — stated as
         // not applicable, never as a pass (src/pipeline/bias.js).
         const insufficient = !row.is_violation && row.group_value === INSUFFICIENT_SAMPLE;
-        const min = biasConfig && Number.isInteger(biasConfig.location_min_sample) ? biasConfig.location_min_sample : null;
+        const num = (k) => (biasConfig && Number.isInteger(biasConfig[k]) ? biasConfig[k] : null);
+        const insufficientNote = type === 'platform_sentiment_parity'
+            ? `insufficient sample: fewer than two source categories with at least ${num('parity_min_per_category') || 'the minimum'} posts in this job, so no alert`
+            : type === 'negative_dominance'
+                ? `insufficient sample: fewer than ${num('negative_min_sample') || 'the minimum'} posts in this job, so no alert`
+                : `insufficient sample: fewer than ${num('location_min_sample') || 'the minimum'} content-located posts in this job, so no alert`;
         return {
             name:            layerName(type, biasConfig),
             assessment_type: type,
@@ -147,9 +152,7 @@ function buildLayers(assessments, biasConfig) {
             severity:        severityLabel(row),
             // P0-3: computed layers carry the config's methodology note (what
             // the check actually measures), null when the config has none.
-            note:            insufficient
-                ? `insufficient sample: fewer than ${min || 'the minimum'} content-located posts in this job, so no alert`
-                : layerNoteFor(type, biasConfig),
+            note:            insufficient ? insufficientNote : layerNoteFor(type, biasConfig),
         };
     });
 

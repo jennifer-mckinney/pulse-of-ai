@@ -538,6 +538,51 @@ const METHODOLOGY_VERSIONS = [
     });
 })();
 
+// bias@1.4.0 — Jennifer's live site (2026-09-29): parity and negative
+// dominance alerts from tiny per-category samples in 2–3 minute cycles. A
+// minimum sample for EVERY check (migration 032). Otherwise bias@1.3.0.
+(() => {
+    const prev = METHODOLOGY_VERSIONS.find(m => m.component === 'bias' && m.version === '1.3.0');
+    METHODOLOGY_VERSIONS.push({
+        component: 'bias',
+        version: '1.4.0',
+        model_name: prev.model_name,
+        config: {
+            ...prev.config,
+            // Read by src/pipeline/bias.js
+            parity_min_per_category: 10,
+            negative_min_sample: 30,
+            sample_rules: {
+                location_concentration: 'at least 30 content-located posts in the job (location_min_sample), publisher-located posts excluded',
+                platform_sentiment_parity: 'only categories with at least 10 posts are compared (parity_min_per_category); fewer than two such categories: insufficient sample',
+                negative_dominance: 'at least 30 posts in the job (negative_min_sample)',
+                below_minimum: '"insufficient sample": the value is stated, no violation, no alert',
+                basis: 'n >= 30 is the conventional minimum for treating a sample proportion as approximately normal (central limit '
+                    + 'theorem rule of thumb); n >= 10 per group is the conventional floor for comparing group means. Both are '
+                    + 'deliberately conservative floors, not significance tests.',
+            },
+            layer_notes: {
+                ...prev.config.layer_notes,
+                platform_sentiment_parity: 'parity measured across source categories (platform), not user demographics; only categories '
+                    + 'with at least 10 posts in the job are compared',
+                negative_dominance: 'needs at least 30 posts in the job, else "insufficient sample" and no alert',
+            },
+        },
+        justification: 'bias@1.4.0 gives every fairness check a minimum sample, after the live dashboard showed 39 active alerts from '
+            + 'collection cycles of a few posts: location concentration of 1.000 for single publisher cities and demographic-parity '
+            + 'watches between two categories of three or four posts each. Location concentration keeps bias@1.3.0\'s rule (at least '
+            + '30 content-located posts; publisher-located posts excluded, decision D3 "Separate layer, excluded from bias."). '
+            + 'Platform sentiment parity (the demographic-parity outcome gap across source categories, Barocas & Selbst 2016) now '
+            + 'compares only categories with at least 10 posts in the job; with fewer than two such categories it records '
+            + '"insufficient sample". Negative dominance needs at least 30 posts. Below a minimum the assessment is recorded with its '
+            + 'value, as "insufficient sample", with no violation and no alert. The floors are conventional (n >= 30 for a '
+            + 'proportion to be treated as approximately normal; n >= 10 per group for comparing means) and are floors, not '
+            + 'significance tests. Thresholds, names, citations (Suresh & Guttag 2021 for location and negative dominance) and '
+            + 'planned layers are as in bias@1.1.0 (AI Act Article 13). Open alerts that this version would not raise are '
+            + 'resolved by migration 032 with an audited alert_resolutions record linked to this version, never deleted.',
+    });
+})();
+
 // ─── Errata (P10-16) ─────────────────────────────────────────────────────────
 // A released methodology row is never edited, even when it turns out not to
 // describe the code that ran. An erratum is a NEW row in

@@ -487,8 +487,8 @@ describe('migration 028 ↔ methodology registry (bias@1.3.0, P10-5)', () => {
         expect(reg.config.location_basis_excluded).toEqual(['publisher']);
     });
 
-    test('bias@1.3.0 is current; 1.2.0 carries no minimum (never edited)', () => {
-        expect(latest('bias').version).toBe('1.3.0');
+    test('bias@1.3.0 (superseded by 1.4.0, never edited); 1.2.0 carries no minimum', () => {
+        expect(['1.3.0', '1.4.0']).toContain(latest('bias').version);
         expect(registry('bias', '1.2.0').config.location_min_sample).toBeUndefined();
         const reg = registry('bias', '1.3.0');
         const prev = registry('bias', '1.2.0');
@@ -533,5 +533,27 @@ describe('migration 031 ↔ methodology registry (ingest@1.6.0, P10-2)', () => {
         const platform = Object.fromEntries(SOURCES.filter(s => s.retention).map(s => [s.slug, retentionHours(s)]));
         expect(reg.config.text_retention.platform_terms_hours).toEqual(platform);
         expect(reg.config.privacy_claim).toBe(registry('ingest', '1.5.0').config.privacy_claim);
+    });
+});
+
+describe('migration 032 ↔ methodology registry (bias@1.4.0, minimum samples)', () => {
+    const { generate } = require('../../../scripts/generate-methodology-migration');
+    const SQL_032 = fs.readFileSync(path.join(__dirname, '../../../src/db/migrations/032_bias_sample_rules.sql'), 'utf8');
+
+    test('032 contains exactly the generated bias@1.4.0 row and deletes nothing', () => {
+        expect(SQL_032).toContain(generate(['bias@1.4.0']));
+        expect((SQL_032.match(/INSERT INTO methodology_versions/g) || []).length).toBe(1);
+        expect(SQL_032).not.toMatch(/DO UPDATE|UPDATE methodology_versions|DELETE|DROP|TRUNCATE/);
+    });
+
+    test('bias@1.4.0 is current; every check has a minimum; the SQL uses the registered numbers', () => {
+        const reg = registry('bias', '1.4.0');
+        expect(latest('bias').version).toBe('1.4.0');
+        expect(reg.config).toMatchObject({ location_min_sample: 30, parity_min_per_category: 10, negative_min_sample: 30 });
+        expect(reg.config.sample_rules.basis).toMatch(/n >= 30/);
+        expect(SQL_032).toMatch(/p\.n >= 10\b/);
+        expect(SQL_032).toMatch(/l\.sample < 30\b/);
+        expect(SQL_032).toMatch(/n\.sample < 30\b/);
+        expect(registry('bias', '1.3.0').config.parity_min_per_category).toBeUndefined();
     });
 });
