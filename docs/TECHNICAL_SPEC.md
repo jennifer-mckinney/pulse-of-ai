@@ -1567,6 +1567,24 @@ Runs on the 1st of each month. Compacts all posts older than 3 months:
 - `post_embeddings` (large, re-computable if needed)
 - `raw_posts.content` field (nulled — privacy compliance)
 
+**Demo data at the retention boundary (P9-3).** Posts whose source has
+`data_sources.source_type = 'demo'` (the fictional standup population from
+`scripts/populate.js`) are never rolled up, and before compaction runs they are
+deleted outright once `collected_at` is past `RETENTION_DETAIL_DAYS` — owner
+decision 2026-09-29. Deleted with each demo post: its `sentiment_results`,
+`relevance_results`, `discourse_results`, `post_embeddings` and
+`decision_audit_log` rows (every table with a foreign key to `raw_posts`; an
+integration test checks that list against the live catalog). Also deleted:
+`user_platform_sightings` recorded against a demo feed past the same boundary,
+and any `pseudonymous_users` profile those rows referenced that has no sighting
+or post left. The purge runs in bounded batches (`DEMO_PURGE_BATCH_SIZE`,
+default 500, max 5000), one transaction per batch, and writes one
+`data_retention_log` row per batch: `action = 'purged_demo'`, `raw_post_id`
+NULL, a JSON `reason` with the per-table counts, the time window and the
+cutoff, and a `legal_basis` stating that the data was fictional demo data. The
+`source_type = 'demo'` filter is in the SQL of every delete, so posts from real
+sources and their audit trails are never deleted.
+
 ### API Behavior for Historical Queries
 When `POST /api/query` date range falls partly outside the detail window:
 ```json
