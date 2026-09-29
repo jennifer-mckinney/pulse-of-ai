@@ -1,9 +1,10 @@
 // tests/unit/pure/collectorLinearText.test.js
 // F10-3 regression: upstream text is processed in linear time. The old
 // regexes were quadratic (redactIdentities on 40k 'a' took ~1 s, so 1 MB
-// took minutes, blocking the event loop). Each 1 MB input must complete in
-// under 50 ms; the helper warms the code path first so JIT compilation is
-// not measured.
+// took minutes, blocking the event loop). Each check compares 256 KB with
+// 1 MB of the same pattern (tests/helpers/scaling.js): time must grow
+// linearly (or 1 MB must finish outright fast), which catches quadratic
+// behaviour without a wall-clock budget that flakes under load.
 
 'use strict';
 
@@ -13,40 +14,41 @@ const { stripSignatures } = require('../../../src/collectors/adapters/nonprofit'
 const { getSource } = require('../../../src/config/source-registry');
 
 const MB = 1024 * 1024;
+const { scaling } = require('../../helpers/scaling');
+
+/** Build an input of ~n chars by repeating the unit. */
+const rep = unit => n => unit.repeat(Math.max(1, Math.round(n / unit.length)));
+const linear = (fn, unit) => {
+    const r = scaling(fn, rep(unit), MB);
+    return expect({ ...r, linear: r.linear }).toMatchObject({ linear: true });
+};
 const npr = getSource('npr');
 
-function timed(fn) {
-    fn();                               // warm-up
-    const t0 = process.hrtime.bigint();
-    const out = fn();
-    return { ms: Number(process.hrtime.bigint() - t0) / 1e6, out };
-}
-
-const INPUTS = {
-    "1 MB of 'a'": 'a'.repeat(MB),
-    "1 MB of '<'": '<'.repeat(MB),
-    "1 MB of '<script '": '<script '.repeat(MB / 8),
-    "1 MB of '@'": '@'.repeat(MB),
-    '1 MB of email-ish runs': 'a.b-c_d+e%f'.repeat(MB / 11),
-    '1 MB of "<a href=User:"': '<a href="User:x">'.repeat(MB / 17),
-    '1 MB of "(" and spaces': '(      '.repeat(MB / 7),
+const UNITS = {
+    "'a'": 'a',
+    "'<'": '<',
+    "'<script '": '<script ',
+    "'@'": '@',
+    'email-ish runs': 'a.b-c_d+e%f',
+    '"<a href=User:"': '<a href="User:x">',
+    '"(" and spaces': '(      ',
 };
 
-describe.each(Object.entries(INPUTS))('%s', (_, input) => {
-    test('toPayload (text and title) completes in < 50 ms', () => {
-        const { ms, out } = timed(() => toPayload({ id: '1', title: input, text: input }, npr, npr.routes[0]));
-        expect(ms).toBeLessThan(50);
+describe.each(Object.entries(UNITS))('1 MB of %s', (_, unit) => {
+    test('toPayload (text and title) is linear and capped', () => {
+        linear(input => toPayload({ id: '1', title: input, text: input }, npr, npr.routes[0]), unit);
+        const out = toPayload({ id: '1', title: rep(unit)(MB), text: rep(unit)(MB) }, npr, npr.routes[0]);
         if (out) expect(out.text.length).toBeLessThanOrEqual(MAX_TEXT);
     });
 
-    test('htmlToText and redactIdentities on the FULL input complete in < 50 ms', () => {
-        expect(timed(() => htmlToText(input)).ms).toBeLessThan(50);
-        expect(timed(() => redactIdentities(input)).ms).toBeLessThan(50);
+    test('htmlToText and redactIdentities on the FULL input are linear', () => {
+        linear(htmlToText, unit);
+        linear(redactIdentities, unit);
     });
 
-    test('Wikipedia signature stripping and Scholar alert parsing complete in < 50 ms', () => {
-        expect(timed(() => stripSignatures(input)).ms).toBeLessThan(50);
-        expect(timed(() => parseScholarAlert(input, null, 'm')).ms).toBeLessThan(50);
+    test('Wikipedia signature stripping and Scholar alert parsing are linear', () => {
+        linear(stripSignatures, unit);
+        linear(input => parseScholarAlert(input, null, 'm'), unit);
     });
 });
 
@@ -74,4 +76,12 @@ test('stripSignatures removes signature links, timestamps and talk markers', () 
         + '(<a href="/wiki/User_talk:Someone">talk</a>) 12:34, 5 May 2026 (UTC)</p>';
     expect(stripSignatures(html)).toBe('AI safety needs audits.');
     expect(stripSignatures('<p>x &lt;b&gt; y</p>')).toBe('x &lt;b&gt; y');
+});
+
+test('the scaling check itself catches a quadratic pattern (the pre-F10-3 e-mail regex)', () => {
+    const { scaling } = require('../../helpers/scaling');
+    const quadratic = s => s.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[email]');
+    const r = scaling(quadratic, n => 'a'.repeat(n), 16 * 1024, 3);
+    expect(r.ratio).toBeGreaterThan(10);
+    expect(r.linear).toBe(false);
 });

@@ -82,12 +82,11 @@ describe('redactText (ingest@1.3.0)', () => {
         expect(redactText('Agree — Preceding unsigned comment added by Foo Bar (talk • contribs)')).toBe('Agree');
     });
 
-    test('linear on hostile 1 MB inputs (F10-3): each under 200 ms', () => {
-        for (const s of ['a', '<', '1', '+', '—', ' ', '@', 'h', 'https://x.com/', 'cc Ab ', '— Ab ', '(415) ']) {
-            const input = s.repeat(Math.ceil((1 << 20) / s.length));
-            const t = process.hrtime.bigint();
-            redactText(input);
-            expect(Number(process.hrtime.bigint() - t) / 1e6).toBeLessThan(200);
+    test('linear on hostile 1 MB inputs (F10-3), load-robust', () => {
+        const { scaling } = require('../../helpers/scaling');
+        for (const u of ['a', '<', '1', '+', '—', ' ', '@', 'h', 'https://x.com/', 'cc Ab ', '— Ab ', '(415) ']) {
+            const r = scaling(redactText, n => u.repeat(Math.max(1, Math.round(n / u.length))), 1 << 20, 3);
+            expect({ unit: u, linear: r.linear }).toEqual({ unit: u, linear: true });
         }
     });
 });
