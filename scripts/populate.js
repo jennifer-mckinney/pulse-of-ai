@@ -218,11 +218,22 @@ async function ensureDemoSources() {
 }
 
 /** LIVE posts (real registry sources, not demo feeds) in the trailing hour. */
+/**
+ * Live posts in the trailing hour that the GLOBE can render (G10-8): the
+ * same rule as GET /api/posts/aggregated-by-location — scored (a
+ * sentiment_results row) and located (location non-empty; a publisher-city
+ * location counts). A live post the globe cannot show must not stop the
+ * demo fallback, or standup ends with an empty globe.
+ */
 async function livePostsInLastHour() {
     const row = await db.dbGet(
-        `SELECT COUNT(*)::int AS n
-         FROM raw_posts rp JOIN data_sources ds ON ds.id = rp.source_id
-         WHERE ds.source_type <> $1 AND rp.collected_at >= NOW() - INTERVAL '1 hour'`,
+        `SELECT COUNT(DISTINCT rp.id)::int AS n
+         FROM raw_posts rp
+         JOIN data_sources ds      ON ds.id = rp.source_id
+         JOIN sentiment_results sr ON sr.raw_post_id = rp.id
+         WHERE ds.source_type <> $1
+           AND rp.location IS NOT NULL AND rp.location <> ''
+           AND rp.collected_at >= NOW() - INTERVAL '1 hour'`,
         [DEMO_SOURCE_TYPE],
     );
     return row.n;

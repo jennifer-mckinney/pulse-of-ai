@@ -157,12 +157,34 @@ describe('scripts/populate.js — demo population through the real pipeline', ()
             .toMatch(/kill switch/);
     });
 
+    // A live post the globe can render: scored and located (G10-8).
+    async function renderableLivePost(ext, { location = 'Washington', scored = true } = {}) {
+        const src = await db.dbGet(`SELECT id FROM data_sources WHERE name = 'npr'`);
+        const p = await db.dbRun(`INSERT INTO raw_posts (source_id, external_id, content, content_hash, location)
+            VALUES ($1, $2, 'AI news', $2, $3) RETURNING id`, [src.id, ext, location]);
+        if (scored) {
+            const mv = await populate.currentMethodology();
+            const job = await db.dbRun(`INSERT INTO processing_jobs (triggered_by, status) VALUES ('test', 'completed') RETURNING id`);
+            await require('../../src/pipeline/sentiment').saveSentiment(p.id, job.id, mv.sentiment);
+        }
+        return p.id;
+    }
+
+    it('G10-8: only live posts the globe can render (scored AND located) count as live', async () => {
+        await seedSources();
+        await registerPipelineMethodology();
+        await renderableLivePost('unscored', { scored: false });
+        await renderableLivePost('unlocated', { location: '' });
+        expect(await populate.livePostsInLastHour()).toBe(0);
+        await renderableLivePost('ok');                         // publisher city counts
+        expect(await populate.livePostsInLastHour()).toBe(1);
+    });
+
     it('collects FIRST: live posts in the trailing hour → no demo batch (LIVE)', async () => {
         await seedSources();
         await registerPipelineMethodology();
         const collect = jest.fn(async () => {
-            const src = await db.dbGet(`SELECT id FROM data_sources WHERE name = 'npr'`);
-            await db.dbRun(`INSERT INTO raw_posts (source_id, external_id, content, content_hash) VALUES ($1, 'live-1', 'AI news', 'h')`, [src.id]);
+            await renderableLivePost('live-1');
             return { jobId: 'j', sourcesQueried: 31, postsCollected: 1, postsProcessed: 1, bias: null, embedQueued: 0 };
         });
         const r = await populate.populateOnce({ size: 4, embed: false, env: { COLLECTOR_CONTACT_URL: 'https://example.org/c' }, collect }, 0);
