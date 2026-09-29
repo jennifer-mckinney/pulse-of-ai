@@ -42,17 +42,166 @@ x-app-env: &app-env
   DEMO_FEED_INTERVAL_MS: ${DEMO_FEED_INTERVAL_MS:-150000}
   DEMO_FEED_BATCH: ${DEMO_FEED_BATCH:-14}
 
-# Third-party collector credentials and settings — merged into `worker`
-# ONLY (F9-2). web is the internet-facing process: an RCE or debug leak
-# there must not expose paid API keys via /proc/self/environ, and migrate /
-# populate never collect. Collector code runs in the worker; anything web
-# needs for source STATUS is a non-secret name or flag, never a credential.
-# scripts/test/check-compose.sh fails if a credential reaches another role.
+# Collector SETTINGS (F9-2, src/config/source-registry.js envClass):
+# non-secret configuration, the permission / licence REFERENCES (names and
+# dates, never credentials) and the 51 per-source kill switches. Every role
+# that evaluates or runs collection gets them (web, worker, populate).
+# Empty means "not set".
+x-collector-settings: &collector-settings
+  COLLECTOR_CONTACT_URL: ${COLLECTOR_CONTACT_URL:-https://github.com/jennifer-mckinney/pulse-of-ai}
+  COLLECTORS_ENABLED: ${COLLECTORS_ENABLED:-true}
+  COLLECTORS_DISABLED: ${COLLECTORS_DISABLED:-}
+  COLLECT_WINDOW_MS: ${COLLECT_WINDOW_MS:-150000}
+  META_CONTENT_LIBRARY_APPROVAL_REF: ${META_CONTENT_LIBRARY_APPROVAL_REF:-}
+  WECHAT_TENCENT_AUTHORIZATION_REF: ${WECHAT_TENCENT_AUTHORIZATION_REF:-}
+  TELEGRAM_WRITTEN_PERMISSION_REF: ${TELEGRAM_WRITTEN_PERMISSION_REF:-}
+  BBC_LICENSE_REF: ${BBC_LICENSE_REF:-}
+  NYT_LICENSE_REF: ${NYT_LICENSE_REF:-}
+  CNN_LICENSE_REF: ${CNN_LICENSE_REF:-}
+  ALJAZEERA_LICENSE_REF: ${ALJAZEERA_LICENSE_REF:-}
+  NBC_LICENSE_REF: ${NBC_LICENSE_REF:-}
+  WAPO_LICENSE_REF: ${WAPO_LICENSE_REF:-}
+  NCBI_TOOL: ${NCBI_TOOL:-pulse-of-ai}
+  ELSEVIER_APPROVAL_REF: ${ELSEVIER_APPROVAL_REF:-}
+  SCHOLAR_ALERTS_IMAP_PORT: ${SCHOLAR_ALERTS_IMAP_PORT:-993}
+  SCHOLAR_ALERTS_MAILBOX: ${SCHOLAR_ALERTS_MAILBOX:-INBOX}
+  RESEARCHGATE_DATA_ACCESS_REF: ${RESEARCHGATE_DATA_ACCESS_REF:-}
+  IEEE_LICENSE_REF: ${IEEE_LICENSE_REF:-}
+  CFR_FEED_PERMISSION_REF: ${CFR_FEED_PERMISSION_REF:-}
+  CATO_ALLOWLIST_REF: ${CATO_ALLOWLIST_REF:-}
+  ARSTECHNICA_LICENSE_REF: ${ARSTECHNICA_LICENSE_REF:-}
+  # Per-source kill switches (SOURCE_<SLUG>_ENABLED) for all 51 slugs.
+  SOURCE_WHATSAPP_ENABLED: ${SOURCE_WHATSAPP_ENABLED:-}
+  SOURCE_INSTAGRAM_ENABLED: ${SOURCE_INSTAGRAM_ENABLED:-}
+  SOURCE_YOUTUBE_ENABLED: ${SOURCE_YOUTUBE_ENABLED:-}
+  SOURCE_FACEBOOK_ENABLED: ${SOURCE_FACEBOOK_ENABLED:-}
+  SOURCE_TIKTOK_ENABLED: ${SOURCE_TIKTOK_ENABLED:-}
+  SOURCE_WECHAT_ENABLED: ${SOURCE_WECHAT_ENABLED:-}
+  SOURCE_TELEGRAM_ENABLED: ${SOURCE_TELEGRAM_ENABLED:-}
+  SOURCE_X_ENABLED: ${SOURCE_X_ENABLED:-}
+  SOURCE_BBC_NEWS_ENABLED: ${SOURCE_BBC_NEWS_ENABLED:-}
+  SOURCE_NYT_ENABLED: ${SOURCE_NYT_ENABLED:-}
+  SOURCE_CNN_ENABLED: ${SOURCE_CNN_ENABLED:-}
+  SOURCE_GUARDIAN_ENABLED: ${SOURCE_GUARDIAN_ENABLED:-}
+  SOURCE_AL_JAZEERA_ENABLED: ${SOURCE_AL_JAZEERA_ENABLED:-}
+  SOURCE_WSJ_ENABLED: ${SOURCE_WSJ_ENABLED:-}
+  SOURCE_AP_ENABLED: ${SOURCE_AP_ENABLED:-}
+  SOURCE_REUTERS_ENABLED: ${SOURCE_REUTERS_ENABLED:-}
+  SOURCE_NBC_NEWS_ENABLED: ${SOURCE_NBC_NEWS_ENABLED:-}
+  SOURCE_WASHINGTON_POST_ENABLED: ${SOURCE_WASHINGTON_POST_ENABLED:-}
+  SOURCE_NPR_ENABLED: ${SOURCE_NPR_ENABLED:-}
+  SOURCE_SPRINGERLINK_ENABLED: ${SOURCE_SPRINGERLINK_ENABLED:-}
+  SOURCE_ARXIV_ENABLED: ${SOURCE_ARXIV_ENABLED:-}
+  SOURCE_PUBMED_ENABLED: ${SOURCE_PUBMED_ENABLED:-}
+  SOURCE_SCIENCEDIRECT_ENABLED: ${SOURCE_SCIENCEDIRECT_ENABLED:-}
+  SOURCE_GOOGLE_SCHOLAR_ENABLED: ${SOURCE_GOOGLE_SCHOLAR_ENABLED:-}
+  SOURCE_RESEARCHGATE_ENABLED: ${SOURCE_RESEARCHGATE_ENABLED:-}
+  SOURCE_IEEE_XPLORE_ENABLED: ${SOURCE_IEEE_XPLORE_ENABLED:-}
+  SOURCE_JSTOR_ENABLED: ${SOURCE_JSTOR_ENABLED:-}
+  SOURCE_GOVINFO_ENABLED: ${SOURCE_GOVINFO_ENABLED:-}
+  SOURCE_CONGRESS_GOV_ENABLED: ${SOURCE_CONGRESS_GOV_ENABLED:-}
+  SOURCE_CFR_ENABLED: ${SOURCE_CFR_ENABLED:-}
+  SOURCE_CATO_ENABLED: ${SOURCE_CATO_ENABLED:-}
+  SOURCE_RAND_ENABLED: ${SOURCE_RAND_ENABLED:-}
+  SOURCE_URBAN_INSTITUTE_ENABLED: ${SOURCE_URBAN_INSTITUTE_ENABLED:-}
+  SOURCE_PEW_ENABLED: ${SOURCE_PEW_ENABLED:-}
+  SOURCE_WIKIPEDIA_ENABLED: ${SOURCE_WIKIPEDIA_ENABLED:-}
+  SOURCE_MOZILLA_ENABLED: ${SOURCE_MOZILLA_ENABLED:-}
+  SOURCE_KHAN_ACADEMY_ENABLED: ${SOURCE_KHAN_ACADEMY_ENABLED:-}
+  SOURCE_OWID_ENABLED: ${SOURCE_OWID_ENABLED:-}
+  SOURCE_OPENSTREETMAP_ENABLED: ${SOURCE_OPENSTREETMAP_ENABLED:-}
+  SOURCE_INTERNET_ARCHIVE_ENABLED: ${SOURCE_INTERNET_ARCHIVE_ENABLED:-}
+  SOURCE_GITHUB_ENABLED: ${SOURCE_GITHUB_ENABLED:-}
+  SOURCE_GITLAB_ENABLED: ${SOURCE_GITLAB_ENABLED:-}
+  SOURCE_DOCKER_HUB_ENABLED: ${SOURCE_DOCKER_HUB_ENABLED:-}
+  SOURCE_HUGGING_FACE_ENABLED: ${SOURCE_HUGGING_FACE_ENABLED:-}
+  SOURCE_STACK_OVERFLOW_ENABLED: ${SOURCE_STACK_OVERFLOW_ENABLED:-}
+  SOURCE_HACKER_NEWS_ENABLED: ${SOURCE_HACKER_NEWS_ENABLED:-}
+  SOURCE_TLDR_ENABLED: ${SOURCE_TLDR_ENABLED:-}
+  SOURCE_SUBSTACK_ENABLED: ${SOURCE_SUBSTACK_ENABLED:-}
+  SOURCE_ARS_TECHNICA_ENABLED: ${SOURCE_ARS_TECHNICA_ENABLED:-}
+  SOURCE_ONE_USEFUL_THING_ENABLED: ${SOURCE_ONE_USEFUL_THING_ENABLED:-}
+  SOURCE_PLATFORMER_ENABLED: ${SOURCE_PLATFORMER_ENABLED:-}
+
+# Collector CREDENTIALS — merged into `worker` ONLY (F9-2). web is the
+# internet-facing process: an RCE or debug leak there must not expose paid
+# API keys via /proc/self/environ, and migrate / populate never need them.
+# Collection with credentials runs in the worker; scripts/test/check-compose.sh
+# fails if a credential value reaches another role.
 x-collector-env: &collector-env
-  REDDIT_USER_AGENT: ${REDDIT_USER_AGENT:-}
-  TWITTER_BEARER_TOKEN: ${TWITTER_BEARER_TOKEN:-}
+  META_CONTENT_LIBRARY_EXPORT_DIR: ${META_CONTENT_LIBRARY_EXPORT_DIR:-}
+  YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
+  TIKTOK_RESEARCH_CLIENT_KEY: ${TIKTOK_RESEARCH_CLIENT_KEY:-}
+  TIKTOK_RESEARCH_CLIENT_SECRET: ${TIKTOK_RESEARCH_CLIENT_SECRET:-}
+  WECHAT_AUTHORIZED_FEED_URL: ${WECHAT_AUTHORIZED_FEED_URL:-}
+  TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+  X_BEARER_TOKEN: ${X_BEARER_TOKEN:-}
+  NYT_API_KEY: ${NYT_API_KEY:-}
+  CNN_FEED_URL: ${CNN_FEED_URL:-}
+  CNN_API_KEY: ${CNN_API_KEY:-}
+  GUARDIAN_API_KEY: ${GUARDIAN_API_KEY:-}
+  DOWJONES_API_KEY: ${DOWJONES_API_KEY:-}
+  DOWJONES_FEED_URL: ${DOWJONES_FEED_URL:-}
+  AP_API_KEY: ${AP_API_KEY:-}
+  REUTERS_CONNECT_CLIENT_ID: ${REUTERS_CONNECT_CLIENT_ID:-}
+  REUTERS_CONNECT_CLIENT_SECRET: ${REUTERS_CONNECT_CLIENT_SECRET:-}
+  SPRINGER_API_KEY: ${SPRINGER_API_KEY:-}
+  NCBI_API_KEY: ${NCBI_API_KEY:-}
+  NCBI_EMAIL: ${NCBI_EMAIL:-}
+  ELSEVIER_API_KEY: ${ELSEVIER_API_KEY:-}
+  SCHOLAR_ALERTS_IMAP_HOST: ${SCHOLAR_ALERTS_IMAP_HOST:-}
+  SCHOLAR_ALERTS_IMAP_USER: ${SCHOLAR_ALERTS_IMAP_USER:-}
+  SCHOLAR_ALERTS_IMAP_PASSWORD: ${SCHOLAR_ALERTS_IMAP_PASSWORD:-}
+  RESEARCHGATE_DATASET_PATH: ${RESEARCHGATE_DATASET_PATH:-}
+  IEEE_API_KEY: ${IEEE_API_KEY:-}
+  JSTOR_DATASET_PATH: ${JSTOR_DATASET_PATH:-}
+  GOVINFO_API_KEY: ${GOVINFO_API_KEY:-}
+  CONGRESS_API_KEY: ${CONGRESS_API_KEY:-}
   GITHUB_TOKEN: ${GITHUB_TOKEN:-}
-  SEMANTIC_SCHOLAR_API_KEY: ${SEMANTIC_SCHOLAR_API_KEY:-}
+  GITLAB_TOKEN: ${GITLAB_TOKEN:-}
+  HF_TOKEN: ${HF_TOKEN:-}
+  STACKEXCHANGE_KEY: ${STACKEXCHANGE_KEY:-}
+  REUTERS_CONNECT_TOKEN_URL: ${REUTERS_CONNECT_TOKEN_URL:-}
+  REUTERS_CONNECT_API_URL: ${REUTERS_CONNECT_API_URL:-}
+
+# Presence markers for web (F9-2): the literal "set" when the credential is
+# set in the env file, empty otherwise — web reports each source's gate
+# status (GET /api/sources, the health drawer) without holding the secret.
+x-collector-presence: &collector-presence
+  META_CONTENT_LIBRARY_EXPORT_DIR: ${META_CONTENT_LIBRARY_EXPORT_DIR:+set}
+  YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:+set}
+  TIKTOK_RESEARCH_CLIENT_KEY: ${TIKTOK_RESEARCH_CLIENT_KEY:+set}
+  TIKTOK_RESEARCH_CLIENT_SECRET: ${TIKTOK_RESEARCH_CLIENT_SECRET:+set}
+  WECHAT_AUTHORIZED_FEED_URL: ${WECHAT_AUTHORIZED_FEED_URL:+set}
+  TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:+set}
+  X_BEARER_TOKEN: ${X_BEARER_TOKEN:+set}
+  NYT_API_KEY: ${NYT_API_KEY:+set}
+  CNN_FEED_URL: ${CNN_FEED_URL:+set}
+  CNN_API_KEY: ${CNN_API_KEY:+set}
+  GUARDIAN_API_KEY: ${GUARDIAN_API_KEY:+set}
+  DOWJONES_API_KEY: ${DOWJONES_API_KEY:+set}
+  DOWJONES_FEED_URL: ${DOWJONES_FEED_URL:+set}
+  AP_API_KEY: ${AP_API_KEY:+set}
+  REUTERS_CONNECT_CLIENT_ID: ${REUTERS_CONNECT_CLIENT_ID:+set}
+  REUTERS_CONNECT_CLIENT_SECRET: ${REUTERS_CONNECT_CLIENT_SECRET:+set}
+  SPRINGER_API_KEY: ${SPRINGER_API_KEY:+set}
+  NCBI_API_KEY: ${NCBI_API_KEY:+set}
+  NCBI_EMAIL: ${NCBI_EMAIL:+set}
+  ELSEVIER_API_KEY: ${ELSEVIER_API_KEY:+set}
+  SCHOLAR_ALERTS_IMAP_HOST: ${SCHOLAR_ALERTS_IMAP_HOST:+set}
+  SCHOLAR_ALERTS_IMAP_USER: ${SCHOLAR_ALERTS_IMAP_USER:+set}
+  SCHOLAR_ALERTS_IMAP_PASSWORD: ${SCHOLAR_ALERTS_IMAP_PASSWORD:+set}
+  RESEARCHGATE_DATASET_PATH: ${RESEARCHGATE_DATASET_PATH:+set}
+  IEEE_API_KEY: ${IEEE_API_KEY:+set}
+  JSTOR_DATASET_PATH: ${JSTOR_DATASET_PATH:+set}
+  GOVINFO_API_KEY: ${GOVINFO_API_KEY:+set}
+  CONGRESS_API_KEY: ${CONGRESS_API_KEY:+set}
+  GITHUB_TOKEN: ${GITHUB_TOKEN:+set}
+  GITLAB_TOKEN: ${GITLAB_TOKEN:+set}
+  HF_TOKEN: ${HF_TOKEN:+set}
+  STACKEXCHANGE_KEY: ${STACKEXCHANGE_KEY:+set}
+  REUTERS_CONNECT_TOKEN_URL: ${REUTERS_CONNECT_TOKEN_URL:+set}
+  REUTERS_CONNECT_API_URL: ${REUTERS_CONNECT_API_URL:+set}
 
 # Shared definition for every Node service of the full solution (migrate,
 # web, worker, populate): ONE image (./Dockerfile), role picked by `command`.
@@ -180,6 +329,9 @@ services:
       sbom: false
     pull_policy: missing
     command: ["node", "src/server.js"]
+    # Source status only: settings plus presence markers, never a credential.
+    environment:
+      <<: [*app-env, *collector-settings, *collector-presence]
     ports:
       - "${PULSE_BIND_ADDR:-127.0.0.1}:${WEB_PORT:-3000}:3000"
     depends_on:
@@ -190,8 +342,10 @@ services:
       migrate:
         condition: service_completed_successfully
 
-  # BullMQ workers (ingest / embed / correlate) — src/workers/start.js is the
-  # only worker entry point. Depends on embeddings being STARTED, not healthy:
+  # BullMQ workers — src/workers/start.js is the only worker entry point:
+  # the collection scheduler + collect.{rss,api,bulk} consumers (live data
+  # from the source registry, ADR 0001), ingest retries, embed, correlate.
+  # Depends on embeddings being STARTED, not healthy:
   # if the model download fails the rest of the stack still comes up (embed
   # jobs retry with backoff), and standup reports embeddings as unavailable.
   worker:
@@ -199,7 +353,7 @@ services:
     command: ["node", "src/workers/start.js"]
     # The only role with collector credentials (F9-2).
     environment:
-      <<: [*app-env, *collector-env]
+      <<: [*app-env, *collector-settings, *collector-env]
     # Healthy = the worker's heartbeat file is fresh (P9-7). It is written
     # every 15 s only after the heartbeat reached Redis, so a stuck worker or
     # one that lost Redis turns unhealthy (src/workers/heartbeat.js).
@@ -246,14 +400,19 @@ services:
     volumes:
       - hf_cache:/home/app/.cache/huggingface
 
-  # Data population loop (profile "demo"). Live collectors are not
-  # implemented yet, so this feeds FICTIONAL demo posts through the real
-  # pipeline every DEMO_FEED_INTERVAL_MS — see scripts/populate.js for why
-  # and how it is labelled. Started by scripts/standup.sh.
+  # Demo FALLBACK loop (profile "demo"). The worker collects live data from
+  # the 51-source registry; this loop writes a FICTIONAL demo batch through
+  # the real pipeline every DEMO_FEED_INTERVAL_MS ONLY while the trailing
+  # hour holds no live posts — see scripts/populate.js. Started by
+  # scripts/standup.sh.
   populate:
     <<: *app
     profiles: ["demo"]
     command: ["node", "scripts/populate.js", "--loop"]
+    # Collector settings only: its one-shot collection (--once) runs the
+    # keyless sources; keyed sources are collected by the worker (F9-2).
+    environment:
+      <<: [*app-env, *collector-settings]
     healthcheck:
       disable: true
     depends_on:

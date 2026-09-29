@@ -15,9 +15,10 @@
 #   4. starts compose profile "full": postgres, postgres_test, redis, the
 #      one-shot migrate job (migrations + seed), web, worker, embeddings
 #   5. waits for health (timeouts; the failing service's logs on timeout)
-#   6. populates data: fictional DEMO posts through the real pipeline, then
-#      starts the demo feed that keeps the trailing hour populated
-#      (live collectors are not implemented yet — see scripts/populate.js)
+#   6. populates data: one REAL collection job over the 51-source registry
+#      (the worker keeps collecting on its schedule); fictional DEMO posts go
+#      through the real pipeline only when collection yields nothing, and the
+#      demo fallback loop stays idle while live posts exist (scripts/populate.js)
 #   7. smoke-checks the running stack and prints a population summary
 #
 # Flags:
@@ -195,7 +196,7 @@ else
 fi
 
 # ─── 6. Populate ─────────────────────────────────────────────────────────────
-step "Populating data (DEMO: fictional posts through the real pipeline)"
+step "Populating data (collect live first; demo only as the fallback)"
 populate_args=(--once)
 (( EMBEDDINGS_OK )) || populate_args+=(--no-embed)
 (( FORCE_DEMO )) && populate_args+=(--force)
@@ -203,8 +204,10 @@ compose_all run --rm --no-deps -T populate node scripts/populate.js "${populate_
     || { show_failure web worker; die "data population failed"; }
 
 compose_all up -d --no-build --no-deps populate >/dev/null 2>&1 \
-    || { show_failure populate; die "could not start the demo feed (service populate)"; }
-ok "demo feed running: a new fictional batch every $(( $(effective DEMO_FEED_INTERVAL_MS 150000) / 1000 ))s keeps the trailing hour populated"
+    || { show_failure populate; die "could not start the demo fallback (service populate)"; }
+ok "demo fallback running: a fictional batch every $(( $(effective DEMO_FEED_INTERVAL_MS 150000) / 1000 ))s ONLY while the trailing hour has no live posts"
+DATA_MODE=$(curl -fsS --max-time 10 "http://localhost:$(compose_full port web 3000 2>/dev/null | head -n 1 | sed 's/.*://')/api/health" 2>/dev/null \
+    | sed -n 's/.*"data_mode":"\([a-z]*\)".*/\1/p' | tr '[:lower:]' '[:upper:]')
 
 # ─── 7. Smoke check ──────────────────────────────────────────────────────────
 step "Smoke check"
@@ -265,8 +268,10 @@ ${_G}${_B}Pulse of AI is up${_N}  (project '$STACK_PROJECT', $(elapsed "$T_START
   API health:  $WEB_URL/api/health
   Embeddings:  $( (( EMBEDDINGS_OK )) && echo "model loaded (internal only: embeddings:8000 on the compose network)" || echo "not ready — vector search disabled (see warnings above)")
 
-  Data is DEMO: fictional posts scored by the real pipeline, refreshed by the
-  'populate' service. Live collection is not implemented yet.
+  Data is ${DATA_MODE:-UNKNOWN} (trailing hour): LIVE = collected from the
+  51-source registry by the worker (per-source status in the health drawer
+  and GET /api/sources); DEMO / MIXED = the fictional fallback is (or was
+  recently) filling the hour.
 
 Next steps
   Status:      $DC --profile full --profile demo ps

@@ -16,14 +16,18 @@ const db = require('../../src/db/connection');
 const { findCity } = require('../../public/js/config/cities.config.js');
 const { main: replayMain } = require('../../scripts/replay');
 const populate = require('../../scripts/populate');
-const { insertSource, insertRegisteredMethodology } = require('./helpers');
+const { insertSource } = require('./helpers');
+const { seedMethodology, seedSources } = require('../../scripts/seed');
 
+// No contact URL → live collection is unavailable: the demo-path tests stay
+// independent of the environment the suite runs in.
+const NO_COLLECTION = {};
+
+// The versions the code implements (CURRENT_VERSIONS) — what populate and
+// live collection record.
 async function registerPipelineMethodology() {
-    const ids = {};
-    for (const c of ['sentiment', 'relevance', 'discourse', 'bias']) {
-        ids[c] = await insertRegisteredMethodology(c);
-    }
-    return ids;
+    await seedMethodology();
+    return populate.currentMethodology();
 }
 
 // Silence the script's progress lines inside jest output.
@@ -121,7 +125,7 @@ describe('scripts/populate.js — demo population through the real pipeline', ()
     it('--once is idempotent: skips when the trailing hour already holds a batch', async () => {
         await insertSource('real-social', 'social');
         await registerPipelineMethodology();
-        const opts = { mode: 'once', size: 4, embed: false, waitEmbeddings: 0, force: false };
+        const opts = { mode: 'once', size: 4, embed: false, waitEmbeddings: 0, force: false, env: NO_COLLECTION };
         const count = async () => (await db.dbGet('SELECT COUNT(*)::int AS n FROM raw_posts')).n;
 
         await populate.runOnce(opts);
@@ -135,15 +139,54 @@ describe('scripts/populate.js — demo population through the real pipeline', ()
     it('fails clearly, without creating a job, when the methodology is not registered', async () => {
         await insertSource('real-social', 'social');
         await expect(populate.runDemoBatch({ size: 2, embed: false, seed: 0 }))
-            .rejects.toThrow(/methodology 'sentiment' is not registered/);
+            .rejects.toThrow(/methodology not registered/);
         const jobs = await db.dbGet('SELECT COUNT(*)::int AS n FROM processing_jobs');
         expect(jobs.n).toBe(0);
     });
 
-    it('reports live collection as unavailable (demo is the only path today)', () => {
-        const live = populate.liveCollectionStatus();
-        expect(live.available).toBe(false);
-        expect(live.reason).toMatch(/not implemented/);
+    it('reports live collection available when registry sources are collecting', () => {
+        expect(populate.liveCollectionStatus({ COLLECTOR_CONTACT_URL: 'https://example.org/c' }))
+            .toEqual({ available: true, collecting: 31, reason: null });
+        const off = populate.liveCollectionStatus({});
+        expect(off.available).toBe(false);
+        expect(off.reason).toMatch(/COLLECTOR_CONTACT_URL/);
+        expect(populate.liveCollectionStatus({ COLLECTOR_CONTACT_URL: 'x', COLLECTORS_ENABLED: 'false' }).reason)
+            .toMatch(/kill switch/);
+    });
+
+    it('collects FIRST: live posts in the trailing hour → no demo batch (LIVE)', async () => {
+        await seedSources();
+        await registerPipelineMethodology();
+        const collect = jest.fn(async () => {
+            const src = await db.dbGet(`SELECT id FROM data_sources WHERE name = 'npr'`);
+            await db.dbRun(`INSERT INTO raw_posts (source_id, external_id, content, content_hash) VALUES ($1, 'live-1', 'AI news', 'h')`, [src.id]);
+            return { jobId: 'j', sourcesQueried: 31, postsCollected: 1, postsProcessed: 1, bias: null, embedQueued: 0 };
+        });
+        const r = await populate.populateOnce({ size: 4, embed: false, env: { COLLECTOR_CONTACT_URL: 'https://example.org/c' }, collect }, 0);
+        expect(collect).toHaveBeenCalled();
+        expect(r.mode).toBe('live');
+        const demo = await db.dbGet(`SELECT COUNT(*)::int AS n FROM data_sources WHERE source_type = 'demo'`);
+        expect(demo.n).toBe(0);
+        const summary = await populate.printSummary();
+        expect(summary).toMatchObject({ mode: 'LIVE', live: 1, demo: 0 });
+    });
+
+    it('falls back to DEMO when collection yields nothing in the trailing hour', async () => {
+        await seedSources();
+        await registerPipelineMethodology();
+        const collect = jest.fn(async () => ({ jobId: 'j', sourcesQueried: 31, postsCollected: 0, postsProcessed: 0, bias: null, embedQueued: 0 }));
+        const r = await populate.populateOnce({ size: 4, embed: false, env: { COLLECTOR_CONTACT_URL: 'https://example.org/c' }, collect }, 0);
+        expect(r.mode).toBe('demo');
+        expect(r.postIds).toHaveLength(4);
+        expect((await populate.printSummary()).mode).toBe('DEMO');
+    });
+
+    it('a failing collection still falls back to DEMO (never an empty page)', async () => {
+        await seedSources();
+        await registerPipelineMethodology();
+        const collect = jest.fn(async () => { throw new Error('offline'); });
+        const r = await populate.populateOnce({ size: 2, embed: false, env: { COLLECTOR_CONTACT_URL: 'https://example.org/c' }, collect }, 0);
+        expect(r.mode).toBe('demo');
     });
 
     it('parses flags with the documented defaults', () => {

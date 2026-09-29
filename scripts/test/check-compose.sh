@@ -12,9 +12,10 @@
 # Checks:
 #   F9-1  every published port has an explicit host IP, and by default that
 #         IP is the loopback address (nothing listens on 0.0.0.0)
-#   F9-2  collector credentials are set on `worker` only; web, migrate and
-#         populate get the base secrets (DB, Redis, AUDIT_HASH_KEY,
-#         CORRELATION_SALT) and nothing else credential-shaped
+#   F9-2  collector credential VALUES are set on `worker` only; web gets a
+#         presence marker ("set") per credential, migrate and populate get
+#         none; the base secrets (DB, Redis, AUDIT_HASH_KEY,
+#         CORRELATION_SALT) go to every role
 #   F9-8  the unauthenticated embeddings API publishes no host port
 #   F9-6  every pulled image (compose services, Dockerfile bases, CI service
 #         containers) is pinned by @sha256 digest
@@ -64,21 +65,43 @@ check "by default every published port binds 127.0.0.1" "$not_lo"
 
 # ─── F9-2: collector credentials reach the worker only ───────────────────────
 # Base secrets every app role needs; any OTHER credential-shaped variable is
-# a collector credential and may be set on `worker` only (web is the
-# internet-facing process; migrate / populate need none).
-BASE_SECRETS='["POSTGRES_PASSWORD","REDIS_PASSWORD","AUDIT_HASH_KEY","CORRELATION_SALT"]'
-CRED_RE='(_TOKEN|_SECRET|_API_KEY|_KEY|_PASSWORD|_CLIENT_SECRET)$'
+# a collector credential. Its VALUE may reach `worker` only: web gets a
+# presence marker ("set" when the credential is set, from
+# ${NAME:+set} in x-collector-presence) so it can report source status, and
+# migrate / populate get nothing. A second resolution with dummy credentials
+# (CRED_PROBE) proves the marker, not the value, reaches web.
+BASE_SECRETS='["POSTGRES_PASSWORD","REDIS_PASSWORD","AUDIT_HASH_KEY","CORRELATION_SALT","PROVENANCE_KEY","REFRESH_TOKEN"]'
+CRED_RE='(_TOKEN|_SECRET|_API_KEY|_KEY|_PASSWORD|_CLIENT_SECRET|_CLIENT_ID|_EMAIL|_IMAP_USER|_IMAP_HOST|_FEED_URL|_PATH|_DIR)$'
+CRED_PROBE=(YOUTUBE_API_KEY GITHUB_TOKEN TIKTOK_RESEARCH_CLIENT_SECRET SCHOLAR_ALERTS_IMAP_PASSWORD
+    NCBI_EMAIL CNN_FEED_URL JSTOR_DATASET_PATH REUTERS_CONNECT_CLIENT_ID)
+probe_env=()
+for k in "${CRED_PROBE[@]}"; do probe_env+=("$k=probe-secret-$k"); done
+cfg_probe=$(env -i PATH="$PATH" HOME="$HOME" ${DOCKER_HOST:+DOCKER_HOST="$DOCKER_HOST"} \
+    ${DOCKER_CONTEXT:+DOCKER_CONTEXT="$DOCKER_CONTEXT"} \
+    POSTGRES_PASSWORD=compose-check REDIS_PASSWORD=compose-check "${probe_env[@]}" \
+    docker compose --project-directory "$ROOT" -f "$ROOT/docker-compose.yml" \
+        --env-file /dev/null -p compose-check --profile full --profile demo \
+        config --format json)
 leaks=$(jq -r --argjson base "$BASE_SECRETS" --arg re "$CRED_RE" '.services | to_entries[]
     | select(.key != "worker") | .key as $s
-    | (.value.environment // {}) | keys[]
-    | select(test($re)) | select(. as $k | $base | index($k) | not)
-    | "\($s) receives collector credential \(.)"' <<< "$cfg")
-check "collector credentials are passed to worker only" "$leaks"
-missing=$(jq -r '(.services.worker.environment // {}) as $w
-    | ["TWITTER_BEARER_TOKEN","GITHUB_TOKEN","SEMANTIC_SCHOLAR_API_KEY"][]
-    | select(. as $k | $w | has($k) | not)
-    | "worker lacks \(.) (x-collector-env)"' <<< "$cfg")
+    | (.value.environment // {}) | to_entries[]
+    | select(.key | test($re)) | select(.key as $k | $base | index($k) | not)
+    | select(($s != "web") or ((.value // "") != "" and .value != "set"))
+    | "\($s) receives collector credential \(.key)"' <<< "$cfg_probe")
+check "collector credential values are passed to worker only" "$leaks"
+probe_json=$(printf '%s\n' "${CRED_PROBE[@]}" | jq -R . | jq -s .)
+missing=$(jq -r --argjson probe "$probe_json" '(.services.worker.environment // {}) as $w
+    | $probe[] | select(. as $k | ($w[$k] // "") != "probe-secret-\($k)")
+    | "worker lacks the value of \(.) (x-collector-env)"' <<< "$cfg_probe")
 check "worker receives the collector credentials (x-collector-env)" "$missing"
+nomark=$(jq -r --argjson probe "$probe_json" '(.services.web.environment // {}) as $w
+    | $probe[] | select(. as $k | ($w[$k] // "") != "set")
+    | "web lacks the presence marker for \(.) (x-collector-presence)"' <<< "$cfg_probe")
+check "web receives presence markers, never values (x-collector-presence)" "$nomark"
+unset_mark=$(jq -r --argjson probe "$probe_json" '(.services.web.environment // {}) as $w
+    | $probe[] | select(. as $k | ($w[$k] // "") != "")
+    | "web marks \(.) as set while it is unset"' <<< "$cfg")
+check "an unset credential has no presence marker on web" "$unset_mark"
 
 # ─── F9-8: the embeddings API is never published ─────────────────────────────
 emb_ports=$(jq -r '(.services.embeddings.ports // [])[]

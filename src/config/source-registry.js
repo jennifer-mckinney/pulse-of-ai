@@ -991,6 +991,11 @@ function sourceStatus(src, env = process.env) {
 
     const killed = killReason(src, env);
     if (killed) return { ...base, status: 'disabled', reason: killed };
+    // Blocked is a property of the source's terms, not of this process's
+    // config: it is reported as blocked whatever else is (un)set.
+    if (src.auth.kind === 'blocked' && routes.length === 0) {
+        return { ...base, status: 'blocked', reason: `blocked: no compliant access — ${src.blocked.reason}` };
+    }
     if (!nonEmpty(env.COLLECTOR_CONTACT_URL)) {
         return { ...base, status: 'disabled', reason: 'COLLECTOR_CONTACT_URL is not set (the User-Agent must carry a contact URL)' };
     }
@@ -999,9 +1004,6 @@ function sourceStatus(src, env = process.env) {
             ? 'collecting under the official permission recorded in env'
             : src.ruling ? src.ruling : `collecting via ${routes.map(r => r.id).join(', ')}`;
         return { ...base, status: 'collecting', reason };
-    }
-    if (src.auth.kind === 'blocked') {
-        return { ...base, status: 'blocked', reason: `blocked: no compliant access — ${src.blocked.reason}` };
     }
     return { ...base, status: src.closedStatus, reason: `waiting for ${missing.join(', ')} (${src.auth.program})` };
 }
@@ -1027,7 +1029,31 @@ function registryEnvVars() {
     return [...names];
 }
 
+// ─── Env classes (F9-2) ──────────────────────────────────────────────────────
+// Which process may hold which collector variable (docker-compose.yml):
+//   setting     non-secret configuration and permission / licence REFERENCES
+//               (names and dates, never credentials) — every app role;
+//   credential  everything else the collectors read: keys, tokens, secrets,
+//               client ids, mailbox logins, contract feed URLs, dataset
+//               paths — the WORKER only. web receives a presence marker
+//               instead (`${NAME:+set}`), so its gate status
+//               (sourceStatus) is right without holding the secret.
+// Unknown names default to credential: a new variable is worker-only until
+// it is deliberately listed here.
+const SETTING_ENV = Object.freeze([
+    'COLLECTOR_CONTACT_URL', 'COLLECTORS_ENABLED', 'COLLECTORS_DISABLED', 'COLLECT_WINDOW_MS',
+    'NCBI_TOOL', 'SCHOLAR_ALERTS_IMAP_PORT', 'SCHOLAR_ALERTS_MAILBOX',
+]);
+
+/** @returns {'setting'|'credential'} */
+function envClass(name) {
+    if (SETTING_ENV.includes(name) || /_REF$/.test(name) || /^SOURCE_[A-Z0-9_]+_ENABLED$/.test(name)) return 'setting';
+    return 'credential';
+}
+
 module.exports = {
+    SETTING_ENV,
+    envClass,
     AUTH_KINDS,
     GATE_STATUSES,
     SOURCE_TYPES,

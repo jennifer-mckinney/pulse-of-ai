@@ -178,10 +178,12 @@ describe('gate status (Jennifer\'s rulings, ADR 0001)', () => {
         expect(status('npr', { ...ENV, SOURCE_NPR_ENABLED: 'true' }).status).toBe('collecting');
     });
 
-    test('no collection without a User-Agent contact URL', () => {
+    test('no collection without a User-Agent contact URL; blocked stays blocked regardless', () => {
         const st = status('arxiv', {});
         expect(st.status).toBe('disabled');
         expect(st.reason).toMatch(/COLLECTOR_CONTACT_URL/);
+        expect(status('wechat', {}).status).toBe('blocked');
+        expect(status('wechat', { SOURCE_WECHAT_ENABLED: 'false' }).status).toBe('disabled');
     });
 
     test('status counts with no keys set', () => {

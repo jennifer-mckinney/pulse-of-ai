@@ -144,9 +144,9 @@ Re-running is safe. The images come from the build cache, running containers are
 | Service | Host port (override) | Role |
 |---|---|---|
 | `web` | `3000` (`WEB_PORT`) | Express API and the static frontend (`public/`) |
-| `worker` | none | BullMQ workers for ingest, embed and correlate (`src/workers/start.js`). Healthy while its Redis heartbeat is fresh; `docker stop` gives it 180 s to finish in-flight jobs |
+| `worker` | none | Collection scheduler + `collect.{rss,api,bulk}` consumers (live data from the 51-source registry), ingest retries, embed, correlate (`src/workers/start.js`). The only role holding collector credentials. Healthy while its Redis heartbeat is fresh; `docker stop` gives it 180 s to finish in-flight jobs |
 | `embeddings` | none (compose network only: `embeddings:8000`) | `/embeddings` and `/health`, unauthenticated, so never published; standup checks it with `compose exec`. The model downloads once into the `hf_cache` volume |
-| `populate` | none | Demo feed. Adds a batch of fictional posts every 150 s (profile `demo`) |
+| `populate` | none | Demo fallback. Adds fictional posts every 150 s only while the trailing hour has no live posts (profile `demo`) |
 | `migrate` | none | One-shot job: migrations and seed |
 | `postgres` | `5434` in `.env` (`POSTGRES_PORT`) | PostgreSQL 16 + pgvector (`postgres_data` volume) |
 | `postgres_test` | `5433` (`POSTGRES_TEST_PORT`) | Test database (not used by the running app) |
@@ -163,16 +163,18 @@ POSTGRES_PORT=5534 POSTGRES_TEST_PORT=5533 REDIS_PORT=6479 npm run standup
 
 ### Live vs demo data
 
-**Live collection is not implemented yet.** Nothing consumes the `collect.*` queues, the collector scheduler is not wired in, and `POST /api/refresh` is a placeholder that completes its job with 0 posts. So standup always populates **demo** data, and it says so in its output and in the smoke-check summary.
+**Standup collects live data first.** The source registry of record is the workbook's 51 sources (`src/config/source-registry.js`, ADR 0001 in `docs/adr/`). The population step runs one real collection job; the worker then collects every *collecting* source on its 2–3 minute schedule (stretched where a documented rate limit needs it), and `POST /api/refresh` runs a real collection job. Per-source status (collecting, awaiting key / approval / licence, blocked, disabled) is in the health drawer, in `GET /api/sources` and in the smoke check. With no keys set, 31 of the 51 sources collect; `.env.example` lists every key, where to get it, and the per-source kill switches (`SOURCE_<SLUG>_ENABLED=false`).
 
-The demo data is honest about what it is:
+Demo data is only the **fallback**: when collection yields nothing in the trailing hour (offline, or every source switched off), fictional posts fill it, and the `populate` loop stays idle while live posts exist. The smoke-check summary labels the hour LIVE, MIXED or DEMO, per category. `npm run collect` runs one collection job by hand; `npm run collect:smoke` live-fetches every keyless route once without writing anything.
+
+When demo data is used, it is honest about what it is:
 
 - **Real pipeline, fictional input.** The posts are invented text with no people, handles or personal data. They go through the real ingest normaliser, the real sentiment, relevance and discourse scorers, the real job-level bias checks, and the real embed worker, which calls the embeddings container. No score is made up: every one has a genuine audit trail, and `npm run replay -- --post <id>` reports PASS.
 - **Labelled in the data.** Posts belong to inactive `demo_<category>` sources named "Demo feed — <Category> (fictional)", and that name shows up in the source ribbon. Every text starts with `[Demo]`, and the processing jobs are recorded as `triggered_by = 'demo'`.
 - **Real timestamps, kept current.** The page shows the trailing hour. Every demo post is stamped with the time it was actually ingested, and nothing is backdated or re-stamped. The `populate` service ingests 14 more every 150 s (`DEMO_FEED_BATCH`, `DEMO_FEED_INTERVAL_MS`), which keeps the hour full. If you stop that service, the demo posts age out of the window on their own.
 - **Shown as DEMO on the page.** The API reports the data origin (`data_mode` on `GET /api/health`, `demo_posts` / `data_mode` on every aggregated row, `data_origin` on each receipt), classified by source. `data_mode` on `/api/health` classifies exactly what the globe shows for the trailing hour (scored posts at a city in the registry), and `data_window` reports those counts next to all posts stored in that hour (`stored_posts`, `stored_demo_posts`). With demo data the intro kicker reads **DEMO**, the intro numbers are computed from the data the globe renders, chapter titles carry the same "— Demo data" marker as the bundled fallback, receipts say the post is fictional demo content generated for this installation (audit narration 1.2.0), and the health drawer counts demo feeds separately from the registry's sources.
 
-`scripts/populate.js` is the seam for real collectors. When they exist, the population step becomes "collect live, with demo as the fallback".
+
 
 ### Embeddings
 
