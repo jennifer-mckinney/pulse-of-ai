@@ -86,6 +86,14 @@ describe('toPayload', () => {
         expect(toPayload({ id: '1', title: 'AI', language: 'en-US' }, hn, route(hn)).language).toBe('en');
     });
 
+    test('in-text @handles and e-mail addresses are redacted before storage', () => {
+        const { redactIdentities } = require('../../../src/collectors/normalize');
+        expect(redactIdentities('playlog | @Yoyolyang | 2p, ping @a_b.c and mail x.y@example.org'))
+            .toBe('playlog | @[user] | 2p, ping @[user] and mail [email]');
+        const p = toPayload({ id: '1', title: 'AI issue by @someone' }, hn, route(hn));
+        expect(p.title).toBe('AI issue by @[user]');
+    });
+
     test('htmlToText strips scripts, tags and entities', () => {
         expect(htmlToText('<script>x()</script><p>A&#39;s &#x41;I&hellip;</p>')).toBe("A's AI…");
         expect(htmlToText(null)).toBe('');

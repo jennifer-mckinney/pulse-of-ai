@@ -253,6 +253,25 @@ const METHODOLOGY_VERSIONS = [
         },
         justification: 'Real collection (ADR 0001): each collector builds the stored payload from an allowlist of content fields (title, text, link, timestamp, licence) and never requests author, username or profile-location fields; the ingest step still removes any identity field that arrives. Location is kept at city level only and comes from a content-level field (for example a geotag rounded to the nearest registry city) or, for editorial sources publishing their own articles, the publisher\'s home city, with the basis recorded on the post; a person\'s location is never inferred. Content is SHA-256 hashed as the immutable join key; duplicates are dropped per source and external id. Processing rests on legitimate interest (GDPR Art. 6(1)(f)) - aggregate discourse measurement over public posts with no profiling of identifiable individuals.',
     },
+    {
+        component: 'ingest',
+        // 1.2.0: in-text identity redaction (migration 014).
+        version: '1.2.0',
+        model_name: 'pulse-ingest-v1',
+        config: {
+            // Must match src/pipeline/ingest.js PII_FIELDS
+            pii_fields_removed:   ['author', 'author_fullname', 'author_id', 'authors', 'username', 'user', 'user_id', 'screen_name', 'creator', 'uploader', 'owner', 'email'],
+            collector_payload:    'collectors build the stored payload from an allowlist of content fields; identity fields are never requested',
+            // Must match src/collectors/normalize.js redactIdentities
+            text_redaction:       { email_addresses: '[email]', at_handles: '@[user]' },
+            identity_links:       'links whose path names a person (/user/, /u/, /@name) are not stored',
+            location_granularity: 'city',
+            location_basis:       ['content', 'publisher'],
+            dedup_strategy:       'unique (source, external id); sha256-content-hash join key',
+            legal_basis:          'GDPR Article 6(1)(f) - Legitimate Interest',
+        },
+        justification: 'Adds in-text identity redaction to real collection (ADR 0001): besides building the stored payload from an allowlist of content fields and removing any identity field that arrives, e-mail addresses in the text become [email] and @handles (mentions, pings) become @[user] before the post is stored, and links whose path names a person are not kept. Location stays at city level from a content-level field or, for editorial sources, the publisher\'s home city, with the basis recorded; a person\'s location is never inferred. Content is SHA-256 hashed as the immutable join key; duplicates are dropped per source and external id. Processing rests on legitimate interest (GDPR Art. 6(1)(f)) - aggregate discourse measurement over public posts with no profiling of identifiable individuals.',
+    },
 ];
 
 /**

@@ -45,6 +45,14 @@ function htmlToText(html) {
         .trim();
 }
 
+// In-text identities: e-mail addresses and @handles (mentions, pings) are
+// replaced before storage — the text keeps its meaning, not the person.
+const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+const HANDLE_RE = /(^|[^A-Za-z0-9_.])@[A-Za-z0-9_][A-Za-z0-9_.-]{1,38}/g;
+function redactIdentities(text) {
+    return String(text || '').replace(EMAIL_RE, '[email]').replace(HANDLE_RE, '$1@[user]');
+}
+
 function truncate(s, n) {
     return s.length > n ? s.slice(0, n - 1).trimEnd() + '…' : s;
 }
@@ -93,8 +101,8 @@ function externalId(routeId, id) {
  */
 function toPayload(item, source, route) {
     if (!item) return null;
-    const title = truncate(htmlToText(item.title), MAX_TITLE);
-    const body = htmlToText(item.text);
+    const title = truncate(redactIdentities(htmlToText(item.title)), MAX_TITLE);
+    const body = redactIdentities(htmlToText(item.text));
     const joined = body && body !== title && !title.includes(body) ? (title ? `${title}\n\n${body}` : body) : title;
     const text = truncate(joined, MAX_TEXT);
     const id = externalId(route.id, item.id || item.url);
@@ -129,4 +137,4 @@ function toPayload(item, source, route) {
     };
 }
 
-module.exports = { IDENTITY_URL_RE, toPayload, htmlToText, nearestCity, externalId, isoDate, truncate, MAX_TEXT };
+module.exports = { IDENTITY_URL_RE, redactIdentities, toPayload, htmlToText, nearestCity, externalId, isoDate, truncate, MAX_TEXT };

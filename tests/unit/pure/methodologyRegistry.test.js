@@ -234,7 +234,7 @@ describe('migration 013 ↔ methodology registry (alignment)', () => {
 
     test('the code implements the CURRENT versions', () => {
         expect(CURRENT_VERSIONS).toEqual(expect.objectContaining({
-            sentiment: '1.0.0', relevance: '1.1.0', discourse: '1.1.0-DQI', ingest: '1.1.0',
+            sentiment: '1.0.0', relevance: '1.1.0', discourse: '1.1.0-DQI', ingest: '1.2.0',
         }));
     });
 
@@ -272,8 +272,30 @@ describe('migration 013 ↔ methodology registry (alignment)', () => {
         expect(sentimentCode.POSITIVE_THRESHOLD).toBe(0.05);
     });
 
-    test('ingest@1.1.0 lists exactly the identity fields ingest removes', () => {
+    test('ingest@1.1.0 lists exactly the identity fields ingest removes (unchanged in 1.2.0)', () => {
         expect(registry('ingest', '1.1.0').config.pii_fields_removed).toEqual(PII_FIELDS);
         expect(registry('ingest', '1.1.0').config.location_basis).toEqual(['content', 'publisher']);
+    });
+});
+
+describe('migration 014 ↔ methodology registry (ingest@1.2.0)', () => {
+    const { generate } = require('../../../scripts/generate-methodology-migration');
+    const { redactIdentities } = require('../../../src/collectors/normalize');
+    const { PII_FIELDS } = require('../../../src/pipeline/ingest');
+    const SQL_014 = fs.readFileSync(
+        path.join(__dirname, '../../../src/db/migrations/014_ingest_text_redaction.sql'), 'utf8');
+
+    test('014 is exactly the generated ingest@1.2.0 row, idempotent, and edits nothing', () => {
+        expect(SQL_014.endsWith(generate(['ingest@1.2.0']))).toBe(true);
+        expect((SQL_014.match(/INSERT INTO/g) || []).length).toBe(1);
+        expect(SQL_014).toMatch(/ON CONFLICT \(component, version\) DO NOTHING;/);
+        expect(SQL_014).not.toMatch(/DO UPDATE|UPDATE methodology_versions|DELETE/);
+    });
+
+    test('ingest@1.2.0 is what the code does and is the current ingest version', () => {
+        const reg = registry('ingest', '1.2.0');
+        expect(latest('ingest').version).toBe('1.2.0');
+        expect(reg.config.pii_fields_removed).toEqual(PII_FIELDS);
+        expect(redactIdentities('a@b.co @x1')).toBe(`${reg.config.text_redaction.email_addresses} ${reg.config.text_redaction.at_handles}`);
     });
 });
