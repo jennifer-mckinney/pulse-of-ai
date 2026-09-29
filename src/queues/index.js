@@ -5,14 +5,19 @@
 //
 // Queue topology:
 //
-//   [Collector Scheduler] — cron per source, staggered to avoid thundering herd
+//   [Collector Scheduler] — one BullMQ job scheduler per collecting source,
+//       staggered across the collection window (src/workers/collector.scheduler.js)
 //       ↓
-//   collect.{reddit|rss|arxiv|scraper} — one job per fetch (source-level)
-//       ↓ each collector produces N raw posts
-//   ingest — one job per raw post (fan-out from collector)
-//       ↓ sentiment + relevance + discourse inline (fast, CPU-bound)
-//   embed  — one job per post_id (calls Python Infinity service, I/O-bound)
-//   correlate — one job per post_id + signals (DB-bound, privacy-sensitive)
+//   collect.{rss|api|bulk} — one job per source run; the queue name is the
+//       source's data_sources.source_type (the SAME vocabulary as the DB and
+//       the registry — src/config/source-registry.js SOURCE_TYPES). The
+//       consumer (src/workers/collect.worker.js) fetches, stores and scores
+//       the source's posts through the real pipeline (src/collectors/runner.js)
+//       ↓
+//   ingest — retry path: a post whose inline scoring failed is re-scored here
+//   embed  — one job per post passing the relevance gate (Python service, I/O-bound)
+//   correlate — reserved: collectors store no identity signals, so nothing
+//       enqueues correlation for collected posts
 //
 // Decoupling embed and correlate from ingest means:
 //   - A flaky embedding service doesn't stall sentiment processing
@@ -52,15 +57,20 @@ const BASE_JOB_OPTIONS = {
 
 // ─── Queue definitions ────────────────────────────────────────────────────────
 
-// Collector queues — one per source type.
-// Each job carries: { sourceId, sourceName, config }
-const collectRedditQueue  = new Queue('collect.reddit',  { connection, defaultJobOptions: BASE_JOB_OPTIONS });
-const collectRssQueue     = new Queue('collect.rss',     { connection, defaultJobOptions: BASE_JOB_OPTIONS });
-const collectArxivQueue   = new Queue('collect.arxiv',   { connection, defaultJobOptions: BASE_JOB_OPTIONS });
-const collectScraperQueue = new Queue('collect.scraper', { connection, defaultJobOptions: BASE_JOB_OPTIONS });
+// Collector queues — one per data_sources.source_type ('rss' | 'api' | 'bulk').
+// Each job carries: { slug, sourceId, sourceType }. A collection run is not
+// retried by BullMQ: the source's next scheduled run is the retry (the HTTP
+// client already retries transient errors, and a refusal must not be retried).
+const COLLECT_JOB_OPTIONS = { ...BASE_JOB_OPTIONS, attempts: 1 };
+const collectRssQueue  = new Queue('collect.rss',  { connection, defaultJobOptions: COLLECT_JOB_OPTIONS });
+const collectApiQueue  = new Queue('collect.api',  { connection, defaultJobOptions: COLLECT_JOB_OPTIONS });
+const collectBulkQueue = new Queue('collect.bulk', { connection, defaultJobOptions: COLLECT_JOB_OPTIONS });
 
-// Ingest queue — one job per raw post.
-// Each job carries: { rawPostId, sourceId, content, metadata }
+/** source_type → collect queue (the DB vocabulary). */
+const COLLECT_QUEUES = Object.freeze({ rss: collectRssQueue, api: collectApiQueue, bulk: collectBulkQueue });
+
+// Ingest queue — scoring retries for stored posts.
+// Each job carries: { rawPostId, sourceId, jobId }
 // Workers run sentiment + relevance + discourse in-process (CPU-bound, no I/O wait).
 const ingestQueue = new Queue('ingest', { connection, defaultJobOptions: BASE_JOB_OPTIONS });
 
@@ -88,10 +98,11 @@ module.exports = {
     connection,
     redisConnection,
     BASE_JOB_OPTIONS,
-    collectRedditQueue,
+    COLLECT_JOB_OPTIONS,
+    COLLECT_QUEUES,
     collectRssQueue,
-    collectArxivQueue,
-    collectScraperQueue,
+    collectApiQueue,
+    collectBulkQueue,
     ingestQueue,
     embedQueue,
     correlateQueue,

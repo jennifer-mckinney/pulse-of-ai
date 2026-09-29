@@ -1,18 +1,22 @@
 // src/workers/start.js
 // Entry point for the BullMQ worker process.
 //
-// Run with:  node src/workers/start.js
-// Or via:    docker-compose --profile workers up
+// Run with:  node src/workers/start.js   (compose service `worker`)
 //
-// This process registers Worker instances for every queue and keeps running
-// until killed. BullMQ workers poll Redis for jobs and call the corresponding
-// processXxxJob() handler.
+// Registers a Worker for every queue and keeps running until killed:
+//   collect.rss / collect.api / collect.bulk — source runs (collect.worker.js)
+//   ingest    — scoring retries (ingest.worker.js)
+//   embed     — embeddings via the Python service (embed.worker.js)
+//   correlate — reserved (collectors store no identity signals)
+// and starts the collection scheduler (collector.scheduler.js): at start and
+// every RESCHEDULE_MS it (re)schedules every collecting registry source, so a
+// kill switch or a new credential takes effect without a code change.
 //
 // Concurrency rationale:
-//   ingest:    20 — CPU-bound (sentiment/relevance/discourse); one per logical core
-//   embed:      4 — I/O-bound but Python service is the bottleneck; 4 concurrent
-//                   calls keeps the service saturated without overwhelming it
-//   correlate:  8 — DB-bound; limited by PG connection pool size (default 20)
+//   collect:   4 per type — I/O-bound; per-host spacing lives in the HTTP client
+//   ingest:   20 — CPU-bound scoring
+//   embed:     4 — the Python service is the bottleneck
+//   correlate: 8 — DB-bound
 
 'use strict';
 
@@ -20,24 +24,38 @@ const { Worker } = require('bullmq');
 const { connection } = require('../queues/index');
 const { createRedisClient } = require('../queues/connection');
 const { startHeartbeat } = require('./heartbeat');
+const { processCollectJob }  = require('./collect.worker');
 const { processIngestJob }   = require('./ingest.worker');
 const { processEmbedJob }    = require('./embed.worker');
 const { processCorrelateJob }= require('./correlate.worker');
+const { scheduleAllSources } = require('./collector.scheduler');
 
-const INGEST_CONCURRENCY    = parseInt(process.env.INGEST_CONCURRENCY    || '20', 10);
-const EMBED_CONCURRENCY     = parseInt(process.env.EMBED_CONCURRENCY     || '4',  10);
-const CORRELATE_CONCURRENCY = parseInt(process.env.CORRELATE_CONCURRENCY || '8',  10);
+const int = (v, d) => { const n = parseInt(v || '', 10); return Number.isFinite(n) && n > 0 ? n : d; };
+const COLLECT_CONCURRENCY   = int(process.env.COLLECT_CONCURRENCY, 4);
+const INGEST_CONCURRENCY    = int(process.env.INGEST_CONCURRENCY, 20);
+const EMBED_CONCURRENCY     = int(process.env.EMBED_CONCURRENCY, 4);
+const CORRELATE_CONCURRENCY = int(process.env.CORRELATE_CONCURRENCY, 8);
+const RESCHEDULE_MS         = int(process.env.COLLECT_RESCHEDULE_MS, 10 * 60 * 1000);
+
+const log = (m) => console.log(m);
 
 const workers = [
+    new Worker('collect.rss',  job => processCollectJob(job), { connection, concurrency: COLLECT_CONCURRENCY }),
+    new Worker('collect.api',  job => processCollectJob(job), { connection, concurrency: COLLECT_CONCURRENCY }),
+    new Worker('collect.bulk', job => processCollectJob(job), { connection, concurrency: 1 }),
     new Worker('ingest',    processIngestJob,    { connection, concurrency: INGEST_CONCURRENCY }),
     new Worker('embed',     processEmbedJob,     { connection, concurrency: EMBED_CONCURRENCY }),
     new Worker('correlate', processCorrelateJob, { connection, concurrency: CORRELATE_CONCURRENCY }),
 ];
 
 workers.forEach(w => {
-    w.on('completed', job => {
-        if (process.env.NODE_ENV !== 'test') {
-            console.log(`[${w.name}] job ${job.id} completed`);
+    w.on('completed', (job, result) => {
+        if (process.env.NODE_ENV === 'test') return;
+        if (w.name.startsWith('collect.') && result) {
+            log(`[${w.name}] ${result.slug}: ${result.outcome}${result.reason ? ` (${result.reason})` : ''} — `
+                + `fetched ${result.fetched}, kept ${result.kept}, new ${result.newPosts}${result.error ? ` — ${result.error}` : ''}`);
+        } else {
+            log(`[${w.name}] job ${job.id} completed`);
         }
     });
     w.on('failed', (job, err) => {
@@ -45,8 +63,20 @@ workers.forEach(w => {
     });
 });
 
+async function schedule() {
+    try {
+        await scheduleAllSources({ log });
+    } catch (err) {
+        console.error(`[scheduler] scheduling failed: ${err.message}`);
+    }
+}
+
+schedule();
+const timer = setInterval(schedule, RESCHEDULE_MS);
+
 console.log(
-    `Workers started — ingest:${INGEST_CONCURRENCY} embed:${EMBED_CONCURRENCY} correlate:${CORRELATE_CONCURRENCY}`,
+    `Workers started — collect:${COLLECT_CONCURRENCY}/type ingest:${INGEST_CONCURRENCY} `
+    + `embed:${EMBED_CONCURRENCY} correlate:${CORRELATE_CONCURRENCY}; rescheduling every ${Math.round(RESCHEDULE_MS / 1000)}s`,
 );
 
 // Liveness (P9-7): Redis key for /api/health + file for the container
@@ -68,6 +98,7 @@ const stopHeartbeat = startHeartbeat(heartbeatRedis, {
 async function shutdown() {
     console.log('Shutting down workers...');
     stopHeartbeat();
+    clearInterval(timer);
     await Promise.all(workers.map(w => w.close()));
     await heartbeatRedis.quit().catch(() => {});
     process.exit(0);

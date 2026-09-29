@@ -1,8 +1,9 @@
 // src/routes/refresh.js
 // POST /api/refresh
 //
-// Triggers a new data collection + processing job.
-// Returns immediately with the job_id — collection runs in background.
+// Triggers a REAL collection job over the source registry (ADR 0001).
+// Returns immediately with the job_id — collection runs in background and
+// completes the processing_jobs row with genuine counts.
 //
 // Rate limit (F2): a GLOBAL in-process debounce — 429 whenever ANY refresh ran
 // within the last 60s, regardless of caller IP. The previous per-IP map was
@@ -23,6 +24,7 @@
 
 const { Router } = require('express');
 const { dbRun }  = require('../db/connection');
+const { SOURCES } = require('../config/source-registry');
 const { requireSameOrigin } = require('../middleware/same-origin');
 
 const router = Router();
@@ -44,51 +46,32 @@ function _resetRateLimiter() {
     lastRefreshAt = 0;
 }
 
-// ─── Background collection runner ────────────────────────────────────────────
-// Lazy-require the ingest pipeline to avoid circular deps at module load time.
-// In production this will call the real collectors; in tests it fails silently
-// because no API keys are present — the job row is still created.
-async function runCollection(jobId) {
+// ─── Background collection ────────────────────────────────────────────────────
+// A real collection job over every registry source (src/collectors/runner.js):
+// each source is gated (collecting only — kill switches, missing credentials
+// and the blocked 4 never run) and claimed against its poll interval, so a
+// refresh never hammers a source the worker schedule just collected. The job
+// row gets the GENUINE counts: posts_collected (items kept), posts_processed
+// (new posts scored through sentiment / relevance / discourse with audit
+// rows), sources_queried; bias checks and embed jobs follow as in the worker.
+//
+// Test seam: _setCollectionOptions({ transport, queues, slugs, env }) injects
+// a fixture transport so integration tests never touch the network.
+let collectionOptions = {};
+
+/** Override runner options (tests only). */
+function _setCollectionOptions(opts) {
+    collectionOptions = opts || {};
+}
+
+async function runCollectionJob(jobId) {
     try {
-        // Pull the list of active sources
-        const { dbAll, dbRun: dbWrite } = require('../db/connection');
-        const sources = await dbAll(
-            `SELECT id, source_type FROM data_sources WHERE active = true`,
-        );
-
-        if (sources.length === 0) {
-            // No sources to collect from — mark job as completed
-            await dbWrite(
-                `UPDATE processing_jobs SET status = 'completed', completed_at = NOW()
-                 WHERE id = $1`,
-                [jobId],
-            );
-            return;
-        }
-
-        // Placeholder: real collection happens in Phase E (collectors/).
-        // For now, just mark the job as completed with 0 posts to keep the audit trail clean.
-        await dbWrite(
-            `UPDATE processing_jobs
-             SET status = 'completed', posts_processed = 0, completed_at = NOW()
-             WHERE id = $1`,
-            [jobId],
-        );
-    /* istanbul ignore start -- Database failure in background job; requires error injection testing infrastructure */
+        const { runCollection } = require('../collectors/runner');
+        await runCollection({ ...collectionOptions, jobId, triggeredBy: 'api' });
     } catch (err) {
-        console.error(`[refresh] Background collection failed for job ${jobId}:`, err.message);
-        try {
-            await dbRun(
-                `UPDATE processing_jobs
-                 SET status = 'failed', error_details = $1, completed_at = NOW()
-                 WHERE id = $2`,
-                [err.message, jobId],
-            );
-        } catch (updateErr) {
-            console.error('[refresh] Failed to update job status:', updateErr.message);
-        }
+        // runCollection marks the job failed itself; this only logs.
+        console.error(`[refresh] collection job ${jobId} failed: ${err.message}`);
     }
-    /* istanbul ignore end */
 }
 
 // ─── Route ────────────────────────────────────────────────────────────────────
@@ -110,13 +93,14 @@ router.post('/refresh', requireSameOrigin, async (req, res) => {
 
         // Create the processing job record
         const job = await dbRun(
-            `INSERT INTO processing_jobs (triggered_by, status)
-             VALUES ('api', 'running')
+            `INSERT INTO processing_jobs (triggered_by, status, sources_queried)
+             VALUES ('api', 'running', $1)
              RETURNING id`,
+            [(collectionOptions.slugs || SOURCES).length],
         );
 
-        // Fire-and-forget — collection errors are caught inside runCollection
-        runCollection(job.id).catch(() => {});
+        // Fire-and-forget — the job row records the outcome.
+        runCollectionJob(job.id);
 
         return res.status(201).json({
             job_id:       job.id,
@@ -133,3 +117,4 @@ router.post('/refresh', requireSameOrigin, async (req, res) => {
 
 module.exports = router;
 module.exports._resetRateLimiter = _resetRateLimiter;
+module.exports._setCollectionOptions = _setCollectionOptions;

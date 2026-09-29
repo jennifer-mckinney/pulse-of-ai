@@ -9,7 +9,13 @@ const app     = require('../../src/server');
 const { dbGet } = require('../../src/db/connection');
 
 // Reset rate limiter between tests so tests don't bleed into each other
-const { _resetRateLimiter } = require('../../src/routes/refresh');
+const { _resetRateLimiter, _setCollectionOptions } = require('../../src/routes/refresh');
+const { seedSources, seedMethodology } = require('../../scripts/seed');
+const { fixtureTransport, RECORDED_AT, TEST_ENV } = require('../helpers/fixtureTransport');
+
+// Every accepted refresh in this file collects nothing unless a test opts
+// in to fixtures (no network, no background writes outliving the test).
+beforeAll(() => _setCollectionOptions({ slugs: [], queues: { enqueueEmbeds: async () => {}, enqueueIngestRetry: async () => {} } }));
 
 beforeEach(() => {
     _resetRateLimiter();
@@ -104,54 +110,69 @@ describe('POST /api/refresh', () => {
         expect(res.status).toBe(201);
     });
 
-    it('background job completes and marks job as completed when sources exist', async () => {
-        // Insert some data sources so the background job has work to do
-        const { insertSource } = require('./helpers');
-        await insertSource('refresh-bg-src-1');
-        await insertSource('refresh-bg-src-2');
+    // ─── The background job is a REAL collection (ADR 0001) ─────────────────
+    // Recorded fixtures stand in for the network (tests/helpers/fixtureTransport).
+    async function waitForJob(jobId) {
+        let job;
+        for (let i = 0; i < 100; i++) {
+            job = await dbGet(
+                `SELECT id, status, completed_at, posts_collected, posts_processed, sources_queried, error_details
+                 FROM processing_jobs WHERE id = $1`, [jobId]);
+            if (job && job.status !== 'running') return job;
+            await new Promise(resolve => setTimeout(resolve, 50));
+        }
+        return job;
+    }
+
+    function useFixtures(slugs) {
+        _setCollectionOptions({
+            slugs, env: TEST_ENV, now: () => Date.parse(RECORDED_AT),
+            queues: { enqueueEmbeds: async () => {}, enqueueIngestRetry: async () => {} },
+            transport: fixtureTransport([
+                ['https://feeds.bbci.co.uk/robots.txt', 'recorded/bbc-robots.txt'],
+                ['https://feeds.bbci.co.uk/news/technology/rss.xml', 'recorded/bbc-technology.xml'],
+                [/hn\.algolia\.com/, 'recorded/hn-algolia.json'],
+            ]),
+        });
+    }
+
+    afterAll(() => _setCollectionOptions({}));
+
+    it('runs a real collection job and completes it with GENUINE counts', async () => {
+        await seedSources();
+        await seedMethodology();
+        useFixtures(['bbc_news', 'hacker_news']);
 
         const res = await refresh();
-        const jobId = res.body.job_id;
-
         expect(res.status).toBe(201);
+        const job = await waitForJob(res.body.job_id);
 
-        // Wait for the background job to execute (should be nearly instant)
-        // Poll up to 2 seconds for the job to complete
-        let job;
-        for (let i = 0; i < 20; i++) {
-            job = await dbGet(
-                'SELECT id, status, completed_at FROM processing_jobs WHERE id = $1',
-                [jobId],
-            );
-            if (job && job.status === 'completed') break;
-            await new Promise(resolve => setTimeout(resolve, 100));
-        }
-
-        expect(job).toBeDefined();
         expect(job.status).toBe('completed');
         expect(job.completed_at).not.toBeNull();
+        expect(job.sources_queried).toBe(2);
+        expect(job.posts_processed).toBeGreaterThan(0);
+        // posts_processed is exactly the posts this job scored (3 audited decisions each)
+        const scored = await dbGet(
+            `SELECT COUNT(DISTINCT raw_post_id)::int AS n FROM decision_audit_log WHERE job_id = $1`, [job.id]);
+        expect(job.posts_processed).toBe(scored.n);
+        expect(job.posts_collected).toBeGreaterThanOrEqual(job.posts_processed);
     });
 
-    it('background job completes and marks job as completed when no sources exist', async () => {
+    it('completes with 0 posts when no requested source is collecting (gated source)', async () => {
+        await seedSources();
+        await seedMethodology();
+        useFixtures(['x']);
+
         const res = await refresh();
-        const jobId = res.body.job_id;
+        const job = await waitForJob(res.body.job_id);
+        expect(job).toMatchObject({ status: 'completed', posts_processed: 0, sources_queried: 0 });
+    });
 
-        expect(res.status).toBe(201);
-
-        // Wait for the background job to execute
-        // Poll up to 2 seconds for the job to complete
-        let job;
-        for (let i = 0; i < 20; i++) {
-            job = await dbGet(
-                'SELECT id, status, completed_at FROM processing_jobs WHERE id = $1',
-                [jobId],
-            );
-            if (job && job.status === 'completed') break;
-            await new Promise(resolve => setTimeout(resolve, 100));
-        }
-
-        expect(job).toBeDefined();
-        expect(job.status).toBe('completed');
-        expect(job.completed_at).not.toBeNull();
+    it('fails the job loudly when the methodology is not registered', async () => {
+        useFixtures(['hacker_news']);
+        const res = await refresh();
+        const job = await waitForJob(res.body.job_id);
+        expect(job.status).toBe('failed');
+        expect(job.error_details).toMatch(/methodology not registered/);
     });
 });

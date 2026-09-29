@@ -44,12 +44,12 @@ async function saveOutcome(sourceId, { cursor, httpCache, ok, itemCount, newPost
         `UPDATE source_collection_state
          SET cursor = $2::jsonb,
              http_cache = $3::jsonb,
-             last_success_at = CASE WHEN $4 THEN NOW() ELSE last_success_at END,
-             last_item_count = CASE WHEN $4 THEN $5 ELSE last_item_count END,
-             last_new_posts  = CASE WHEN $4 THEN $6 ELSE last_new_posts END,
-             last_error      = $7,
-             last_error_at   = CASE WHEN $7 IS NULL THEN last_error_at ELSE NOW() END,
-             consecutive_failures = CASE WHEN $4 THEN 0 ELSE consecutive_failures + 1 END,
+             last_success_at = CASE WHEN $4::boolean THEN NOW() ELSE last_success_at END,
+             last_item_count = CASE WHEN $4::boolean THEN $5::int ELSE last_item_count END,
+             last_new_posts  = CASE WHEN $4::boolean THEN $6::int ELSE last_new_posts END,
+             last_error      = $7::text,
+             last_error_at   = CASE WHEN $7::text IS NULL THEN last_error_at ELSE NOW() END,
+             consecutive_failures = CASE WHEN $4::boolean THEN 0 ELSE consecutive_failures + 1 END,
              updated_at = NOW()
          WHERE source_id = $1`,
         [sourceId, JSON.stringify(cursor || {}), JSON.stringify(httpCache || {}), ok, itemCount, newPosts, error || null],

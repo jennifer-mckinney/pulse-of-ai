@@ -10,7 +10,12 @@
 const request = require('supertest');
 const app     = require('../../src/server');
 const { dbGet } = require('../../src/db/connection');
-const { _resetRateLimiter } = require('../../src/routes/refresh');
+const { _resetRateLimiter, _setCollectionOptions } = require('../../src/routes/refresh');
+
+// Accepted refreshes run a real collection; here it is scoped to no sources
+// so no request ever leaves the test (the guard, not collection, is tested).
+beforeAll(() => _setCollectionOptions({ slugs: [], queues: { enqueueEmbeds: async () => {}, enqueueIngestRetry: async () => {} } }));
+afterAll(() => _setCollectionOptions({}));
 
 const HOST = 'pulse.test:3000';
 

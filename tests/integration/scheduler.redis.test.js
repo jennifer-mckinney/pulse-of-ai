@@ -18,8 +18,7 @@
 jest.mock('../../src/db/connection', () => ({ dbAll: jest.fn() }));
 
 // Throwaway real queues — unique name per run so parallel/aborted runs never
-// collide; all four registry exports must exist because the scheduler
-// destructures them (only the reddit queue is exercised).
+// collide; one throwaway queue per source_type (only rss is exercised).
 jest.mock('../../src/queues/index', () => {
     const { Queue } = require('bullmq');
     // The app's own connection config, so REDIS_PASSWORD (F9-1 requirepass)
@@ -27,33 +26,24 @@ jest.mock('../../src/queues/index', () => {
     const { redisConnection } = require('../../src/queues/connection');
     const connection = redisConnection(process.env);
     const suffix = `${Date.now()}-${process.pid}`;
-    return {
-        collectRedditQueue:  new Queue(`test-sched-reddit-${suffix}`,  { connection }),
-        collectRssQueue:     new Queue(`test-sched-rss-${suffix}`,     { connection }),
-        collectArxivQueue:   new Queue(`test-sched-arxiv-${suffix}`,   { connection }),
-        collectScraperQueue: new Queue(`test-sched-scraper-${suffix}`, { connection }),
+    const COLLECT_QUEUES = {
+        rss:  new Queue(`test-sched-rss-${suffix}`,  { connection }),
+        api:  new Queue(`test-sched-api-${suffix}`,  { connection }),
+        bulk: new Queue(`test-sched-bulk-${suffix}`, { connection }),
     };
+    return { COLLECT_QUEUES };
 });
 
 const { dbAll } = require('../../src/db/connection');
 const queues = require('../../src/queues/index');
 const { scheduleAllSources, COLLECT_WINDOW_MS } = require('../../src/workers/collector.scheduler');
 
-const ALL_QUEUES = [
-    queues.collectRedditQueue,
-    queues.collectRssQueue,
-    queues.collectArxivQueue,
-    queues.collectScraperQueue,
-];
+const ALL_QUEUES = Object.values(queues.COLLECT_QUEUES);
+const ENV = { COLLECTOR_CONTACT_URL: 'https://example.org/c', COLLECT_WINDOW_MS: String(COLLECT_WINDOW_MS) };
 
+// Two same-type (rss) registry sources.
 function makeSource(overrides = {}) {
-    return {
-        id:          'src-a',
-        name:        'r/MachineLearning',
-        source_type: 'reddit',
-        config:      { subreddit: 'MachineLearning' },
-        ...overrides,
-    };
+    return { id: 'src-a', name: 'bbc_news', source_type: 'rss', ...overrides };
 }
 
 afterAll(async () => {
@@ -68,42 +58,42 @@ afterAll(async () => {
 describe('scheduleAllSources() against real Redis', () => {
     test('two same-type sources coexist as two schedulers with distinct ids and next runs', async () => {
         dbAll.mockResolvedValue([
-            makeSource({ id: 'src-a', name: 'r/MachineLearning' }),
-            makeSource({ id: 'src-b', name: 'r/artificial' }),
+            makeSource({ id: 'src-a', name: 'bbc_news' }),
+            makeSource({ id: 'src-b', name: 'npr' }),
         ]);
 
-        const count = await scheduleAllSources();
+        const count = await scheduleAllSources({ env: ENV });
         expect(count).toBe(2);
 
-        const schedulers = await queues.collectRedditQueue.getJobSchedulers();
+        const schedulers = await queues.COLLECT_QUEUES.rss.getJobSchedulers();
         expect(schedulers).toHaveLength(2); // legacy repeat collapsed this to 1
 
         const ids = schedulers.map(s => s.key).sort();
-        expect(ids).toEqual(['src-a', 'src-b']);
+        expect(ids).toEqual(['bbc_news', 'npr']);
 
         // Stagger survives: first runs are COLLECT_WINDOW_MS/2 apart
         const nextById = Object.fromEntries(schedulers.map(s => [s.key, s.next]));
-        expect(Number.isFinite(nextById['src-a'])).toBe(true);
-        expect(Number.isFinite(nextById['src-b'])).toBe(true);
-        expect(nextById['src-a']).not.toBe(nextById['src-b']);
-        // src-a's first run is "now" (clamped server-side, so allow a little
-        // clock skew); src-b's is one stagger step later — the gap must be
+        expect(Number.isFinite(nextById.bbc_news)).toBe(true);
+        expect(Number.isFinite(nextById.npr)).toBe(true);
+        expect(nextById.bbc_news).not.toBe(nextById.npr);
+        // The first source runs "now" (clamped server-side, so allow a little
+        // clock skew); the second one stagger step later — the gap must be
         // the stagger, not zero (the legacy behavior discarded it entirely).
-        const gap = nextById['src-b'] - nextById['src-a'];
+        const gap = nextById.npr - nextById.bbc_news;
         const staggerMs = Math.floor(COLLECT_WINDOW_MS / 2);
         expect(gap).toBeGreaterThan(staggerMs - 5000);
         expect(gap).toBeLessThanOrEqual(staggerMs);
     });
 
     test('a re-run without a source removes its now-stale scheduler', async () => {
-        // First run (above) left schedulers for src-a and src-b. Now only
-        // src-a is active — src-b's scheduler must be cleaned up.
+        // First run (above) left schedulers for both. Now only bbc_news is
+        // active — npr's scheduler must be cleaned up.
         dbAll.mockResolvedValue([makeSource({ id: 'src-a' })]);
 
-        const count = await scheduleAllSources();
+        const count = await scheduleAllSources({ env: ENV });
         expect(count).toBe(1);
 
-        const schedulers = await queues.collectRedditQueue.getJobSchedulers();
-        expect(schedulers.map(s => s.key)).toEqual(['src-a']);
+        const schedulers = await queues.COLLECT_QUEUES.rss.getJobSchedulers();
+        expect(schedulers.map(s => s.key)).toEqual(['bbc_news']);
     });
 });

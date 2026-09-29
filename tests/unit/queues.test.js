@@ -83,26 +83,27 @@ describe('src/queues/index.js', () => {
     });
 
     describe('queue topology', () => {
-        it('creates exactly the seven pipeline queues with expected names', () => {
+        it('creates exactly the six pipeline queues; collect queues use the DB source_type vocabulary', () => {
             const { Queue } = loadRegistry();
             const names = Queue.mock.calls.map(([name]) => name).sort();
             expect(names).toEqual([
-                'collect.arxiv',
-                'collect.reddit',
+                'collect.api',
+                'collect.bulk',
                 'collect.rss',
-                'collect.scraper',
                 'correlate',
                 'embed',
                 'ingest',
             ]);
+            const { SOURCE_TYPES } = require('../../src/config/source-registry');
+            expect(names.filter(n => n.startsWith('collect.')).map(n => n.slice(8)).sort()).toEqual([...SOURCE_TYPES].sort());
         });
 
         it('exports each queue keyed by pipeline stage', () => {
             const { registry } = loadRegistry();
-            expect(registry.collectRedditQueue.name).toBe('collect.reddit');
             expect(registry.collectRssQueue.name).toBe('collect.rss');
-            expect(registry.collectArxivQueue.name).toBe('collect.arxiv');
-            expect(registry.collectScraperQueue.name).toBe('collect.scraper');
+            expect(registry.collectApiQueue.name).toBe('collect.api');
+            expect(registry.collectBulkQueue.name).toBe('collect.bulk');
+            expect(registry.COLLECT_QUEUES.rss).toBe(registry.collectRssQueue);
             expect(registry.ingestQueue.name).toBe('ingest');
             expect(registry.embedQueue.name).toBe('embed');
             expect(registry.correlateQueue.name).toBe('correlate');
@@ -110,7 +111,7 @@ describe('src/queues/index.js', () => {
 
         it('reuses the single shared connection object for every queue', () => {
             const { Queue, registry } = loadRegistry();
-            expect(Queue.mock.calls).toHaveLength(7);  // guard: loop below must not be vacuous
+            expect(Queue.mock.calls).toHaveLength(6);  // guard: loop below must not be vacuous
             for (const [, opts] of Queue.mock.calls) {
                 expect(opts.connection).toBe(registry.connection);  // identity, not equality
             }
@@ -137,12 +138,22 @@ describe('src/queues/index.js', () => {
             });
         });
 
-        it('keeps the base retry strategy on all non-embed queues', () => {
+        it('keeps the base retry strategy on ingest and correlate', () => {
             const { Queue, registry } = loadRegistry();
-            const nonEmbedCalls = Queue.mock.calls.filter(([name]) => name !== 'embed');
-            expect(nonEmbedCalls).toHaveLength(6);  // guard: loop below must not be vacuous
-            for (const [, opts] of nonEmbedCalls) {
+            const calls = Queue.mock.calls.filter(([name]) => name === 'ingest' || name === 'correlate');
+            expect(calls).toHaveLength(2);  // guard: loop below must not be vacuous
+            for (const [, opts] of calls) {
                 expect(opts.defaultJobOptions).toBe(registry.BASE_JOB_OPTIONS);
+            }
+        });
+
+        it('runs each collection once: the next scheduled run is the retry', () => {
+            const { Queue, registry } = loadRegistry();
+            const calls = Queue.mock.calls.filter(([name]) => name.startsWith('collect.'));
+            expect(calls).toHaveLength(3);
+            for (const [, opts] of calls) {
+                expect(opts.defaultJobOptions).toBe(registry.COLLECT_JOB_OPTIONS);
+                expect(opts.defaultJobOptions.attempts).toBe(1);
             }
         });
     });
