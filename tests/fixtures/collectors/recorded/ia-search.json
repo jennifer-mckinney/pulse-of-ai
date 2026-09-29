@@ -1,0 +1,39 @@
+{
+  "responseHeader": {
+    "status": 0,
+    "QTime": 91,
+    "params": {
+      "query": "subject:&quot;artificial intelligence&quot;",
+      "qin": "subject:(&quot;artificial intelligence&quot;)",
+      "fields": "identifier,title,description,publicdate",
+      "wt": "json",
+      "sort": "publicdate desc",
+      "rows": 3,
+      "start": 0
+    }
+  },
+  "response": {
+    "numFound": 37040,
+    "start": 0,
+    "docs": [
+      {
+        "description": "GPT4All 3.10.0 es un ecosistema de código abierto diseñado para ejecutar modelos de lenguaje de inteligencia artificial (LLMs) localmente en la PC, sin necesidad de conexión a internet ni envío de datos a servidores externos. Incluye una interfaz gráfica intuitiva, privacidad total y compatibilidad con aceleración por hardware para chat, análisis de documentos y generación de código.",
+        "identifier": "gpt-4-all-v-3.10.0.7z",
+        "publicdate": "2026-09-29T01:20:15Z",
+        "title": "GPT4All - v3.10.0"
+      },
+      {
+        "description": "DeltaVille — Tome 1 : Pétales de rouille est un roman graphique de science-fiction dystopique écrit et réalisé par Anthony Zoria. Dans un futur ravagé par les guerres et l’effondrement de l’Ancien Monde, Li survit à DeltaVille, une cité de béton, de rouille et de bidonvilles où coexistent pauvreté extrême, robots ultramodernes, convois du désert et vestiges d’une civilisation disparue. Tome 1 — Version française — 545 pages. Ouvrage gratuit. La diffusion gratuite de cette version intégrale et non modifiée est autorisée. Toute reproduction partielle, modification, adaptation ou utilisation commerciale est interdite sans l’autorisation de l’auteur.",
+        "identifier": "deltaville-tome-1-petales-de-rouille_202609",
+        "publicdate": "2026-09-29T00:56:47Z",
+        "title": "DeltaVille — Tome 1 : Pétales de rouille"
+      },
+      {
+        "description": "ReaChat is an AI copilot built for REAPER, with full control of your DAW session. Powered by the latest models from Anthropic, Google and OpenAI, it reads every track, plug-in and route in your project and works on them directly: mixing, arranging, composing and designing sound across hundreds of tracks at once. It engineers and installs its own ReaScripts, builds user interfaces and JSFX effects, researches the web, consults you along the way, and carries what it learns about your work from one project to the next, while you keep full control of your project history, memory and personal goals. ReaChat puts you in the director's chair as producer and master engineer, with total expertise at your fingertips: approachable with no technical background, empowering with one. Free 7-day trial: https:// reachat-activation.rclicensecheck.workers.dev/download Buy: https:// realitychat.itch.io/reachat",
+        "identifier": "merged_video_1790638134533_compressed_compressed_compressed",
+        "publicdate": "2026-09-29T00:30:12Z",
+        "title": "ReaChat AI - Demo"
+      }
+    ]
+  }
+}

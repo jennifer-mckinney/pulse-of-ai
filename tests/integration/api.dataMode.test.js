@@ -132,15 +132,18 @@ describe('GET /api/posts/aggregated-by-location — per-row data origin', () => 
     });
 });
 
-describe('GET /api/audit/:post_id — demo ingestion wording (audit_narration 1.2.0)', () => {
+describe('GET /api/audit/:post_id — demo ingestion wording (audit_narration 1.2.0+)', () => {
     it('describes a demo-feed post as fictional demo content, never as a public source', async () => {
         await insertIngestMethodology();
         const ids = await scenario({ live: 1, demo: 1 });
 
         const demo = (await request(app).get(`/api/audit/${ids.demo[0]}`)).body;
         expect(demo.narration.version).toBe(NARRATION_VERSION);
-        expect(NARRATION_VERSION).toBe('1.2.0');
+        expect(NARRATION_VERSION).toBe('1.3.0');
         expect(demo.post.data_origin).toBe('demo');
+        // D2: demo content has no provenance to verify, and says why.
+        expect(demo.provenance.fingerprint).toBeNull();
+        expect(demo.provenance.verifiable).toMatch(/fictional demo content/);
         expect(demo.ingest.audiences.public)
             .toMatch(/fictional demo post generated for this installation/);
         expect(demo.ingest.audiences.public).not.toMatch(/came from a public source/);

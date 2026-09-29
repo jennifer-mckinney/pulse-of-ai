@@ -30,7 +30,13 @@ const NARRATION_COMPONENT = 'audit_narration';
 // (data_sources.source_type 'demo', written by scripts/populate.js) are
 // described as fictional demo content generated for this installation, never
 // as "came from a public source". Live-source wording is unchanged.
-const NARRATION_VERSION   = '1.2.0';
+// 1.3.0 (decision D2): the live-source ingestion step states exactly what
+// the registered ingest version claims (its config.privacy_claim, e.g.
+// ingest@1.3.0: "free text may still contain names mentioned in content")
+// instead of "anything that could identify who wrote it was removed", and
+// states the post's provenance: the permalink or the provenance
+// fingerprint, with the command that verifies an original against it.
+const NARRATION_VERSION   = '1.3.0';
 const NARRATION_MODEL     = 'pulse-narration-templates-v1';
 
 // Reproduce-command template surfaced in every researcher view. It runs
@@ -38,6 +44,11 @@ const NARRATION_MODEL     = 'pulse-narration-templates-v1';
 // the deterministic src/pipeline modules against the methodology version
 // each decision references, and prints PASS / DIVERGENCE per stage.
 const REPRODUCE_COMMAND = 'npm run replay -- --post {post_id}';
+
+// D2: proves a post's provenance fingerprint from the original link (and,
+// when the upstream id was fingerprinted, the original id).
+const VERIFY_PROVENANCE_COMMAND = 'npm run verify-provenance -- --post {post_id} --url <original URL> [--id <original id>]';
+const PROVENANCE_VERIFIABLE = 'verifiable: provide the original URL or id to reproduce the fingerprint';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -244,6 +255,43 @@ function deriveStatus() {
  * @param {object|null} ingestMv  methodology_versions row (component='ingest') or null
  * @returns {object|null}  step object, or null when no ingest methodology is registered
  */
+/**
+ * Live-source ingestion audiences (1.3.0). The privacy sentence restates the
+ * registered ingest config: its privacy_claim when it has one (ingest@1.3.0+),
+ * else the pre-D2 wording that the older version registered.
+ */
+function liveIngestAudiences({ cfg, config, piiFields, granularity, researcher, opts }) {
+    const claim = typeof cfg.privacy_claim === 'string' ? cfg.privacy_claim : null;
+    const prov = opts.provenance || null;
+    const postId = opts.postId || '{post_id}';
+    let provPlain = '';
+    let provResearcher = '';
+    if (prov) {
+        const where = prov.permalink ? `Source link: ${prov.permalink}.` : 'The source link is not stored (it identifies a person, or there was none).';
+        provPlain = prov.fingerprint
+            ? ` ${where} Provenance fingerprint ${prov.fingerprint.slice(0, 16)}… (${PROVENANCE_VERIFIABLE}).`
+            : ` ${where} No provenance fingerprint was recorded for this post.`;
+        provResearcher = prov.fingerprint
+            ? ` Provenance: HMAC-SHA256(key, source_slug:upstream id:source URL) = ${prov.fingerprint}; `
+                + `verify with: ${VERIFY_PROVENANCE_COMMAND.replace('{post_id}', postId)}`
+            : ' Provenance: no fingerprint recorded (collected before ingest@1.3.0, or no provenance key configured).';
+    }
+    return {
+        public: claim
+            ? `This post came from a public source. Before it was saved, the author's identity fields were dropped and `
+                + 'e-mail addresses, handles, phone numbers, sign-offs and profile links in the text were removed; '
+                + `names mentioned in the text itself may remain. Only the ${granularity} it came from is kept.`
+            : 'This post came from a public source. Before it was saved, anything that could '
+                + `identify who wrote it was removed. Only the ${granularity} it came from is kept.`,
+        plain: `Collected via the source’s public API. ${piiFields.length} identifying field(s)`
+            + ` (${piiFields.join(', ')}) were stripped before anything was stored.`
+            + (claim ? ` Claim: ${claim}.` : '')
+            + ` Location was kept at ${granularity} level only.${provPlain}`,
+        config: prov ? { ...config, provenance: prov } : config,
+        researcher: `${researcher}${provResearcher}`,
+    };
+}
+
 function renderIngestStep(ingestMv, opts) {
     if (!ingestMv) return null;
     const cfg = ingestMv.config || {};
@@ -275,15 +323,7 @@ function renderIngestStep(ingestMv, opts) {
             researcher: `${researcher} Content origin: demo feed (data_sources.source_type = 'demo'); `
                 + 'the text is fictional and was never collected.',
         }
-        : {
-            public: 'This post came from a public source. Before it was saved, anything that could '
-                + `identify who wrote it was removed. Only the ${granularity} it came from is kept.`,
-            plain: `Collected via the source’s public API. ${piiFields.length} identifying field(s)`
-                + ` (${piiFields.join(', ')}) were stripped before anything was stored.`
-                + ` Location was kept at ${granularity} level only.`,
-            config,
-            researcher,
-        };
+        : liveIngestAudiences({ cfg, config, piiFields, granularity, researcher, opts: opts || {} });
 
     return {
         stage:               'ingestion',
@@ -299,6 +339,8 @@ module.exports = {
     NARRATION_VERSION,
     NARRATION_MODEL,
     REPRODUCE_COMMAND,
+    VERIFY_PROVENANCE_COMMAND,
+    PROVENANCE_VERIFIABLE,
     renderAudiences,
     deriveScore,
     deriveStatus,

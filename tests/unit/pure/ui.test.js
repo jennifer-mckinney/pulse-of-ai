@@ -230,6 +230,39 @@ function auditPayload(overrides) {
 }
 
 describe('mapAuditResponse — served audit shape → drawer model', () => {
+    test('D2: carries the served provenance and renders it as one line; absent stays absent', () => {
+        const fp = 'a'.repeat(64);
+        const m = P.mapAuditResponse(auditPayload({ provenance: {
+            source: 'Hacker News', published_at: '2026-09-29T10:00:00.000Z',
+            permalink: 'https://news.ycombinator.com/item?id=1', external_id: 'hn:1',
+            fingerprint: fp, verifiable: 'verifiable: provide the original URL or id to reproduce the fingerprint',
+        } }));
+        expect(m.provenance).toEqual({
+            permalink: 'https://news.ycombinator.com/item?id=1', fingerprint: fp,
+            published_at: '2026-09-29T10:00:00.000Z',
+            verifiable: 'verifiable: provide the original URL or id to reproduce the fingerprint',
+            retention: null,
+        });
+        expect(P.provenanceLine(m.provenance)).toBe(
+            'source https://news.ycombinator.com/item?id=1 · provenance aaaaaaaaaaaa… · verifiable: provide the original URL or id to reproduce the fingerprint');
+        expect(P.mapAuditResponse(auditPayload()).provenance).toBeNull();
+        expect(P.provenanceFrom({ permalink: '', fingerprint: null })).toBeNull();
+        expect(P.provenanceLine(null)).toBe('');
+    });
+
+    test('ruling 9: a Reddit receipt carries its retention notice (live or text removed)', () => {
+        const removed = P.mapAuditResponse(auditPayload({ provenance: {
+            source: 'reddit', permalink: 'https://www.reddit.com/r/OpenAI/comments/abc/',
+            retention: { status: 'text_removed', notice: 'Text removed per the Reddit Data API Terms (48-hour retention window ended): after 48 hours or on deletion upstream. Scores and audit rows retained by owner decision.' },
+        } }));
+        expect(removed.provenance.retention).toMatch(/^Text removed per the Reddit Data API Terms/);
+        expect(P.provenanceLine(removed.provenance)).toBe('source https://www.reddit.com/r/OpenAI/comments/abc/ · '
+            + removed.provenance.retention);
+        // A retention notice alone still yields a provenance line.
+        expect(P.provenanceFrom({ retention: { notice: 'n' } })).toEqual(expect.objectContaining({ retention: 'n' }));
+        expect(P.provenanceFrom({ retention: { notice: '' } })).toBeNull();
+    });
+
     test('builds ingest + decisions + bias steps in order', () => {
         const m = P.mapAuditResponse(auditPayload());
         expect(m.steps.map(s => s.stage)).toEqual([
@@ -482,19 +515,45 @@ describe('healthBanner / sourcesStat / methodologyModel', () => {
         expect(b.state).toBe('yellow');
         expect(b.title).toBe('Model health unavailable');
     });
-    test('sourcesStat counts registry-active flags', () => {
+    test('sourcesStat: online counts only registry sources that collected in the last hour', () => {
         expect(P.sourcesStat([
-            { active: true }, { active: true }, { active: false }, null,
-        ])).toEqual({ active: 2, total: 4, demoFeeds: 0 });
-        expect(P.sourcesStat(null)).toEqual({ active: 0, total: 0, demoFeeds: 0 });
+            { active: true, registry: true, status: 'collecting', online: true },
+            { active: true, registry: true, status: 'collecting', online: false },
+            { active: true, registry: true, status: 'blocked', online: false },
+            { active: false, retired: true },           // retired pre-registry row: not a source
+            null,
+        ])).toEqual({ active: 3, total: 3, demoFeeds: 0, registry: 3, collecting: 2, online: 1 });
+        expect(P.sourcesStat(null)).toEqual({ active: 0, total: 0, demoFeeds: 0, registry: 0, collecting: 0, online: 0 });
     });
     test('sourcesStat never counts demo feeds as sources — separate figure', () => {
         expect(P.sourcesStat([
-            { active: true, source_type: 'rss' },
+            { active: true, source_type: 'rss', registry: true, status: 'collecting', online: true },
             { active: false, source_type: 'api' },
             { active: false, source_type: 'demo' },
-            { active: true, source_type: 'demo' },   // even if flagged active
-        ])).toEqual({ active: 1, total: 2, demoFeeds: 2 });
+            { active: true, source_type: 'demo', online: true },   // even if flagged active
+        ])).toEqual({ active: 1, total: 2, demoFeeds: 2, registry: 1, collecting: 1, online: 1 });
+    });
+    test('sourceStatusLabel: blocked says "blocked: no compliant access"; online beats collecting', () => {
+        expect(P.sourceStatusLabel({ status: 'blocked' })).toBe('blocked: no compliant access');
+        expect(P.sourceStatusLabel({ status: 'awaiting_licence' })).toBe('awaiting licence');
+        expect(P.sourceStatusLabel({ status: 'collecting', online: true })).toBe('online');
+        expect(P.sourceStatusLabel({ status: 'collecting', online: false })).toBe('collecting');
+        expect(P.sourceStatusLabel({ status: 'odd' })).toBe('odd');
+        expect(P.sourceStatusLabel(null)).toBe('unknown');
+    });
+    test('sourceListModel: canon category order, rank order, terms cited for non-collecting sources', () => {
+        const groups = P.sourceListModel([
+            { registry: true, category: 'forums', rank: 46, display_name: 'Hacker News', status: 'collecting', online: true, terms_url: 'https://h' },
+            { registry: true, category: 'forums', rank: 45, display_name: 'Stack Overflow', status: 'collecting', terms_url: 'https://s' },
+            { registry: true, category: 'social', rank: 6, display_name: 'WeChat', status: 'blocked', terms_url: 'https://weixin.qq.com/agreement', status_reason: 'blocked: no compliant access — x' },
+            { registry: true, category: 'social', rank: 8, display_name: 'X', status: 'awaiting_licence', terms_url: 'javascript:alert(1)' },
+            { registry: false, category: 'news', source_type: 'demo', display_name: 'Demo feed' },
+        ]);
+        expect(groups.map(g => g.slug)).toEqual(['social', 'forums']);
+        expect(groups[1].sources.map(s => s.name)).toEqual(['Stack Overflow', 'Hacker News']);
+        expect(groups[0].sources[0]).toMatchObject({ statusLabel: 'blocked: no compliant access', termsUrl: 'https://weixin.qq.com/agreement' });
+        expect(groups[0].sources[1].termsUrl).toBeNull();      // non-https never linked
+        expect(groups[1].sources[1].termsUrl).toBeNull();      // collecting: no citation needed
     });
     test('methodologyModel: latest row per component, model@version keys', () => {
         const rows = P.methodologyModel([

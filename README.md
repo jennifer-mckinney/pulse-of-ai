@@ -140,7 +140,7 @@ The script checks Docker, the Compose version, the daemon and `curl` first, and 
 
 1. Creates `.env` from `.env.example` if you don't have one, generating strong random `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `AUDIT_HASH_KEY` and `CORRELATION_SALT` values. It never prints them. An existing `.env` keeps its values: only keys that are missing get added (standup refuses to add secrets to a group- or world-writable file), and the file is set to mode 600. If a secret is empty or still has its `.env.example` placeholder, standup stops and names it.
 2. Builds two images: `pulse-of-ai/app` (Node 22; one image for web, worker, migrate and populate) and `pulse-of-ai/embeddings` (Python 3.13, FastAPI and sentence-transformers, CPU only). Both run as non-root users.
-3. Starts the compose `full` profile. A one-shot `migrate` job applies migrations 001–012 and the seed, and web and the worker start only after it exits successfully.
+3. Starts the compose `full` profile. A one-shot `migrate` job applies migrations 001–015 and the seed, and web and the worker start only after it exits successfully.
 4. Waits for health, with timeouts. If a service fails, its logs are printed.
 5. Populates data (see below) and starts the `populate` feed.
 6. Runs a smoke check. It looks at the API, the page, and the page's own data calls (globe, themes, bias, ribbon, drill-down). It counts posts, audit decisions, bias assessments and embeddings, opens one receipt and checks its four audience views and bias lineage, and runs `npm run replay` on that post, which must PASS. It ends with a population summary.
@@ -154,9 +154,9 @@ Re-running is safe. The images come from the build cache, running containers are
 | Service | Host port (override) | Role |
 |---|---|---|
 | `web` | `3000` (`WEB_PORT`) | Express API and the static frontend (`public/`) |
-| `worker` | none | BullMQ workers for ingest, embed and correlate (`src/workers/start.js`). Healthy while its Redis heartbeat is fresh; `docker stop` gives it 180 s to finish in-flight jobs |
+| `worker` | none | Collection scheduler + `collect.{rss,api,bulk}` consumers (live data from the 52-source registry), ingest retries, embed, correlate (`src/workers/start.js`). The only role holding collector credentials. Healthy while its Redis heartbeat is fresh; `docker stop` gives it 180 s to finish in-flight jobs |
 | `embeddings` | none (compose network only: `embeddings:8000`) | `/embeddings` and `/health`, unauthenticated, so never published; standup checks it with `compose exec`. The model downloads once into the `hf_cache` volume |
-| `populate` | none | Demo feed. Adds a batch of fictional posts every 150 s (profile `demo`) |
+| `populate` | none | Demo fallback. Adds fictional posts every 150 s only while the trailing hour has no live posts (profile `demo`) |
 | `migrate` | none | One-shot job: migrations and seed |
 | `postgres` | `5434` in `.env` (`POSTGRES_PORT`) | PostgreSQL 16 + pgvector (`postgres_data` volume) |
 | `postgres_test` | `5433` (`POSTGRES_TEST_PORT`) | Test database (not used by the running app) |
@@ -173,16 +173,27 @@ POSTGRES_PORT=5534 POSTGRES_TEST_PORT=5533 REDIS_PORT=6479 npm run standup
 
 ### Live vs demo data
 
-**Live collection is not implemented yet.** Nothing consumes the `collect.*` queues, the collector scheduler is not wired in, and `POST /api/refresh` is a placeholder that completes its job with 0 posts. So standup always populates **demo** data, and it says so in its output and in the smoke-check summary.
+**Standup collects live data first.** The source registry of record is the workbook's 52 sources (`src/config/source-registry.js`, ADR 0001 in `docs/adr/`; Rev. 4 added Reddit as #52 in Forums). The population step runs one real collection job; the worker then collects every *collecting* source on its 2–3 minute schedule (stretched where a documented rate limit needs it), and `POST /api/refresh` enqueues a real collection job to the worker (409 while one is running; `REFRESH_TOKEN` required when the site is bound beyond loopback). Per-source status (collecting, awaiting key / approval / licence, blocked, disabled) is in the health drawer, in `GET /api/sources` and in the smoke check. `.env.example` lists every key, where to get it, and the per-source kill switches (`SOURCE_<SLUG>_ENABLED=false`).
 
-The demo data is honest about what it is:
+**Live collection is off on a fresh clone** (ADR 0001, decision D1 "Off for others, on for you"). `COLLECTOR_CONTACT_URL` ships empty: without it every source is disabled and standup populates demo data only, and says so. Collection goes out under the operator's identity, so each operator sets their own contact URL — a page where publishers can reach them. The 8 permission-gated news feeds (BBC, NYT, Guardian, Al Jazeera, WSJ, NBC News, Washington Post, Ars Technica) additionally need `PERMISSION_GATED_FEEDS_ACCEPTED_BY="<your name> <YYYY-MM-DD>"`, which records that you accept the legal risk of reading them (their terms require permission for automated analysis). Run on a terminal, `npm run standup` asks for both; `npm run standup -- --yes` never asks. With the contact URL alone, 23 of the 51 sources collect with no keys; with both, 31.
+
+**Jennifer's deployment** sets both values in her own `.env` (never in `.env.example` or the compose file):
+
+```bash
+COLLECTOR_CONTACT_URL=https://github.com/jennifer-mckinney/pulse-of-ai
+PERMISSION_GATED_FEEDS_ACCEPTED_BY="Jennifer McKinney 2026-09-29"
+```
+
+Demo data is only the **fallback**: when collection yields nothing in the trailing hour (offline, or every source switched off), fictional posts fill it, and the `populate` loop stays idle while live posts exist. The smoke-check summary labels the hour LIVE, MIXED or DEMO, per category. `npm run collect` runs one collection job by hand; `npm run collect:smoke` live-fetches every keyless route once without writing anything.
+
+When demo data is used, it is honest about what it is:
 
 - **Real pipeline, fictional input.** The posts are invented text with no people, handles or personal data. They go through the real ingest normaliser, the real sentiment, relevance and discourse scorers, the real job-level bias checks, and the real embed worker, which calls the embeddings container. No score is made up: every one has a genuine audit trail, and `npm run replay -- --post <id>` reports PASS.
 - **Labelled in the data.** Posts belong to inactive `demo_<category>` sources named "Demo feed — <Category> (fictional)", and that name shows up in the source ribbon. Every text starts with `[Demo]`, and the processing jobs are recorded as `triggered_by = 'demo'`.
-- **Real timestamps, kept current.** The page shows the trailing hour. Every demo post is stamped with the time it was actually ingested, and nothing is backdated or re-stamped. The `populate` service ingests 14 more every 150 s (`DEMO_FEED_BATCH`, `DEMO_FEED_INTERVAL_MS`), which keeps the hour full. If you stop that service, the demo posts age out of the window on their own.
+- **Real timestamps, kept current.** The page shows the trailing hour. Every demo post is stamped with the time it was actually ingested, and nothing is backdated or re-stamped. The `populate` service ingests 16 more every 150 s (two per category) (`DEMO_FEED_BATCH`, `DEMO_FEED_INTERVAL_MS`), which keeps the hour full. If you stop that service, the demo posts age out of the window on their own.
 - **Shown as DEMO on the page.** The API reports the data origin (`data_mode` on `GET /api/health`, `demo_posts` / `data_mode` on every aggregated row, `data_origin` on each receipt), classified by source. `data_mode` on `/api/health` classifies exactly what the globe shows for the trailing hour (scored posts at a city in the registry), and `data_window` reports those counts next to all posts stored in that hour (`stored_posts`, `stored_demo_posts`). With demo data the intro kicker reads **DEMO**, the intro numbers are computed from the data the globe renders, chapter titles carry the same "— Demo data" marker as the bundled fallback, receipts say the post is fictional demo content generated for this installation (audit narration 1.2.0), and the health drawer counts demo feeds separately from the registry's sources.
 
-`scripts/populate.js` is the seam for real collectors. When they exist, the population step becomes "collect live, with demo as the fallback".
+
 
 ### Embeddings
 
@@ -300,7 +311,7 @@ Copy `.env.example` to `.env` and fill in the values below.
 | `PULSE_BIND_ADDR` | No | Interface every published port binds to: web, postgres, postgres_test, redis (default `127.0.0.1`) |
 | `REDIS_PASSWORD` | Yes (Docker) | Redis `requirepass`; BullMQ, the worker and `/api/health` authenticate with it. Standup generates it |
 | `DEMO_FEED_INTERVAL_MS` | No | Standup demo feed: ms between fictional batches (default `150000`) |
-| `DEMO_FEED_BATCH` | No | Standup demo feed: posts per batch (default `14`) |
+| `DEMO_FEED_BATCH` | No | Standup demo feed: posts per batch (default: two per category, `16`) |
 
 Generate secrets:
 

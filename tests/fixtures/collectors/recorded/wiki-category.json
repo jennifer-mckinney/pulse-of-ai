@@ -1,0 +1,36 @@
+{
+  "batchcomplete": true,
+  "continue": {
+    "cmcontinue": "page|2a30423a4e4e3a2c4032043832524c3a4e503a2e011801dc17|11338826",
+    "continue": "-||"
+  },
+  "query": {
+    "categorymembers": [
+      {
+        "pageid": 1164,
+        "ns": 0,
+        "title": "Artificial intelligence"
+      },
+      {
+        "pageid": 80430180,
+        "ns": 0,
+        "title": "List of artificial intelligence journals"
+      },
+      {
+        "pageid": 81854017,
+        "ns": 0,
+        "title": "2025–present global memory supply shortage"
+      },
+      {
+        "pageid": 82525186,
+        "ns": 0,
+        "title": "The 2028 Global Intelligence Crisis"
+      },
+      {
+        "pageid": 78938430,
+        "ns": 0,
+        "title": "Actor-critic algorithm"
+      }
+    ]
+  }
+}

@@ -124,9 +124,8 @@ describe('migration 011 ↔ methodology registry (audit_narration@1.2.0)', () =>
         });
     });
 
-    test('the renderer version is the newest registered audit_narration row (011)', () => {
-        expect(latest('audit_narration').version).toBe(NARRATION_VERSION);
-        expect(rows[0].version).toBe(NARRATION_VERSION);
+    test('011 registered 1.2.0 (superseded by 017\'s 1.3.0, never edited)', () => {
+        expect(rows[0].version).toBe('1.2.0');
         expect(rows[0].config.reproduce_command).toBe(REPRODUCE_COMMAND);
         expect(rows[0].config.ingest_branches).toEqual(['live_source', 'demo_feed']);
     });
@@ -190,6 +189,155 @@ describe('migration 012 ↔ methodology registry (embedding@1.0.0, P9-5)', () =>
     });
 });
 
+// ─── Migration 014 + code ↔ registry alignment (ADR 0001) ────────────────────
+// The replay tool reported drift between the registered relevance / discourse
+// rows and the code. New versions describe the code exactly; these tests
+// hold the code, the registry and migration 014 to one another.
+describe('migration 014 ↔ methodology registry (alignment)', () => {
+    const { CURRENT_VERSIONS } = require('../../../src/config/methodology-registry');
+    const relevanceCode = require('../../../src/pipeline/relevance');
+    const discourseCode = require('../../../src/pipeline/discourse');
+    const sentimentCode = require('../../../src/pipeline/sentiment');
+    const { PII_FIELDS } = require('../../../src/pipeline/ingest');
+    const { STAGES } = require('../../../src/audit/replay');
+    const { generate } = require('../../../scripts/generate-methodology-migration');
+
+    const SQL_014 = fs.readFileSync(
+        path.join(__dirname, '../../../src/db/migrations/014_methodology_alignment.sql'), 'utf8');
+    const rows = [...SQL_014.matchAll(ROW_011_RE)].map(m => ({
+        component: m[1], version: m[2], model_name: m[3],
+        config: JSON.parse(m[4]), justification: m[5],
+    }));
+    const KEYS = ['sentiment@1.0.0', 'relevance@1.0.0', 'discourse@1.0.0-DQI',
+        'relevance@1.1.0', 'discourse@1.1.0-DQI', 'ingest@1.1.0'];
+
+    test('014 registers the 1.0.0 predecessors first, then the aligned versions', () => {
+        expect(rows.map(r => `${r.component}@${r.version}`)).toEqual(KEYS);
+        expect((SQL_014.match(/INSERT INTO/g) || []).length).toBe(rows.length);
+        expect(SQL_014).not.toMatch(/DO UPDATE|UPDATE methodology_versions|DELETE/);
+    });
+
+    test('014 is exactly what the generator emits from the registry', () => {
+        expect(SQL_014.endsWith(generate(KEYS))).toBe(true);
+    });
+
+    test.each(KEYS)('%s agrees field for field', (key) => {
+        const [component, version] = key.split('@');
+        const row = rows.find(r => r.component === component && r.version === version);
+        const reg = registry(component, version);
+        expect(row).toEqual({
+            component: reg.component, version: reg.version, model_name: reg.model_name,
+            config: reg.config, justification: reg.justification,
+        });
+    });
+
+    test('the code implements the CURRENT versions', () => {
+        expect(CURRENT_VERSIONS).toEqual(expect.objectContaining({
+            sentiment: '1.0.0', relevance: '1.1.0', discourse: '1.1.0-DQI', ingest: '1.5.0',
+        }));
+    });
+
+    test('relevance@1.1.0 is the code: lexicon, score rule, model and embed gate', () => {
+        const reg = registry('relevance', '1.1.0');
+        expect(reg.config.keywords).toEqual(relevanceCode.KEYWORD_LIST);
+        expect(reg.config.score_per_match).toBe(1 / relevanceCode.KEYWORD_LIST.length);
+        expect(reg.config.embed_gate_min_score).toBe(relevanceCode.EMBED_GATE_MIN_SCORE);
+        expect(reg.model_name).toBe(relevanceCode.MODEL_NAME);
+        // Replay reports no config drift against the aligned row.
+        expect(STAGES.relevance.configDrift(reg.config)).toEqual([]);
+        // …and it did against the 1.0.0 row (the drift that motivated 014).
+        expect(STAGES.relevance.configDrift(registry('relevance', '1.0.0').config)).not.toEqual([]);
+    });
+
+    test('the embed gate is reachable: one keyword match passes, none does not', () => {
+        const one = relevanceCode.computeRelevance('A new machine learning result.');
+        expect(one.matchedKeywords).toEqual(['machine learning']);
+        expect(relevanceCode.passesEmbedGate(one.score)).toBe(true);
+        expect(relevanceCode.passesEmbedGate(relevanceCode.computeRelevance('Weather today.').score)).toBe(false);
+        expect(relevanceCode.passesEmbedGate('0.05')).toBe(true);   // NUMERIC string from pg
+        expect(relevanceCode.passesEmbedGate(null)).toBe(false);
+    });
+
+    test('discourse@1.1.0-DQI is the code: five equal-weight dimensions', () => {
+        const reg = registry('discourse', '1.1.0-DQI');
+        expect(Object.keys(reg.config.dimensions).sort()).toEqual([...discourseCode.DQI_DIMENSIONS].sort());
+        for (const d of Object.values(reg.config.dimensions)) expect(d.weight).toBe(1 / discourseCode.DQI_DIMENSIONS.length);
+        expect(reg.model_name).toBe(discourseCode.MODEL_NAME);
+        expect(STAGES.discourse.configDrift(reg.config)).toEqual([]);
+    });
+
+    test('sentiment@1.0.0 thresholds are the code thresholds (no new version needed)', () => {
+        expect(STAGES.sentiment.configDrift(registry('sentiment', '1.0.0').config)).toEqual([]);
+        expect(sentimentCode.POSITIVE_THRESHOLD).toBe(0.05);
+    });
+
+    test('ingest@1.1.0 lists exactly the identity fields ingest removes (unchanged in 1.2.0)', () => {
+        expect(registry('ingest', '1.1.0').config.pii_fields_removed).toEqual(PII_FIELDS);
+        expect(registry('ingest', '1.1.0').config.location_basis).toEqual(['content', 'publisher']);
+    });
+});
+
+describe('migration 015 ↔ methodology registry (ingest@1.2.0)', () => {
+    const { generate } = require('../../../scripts/generate-methodology-migration');
+    const { redactIdentities } = require('../../../src/collectors/normalize');
+    const { PII_FIELDS } = require('../../../src/pipeline/ingest');
+    const SQL_015 = fs.readFileSync(
+        path.join(__dirname, '../../../src/db/migrations/015_ingest_text_redaction.sql'), 'utf8');
+
+    test('015 is exactly the generated ingest@1.2.0 row, idempotent, and edits nothing', () => {
+        expect(SQL_015.endsWith(generate(['ingest@1.2.0']))).toBe(true);
+        expect((SQL_015.match(/INSERT INTO/g) || []).length).toBe(1);
+        expect(SQL_015).toMatch(/ON CONFLICT \(component, version\) DO NOTHING;/);
+        expect(SQL_015).not.toMatch(/DO UPDATE|UPDATE methodology_versions|DELETE/);
+    });
+
+    test('ingest@1.2.0 stays registered (superseded by 1.3.0, never edited)', () => {
+        const reg = registry('ingest', '1.2.0');
+        expect(reg.config.pii_fields_removed).toEqual(PII_FIELDS);
+        expect(redactIdentities('a@b.co @x1')).toBe(`${reg.config.text_redaction.email_addresses} ${reg.config.text_redaction.at_handles}`);
+    });
+});
+
+describe('migration 017 ↔ methodology registry (ingest@1.3.0, decision D2)', () => {
+    const { generate } = require('../../../scripts/generate-methodology-migration');
+    const { redactIdentities } = require('../../../src/collectors/normalize');
+    const { PII_FIELDS } = require('../../../src/pipeline/ingest');
+    const SQL_017 = fs.readFileSync(
+        path.join(__dirname, '../../../src/db/migrations/017_ingest_provenance.sql'), 'utf8');
+
+    test('017 adds the provenance column additively and ends with exactly the generated ingest@1.3.0 row', () => {
+        expect(SQL_017.endsWith(generate(['ingest@1.3.0', 'audit_narration@1.3.0']))).toBe(true);
+        expect((SQL_017.match(/INSERT INTO/g) || []).length).toBe(2);
+        expect(SQL_017).toMatch(/ALTER TABLE raw_posts ADD COLUMN IF NOT EXISTS provenance_fingerprint TEXT;/);
+        expect(SQL_017).not.toMatch(/DO UPDATE|UPDATE methodology_versions|DELETE|DROP/);
+    });
+
+    test('ingest@1.3.0 stays registered with the D2 claim (superseded by 1.4.0, never edited)', () => {
+        const reg = registry('ingest', '1.3.0');
+        expect(reg.config.pii_fields_removed).toEqual(PII_FIELDS);
+        const t = reg.config.text_redaction;
+        expect(redactIdentities('a@b.co @x1')).toBe(`${t.email_addresses} ${t.at_handles}`);
+        expect(redactIdentities('call (415) 555-2671')).toBe('call [phone]');
+        expect(reg.config.privacy_claim).toBeDefined();
+        expect(redactIdentities('see https://github.com/alice')).toBe(`see ${t.identity_links}`);
+        expect(redactIdentities('ok cc Jane Doe')).toBe(`ok ${t.cc_names}`);
+        // The precise claim (D2 b), verbatim in config and justification.
+        const claim = 'identity fields are never stored; e-mail addresses, handles, phone numbers, sign-offs and profile links in text are redacted; free text may still contain names mentioned in content';
+        expect(reg.config.privacy_claim).toBe(claim);
+        expect(reg.justification).toContain(`Precise claim: ${claim}.`);
+        expect(reg.justification).toContain('"both yet we need an identifier to be able to prove the audit traceability back to the source."');
+    });
+
+    test('audit_narration@1.3.0 is the renderer\'s version and registers the provenance wording', () => {
+        const { NARRATION_VERSION, VERIFY_PROVENANCE_COMMAND, PROVENANCE_VERIFIABLE } = require('../../../src/config/audit-narration');
+        const reg = registry('audit_narration', '1.3.0');
+        expect(latest('audit_narration').version).toBe(NARRATION_VERSION);
+        expect(NARRATION_VERSION).toBe('1.3.0');
+        expect(reg.config.verify_provenance_command).toBe(VERIFY_PROVENANCE_COMMAND);
+        expect(reg.justification).toContain(PROVENANCE_VERIFIABLE);
+    });
+});
+
 // Grumpy NIT a (PR #8): scripts/seed.js's header comment once claimed every
 // methodology row was "all v1.0.0" while bias was already 1.1.0. The header
 // must state, per component, the version the registry (the source seed.js
@@ -240,5 +388,51 @@ describe('scripts/seed.js header ↔ methodology registry (grumpy NIT a)', () =>
 
     test('no blanket "all v1.0.0" claim survives', () => {
         expect(methodologyHeader()).not.toMatch(/\ball v?\d+\.\d+\.\d+/i);
+    });
+});
+
+describe('migration 024 ↔ methodology registry (ingest@1.4.0, Copilot 4129565702)', () => {
+    const { generate } = require('../../../scripts/generate-methodology-migration');
+    const { redactIdentities } = require('../../../src/collectors/normalize');
+    const SQL_024 = fs.readFileSync(
+        path.join(__dirname, '../../../src/db/migrations/024_ingest_single_char_handles.sql'), 'utf8');
+
+    test('024 is exactly the generated ingest@1.4.0 row, idempotent, and edits nothing', () => {
+        expect(SQL_024.endsWith(generate(['ingest@1.4.0']))).toBe(true);
+        expect((SQL_024.match(/INSERT INTO/g) || []).length).toBe(1);
+        expect(SQL_024).not.toMatch(/DO UPDATE|UPDATE methodology_versions|DELETE|DROP/);
+    });
+
+    test('ingest@1.4.0 keeps the D2 claim and redacts single-character handles (superseded by 1.5.0, never edited)', () => {
+        const reg = registry('ingest', '1.4.0');
+        const prev = registry('ingest', '1.3.0');
+        expect(reg.config.privacy_claim).toBe(prev.config.privacy_claim);
+        expect(reg.config.text_redaction.at_handle_min_length).toBe(1);
+        expect(redactIdentities('ping @a and @b_ and a@b.co')).toBe('ping @[user] and @[user] and [email]');
+    });
+});
+
+describe('migration 026 ↔ methodology registry (ingest@1.5.0, Reddit u/ names)', () => {
+    const { generate } = require('../../../scripts/generate-methodology-migration');
+    const { redactIdentities } = require('../../../src/collectors/normalize');
+    const SQL_026 = fs.readFileSync(
+        path.join(__dirname, '../../../src/db/migrations/026_ingest_reddit_handles.sql'), 'utf8');
+
+    test('026 is exactly the generated ingest@1.5.0 row, idempotent, and edits nothing', () => {
+        expect(SQL_026.endsWith(generate(['ingest@1.5.0']))).toBe(true);
+        expect((SQL_026.match(/INSERT INTO/g) || []).length).toBe(1);
+        expect(SQL_026).not.toMatch(/DO UPDATE|UPDATE methodology_versions|DELETE|DROP/);
+    });
+
+    test('ingest@1.5.0 is current and redacts Reddit user names; 1.4.0 is unchanged', () => {
+        const reg = registry('ingest', '1.5.0');
+        const prev = registry('ingest', '1.4.0');
+        expect(latest('ingest').version).toBe('1.5.0');
+        expect(reg.config.text_redaction.reddit_user_handles).toMatch(/u\/\[user\]/);
+        expect(prev.config.text_redaction.reddit_user_handles).toBeUndefined();
+        expect(reg.config.pii_fields_removed).toEqual(prev.config.pii_fields_removed);
+        expect(redactIdentities('thanks u/spez, /u/Jane_Doe and reddit.com/user/bob'))
+            .toBe('thanks u/[user], u/[user] and [profile link]');
+        expect(redactIdentities('r/MachineLearning and menu/u/x stay')).toBe('r/MachineLearning and menu/u/x stay');
     });
 });

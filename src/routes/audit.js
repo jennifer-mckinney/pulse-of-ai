@@ -20,7 +20,14 @@
 // key is unset the field is OMITTED entirely (never raw).
 //
 // Returns:
-//   200 { post: {...}, narration: {...}, ingest: {...}|null,
+//   200 { provenance: { source, published_at, permalink, external_id,
+//                       fingerprint, verifiable,              (decision D2)
+//                       retention? },   platform-terms sources (Reddit):
+//                                       { status: 'live', removes_at, notice }
+//                                       or { status: 'text_removed',
+//                                       removed_at, reason, notice } (ADR
+//                                       0001 ruling 9)
+//         post: {...}, narration: {...}, ingest: {...}|null,
 //         decisions: [...],
 //         bias: { job_id, assessed_at, model_name, version,
 //                 lineage, lineage_fallback, layers } }
@@ -40,9 +47,13 @@ const {
     deriveScore,
     deriveStatus,
     renderIngestStep,
+    VERIFY_PROVENANCE_COMMAND,
+    PROVENANCE_VERIFIABLE,
 } = require('../config/audit-narration');
 const { buildLayers } = require('../config/bias-vocabulary');
 const { DEMO_SOURCE_TYPE } = require('../config/data-mode');
+const { attributionFor } = require('../config/source-registry');
+const { retentionStatus } = require('../collectors/retention');
 const {
     resolveBiasLineage,
     currentBiasVersion,
@@ -81,6 +92,13 @@ router.get('/audit/:post_id', async (req, res) => {
                 rp.content,
                 rp.location,
                 rp.collected_at,
+                rp.external_id,
+                rp.provenance_fingerprint,
+                rp.ingest_mv_id,
+                rp.text_removed_at,
+                rp.text_removed_reason,
+                rp.raw_payload->>'url'          AS permalink,
+                rp.raw_payload->>'published_at' AS published_at,
                 ds.category    AS source_category,
                 ds.name        AS source_name,
                 ds.source_type AS source_type
@@ -208,20 +226,72 @@ router.get('/audit/:post_id', async (req, res) => {
         // Ingestion is not an inference so it has no decision_audit_log rows;
         // its regulator-relevant facts (PII fields stripped, city granularity,
         // legal basis) live in the registered methodology config.
-        const ingestMv = await dbGet(
-            `SELECT model_name, version, config FROM methodology_versions
-             WHERE component = 'ingest' AND deprecated_at IS NULL
-             ORDER BY effective_from DESC
-             LIMIT 1`,
-        );
+        // G10-11: the version the post was STORED under (raw_posts.
+        // ingest_mv_id, lineage 'recorded'); for rows stored before
+        // migration 022, the ingest version effective at collected_at
+        // (lineage 'inferred'; the earliest one when the post predates
+        // every registered version).
+        let ingestMv = null;
+        let ingestLineage = null;
+        if (post.ingest_mv_id) {
+            ingestMv = await dbGet(
+                `SELECT model_name, version, config FROM methodology_versions WHERE id = $1 AND component = 'ingest'`,
+                [post.ingest_mv_id],
+            );
+            if (ingestMv) ingestLineage = 'recorded';
+        }
+        if (!ingestMv) {
+            ingestMv = await dbGet(
+                `SELECT model_name, version, config FROM methodology_versions
+                 WHERE component = 'ingest'
+                 ORDER BY (effective_from <= $1) DESC,
+                          CASE WHEN effective_from <= $1 THEN effective_from END DESC NULLS LAST,
+                          effective_from ASC
+                 LIMIT 1`,
+                [post.collected_at],
+            );
+            if (ingestMv) ingestLineage = 'inferred';
+        }
+
+        // ── Provenance (decision D2) ───────────────────────────────────────
+        // Traceability back to the source without storing identity: the
+        // permalink when it is not an identity link, the stored (identity-
+        // free) external id, and the keyed provenance fingerprint that
+        // `npm run verify-provenance` reproduces from the original.
+        const demo = post.source_type === DEMO_SOURCE_TYPE;
+        const provenance = {
+            source:       post.source_name,
+            published_at: post.published_at || null,
+            permalink:    /^https?:\/\//.test(post.permalink || '') ? post.permalink : null,
+            external_id:  post.external_id,
+            fingerprint:  post.provenance_fingerprint || null,
+            verifiable:   post.provenance_fingerprint
+                ? `${PROVENANCE_VERIFIABLE}: ${VERIFY_PROVENANCE_COMMAND.replace('{post_id}', post.id)}`
+                : (demo
+                    ? 'not applicable: fictional demo content, never collected from a source'
+                    : 'no provenance fingerprint was recorded for this post (collected before ingest@1.3.0, or no provenance key was configured)'),
+        };
+        // ADR 0001 ruling 9: platform-terms retention (Reddit). A live post
+        // says when its text will be removed; a blanked one shows the removal
+        // notice as its text and says why, and that its scores and audit rows
+        // were retained by owner decision.
+        const retention = retentionStatus(post.source_name, {
+            collectedAt: post.collected_at,
+            textRemovedAt: post.text_removed_at,
+            textRemovedReason: post.text_removed_reason,
+        });
+        if (retention) provenance.retention = retention;
 
         return res.json({
+            provenance,
             post: {
                 id:              post.id,
                 content_snippet: post.content.slice(0, 120),
                 location:        post.location,
                 source_category: post.source_category,
                 source_name:     post.source_name,
+                // credit the source's terms require next to its content, or null
+                attribution:     attributionFor(post.source_name),
                 // 'demo' for fictional demo-feed posts, else 'live'
                 data_origin:     post.source_type === DEMO_SOURCE_TYPE ? 'demo' : 'live',
                 collected_at:    post.collected_at,
@@ -229,7 +299,9 @@ router.get('/audit/:post_id', async (req, res) => {
             narration: { component: NARRATION_COMPONENT, version: NARRATION_VERSION },
             // Demo-feed posts get the fictional-content ingestion wording
             // (audit_narration 1.2.0 — src/config/data-mode.js defines demo).
-            ingest:    renderIngestStep(ingestMv, { demo: post.source_type === DEMO_SOURCE_TYPE }),
+            ingest:    ingestMv
+                ? { ...renderIngestStep(ingestMv, { demo, provenance, postId: post.id }), lineage: ingestLineage }
+                : null,
             decisions: exposed,
             bias:      biasBlock,
         });

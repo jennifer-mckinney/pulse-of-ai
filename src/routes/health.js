@@ -16,6 +16,11 @@
 //                    stored_posts, stored_demo_posts }     ← every stored post
 //   active_sources registry sources flagged active, EXCLUDING demo feeds
 //   demo_feeds     number of demo feed sources (never counted as sources)
+//   sources        { registry: SOURCES.length (52), seeded, collecting, online, by_status }
+//                  from the source registry of record and each source's
+//                  runtime gate status + last successful run
+//                  (src/collectors/status.js). "Sources online" = online:
+//                  collecting AND succeeded within the last hour.
 //
 //   redis          { reachable } — an authenticated PING answered (P9-7)
 //   worker         { alive, last_heartbeat } — the worker's heartbeat
@@ -38,6 +43,7 @@ const { findCity } = require('../../public/js/config/cities.config.js');
 
 const { createRedisClient } = require('../queues/connection');
 const { readHeartbeat } = require('../workers/heartbeat');
+const { sourceRows, summarize } = require('../collectors/status');
 
 const router = Router();
 
@@ -143,6 +149,8 @@ router.get('/health', async (req, res) => {
             [DEMO_SOURCE_TYPE],
         );
 
+        const sources = summarize(await sourceRows());
+
         return res.json({
             status:        dbConnected ? 'healthy' : 'degraded',
             db_connected:  dbConnected,
@@ -159,6 +167,7 @@ router.get('/health', async (req, res) => {
             active_sources: sourceCounts.active_sources,
             demo_feeds:     sourceCounts.demo_feeds,
             ...(await queueStatus()),
+            sources,
         });
     /* istanbul ignore start -- Database failure; requires error injection testing infrastructure */
     } catch (err) {

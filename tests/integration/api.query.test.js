@@ -391,4 +391,16 @@ describe('POST /api/query', () => {
             expect(res.body.results[0].comparative).toBe(0.5);
         });
     });
+
+    it('carries the attribution a source\'s terms require (NPR), null otherwise (ADR 0001)', async () => {
+        const npr = await insertSource('npr', 'news');
+        const other = await insertSource('query-plain', 'news');
+        const jobId = await insertJob();
+        const mvIds = await insertMethodologyVersions();
+        await insertPostWithFullPipeline(npr, jobId, mvIds, { externalId: 'attr-npr' });
+        await insertPostWithFullPipeline(other, jobId, mvIds, { externalId: 'attr-plain' });
+        const res = await request(app).post('/api/query').send({ limit: 10 });
+        const by = Object.fromEntries(res.body.results.map(r => [r.source_name, r.attribution]));
+        expect(by).toEqual({ npr: 'NPR', 'query-plain': null });
+    });
 });

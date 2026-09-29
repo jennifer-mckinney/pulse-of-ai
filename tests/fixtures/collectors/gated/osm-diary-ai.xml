@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:geo="http://www.w3.org/2003/01/geo/wgs84_pos#" xmlns:georss="http://www.georss.org/georss">
+  <channel>
+    <title>OpenStreetMap diary entries</title>
+    <description>Hand-made (G10-15): one AI-related diary entry geotagged in central London, in the recorded feed's shape.</description>
+    <link>https://www.openstreetmap.org/diary</link>
+    <item>
+      <title>Mapping with machine learning road detection</title>
+      <link>https://www.openstreetmap.org/user/REDACTED/diary/999001</link>
+      <guid>https://www.openstreetmap.org/user/REDACTED/diary/999001</guid>
+      <description>Trying artificial intelligence assisted tracing of roads around Westminster.</description>
+      <dc:creator>REDACTED</dc:creator>
+      <pubDate>Sun, 28 Sep 2026 12:00:00 +0000</pubDate>
+      <geo:lat>51.5007</geo:lat>
+      <geo:long>-0.1246</geo:long>
+      <georss:point>51.5007 -0.1246</georss:point>
+    </item>
+  </channel>
+</rss>

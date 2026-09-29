@@ -15,18 +15,27 @@
 #      (never printed); an existing .env keeps every value — only missing
 #      keys are appended — and is kept at mode 600. A secret that is empty
 #      or still the .env.example placeholder stops the run.
+#      Live collection is OFF on a fresh clone (ADR 0001 D1): without
+#      COLLECTOR_CONTACT_URL every source is disabled and only DEMO data is
+#      populated. Run interactively, standup asks for the contact URL and
+#      for PERMISSION_GATED_FEEDS_ACCEPTED_BY (the 8 permission-gated news
+#      feeds); --yes or a non-interactive run never asks, and neither value
+#      is ever added to an existing env file on its own.
 #   3. builds the app + embeddings images
 #   4. starts compose profile "full": postgres, postgres_test, redis, the
 #      one-shot migrate job (migrations + seed), web, worker, embeddings
 #   5. waits for health (timeouts; the failing service's logs on timeout)
-#   6. populates data: fictional DEMO posts through the real pipeline, then
-#      starts the demo feed that keeps the trailing hour populated
-#      (live collectors are not implemented yet — see scripts/populate.js)
+#   6. populates data: one REAL collection job over the 52-source registry
+#      (the worker keeps collecting on its schedule); fictional DEMO posts go
+#      through the real pipeline only when collection yields nothing, and the
+#      demo fallback loop stays idle while live posts exist (scripts/populate.js)
 #   7. smoke-checks the running stack and prints a population summary
 #
 # Flags:
 #   --demo       add a fresh demo batch even if the trailing hour already has one
 #   --no-build   skip image builds (images must already exist)
+#   -y, --yes    non-interactive: never prompt (live collection stays as the
+#                env file has it — off without COLLECTOR_CONTACT_URL)
 #   -h, --help   this help
 #
 # Environment (optional): PULSE_ENV_FILE, COMPOSE_PROJECT_NAME, WEB_PORT,
@@ -43,10 +52,12 @@ usage() { sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed '$d' | sed 's/^# \{0
 
 DO_BUILD=1
 FORCE_DEMO=0
+ASSUME_YES=0
 for arg in "$@"; do
     case "$arg" in
         --demo)     FORCE_DEMO=1 ;;
         --no-build) DO_BUILD=0 ;;
+        -y|--yes)   ASSUME_YES=1 ;;
         -h|--help)  usage; exit 0 ;;
         *)          usage >&2; die "unknown option '$arg'" ;;
     esac
@@ -73,6 +84,13 @@ ensure_env_file
 secure_env_file
 check_env_secrets
 [[ -n "$(effective POSTGRES_PASSWORD)" ]] || die "POSTGRES_PASSWORD is empty in $STACK_ENV_FILE"
+
+# D1: live collection is the operator's decision. Prompt only on a terminal
+# and without --yes; otherwise report the state and go on (demo only when off).
+step "Live collection (ADR 0001 D1: off unless you set it)"
+interactive=0
+if (( ! ASSUME_YES )) && [[ -t 0 && -t 1 ]]; then interactive=1; fi
+collector_operator_setup "$interactive"
 
 STACK_PROJECT=$(stack_project)
 APP_IMAGE=$(effective PULSE_APP_IMAGE pulse-of-ai/app:local)
@@ -199,16 +217,28 @@ else
 fi
 
 # ─── 6. Populate ─────────────────────────────────────────────────────────────
-step "Populating data (DEMO: fictional posts through the real pipeline)"
+step "Populating data (collect live first; demo only as the fallback)"
 populate_args=(--once)
 (( EMBEDDINGS_OK )) || populate_args+=(--no-embed)
 (( FORCE_DEMO )) && populate_args+=(--force)
-compose_all run --rm --no-deps -T populate node scripts/populate.js "${populate_args[@]}" \
-    || { show_failure web worker; die "data population failed"; }
+# G10-9: the collection itself stops starting sources after 240 s; the whole
+# step (collection, scoring, demo fallback, embeddings wait) is bounded too.
+POPULATE_TIMEOUT_SEC=${POPULATE_TIMEOUT_SEC:-900}
+rc=0
+run_with_timeout "$POPULATE_TIMEOUT_SEC" compose_all run --rm --no-deps -T populate node scripts/populate.js "${populate_args[@]}" || rc=$?
+if (( rc == 124 )); then
+    show_failure web worker
+    die "data population did not finish within ${POPULATE_TIMEOUT_SEC}s (POPULATE_TIMEOUT_SEC)"
+elif (( rc != 0 )); then
+    show_failure web worker
+    die "data population failed"
+fi
 
 compose_all up -d --no-build --no-deps populate >/dev/null 2>&1 \
-    || { show_failure populate; die "could not start the demo feed (service populate)"; }
-ok "demo feed running: a new fictional batch every $(( $(effective DEMO_FEED_INTERVAL_MS 150000) / 1000 ))s keeps the trailing hour populated"
+    || { show_failure populate; die "could not start the demo fallback (service populate)"; }
+ok "demo fallback running: a fictional batch every $(( $(effective DEMO_FEED_INTERVAL_MS 150000) / 1000 ))s ONLY while the trailing hour has no live posts"
+DATA_MODE=$(curl -fsS --max-time 10 "http://localhost:$(compose_full port web 3000 2>/dev/null | head -n 1 | sed 's/.*://')/api/health" 2>/dev/null \
+    | sed -n 's/.*"data_mode":"\([a-z]*\)".*/\1/p' | tr '[:lower:]' '[:upper:]') || true   # G10-10: a failed probe never aborts standup (set -e + pipefail)
 
 # ─── 7. Smoke check ──────────────────────────────────────────────────────────
 step "Smoke check"
@@ -273,8 +303,11 @@ ${_G}${_B}Pulse of AI is up${_N}  (project '$STACK_PROJECT', $(elapsed "$T_START
   API health:  $WEB_URL/api/health
   Embeddings:  $( (( EMBEDDINGS_OK )) && echo "model loaded (internal only: embeddings:8000 on the compose network)" || echo "not ready — vector search disabled (see warnings above)")
 
-  Data is DEMO: fictional posts scored by the real pipeline, refreshed by the
-  'populate' service. Live collection is not implemented yet.
+  Data is ${DATA_MODE:-UNKNOWN} (trailing hour): LIVE = collected from the
+  52-source registry by the worker (per-source status in the health drawer
+  and GET /api/sources); DEMO / MIXED = the fictional fallback is (or was
+  recently) filling the hour.
+  Live collection: $( (( STACK_LIVE_COLLECTION )) && echo "ON (COLLECTOR_CONTACT_URL set)" || echo "OFF — no COLLECTOR_CONTACT_URL, so DEMO data only. Set it in $STACK_ENV_FILE and re-run (ADR 0001 D1).")
 
 Next steps
   Status:      $DC --profile full --profile demo ps

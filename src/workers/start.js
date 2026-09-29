@@ -1,52 +1,139 @@
 // src/workers/start.js
 // Entry point for the BullMQ worker process.
 //
-// Run with:  node src/workers/start.js
-// Or via:    docker-compose --profile workers up
+// Run with:  node src/workers/start.js   (compose service `worker`)
 //
-// This process registers Worker instances for every queue and keeps running
-// until killed. BullMQ workers poll Redis for jobs and call the corresponding
-// processXxxJob() handler.
+// Registers a Worker for every queue and keeps running until killed:
+//   collect.rss / collect.api / collect.bulk — source runs (collect.worker.js)
+//   collect.refresh — POST /api/refresh collections (processRefreshJob)
+//   ingest    — scoring retries (ingest.worker.js)
+//   embed     — embeddings via the Python service (embed.worker.js)
+//   correlate — reserved (collectors store no identity signals)
+// and the Reddit maintenance timer (48 h text retention, deletion re-check,
+// subreddit discovery — src/collectors/reddit/maintenance.js),
+// and starts the collection scheduler (collector.scheduler.js): at start and
+// every RESCHEDULE_MS it (re)schedules every collecting registry source, so a
+// kill switch or a new credential takes effect without a code change.
 //
 // Concurrency rationale:
-//   ingest:    20 — CPU-bound (sentiment/relevance/discourse); one per logical core
-//   embed:      4 — I/O-bound but Python service is the bottleneck; 4 concurrent
-//                   calls keeps the service saturated without overwhelming it
-//   correlate:  8 — DB-bound; limited by PG connection pool size (default 20)
+//   collect:   4 per type — I/O-bound; per-host spacing lives in the HTTP client
+//   ingest:   20 — CPU-bound scoring
+//   embed:     4 — the Python service is the bottleneck
+//   correlate: 8 — DB-bound
 
 'use strict';
 
 const { Worker } = require('bullmq');
-const { connection } = require('../queues/index');
+const { connection, ingestQueue } = require('../queues/index');
+const { sweepUnscored } = require('../collectors/sweep');
 const { createRedisClient } = require('../queues/connection');
 const { startHeartbeat } = require('./heartbeat');
-const { processIngestJob }   = require('./ingest.worker');
+const { processCollectJob, processRefreshJob } = require('./collect.worker');
+const { processIngestJob, onIngestJobFailed } = require('./ingest.worker');
 const { processEmbedJob }    = require('./embed.worker');
 const { processCorrelateJob }= require('./correlate.worker');
+const { scheduleAllSources } = require('./collector.scheduler');
+const { collectWindowMs } = require('../config/source-registry');
+const { closeCycles } = require('../collectors/cycle');
+const { runRedditMaintenance, MAINTENANCE_MS } = require('../collectors/reddit/maintenance');
 
-const INGEST_CONCURRENCY    = parseInt(process.env.INGEST_CONCURRENCY    || '20', 10);
-const EMBED_CONCURRENCY     = parseInt(process.env.EMBED_CONCURRENCY     || '4',  10);
-const CORRELATE_CONCURRENCY = parseInt(process.env.CORRELATE_CONCURRENCY || '8',  10);
+const int = (v, d) => { const n = parseInt(v || '', 10); return Number.isFinite(n) && n > 0 ? n : d; };
+const COLLECT_CONCURRENCY   = int(process.env.COLLECT_CONCURRENCY, 4);
+const INGEST_CONCURRENCY    = int(process.env.INGEST_CONCURRENCY, 20);
+const EMBED_CONCURRENCY     = int(process.env.EMBED_CONCURRENCY, 4);
+const CORRELATE_CONCURRENCY = int(process.env.CORRELATE_CONCURRENCY, 8);
+const RESCHEDULE_MS         = int(process.env.COLLECT_RESCHEDULE_MS, 10 * 60 * 1000);
+
+// Every line is scrubbed of secrets (src/workers/logging.js).
+const { log, logError } = require('./logging');
 
 const workers = [
+    new Worker('collect.rss',  job => processCollectJob(job), { connection, concurrency: COLLECT_CONCURRENCY }),
+    new Worker('collect.api',  job => processCollectJob(job), { connection, concurrency: COLLECT_CONCURRENCY }),
+    new Worker('collect.bulk', job => processCollectJob(job), { connection, concurrency: 1 }),
+    // POST /api/refresh collections (F10-3, F10-8): one at a time.
+    new Worker('collect.refresh', job => processRefreshJob(job), { connection, concurrency: 1 }),
     new Worker('ingest',    processIngestJob,    { connection, concurrency: INGEST_CONCURRENCY }),
     new Worker('embed',     processEmbedJob,     { connection, concurrency: EMBED_CONCURRENCY }),
     new Worker('correlate', processCorrelateJob, { connection, concurrency: CORRELATE_CONCURRENCY }),
 ];
 
 workers.forEach(w => {
-    w.on('completed', job => {
-        if (process.env.NODE_ENV !== 'test') {
-            console.log(`[${w.name}] job ${job.id} completed`);
+    w.on('completed', (job, result) => {
+        if (process.env.NODE_ENV === 'test') return;
+        if (w.name.startsWith('collect.') && result && result.slug) {
+            log(`[${w.name}] ${result.slug}: ${result.outcome}${result.reason ? ` (${result.reason})` : ''} — `
+                + `fetched ${result.fetched}, kept ${result.kept}, new ${result.newPosts}${result.error ? ` — ${result.error}` : ''}`);
+        } else {
+            log(`[${w.name}] job ${job.id} completed`);
         }
     });
     w.on('failed', (job, err) => {
-        console.error(`[${w.name}] job ${job?.id} failed: ${err.message}`);
+        // A reserved scoring retry's last failed attempt releases its slot
+        // (Copilot 4129565673), so the job's bias checks are not held.
+        if (w.name === 'ingest') {
+            onIngestJobFailed(job).catch(e => logError(`[ingest] could not release a retry slot: ${e.message}`));
+        }
+        // F10-1: an error text can carry upstream detail — scrubbed.
+        logError(`[${w.name}] job ${job?.id} failed: ${err.message}`);
     });
 });
 
-console.log(
-    `Workers started — ingest:${INGEST_CONCURRENCY} embed:${EMBED_CONCURRENCY} correlate:${CORRELATE_CONCURRENCY}`,
+async function schedule() {
+    try {
+        await scheduleAllSources({ log });
+    } catch (err) {
+        logError(`[scheduler] scheduling failed: ${err.message}`);
+    }
+}
+
+// Close collection cycles past their window: bias checks once over every
+// source's posts in the cycle (src/collectors/cycle.js).
+async function closeDueCycles() {
+    try {
+        for (const c of await closeCycles(collectWindowMs())) {
+            log(`[cycle] job ${c.jobId} closed: ${c.postsProcessed} posts, `
+                + `${c.violations === null ? 'no bias checks (no posts)' : `${c.violations} bias violation(s)`}`);
+        }
+    } catch (err) {
+        logError(`[cycle] closing failed: ${err.message}`);
+    }
+    // G10-4: re-queue posts from the last 24 h that were never scored.
+    try {
+        const s = await sweepUnscored({
+            enqueue: (data, key) => ingestQueue.add('ingest-sweep', data, { jobId: key }),
+        });
+        if (s.found) log(`[sweep] ${s.found} unscored post(s): ${s.queued} re-queued, ${s.failed} failed`);
+    } catch (err) {
+        logError(`[sweep] failed: ${err.message}`);
+    }
+}
+
+// Reddit (#52): the 48 h text retention always, and — while Reddit's gate is
+// open — the 6-hourly deletion re-check and the daily subreddit discovery
+// (src/collectors/reddit/maintenance.js; ADR 0001 rulings 8 and 9).
+let redditRunning = false;
+async function redditMaintenance() {
+    if (redditRunning) return;
+    redditRunning = true;
+    try {
+        await runRedditMaintenance({ log });
+    } catch (err) {
+        logError(`[reddit] maintenance failed: ${err.message}`);
+    } finally {
+        redditRunning = false;
+    }
+}
+
+schedule();
+redditMaintenance();
+const timer = setInterval(schedule, RESCHEDULE_MS);
+const cycleTimer = setInterval(closeDueCycles, 30 * 1000);
+const redditTimer = setInterval(redditMaintenance, MAINTENANCE_MS);
+
+log(
+    `Workers started — collect:${COLLECT_CONCURRENCY}/type ingest:${INGEST_CONCURRENCY} `
+    + `embed:${EMBED_CONCURRENCY} correlate:${CORRELATE_CONCURRENCY}; rescheduling every ${Math.round(RESCHEDULE_MS / 1000)}s`,
 );
 
 // Liveness (P9-7): Redis key for /api/health + file for the container
@@ -57,7 +144,7 @@ heartbeatRedis.on('error', () => {});
 let lastBeatError = '';
 const stopHeartbeat = startHeartbeat(heartbeatRedis, {
     onError: (err) => {
-        if (err.message !== lastBeatError) console.error(`[heartbeat] ${err.message}`);
+        if (err.message !== lastBeatError) logError(`[heartbeat] ${err.message}`);
         lastBeatError = err.message;
     },
 });
@@ -66,8 +153,11 @@ const stopHeartbeat = startHeartbeat(heartbeatRedis, {
 // waits for in-flight jobs, so compose gives this process a long
 // stop_grace_period (docker-compose.yml, worker).
 async function shutdown() {
-    console.log('Shutting down workers...');
+    log('Shutting down workers...');
     stopHeartbeat();
+    clearInterval(timer);
+    clearInterval(cycleTimer);
+    clearInterval(redditTimer);
     await Promise.all(workers.map(w => w.close()));
     await heartbeatRedis.quit().catch(() => {});
     process.exit(0);

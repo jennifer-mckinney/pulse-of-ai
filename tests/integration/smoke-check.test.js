@@ -10,10 +10,11 @@
 
 'use strict';
 
+const { SOURCES } = require('../../src/config/source-registry');
 const app = require('../../src/server');
 const populate = require('../../scripts/populate');
 const { run } = require('../../scripts/smoke-check');
-const { insertSource, insertRegisteredMethodology } = require('./helpers');
+const { seedSources, seedMethodology } = require('../../scripts/seed');
 
 let server;
 let baseUrl;
@@ -36,12 +37,8 @@ beforeEach(() => {
 afterEach(() => stdoutSpy.mockRestore());
 
 async function populateDemo() {
-    for (const [name, cat] of [['real-social', 'social'], ['real-news', 'news'], ['real-policy', 'policy']]) {
-        await insertSource(name, cat);
-    }
-    for (const c of ['sentiment', 'relevance', 'discourse', 'bias', 'ingest']) {
-        await insertRegisteredMethodology(c);
-    }
+    await seedSources();        // the 52-source registry of record (SOURCES.length)
+    await seedMethodology();
     await populate.runDemoBatch({ size: 60, embed: false, seed: 0 });
 }
 
@@ -60,6 +57,8 @@ describe('scripts/smoke-check.js', () => {
         expect(text).toContain("[PASS] data mode reported — /api/health data_mode 'demo' matches the globe's rows ('demo': 60 of 60 placed trailing-hour posts from demo feeds)");
         expect(text).toContain('[WARN] embeddings stored');
         expect(text).toContain('data:               DEMO — fictional posts scored by the real pipeline');
+        expect(text).toContain(`[PASS] source registry — ${SOURCES.length}/${SOURCES.length} registry sources served`);
+        expect(text).toMatch(/ 6\. wechat {13}social {4}blocked — blocked: no compliant access/);
         expect(text).toContain('SMOKE: PASS');
     }, 60000);
 
@@ -73,6 +72,7 @@ describe('scripts/smoke-check.js', () => {
         expect(text).toContain('[FAIL] globe data (trailing hour)');
         expect(text).toContain('[FAIL] posts stored');
         expect(text).toContain('NO DEMO FEED DATA');
+        expect(text).toContain(`[FAIL] source registry — 0/${SOURCES.length}`);
         expect(text).toContain('SMOKE: FAIL');
     }, 30000);
 
@@ -113,5 +113,28 @@ describe('scripts/smoke-check.js', () => {
         const code = await run({ baseUrl, expectEmbeddings: true }, l => lines.push(l));
         expect(code).toBe(1);
         expect(lines.join('\n')).toContain('[FAIL] embeddings stored — 0 — embeddings were expected');
+    }, 60000);
+
+    it('labels live-collected data LIVE, and LIVE + demo MIXED, per category', async () => {
+        await seedSources();
+        await seedMethodology();
+        const { storeRawPost, scorePost } = require('../../src/pipeline/ingest');
+        const { resolveCurrentMethodology } = require('../../src/pipeline/methodology');
+        const { dbGet } = require('../../src/db/connection');
+        const mv = await resolveCurrentMethodology();
+        const npr = await dbGet(`SELECT id FROM data_sources WHERE name = 'npr'`);
+        const job = await dbGet(`INSERT INTO processing_jobs (triggered_by, status) VALUES ('test', 'completed') RETURNING id`);
+        const { postId } = await storeRawPost({ id: 'live-1', text: 'Machine learning policy news', location: 'Washington' }, npr.id);
+        await scorePost(postId, job.id, mv);
+
+        let lines = [];
+        await run({ baseUrl, expectEmbeddings: false }, l => lines.push(l));
+        expect(lines.join('\n')).toContain('data:               LIVE — 1 real posts collected from registry sources in the trailing hour');
+        expect(lines.join('\n')).toMatch(/news\s+live\s+1\s+demo\s+0/);
+
+        await populate.runDemoBatch({ size: 4, embed: false, seed: 0 });
+        lines = [];
+        await run({ baseUrl, expectEmbeddings: false }, l => lines.push(l));
+        expect(lines.join('\n')).toContain('data:               MIXED — 1 live and 4 demo posts');
     }, 60000);
 });

@@ -111,6 +111,12 @@ effective() {
 STACK_SECRET_KEYS=(POSTGRES_PASSWORD REDIS_PASSWORD AUDIT_HASH_KEY CORRELATION_SALT)
 # Temp file of an env file being created (removed on any exit — F9-4).
 STACK_ENV_TMP=''
+# Operator decisions (ADR 0001 D1 "Off for others, on for you"): the
+# collector contact URL and the permission-gated feeds' acknowledgement.
+# They ship EMPTY in .env.example and are NEVER appended to an existing env
+# file by the merge path — only the operator sets them (by hand, or through
+# the interactive prompt in collector_operator_setup).
+STACK_OPERATOR_KEYS=(COLLECTOR_CONTACT_URL PERMISSION_GATED_FEEDS_ACCEPTED_BY)
 
 # 64 hex chars (256 bits) on stdout; non-zero exit when no source works.
 gen_secret() {
@@ -127,6 +133,12 @@ gen_secret() {
 is_secret_key() {
     local k
     for k in "${STACK_SECRET_KEYS[@]}"; do [[ "$1" == "$k" ]] && return 0; done
+    return 1
+}
+
+is_operator_key() {
+    local k
+    for k in "${STACK_OPERATOR_KEYS[@]}"; do [[ "$1" == "$k" ]] && return 0; done
     return 1
 }
 
@@ -193,6 +205,8 @@ ensure_env_file() {
         [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)= ]] || continue
         key=${BASH_REMATCH[1]}
         grep -Eq "^(export[[:space:]]+)?${key}=" "$STACK_ENV_FILE" && continue
+        # D1: operator decisions are never injected into an existing file.
+        is_operator_key "$key" && continue
         missing+=("$key")
         if is_secret_key "$key"; then missing_secret=1; fi
     done < "$STACK_EXAMPLE_FILE"
@@ -222,6 +236,98 @@ ensure_env_file() {
     done
     secure_env_file   # mode 600 before the success line (see above)
     ok "kept existing $STACK_ENV_FILE; added missing key(s): ${missing[*]} (mode 600)"
+}
+
+# ─── Operator decisions (ADR 0001 D1) ────────────────────────────────────────
+
+# set_env_value KEY VALUE: write KEY="VALUE" to the env file — replacing an
+# EMPTY assignment of KEY, else appending. Never overwrites a non-empty
+# value (returns 1). The value is double-quoted with \ and " escaped, so a
+# name with spaces or a '#' is read back intact (env_value_body).
+set_env_value() {
+    local key=$1 value=$2 quoted tmp
+    [[ -n "$(env_file_value "$key")" ]] && return 1
+    quoted=${value//\\/\\\\}
+    quoted=${quoted//\"/\\\"}
+    if grep -Eq "^(export[[:space:]]+)?${key}=" "$STACK_ENV_FILE"; then
+        tmp="$STACK_ENV_FILE.tmp.$$"
+        ( umask 077; : > "$tmp" ) || return 1
+        # ENVIRON, not -v: awk would process backslash escapes in a -v value.
+        STACK_SET_KEY=$key STACK_SET_LINE="$key=\"$quoted\"" awk '
+            $0 ~ "^(export[[:space:]]+)?" ENVIRON["STACK_SET_KEY"] "=" { print ENVIRON["STACK_SET_LINE"]; next }
+            { print }' "$STACK_ENV_FILE" > "$tmp" || { rm -f "$tmp"; return 1; }
+        if ! { chmod 600 "$tmp" && mv "$tmp" "$STACK_ENV_FILE"; }; then
+            rm -f "$tmp"
+            return 1
+        fi
+    else
+        [[ -z "$(tail -c 1 "$STACK_ENV_FILE")" ]] || printf '\n' >> "$STACK_ENV_FILE"
+        printf '%s="%s"\n' "$key" "$quoted" >> "$STACK_ENV_FILE"
+    fi
+}
+
+# collector_operator_setup INTERACTIVE: report (and, when INTERACTIVE is 1,
+# offer to set) the two operator decisions. Sets STACK_LIVE_COLLECTION to 1
+# when a contact URL is in effect, else 0. Prompts read stdin; a blank answer
+# keeps the value empty. Nothing is ever written without an answer.
+# Read by scripts/standup.sh, which sources this file (the summary line).
+# shellcheck disable=SC2034
+STACK_LIVE_COLLECTION=0
+# shellcheck disable=SC2034  # STACK_LIVE_COLLECTION is read by standup.sh
+collector_operator_setup() {
+    local interactive=${1:-0} contact ack answer
+    contact=$(effective COLLECTOR_CONTACT_URL)
+    if [[ -z "$contact" && "$interactive" == 1 ]]; then
+        info "Live collection needs a contact URL for the collector User-Agent: a page where"
+        info "publishers can reach YOU (your repository or a contact page). Blank = demo data only."
+        while :; do
+            printf '    COLLECTOR_CONTACT_URL (https://...): '
+            IFS= read -r answer || answer=''
+            answer=$(printf '%s' "$answer" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
+            [[ -z "$answer" ]] && break
+            if [[ "$answer" =~ ^https://[^[:space:]\"#]+$ ]]; then
+                set_env_value COLLECTOR_CONTACT_URL "$answer" || die "could not write COLLECTOR_CONTACT_URL to $STACK_ENV_FILE"
+                contact=$answer
+                ok "COLLECTOR_CONTACT_URL saved to $STACK_ENV_FILE"
+                break
+            fi
+            warn "not an https:// URL without spaces — try again, or press Enter to skip"
+        done
+    fi
+    if [[ -z "$contact" ]]; then
+        STACK_LIVE_COLLECTION=0
+        warn "Live collection is OFF: COLLECTOR_CONTACT_URL is not set, so every source is disabled"
+        warn "and standup populates DEMO data only (ADR 0001 D1). Set it in $STACK_ENV_FILE and re-run."
+        return 0
+    fi
+    STACK_LIVE_COLLECTION=1
+    ok "live collection ON (collector contact URL set)"
+    ack=$(effective PERMISSION_GATED_FEEDS_ACCEPTED_BY)
+    if [[ -z "$ack" && "$interactive" == 1 ]]; then
+        info "8 news feeds (BBC, NYT, Guardian, Al Jazeera, WSJ, NBC, Washington Post, Ars Technica)"
+        info "publish public RSS, but their terms require permission for automated analysis."
+        info "They open only if YOU accept that legal risk. To accept, type your name and today's"
+        info "date (e.g. 'Ada Lovelace 2026-09-29'); press Enter to keep them closed."
+        while :; do
+            printf '    PERMISSION_GATED_FEEDS_ACCEPTED_BY: '
+            IFS= read -r answer || answer=''
+            answer=$(printf '%s' "$answer" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')
+            [[ -z "$answer" ]] && break
+            if [[ "$answer" =~ [^[:space:]].*[[:space:]][0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+                set_env_value PERMISSION_GATED_FEEDS_ACCEPTED_BY "$answer" \
+                    || die "could not write PERMISSION_GATED_FEEDS_ACCEPTED_BY to $STACK_ENV_FILE"
+                ack=$answer
+                ok "acknowledgement saved to $STACK_ENV_FILE"
+                break
+            fi
+            warn "expected '<name> <YYYY-MM-DD>' — try again, or press Enter to keep the feeds closed"
+        done
+    fi
+    if [[ -z "$ack" ]]; then
+        info "the 8 permission-gated news feeds stay closed (PERMISSION_GATED_FEEDS_ACCEPTED_BY is not set)"
+    else
+        ok "permission-gated news feeds open (acknowledgement recorded)"
+    fi
 }
 
 # F9-3: the env file holds secrets — always mode 600, and say so when it is

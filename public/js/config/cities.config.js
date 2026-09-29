@@ -138,6 +138,24 @@
             lat: 55.7558,  lng:   37.6173, country: 'RU', region: 'europe', tier: 2 },
         { id: 'cai',  name: 'Cairo',         aliases: [],
             lat: 30.0444,  lng:   31.2357, country: 'EG', region: 'africa', tier: 2 },
+
+        // ── Tier 2 — publisher origins (source registry, ADR 0001) ──────────
+        // Home cities of editorial sources in src/config/source-registry.js
+        // (homeCity): a collected item with no content-level location is
+        // placed at its publisher's city, recorded as location_basis
+        // 'publisher' in the stored payload — never a user's location.
+        { id: 'was',  name: 'Washington, D.C.', aliases: ['Washington', 'Washington DC', 'Washington, DC'],
+            lat: 38.9072,  lng:  -77.0369, country: 'US', region: 'north_america', tier: 2 },
+        { id: 'atl',  name: 'Atlanta',       aliases: [],
+            lat: 33.7490,  lng:  -84.3880, country: 'US', region: 'north_america', tier: 2 },
+        { id: 'smo',  name: 'Santa Monica',  aliases: [],
+            lat: 34.0195,  lng: -118.4912, country: 'US', region: 'north_america', tier: 2 },
+        { id: 'mtv',  name: 'Mountain View', aliases: [],
+            lat: 37.3861,  lng: -122.0839, country: 'US', region: 'north_america', tier: 2 },
+        { id: 'oxf',  name: 'Oxford',        aliases: [],
+            lat: 51.7520,  lng:   -1.2577, country: 'GB', region: 'europe', tier: 2 },
+        { id: 'doh',  name: 'Doha',          aliases: [],
+            lat: 25.2854,  lng:   51.5310, country: 'QA', region: 'middle_east', tier: 2 },
     ];
 
     // ── Lookup index (Grafana gazetteer semantics) ──────────────────────────

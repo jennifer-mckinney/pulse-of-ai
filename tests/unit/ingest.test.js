@@ -265,3 +265,56 @@ describe('ingestBatch()', () => {
         expect(result.newPosts).toBe(0);
     });
 });
+
+// ─── Collector payloads: store / score split (ADR 0001) ─────────────────────
+describe('storeRawPost() / scorePost() — collector payloads', () => {
+    const { storeRawPost, scorePost, cityLocation, PII_FIELDS } = require('../../src/pipeline/ingest');
+
+    async function rssSource() {
+        const row = await dbRun(
+            `INSERT INTO data_sources (name, display_name, source_type, category)
+             VALUES ('ingest-rss', 'Ingest RSS', 'rss', 'news') RETURNING id`);
+        return row.id;
+    }
+
+    it('stores city-level location and language, strips every identity field', async () => {
+        const sourceId = await rssSource();
+        const payload = {
+            id: 'rss-1', text: 'Machine learning policy news.', title: 'ML policy',
+            location: 'london', location_basis: 'publisher', language: 'fr',
+        };
+        for (const f of PII_FIELDS) payload[f] = 'identity';
+        const { postId, isNew } = await storeRawPost(payload, sourceId);
+        expect(isNew).toBe(true);
+        const row = await dbGet('SELECT location, language, raw_payload FROM raw_posts WHERE id = $1', [postId]);
+        expect(row.location).toBe('London');
+        expect(row.language).toBe('fr');
+        for (const f of PII_FIELDS) expect(row.raw_payload).not.toHaveProperty(f);
+        expect(row.raw_payload.location_basis).toBe('publisher');
+    });
+
+    it('drops locations that are not registry cities (never finer than a city)', () => {
+        expect(cityLocation('221B Baker Street, London')).toBe('');
+        expect(cityLocation('Washington')).toBe('Washington, D.C.');
+        expect(cityLocation(undefined)).toBe('');
+    });
+
+    it('rejects a payload with no text; dedups by (source, external id)', async () => {
+        const sourceId = await rssSource();
+        await expect(storeRawPost({ id: 'x' }, sourceId)).rejects.toThrow(/no external id or no text/);
+        const a = await storeRawPost({ id: 'dup', text: 'AI text' }, sourceId);
+        const b = await storeRawPost({ id: 'dup', text: 'AI text' }, sourceId);
+        expect(b).toEqual({ postId: a.postId, isNew: false });
+    });
+
+    it('scorePost is idempotent: a retry completes without duplicating decisions', async () => {
+        const sourceId = await rssSource();
+        const mv = await insertMethodologyVersions();
+        const jobId = await insertJob();
+        const { postId } = await storeRawPost({ id: 's1', text: 'Deep learning because data shows it.' }, sourceId);
+        await scorePost(postId, jobId, mv);
+        await scorePost(postId, jobId, mv);
+        const n = await dbGet('SELECT COUNT(*)::int AS n FROM decision_audit_log WHERE raw_post_id = $1', [postId]);
+        expect(n.n).toBe(3);
+    });
+});

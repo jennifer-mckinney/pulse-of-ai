@@ -9,6 +9,8 @@
 //
 // Returns:
 //   200 { results: [...], total: number, query: { platform, location, from, to, limit } }
+//     each result carries `attribution` (string|null): the credit the source's
+//     terms require next to its content (NPR, NBCNews.com, Stack Exchange …)
 //     total = the number of rows MATCHING the filters (COUNT(*) OVER() in
 //     the query), not the page size — results.length can be smaller when
 //     limit truncates. Callers page honestly against total.
@@ -19,6 +21,7 @@
 const { Router } = require('express');
 const { dbAll }  = require('../db/connection');
 const { CATEGORY_SLUGS, isCanonicalCategory } = require('../config/categories');
+const { attributionFor } = require('../config/source-registry');
 
 const router = Router();
 
@@ -158,7 +161,9 @@ router.post('/query', async (req, res) => {
         );
 
         const total = rows.length > 0 ? rows[0].full_count : 0;
-        const results = rows.map(({ full_count, ...row }) => row);
+        // attribution: the text a source's terms require next to its content
+        // (e.g. "NPR") — null when none is required (ADR 0001 ruling 6).
+        const results = rows.map(({ full_count, ...row }) => ({ ...row, attribution: attributionFor(row.source_name) }));
 
         return res.json({
             results,

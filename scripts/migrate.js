@@ -56,6 +56,27 @@ async function dropAllTables(client) {
     console.log('  Schema reset complete.');
 }
 
+/**
+ * The migration files, in apply order. Every .sql file must be named
+ * NNN_snake_case.sql with a number used once: a stray copy such as
+ * "012_x 2.sql" (a file-sync conflict copy) or a second "012_*" would
+ * otherwise be applied as a real migration. Refuses to run instead.
+ * @param {string} dir
+ * @returns {string[]}
+ */
+function listMigrationFiles(dir) {
+    const sql = fs.readdirSync(dir).filter(f => f.endsWith('.sql')).sort();
+    const bad = sql.filter(f => !/^\d{3}_[a-z0-9_]+\.sql$/.test(f));
+    if (bad.length) throw new Error(`migration file name(s) not NNN_snake_case.sql: ${bad.join(', ')}`);
+    const seen = new Map();
+    for (const f of sql) {
+        const n = f.slice(0, 3);
+        if (seen.has(n)) throw new Error(`migration number ${n} used twice: ${seen.get(n)}, ${f}`);
+        seen.set(n, f);
+    }
+    return sql;
+}
+
 async function runMigration(client, filename, sql) {
     console.log(`  → Applying ${filename}`);
     await client.query(sql);
@@ -78,9 +99,7 @@ async function main() {
         const applied = await getAppliedMigrations(client);
 
         // Read migration files sorted by name (001_, 002_, etc.)
-        const files = fs.readdirSync(MIGRATIONS_DIR)
-            .filter(f => f.endsWith('.sql'))
-            .sort();
+        const files = listMigrationFiles(MIGRATIONS_DIR);
 
         let pendingCount = 0;
         for (const filename of files) {
@@ -110,4 +129,9 @@ async function main() {
     }
 }
 
-main();
+/* istanbul ignore next -- CLI entry point */
+if (require.main === module) {
+    main();
+}
+
+module.exports = { listMigrationFiles };

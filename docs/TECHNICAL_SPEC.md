@@ -33,7 +33,7 @@
 14. [Quality Gates & Success Metrics](#14-quality-gates--success-metrics)
 15. [Alternatives Considered](#15-alternatives-considered)
 16. [Open Questions & Future Phases](#16-open-questions--future-phases)
-17. [Source Taxonomy — Top 50](#17-source-taxonomy--top-50)
+17. [Source Taxonomy — the registry of record (52 sources)](#17-source-taxonomy--the-registry-of-record-52-sources)
 18. [Discourse Algorithm](#18-discourse-algorithm)
 19. [Layered Retention Architecture](#19-layered-retention-architecture)
 20. [Cross-Platform User Correlation](#20-cross-platform-user-correlation)
@@ -90,7 +90,7 @@ Public discourse about AI is happening at scale across platforms, but:
 
 | Requirement | Technical Implementation | Spec Section |
 |---|---|---|
-| Global real-time data pipeline | 2–3 min cron across 50 sources + `POST /api/refresh` on demand | §13 Phase C, §17 |
+| Global real-time data pipeline | 2–3 min cron across the 52 registry sources + `POST /api/refresh` on demand | §13 Phase C, §17 |
 | Sentiment analysis with 99% accuracy | AFINN v1 → RoBERTa v2; all results audited; accuracy validated continuously | §10, §18 |
 | Demographic inference 99% accuracy | Phase 2 feature; methodology_version pre-registered; validated on labeled set | §10 |
 | AI relevance filtering 99% | Keyword + embedding hybrid scoring v1; methodology versioned | §10 |
@@ -137,7 +137,7 @@ All thresholds below are stored in the `methodology_versions` table with their a
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│              DATA SOURCES — TOP 50 GLOBAL (§17)                  │
+│              DATA SOURCES — 52-SOURCE REGISTRY (§17)             │
 │  Social: Reddit, Twitter/X, Mastodon, Bluesky, HackerNews       │
 │  News:   TechCrunch, Wired, MIT Tech Review, Ars Technica       │
 │  Academic: arXiv, Semantic Scholar, ACM DL                      │
@@ -558,13 +558,19 @@ Aggregate summary + recent posts for dashboard refresh panel.
 ---
 
 ### `POST /api/refresh`
-Triggers a data collection + processing run. Rate limited: 1 request per minute per IP.
+Requests a collection + processing run over the source registry. The web process only creates the `processing_jobs` row and enqueues one `collect-all` job on the `collect.refresh` queue; the worker runs the collection (F10-3, F10-8). Guards in order: same-origin (403), `REFRESH_TOKEN` (403), one refresh in flight (409), a global 60 s debounce (429).
 
-**Response 200:**
+**Response 202:**
 ```json
-{ "job_id": "uuid", "status": "started", "triggered_by": "api" }
+{ "job_id": "uuid", "status": "queued", "triggered_by": "api" }
 ```
-**Response 429:** `{ "error": "Rate limit exceeded. Try again in 60 seconds." }`
+**Response 409:** `{ "error": "A refresh collection is already running", "job_id": "uuid" }` while a refresh job is running (migration 019's partial unique index holds this across processes; a row still running after `REFRESH_STALE_MINUTES`, default 30, is marked failed as stale).
+
+**Response 403 (token):** when `REFRESH_TOKEN` is set, the request must carry it as `X-Refresh-Token`; when the site is bound beyond loopback (`PULSE_BIND_ADDR` or `HOST` not a loopback address) a token is required and refresh is refused without one.
+
+**Response 429:** `{ "error": "Rate limit exceeded: 1 refresh per minute (global)", "retry_after_seconds": n }` with `Retry-After`.
+
+**Response 503:** `{ "error": "Collection queue unavailable", "job_id": "uuid" }` — the job row is marked failed and the debounce budget is not spent.
 
 **Response 403:** `{ "error": "Cross-site request rejected" }`. The endpoint is unauthenticated and changes state, and a cross-site "simple" POST needs no CORS preflight, so the server checks where each request came from. It allows `Sec-Fetch-Site: same-origin | none`. When that header is absent, it allows the request only if `Origin` (or, failing that, `Referer`) names the server's own host. Every other request is rejected before the rate limiter runs. The endpoint never serves CORS headers, and its `OPTIONS` preflight gets a 403.
 
@@ -787,8 +793,10 @@ Non-real-time query interface. Accepts structured filters and returns aggregated
 Incoming post (Reddit/Twitter)
         │
         ▼
-Strip: @mentions, u/usernames (regex)
-Strip: raw_payload.author, .author_fullname, .user_id
+Strip: identity fields (author, username, user_id, … — PII_FIELDS)
+Redact in text: e-mails, @handles, phones, profile links, cc names,
+                sign-offs, Wikipedia unsigned notes (ingest@1.3.0)
+Fingerprint: provenance HMAC; identity-bearing upstream ids
 Normalize: trim whitespace, lowercase for hashing
         │
         ▼
@@ -803,13 +811,20 @@ Check: content_hash EXISTS in raw_posts?
 Log to data_retention_log: action='collected', legal_basis='GDPR Article 6(1)(f)'
 ```
 
+**The claim (ingest@1.3.0 and 1.4.0, decision D2), exactly:** identity fields are never stored; e-mail addresses, handles, phone numbers, sign-offs and profile links in text are redacted; free text may still contain names mentioned in content.
+
 **What is NEVER stored:**
-- Usernames or account handles
-- User IDs (platform-internal)
-- Email addresses
+- Identity fields: author, username, user id, screen name, creator, uploader, owner, e-mail (`src/pipeline/ingest.js` PII_FIELDS; collectors never request them)
 - IP addresses or location beyond city-level metadata
-- Profile information of any kind
+- Profile information of any kind, including profile or user-namespace links as a post's link (`src/collectors/identity.js` isIdentityUrl)
 - Post metadata that enables user re-identification (karma score, account age, etc.)
+- An upstream id that could identify a person (a profile link, a URL with a query string, an id with `@`, `%`, `&`, `=` or `#`), or the Telegram chat id: only its keyed fingerprint is stored
+
+**What is redacted in the text before storage** (`src/collectors/identity.js` redactText): e-mail addresses → `[email]`; @handles of one or more characters → `@[user]` (ingest@1.4.0); phone numbers (E.164 and NANP) → `[phone]`; profile and identity links → `[profile link]`; `cc <Name>` → `cc [name]`; a trailing sign-off (`— Jane Doe`) and Wikipedia's "Preceding unsigned comment added by …" note are removed. All patterns are bounded and linear.
+
+**What free text may still contain:** names of people mentioned in the content itself (for example "Sam Altman said…", or a name inside a GitHub issue body). The text is not otherwise de-identified.
+
+**Provenance without identity (D2):** each collected post stores `raw_posts.provenance_fingerprint` = HMAC-SHA256(`PROVENANCE_KEY` or `AUDIT_HASH_KEY`, `source_slug + ":" + raw upstream id + ":" + canonical source URL`), next to `source_id`, the content hash and the identity-free external id; the canonical permalink is kept when it is not an identity link. The audit receipt (`GET /api/audit/:post_id` → `provenance`) shows the source, the published time, the permalink or the fingerprint, and "verifiable: provide the original URL or id to reproduce the fingerprint". `npm run verify-provenance -- --post <id> --url <original> [--id <original id>]` recomputes the fingerprint and prints `RESULT: MATCH` (exit 0) or `NO MATCH` (exit 1).
 
 ### Input Sanitization (Route Layer)
 All route inputs are validated before reaching the DB layer:
@@ -822,7 +837,7 @@ All route inputs are validated before reaching the DB layer:
 | `?platform` query param | Allowlist check | Ignored if unknown |
 
 ### Rate Limiting
-- `POST /api/refresh`: 1 request per minute per IP. In-memory counter (no Redis for MVP). Resets on server restart — acceptable for v1.
+- `POST /api/refresh`: one accepted refresh per minute globally (in-process debounce), one refresh job in flight at a time (409), and a shared-secret `X-Refresh-Token` required when the site is bound beyond loopback. The collection itself runs in the worker.
 - All GET endpoints: no rate limit (public read-only dashboard).
 
 ### Error Responses — No Information Leakage
@@ -1266,97 +1281,100 @@ Only after all backend tests pass:
 
 ---
 
-## 17. Source Taxonomy — Top 50
+## 17. Source Taxonomy — the registry of record (52 sources)
 
-Sources are organized into 7 categories. Each category has a `source_type` in `data_sources` and a `category` field for bias analysis (source concentration across categories is a monitored metric).
+The source list is the workbook `docs/requirements/Top_50_Global_Online_Sources.xlsx` (Rev. 4, 52 rows; CSV export `docs/requirements/Top_52_Global_Online_Sources.rev4.csv`), held in code by `src/config/source-registry.js` (ADR 0001). `tests/unit/pure/sourceRegistry.test.js` parses the workbook and asserts a 1:1 match on rank, name and category; every count in code is `SOURCES.length`. The earlier planning list that stood here (Mastodon, Bluesky, LinkedIn scraping and so on) is superseded: no source is scraped against its terms, and each is collected only through the official route recorded in the registry (`docs/research/2026-09-29-source-access.md`, `docs/research/2026-09-29-reddit-access.md`).
 
-The 2–3 minute refresh is achieved by distributing collection across the window. High-volume sources (Reddit, arXiv) run every 2 min; lower-volume sources (policy blogs, non-profits) run every 10–15 min on a staggered schedule.
+Eight categories (ADR 0001 ruling 7). Each source has a gate status at runtime (collecting, awaiting key / approval / licence, blocked, disabled); the scheduler runs every collecting source on the 2–3 minute cycle, stretched where a documented rate limit needs it. `#` is the workbook rank; Reddit is #52 in Forums (Rev. 4, ruling 8), so the Forums block reads 45, 46, 52.
 
-### Category 1: Social Platforms (8 sources)
-| Source | API/Method | Rate Limit | Priority |
+### Social (8)
+| # | Source | Gate (auth kind) | Route(s) |
 |---|---|---|---|
-| Reddit (`r/artificial`, `r/MachineLearning`, `r/AIEthics`) | Reddit API (free) | 60 req/min | P1 |
-| Twitter/X (AI discourse search) | Basic API ($100/mo) | 500K tweets/mo | P1 (pending cost decision) |
-| Mastodon (`mastodon.social`, `hachyderm.io`) | ActivityPub (free) | No hard limit | P1 |
-| Bluesky (AI-tagged posts) | AT Protocol (free) | No hard limit | P1 |
-| Hacker News (AI submissions) | Algolia API (free) | No limit | P1 |
-| LinkedIn (public AI posts) | Web scraping (Playwright) | Politeness delay | P2 |
-| Threads (AI hashtags) | Web scraping | Politeness delay | P2 |
-| Discord (public AI servers) | Discord API (approved) | Varies | P2 |
+| 1 | WhatsApp (Meta) | approval | mcl-export (`meta-content-library`) |
+| 2 | Instagram (Meta) | approval | mcl-export (`meta-content-library`) |
+| 3 | YouTube (Alphabet) | key | data-api (`youtube`) |
+| 4 | Facebook (Meta) | approval | mcl-export (`meta-content-library`) |
+| 5 | TikTok (ByteDance) | approval | research-api (`tiktok-research`) |
+| 6 | WeChat / Weixin (Tencent) | blocked | tencent-authorized-feed (`blocked-wechat`) |
+| 7 | Telegram | blocked | bot-api-with-permission (`blocked-telegram`) |
+| 8 | X (formerly Twitter) | paid | recent-search (`x-recent-search`) |
 
-### Category 2: News Outlets (10 sources)
-| Source | Method | Frequency |
-|---|---|---|
-| TechCrunch | RSS + scrape | 5 min |
-| Wired | RSS + scrape | 10 min |
-| MIT Technology Review | RSS + scrape | 10 min |
-| Ars Technica | RSS + scrape | 10 min |
-| The Verge (AI section) | RSS + scrape | 10 min |
-| VentureBeat (AI section) | RSS + scrape | 10 min |
-| IEEE Spectrum | RSS + scrape | 15 min |
-| Nature News | RSS + scrape | 15 min |
-| Science Magazine | RSS + scrape | 15 min |
-| Reuters Technology | RSS | 5 min |
+### News (11)
+| # | Source | Gate (auth kind) | Route(s) |
+|---|---|---|---|
+| 9 | BBC News | permission | technology-rss (`rss`) |
+| 10 | The New York Times | permission | technology-rss (`rss`), article-search (`nyt-article-search`) |
+| 11 | CNN | paid | wire-store (`licensed-feed`) |
+| 12 | The Guardian | permission | ai-tag-rss (`rss`), content-api (`guardian-content-api`) |
+| 13 | Al Jazeera | permission | all-news-rss (`rss`) |
+| 14 | The Wall Street Journal | permission | technology-rss (`rss`), dow-jones-feed (`licensed-feed`) |
+| 15 | Associated Press | paid | media-api (`ap-media`) |
+| 16 | Reuters | paid | reuters-connect (`reuters-connect`) |
+| 17 | NBC News | permission | tech-rss (`rss`) |
+| 18 | The Washington Post | permission | technology-rss (`rss`) |
+| 19 | NPR | none | technology-rss (`rss`) |
 
-### Category 3: Academic (6 sources)
-| Source | Method | Coverage |
-|---|---|---|
-| arXiv (`cs.AI`, `cs.CL`, `cs.LG`, `cs.CV`, `cs.RO`) | arXiv API (free) | Preprints, daily |
-| Semantic Scholar | S2 API (free, 100 req/day) | Citations + abstracts |
-| ACM Digital Library | RSS (open abstracts only) | Conference papers |
-| PubMed (AI in medicine) | E-utilities API (free) | Medical AI |
-| SSRN (AI policy papers) | RSS | Policy preprints |
-| OpenReview (NeurIPS, ICML, ICLR) | OpenReview API (free) | Peer review discourse |
+### Academic (8)
+| # | Source | Gate (auth kind) | Route(s) |
+|---|---|---|---|
+| 20 | SpringerLink (Springer Nature) | key | meta-api (`springer`) |
+| 21 | arXiv | none | export-api (`arxiv`) |
+| 22 | PubMed / PMC (NCBI) | none | e-utilities (`pubmed`) |
+| 23 | ScienceDirect (Elsevier) | approval | search-api (`elsevier`) |
+| 24 | Google Scholar | key | alert-mailbox (`scholar-imap`) |
+| 25 | ResearchGate | blocked | granted-dataset (`blocked-researchgate`) |
+| 26 | IEEE Xplore | paid | metadata-api (`ieee`) |
+| 27 | JSTOR (ITHAKA) | approval | tas-dataset (`jstor-dataset`) |
 
-### Category 4: Policy & Political (8 sources)
-| Source | Method |
-|---|---|
-| Electronic Frontier Foundation | RSS |
-| AI Now Institute | RSS + scrape |
-| RAND Corporation (AI reports) | RSS |
-| Brookings Institution (AI) | RSS |
-| Center for AI Safety | RSS + scrape |
-| EU AI Office | RSS |
-| US NIST AI Resources | RSS |
-| Georgetown CSET | RSS |
+### Policy (7)
+| # | Source | Gate (auth kind) | Route(s) |
+|---|---|---|---|
+| 28 | GovInfo (US GPO) | key | collection-rss (`rss`), search-api (`govinfo-search`) |
+| 29 | Congress.gov (Library of Congress) | key | bill-api (`congress`) |
+| 30 | Council on Foreign Relations | permission | site-feed (`rss`) |
+| 31 | Cato Institute | blocked | allowlisted-rss (`blocked-cato`) |
+| 32 | RAND Corporation | none | publication-feeds (`rss`) |
+| 33 | Urban Institute | none | research-rss (`rss`) |
+| 34 | Pew Research Center | none | wp-rest-ai (`pew`) |
 
-### Category 5: Non-Profit & Think Tanks (7 sources)
-| Source | Method |
-|---|---|
-| Future of Life Institute | RSS + scrape |
-| Partnership on AI | RSS + scrape |
-| Mozilla Foundation (AI) | RSS |
-| OpenMind (constructive AI discourse) | RSS + scrape |
-| AI4People | RSS |
-| Algorithm Watch | RSS |
-| Access Now | RSS |
+### Non-profit (6)
+| # | Source | Gate (auth kind) | Route(s) |
+|---|---|---|---|
+| 35 | Wikipedia / Wikimedia Foundation | none | ai-talk-pages (`wikipedia-talk`) |
+| 36 | Mozilla (Firefox) | none | ai-category-rss (`rss`) |
+| 37 | Khan Academy | none | blog-rss (`rss`) |
+| 38 | Our World in Data | none | atom-feeds (`rss`) |
+| 39 | OpenStreetMap | none | diary-rss (`rss`), forum-ai-tag (`discourse`), blog-rss (`rss`) |
+| 40 | Internet Archive | none | advanced-search (`internet-archive`), blog-rss (`rss`) |
 
-### Category 6: Developer & Research Communities (6 sources)
-| Source | Method |
-|---|---|
-| GitHub Discussions (major AI repos: transformers, llama.cpp, stable-diffusion) | GitHub API |
-| Stack Overflow (AI/ML tags) | Stack Exchange API (free) |
-| Hugging Face Community | HF API (free) |
-| Papers With Code (comments, trending) | Web scrape |
-| Kaggle Forums | Web scrape |
-| fast.ai Forums | Discourse API |
+### Developer (4)
+| # | Source | Gate (auth kind) | Route(s) |
+|---|---|---|---|
+| 41 | GitHub | none | repo-search (`github-search`), issue-search (`github-search`), ai-ml-blog-rss (`rss`) |
+| 42 | GitLab | none | topic-projects (`gitlab-projects`), forum-latest (`discourse`) |
+| 43 | Docker Hub | none | ai-namespace (`dockerhub-namespace`), blog-rss (`rss`), forum-latest (`discourse`) |
+| 44 | Hugging Face | none | daily-papers (`hf-daily-papers`), blog-rss (`rss`), forum-latest (`discourse`) |
 
-### Category 7: Blogs & Newsletters (5 sources)
-| Source | Method |
-|---|---|
-| LessWrong | LessWrong API (free) |
-| AI Alignment Forum | API (shared with LessWrong) |
-| Substack (AI-tagged newsletters) | RSS aggregation |
-| Medium (AI tag, top 50 posts) | RSS |
-| Stratechery (AI analysis) | RSS (public posts) |
+### Forums (3)
+| # | Source | Gate (auth kind) | Route(s) |
+|---|---|---|---|
+| 45 | Stack Overflow | none | questions (`stackexchange`) |
+| 46 | Hacker News (Y Combinator) | none | algolia-search (`hn-algolia`) |
+| 52 | Reddit | approval | data-api (`reddit`) |
 
-### Source Registry Seed Data (`scripts/seed.js`)
-All 50 sources are seeded into `data_sources` on setup. Each row includes:
-- `name`: unique slug (e.g., `reddit_machinelearning`)
-- `source_type`: `reddit | twitter | rss | api | scrape`
-- `category`: `social | news | academic | policy | nonprofit | developer | blog`
-- `config` JSONB: non-secret settings (subreddit name, RSS URL, poll interval in seconds, etc.)
-- `active`: `true` for all P1 sources; `false` for P2 until enabled
+### Blogs and newsletters (5)
+| # | Source | Gate (auth kind) | Route(s) |
+|---|---|---|---|
+| 47 | TLDR (13 newsletters) | none | tldr-ai-rss (`rss`) |
+| 48 | Substack (platform-level) | none | publication-feeds (`rss`) |
+| 49 | Ars Technica | permission | ai-rss (`rss`) |
+| 50 | One Useful Thing (Ethan Mollick) | none | feed (`rss`) |
+| 51 | Platformer (Casey Newton) | none | feed (`rss`) |
+
+**Reddit (#52).** Approval-gated Reddit Data API only (client-credentials OAuth; `oauth.reddit.com`; Reddit's User-Agent format), closed until `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`, `REDDIT_USER_AGENT` and `REDDIT_API_APPROVAL_REF` are all set. Subreddits: the 7 with the most subscribers among those with at least `REDDIT_MIN_AI_POSTS_7D` (default 20) AI-mentioning posts in 7 days, re-ranked daily and stored in `reddit_subreddit_rankings`; a documented provisional list until the first ranking. One shared request budget (100 QPM averaged over 10 minutes). Post text is blanked 48 h after collection or on upstream deletion (6-hourly `/api/info` re-check); scores and audit rows are kept (ADR 0001 ruling 9). Only allowlisted submission fields are stored; `u/<name>` handles are redacted (`ingest@1.5.0`).
+
+### Source registry seed data (`scripts/seed.js`)
+Every registry source is upserted into `data_sources` on setup: `name` = the registry slug, `display_name` = the workbook name, `source_type` = `rss | api | bulk` (the `collect.<type>` queue), `category` = one of the 8 canonical slugs, `config` JSONB = non-secret route settings (never a credential value).
 
 ### Demographic Hierarchy
 Demographic signals are inferred at collection time from metadata and content. Stored in `raw_posts.location` (city-level only) and extended in Phase 2:

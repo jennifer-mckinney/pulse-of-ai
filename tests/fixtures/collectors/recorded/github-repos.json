@@ -1,0 +1,76 @@
+{
+  "total_count": 49993,
+  "items": [
+    {
+      "id": 768491946,
+      "name": "Greenhawk5",
+      "description": "Personal GitHub profile of Ali Faniani (Greenhawk) — AI, Deep Learning, Computer Vision, Software Engineering, and open-source projects.",
+      "pushed_at": "2026-09-29T02:59:34Z",
+      "updated_at": "2026-09-29T02:59:38Z",
+      "topics": [
+        "artificial-intelligence",
+        "computer-vision",
+        "deep-learning",
+        "developer-portfolio",
+        "developer-profile",
+        "github-actions",
+        "github-profile",
+        "github-readme",
+        "machine-learning",
+        "profile-readme",
+        "readme-badges",
+        "software-engineering"
+      ]
+    },
+    {
+      "id": 1338437827,
+      "name": "dicechess-engine",
+      "description": "Cross-platform high-performance Dice Chess engine, move generator, and AI search targeting JVM, JavaScript, and WebAssembly.",
+      "pushed_at": "2026-09-29T02:59:26Z",
+      "updated_at": "2026-09-29T02:59:29Z",
+      "topics": [
+        "artificial-intelligence",
+        "bitboard",
+        "board-games",
+        "chess-engine",
+        "dice-chess",
+        "expectimax",
+        "game-engine",
+        "javascript",
+        "jvm",
+        "magic-bitboards",
+        "scala",
+        "scala3",
+        "typescript",
+        "wasm",
+        "webassembly"
+      ]
+    },
+    {
+      "id": 1302051423,
+      "name": "skyportalai",
+      "description": "SkyPortal SDK & CLI",
+      "pushed_at": "2026-09-29T02:57:51Z",
+      "updated_at": "2026-09-29T02:57:34Z",
+      "topics": [
+        "ai-observability",
+        "anthropic",
+        "artificial-intelligence",
+        "devops",
+        "gpu-monitoring",
+        "grafana",
+        "inference",
+        "kubernetes",
+        "llm-observability",
+        "machine-learning",
+        "mlops",
+        "openai",
+        "opentelemetry",
+        "otel",
+        "prometheus",
+        "sre",
+        "vllm"
+      ]
+    }
+  ]
+}

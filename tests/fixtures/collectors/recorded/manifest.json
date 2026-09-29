@@ -1,0 +1,27 @@
+{
+  "recordedAt": "2026-09-29T02:59:38.173Z",
+  "note": "Live responses trimmed and identity-redacted by scripts/test/record-collector-fixtures.js",
+  "files": {
+    "https://feeds.bbci.co.uk/news/technology/rss.xml": "bbc-technology.xml",
+    "https://feeds.bbci.co.uk/robots.txt": "bbc-robots.txt",
+    "https://www.theguardian.com/technology/artificialintelligenceai/rss": "guardian-ai.xml",
+    "https://www.cfr.org/robots.txt": "cfr-robots.txt",
+    "https://export.arxiv.org/api/query?search_query=cat%3Acs.AI+OR+cat%3Acs.LG+OR+cat%3Acs.CL&sortBy=submittedDate&sortOrder=descending&max_results=3": "arxiv-api.xml",
+    "https://hn.algolia.com/api/v1/search_by_date?query=AI&tags=story&hitsPerPage=4": "hn-algolia.json",
+    "https://api.stackexchange.com/2.3/questions?order=desc&sort=creation&site=stackoverflow&pagesize=2&filter=withbody&tagged=artificial-intelligence": "stackexchange-so.json",
+    "https://api.stackexchange.com/2.3/questions?order=desc&sort=creation&site=ai&pagesize=2&filter=withbody": "stackexchange-ai.json",
+    "https://api.github.com/search/repositories?q=topic%3Aartificial-intelligence&sort=updated&order=desc&per_page=3": "github-repos.json",
+    "https://gitlab.com/api/v4/projects?topic=artificial-intelligence&order_by=last_activity_at&sort=desc&per_page=3&simple=true": "gitlab-projects.json",
+    "https://hub.docker.com/v2/namespaces/ai/repositories?ordering=last_updated&page_size=3": "dockerhub-ai.json",
+    "https://huggingface.co/api/daily_papers?limit=3": "hf-daily-papers.json",
+    "https://discuss.huggingface.co/latest.json": "hf-forum-latest.json",
+    "https://discuss.huggingface.co/robots.txt": "hf-forum-robots.txt",
+    "https://www.pewresearch.org/wp-json/wp/v2/posts?categories=299&per_page=3&_fields=id%2Cdate_gmt%2Clink%2Ctitle%2Cexcerpt": "pew-ai.json",
+    "https://archive.org/advancedsearch.php?q=subject%3A%28%22artificial+intelligence%22%29&rows=3&output=json&sort%5B%5D=publicdate+desc&fl%5B%5D=identifier&fl%5B%5D=title&fl%5B%5D=description&fl%5B%5D=publicdate": "ia-search.json",
+    "https://www.govinfo.gov/rss/bills.xml": "govinfo-bills.xml",
+    "https://importai.substack.com/feed": "substack-importai.xml",
+    "https://www.openstreetmap.org/diary/rss": "osm-diary.xml",
+    "https://en.wikipedia.org/w/api.php?format=json&formatversion=2&action=query&list=categorymembers&cmtitle=Category%3AArtificial_intelligence&cmnamespace=0&cmlimit=5": "wiki-category.json",
+    "https://en.wikipedia.org/w/api.php?format=json&formatversion=2&action=discussiontoolspageinfo&page=Talk%3AArtificial+intelligence&prop=threaditemshtml": "wiki-talk-ai.json"
+  }
+}

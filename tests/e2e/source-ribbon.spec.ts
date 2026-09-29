@@ -21,13 +21,16 @@ test('ribbon: explore-only, proportional segments, sparklines, 12h label, hover 
 
     // Explore: ribbon visible with one segment per CANONICAL category,
     // always (allCategoryRows pads quiet categories with zero rows — the
-    // prototype marimekko's "all categories, always" contract). Live DB:
-    // forums renders as an honest zero segment (no seeded forum sources).
+    // prototype marimekko's "all categories, always" contract). The forums
+    // segment's volume is whatever the server holds for forums — on a fresh
+    // database the fixture seed spreads its posts over all the registry
+    // sources, forum sources included (the old "honest zero" assumed a
+    // pre-registry seed and only held on a stale database).
     await enterExplore(page);
     const strip = page.locator('#strip');
     await expect(strip).toBeVisible();
     const segs = strip.locator('.strip-seg');
-    const expectedRows: Array<{ category: string; slug: string; flexPct: number; volume: number }> =
+    const expectedRows: Array<{ category: string; slug: string; flexPct: number; volume: number; share: number }> =
         await page.evaluate(() => {
             const w = window as any;
             const rows = w.PulseInsights.allCategoryRows(w.PulseStory.getCities());
@@ -37,14 +40,19 @@ test('ribbon: explore-only, proportional segments, sparklines, 12h label, hover 
                 slug: w.PulseGlobe.math.normalizeCategorySlug(r.category),
                 flexPct: flex[i],
                 volume: r.volume,
+                share: r.share,
             }));
         });
     expect(expectedRows.length, 'full canonical taxonomy').toBe(8);
     await expect(segs).toHaveCount(8);
-    // Forums enumerated with an honest zero on the live seed.
+    // Forums enumerated, with exactly the volume the API serves for it.
     const forumsRow = expectedRows.find((r) => r.slug === 'forums');
     expect(forumsRow, 'forums segment present').toBeTruthy();
-    expect(forumsRow!.volume).toBe(0);
+    const servedForums: number = await page.evaluate(async () => {
+        const rows = await (await fetch('/api/posts/aggregated-by-location?platform=forums')).json();
+        return (Array.isArray(rows) ? rows : []).reduce((n: number, r: any) => n + (r.total || 0), 0);
+    });
+    expect(forumsRow!.volume).toBe(servedForums);
 
     // flex-basis widths follow ribbonFlexPercents (share-proportional with
     // a minimum readable sliver for zero segments, renormalized to 100).
@@ -55,9 +63,15 @@ test('ribbon: explore-only, proportional segments, sparklines, 12h label, hover 
         expect(Math.abs(parseFloat(basis) - expectedRows[i].flexPct),
             `segment ${i} width`).toBeLessThan(0.01);
     }
-    // The displayed percentage stays the REAL share: a zero segment reads 0%.
+    // The displayed percentage stays the REAL share (not the flex sliver):
+    // every segment reads "<volume>/hr · <round(share)>%" — a zero segment
+    // reads "0/hr · 0%".
+    const totShare = expectedRows.reduce((n, r) => n + (r.share || 0), 0) || 1;
+    for (let i = 0; i < expectedRows.length; i++) {
+        const r = expectedRows[i];
+        await expect(segs.nth(i).locator('.seg-vol')).toHaveText(`${r.volume}/hr · ${Math.round(((r.share || 0) / totShare) * 100)}%`);
+    }
     const forumsIdx = expectedRows.findIndex((r) => r.slug === 'forums');
-    await expect(segs.nth(forumsIdx).locator('.seg-vol')).toHaveText('0/hr · 0%');
     await expect(segs.nth(forumsIdx).locator('.seg-cat')).toHaveText('Forums');
 
     // Sparkline SVGs: the live 12h timeseries feeds them (categories the

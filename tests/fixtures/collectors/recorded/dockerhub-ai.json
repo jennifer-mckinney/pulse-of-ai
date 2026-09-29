@@ -1,0 +1,80 @@
+{
+  "count": 110,
+  "next": "https://hub.docker.com/v2/namespaces/ai/repositories?ordering=last_updated&page=2&page_size=3",
+  "previous": null,
+  "results": [
+    {
+      "name": "llmman",
+      "namespace": "ai",
+      "repository_type": "image",
+      "status": 1,
+      "status_description": "active",
+      "description": "llmman with llama.cpp: server, server-cuda, server-cuda13, server-rocm, server-vulkan",
+      "is_private": false,
+      "star_count": 0,
+      "pull_count": 131012,
+      "last_updated": "2026-09-29T00:29:59.837042Z",
+      "last_modified": "2026-09-10T20:14:29.27901Z",
+      "date_registered": "2026-09-10T20:14:29.280246Z",
+      "affiliation": "",
+      "media_types": [
+        "application/vnd.oci.image.config.v1+json",
+        "application/vnd.oci.image.index.v1+json"
+      ],
+      "content_types": [
+        "image"
+      ],
+      "categories": [],
+      "storage_size": 38622685952,
+      "source": null
+    },
+    {
+      "name": "qwen-image-2.1",
+      "namespace": "ai",
+      "repository_type": "image",
+      "status": 1,
+      "status_description": "active",
+      "description": "",
+      "is_private": false,
+      "star_count": 1,
+      "pull_count": 5452,
+      "last_updated": "2026-09-23T20:00:31.677166Z",
+      "last_modified": "2026-09-29T02:58:44.211915Z",
+      "date_registered": "2026-09-23T15:23:32.54133Z",
+      "affiliation": "",
+      "media_types": [
+        "application/vnd.cncf.model.manifest.v1+json"
+      ],
+      "content_types": [
+        "unrecognized"
+      ],
+      "categories": [],
+      "storage_size": 108443914727,
+      "source": null
+    },
+    {
+      "name": "glm-5.3",
+      "namespace": "ai",
+      "repository_type": "image",
+      "status": 1,
+      "status_description": "active",
+      "description": "",
+      "is_private": false,
+      "star_count": 0,
+      "pull_count": 13682,
+      "last_updated": "2026-09-23T18:12:34.688597Z",
+      "last_modified": "2026-09-29T02:31:15.66416Z",
+      "date_registered": "2026-09-01T12:31:43.131838Z",
+      "affiliation": "",
+      "media_types": [
+        "application/vnd.cncf.model.manifest.v1+json"
+      ],
+      "content_types": [
+        "unrecognized"
+      ],
+      "categories": [],
+      "storage_size": 9095925971384,
+      "source": null
+    }
+  ]
+}

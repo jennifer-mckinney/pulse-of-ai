@@ -5,9 +5,9 @@
 # ONE image serves every Node role; the compose service picks the role by
 # command (see docker-compose.yml, profiles "full" and "demo"):
 #   web        node src/server.js                         (default CMD)
-#   worker     node src/workers/start.js                  (BullMQ ingest/embed/correlate)
+#   worker     node src/workers/start.js                  (scheduler + collect / ingest / embed / correlate)
 #   migrate    node scripts/migrate.js && node scripts/seed.js   (one-shot)
-#   populate   node scripts/populate.js --loop            (profile "demo": the demo feed)
+#   populate   node scripts/populate.js --once | --loop   (collect first; demo fallback)
 #
 # Build:  docker build -t pulse-of-ai/app:local .
 #

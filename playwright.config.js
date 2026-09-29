@@ -46,6 +46,14 @@ module.exports = defineConfig({
         port: E2E_PORT,
         reuseExistingServer: false,
         timeout: 30000,
-        env: { PORT: String(E2E_PORT), POSTGRES_DB: E2E_DB },
+        // The gate statuses the drawer shows are pinned too, so they are the
+        // same on every host: a contact URL (the server never collects —
+        // there is no worker) and no Reddit credential, so Reddit (#52)
+        // reads "awaiting approval" (ADR 0001 ruling 8).
+        env: {
+            PORT: String(E2E_PORT), POSTGRES_DB: E2E_DB,
+            COLLECTOR_CONTACT_URL: 'https://example.org/pulse-e2e',
+            REDDIT_CLIENT_ID: '', REDDIT_CLIENT_SECRET: '', REDDIT_USER_AGENT: '', REDDIT_API_APPROVAL_REF: '',
+        },
     },
 });

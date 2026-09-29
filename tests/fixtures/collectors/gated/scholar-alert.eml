@@ -1,0 +1,19 @@
+Authentication-Results: mx.example.invalid;
+ dkim=pass header.i=@google.com header.s=20230601 header.b=AbCdEf;
+ spf=pass smtp.mailfrom=scholaralerts-noreply@google.com
+From: Google Scholar Alerts <scholaralerts-noreply@google.com>
+To: alerts@example.invalid
+Subject: "large language model" - new results
+Date: Sun, 28 Sep 2026 06:00:00 +0000
+Message-ID: <alert-0001@scholar.google.com>
+MIME-Version: 1.0
+Content-Type: text/html; charset=UTF-8
+
+<html><body>
+<h3 style="font-weight:normal"><a href="https://scholar.google.com/scholar_url?url=https://example.invalid/p1" class="gse_alrt_title">Scaling laws for <b>large language models</b> revisited</a></h3>
+<div style="color:#006621">REDACTED, REDACTED - Example Journal, 2026</div>
+<div class="gse_alrt_sni" style="line-height:17px">We revisit scaling laws for large language models and find...</div>
+<h3 style="font-weight:normal"><a href="https://scholar.google.com/scholar_url?url=https://example.invalid/p2" class="gse_alrt_title">Auditing artificial intelligence hiring tools</a></h3>
+<div style="color:#006621">REDACTED - arXiv preprint, 2026</div>
+<div class="gse_alrt_sni" style="line-height:17px">An audit framework for AI hiring systems.</div>
+</body></html>

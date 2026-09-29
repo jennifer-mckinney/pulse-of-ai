@@ -29,8 +29,15 @@
 // embeddings when the model could not be downloaded); --expect-embeddings
 // makes it a FAIL.
 //
-// The summary labels the data DEMO whenever it came from the demo feed —
-// live collection is not implemented, so nothing here is ever called live.
+//   - the source registry: GET /api/sources serves every registry source,
+//     and the per-source collection status is printed (collecting / online,
+//     awaiting key / approval / licence, blocked, disabled)
+//   - live collection: WARN unless at least one source collected
+//     successfully in the last hour
+//
+// The population summary labels the trailing hour LIVE (every post from a
+// real registry source), DEMO (every post from a demo feed), MIXED or NONE,
+// per category.
 //
 // Exit code: 0 when no check FAILed, 1 otherwise.
 
@@ -41,6 +48,7 @@ require('dotenv').config();
 const { execFileSync } = require('child_process');
 const db = require('../src/db/connection');
 const { deriveDataMode } = require('../src/config/data-mode');
+const { SOURCES } = require('../src/config/source-registry');
 
 const AUDIENCES = ['public', 'plain', 'config', 'researcher'];
 const LINEAGES = new Set(['recorded', 'inferred', 'current']);
@@ -211,6 +219,32 @@ async function run(opts, out) {
         (opts.expectWorker ? r.fail : r.warn)('worker heartbeat', detail);
     });
 
+    // ── Source registry + per-source collection status ─────────────────────
+    await check(r, 'source registry', async () => {
+        const { status, body } = await getJson(base, '/api/sources');
+        const reg = Array.isArray(body) ? body.filter(x => x && x.registry === true) : [];
+        const count = (st) => reg.filter(x => x.status === st).length;
+        const online = reg.filter(x => x.online).length;
+        // G10-18: the registry's own size, not a hardcoded 51.
+        (status === 200 && reg.length === SOURCES.length ? r.pass : r.fail)('source registry',
+            `${reg.length}/${SOURCES.length} registry sources served — collecting ${count('collecting')} (online ${online}), `
+            + `awaiting key ${count('awaiting_key')}, awaiting approval ${count('awaiting_approval')}, `
+            + `awaiting licence ${count('awaiting_licence')}, blocked ${count('blocked')}, disabled ${count('disabled')}, `
+            + `blocked by source ${count('blocked_by_source')}`);
+        for (const x of reg) {
+            const label = x.status === 'collecting' ? (x.online ? 'online' : 'collecting') : x.status.replace(/_/g, ' ');
+            const last = x.last_success_at ? `, last ok ${new Date(x.last_success_at).toISOString().slice(11, 19)}Z, ${x.last_item_count} items` : '';
+            const why = x.status === 'collecting' ? (x.last_error_kind ? `, last error: ${x.last_error_kind}${x.last_http_status ? ` (HTTP ${x.last_http_status})` : ''}` : '')
+                : x.status === 'blocked' ? ' — blocked: no compliant access'
+                    : x.status === 'blocked_by_source' ? ` — ${x.status_reason}` : ` — needs ${(x.missing_env || []).join(', ') || x.status_reason}`;
+            out(`      ${String(x.rank).padStart(2)}. ${x.slug.padEnd(18)} ${x.category.padEnd(9)} ${label}${last}${why}`);
+        }
+        const collecting = count('collecting');
+        if (collecting === 0) r.warn('live collection', 'no registry source is collecting (contact URL unset or every source switched off)');
+        else if (online > 0) r.pass('live collection', `${online} of ${collecting} collecting sources succeeded in the last hour`);
+        else r.warn('live collection', `${collecting} sources collecting, none has succeeded in the last hour yet`);
+    });
+
     await check(r, 'GET / serves the story page', async () => {
         const res = await fetch(base + '/', { signal: AbortSignal.timeout(10000) });
         const html = await res.text();
@@ -330,18 +364,27 @@ async function run(opts, out) {
     }
 
     // ── Population summary ───────────────────────────────────────────────────
-    const demoOnly = c.demoPosts > 0 && c.demoPosts === c.posts;
+    const byCat = await db.dbAll(
+        `SELECT ds.category,
+                COUNT(*) FILTER (WHERE ds.source_type <> 'demo')::int AS live,
+                COUNT(*) FILTER (WHERE ds.source_type = 'demo')::int  AS demo
+         FROM raw_posts rp JOIN data_sources ds ON ds.id = rp.source_id
+         WHERE rp.collected_at >= NOW() - INTERVAL '1 hour'
+         GROUP BY ds.category ORDER BY ds.category`);
+    const hourLive = byCat.reduce((n, x) => n + x.live, 0);
+    const hourDemo = byCat.reduce((n, x) => n + x.demo, 0);
     let label;
-    if (c.demoPosts > 0) {
-        label = 'DEMO — fictional posts scored by the real pipeline (live collection is not implemented yet)';
-        if (!demoOnly) label += `; ${c.posts - c.demoPosts} other post(s) already in the DB (seed fixtures, not live-collected)`;
-    } else {
-        label = 'NO DEMO FEED DATA — posts present were not produced by the demo feed (live collection is not implemented yet)';
-    }
+    if (hourLive + hourDemo === 0) label = 'NONE — no posts in the trailing hour';
+    else if (hourDemo === 0) label = `LIVE — ${hourLive} real posts collected from registry sources in the trailing hour`;
+    else if (hourLive === 0) label = `DEMO — fictional posts scored by the real pipeline (${hourDemo} in the trailing hour; live collection yielded none)`;
+    else label = `MIXED — ${hourLive} live and ${hourDemo} demo posts in the trailing hour (demo posts age out within the hour)`;
+    if (c.posts > 0 && c.demoPosts === 0 && hourLive === 0) label += '; older posts in the DB are not from the demo feed';
+    if (c.posts === 0) label = 'NO DATA — no posts stored (NO DEMO FEED DATA, no live posts)';
     out('');
     out('Population summary');
     out(`  data:               ${label}`);
     out(`  posts:              ${c.posts} (${c.postsLastHour} in the trailing hour)`);
+    for (const x of byCat) out(`    ${x.category.padEnd(10)}        live ${String(x.live).padStart(4)}  demo ${String(x.demo).padStart(4)}`);
     out(`  cities:             ${c.cities}`);
     out(`  categories:         ${c.categories}`);
     out(`  audit decisions:    ${c.decisions}`);

@@ -3,6 +3,8 @@
 // the VERSIONED METHODOLOGY table has ≥ 4 rows; the registry-active
 // sources stat is present. Live data only — no demo fallback labels.
 import { test, expect } from '@playwright/test';
+// Counts come from the registry itself (SOURCES.length), never a literal.
+const { SOURCES } = require('../../src/config/source-registry');
 import {
     consoleErrors, expectNoConsoleErrors, gotoAndWaitForData, evidence,
 } from './helpers';
@@ -29,13 +31,33 @@ test('health drawer: yellow banner, alert history, methodology table, sources st
     await expect(banner.locator('.hb-title')).toContainText('active alert');
     await expect(banner.locator('.health-light')).toHaveClass(/yellow/);
 
-    // Registry-active sources stat, honestly labeled (G20).
-    await expect(drawer.locator('.sec-lbl', { hasText: 'SOURCES · REGISTRY-ACTIVE' }))
+    // Sources: the registry of record (52 since Rev. 4) with live status (ADR 0001).
+    // "online" counts only sources that collected successfully in the last
+    // hour (G20: never configured flags passed off as liveness).
+    await expect(drawer.locator('.sec-lbl', { hasText: new RegExp(`^SOURCES · \\d+ / ${SOURCES.length} ONLINE$`) }))
         .toHaveCount(1);
-    const sourcesRow = drawer.locator('.kv-row', { hasText: 'sources registry-active' });
+    const sourcesRow = drawer.locator('.kv-row', { hasText: 'sources online' });
     await expect(sourcesRow).toHaveCount(1);
     await expect(sourcesRow.locator('.kv-v')).toHaveText(
-        /^\d+ \/ \d+ \(configured active, not liveness\)$/);
+        new RegExp(`^\\d+ / ${SOURCES.length} \\(collected successfully in the last hour\\)$`));
+    // All of them listed under the 8 categories; the blocked 4 say so and cite terms.
+    expect(SOURCES.length).toBe(52);
+    await expect(drawer.locator('.src-list .src-row')).toHaveCount(SOURCES.length);
+    await expect(drawer.locator('.src-list .src-cat')).toHaveCount(8);
+    const blocked = drawer.locator('.src-row', { has: page.locator('.src-status.st-blocked') });
+    await expect(blocked).toHaveCount(4);
+    for (const name of ['WeChat / Weixin (Tencent)', 'Telegram', 'ResearchGate', 'Cato Institute']) {
+        const row = blocked.filter({ hasText: name });
+        await expect(row.locator('.src-status')).toHaveText('blocked: no compliant access');
+        await expect(row.locator('a.src-terms')).toHaveAttribute('href', /^https:\/\//);
+    }
+    await expect(drawer.locator('.src-row', { hasText: 'Hacker News (Y Combinator)' })).toHaveCount(1);
+    // Reddit (#52, ADR 0001 ruling 8): built, off until Reddit approves —
+    // "awaiting approval" in Forums, citing the Reddit Data API Terms.
+    const reddit = drawer.locator('.src-row', { hasText: /^Reddit/ });
+    await expect(reddit).toHaveCount(1);
+    await expect(reddit.locator('.src-status')).toHaveText('awaiting approval');
+    await expect(reddit.locator('a.src-terms')).toHaveAttribute('href', 'https://redditinc.com/policies/data-api-terms');
 
     // ALERT HISTORY · LAST 12H rows with severity classes.
     await expect(drawer.locator('.sec-lbl', { hasText: 'ALERT HISTORY · LAST 12H' }))

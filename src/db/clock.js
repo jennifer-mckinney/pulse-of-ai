@@ -17,9 +17,22 @@
 
 const connection = require('./connection');
 
-/** The database's NOW() as a Date. */
+/**
+ * The database's NOW() as a Date, rounded UP to the millisecond.
+ *
+ * PostgreSQL timestamps have microsecond precision but a JS Date has
+ * millisecond precision: a plain NOW() came back truncated, so a row stored
+ * earlier in the same millisecond (created_at = …123456 µs) fell AFTER the
+ * anchor (…123 ms) and was left out of a `created_at <= anchor` window
+ * (a flaky GET /api/bias/history in CI). Rounding up keeps the anchor at
+ * or after every row already stored, and is exactly representable.
+ */
 async function dbNow() {
-    const row = await connection.dbGet('SELECT NOW() AS now');
+    const row = await connection.dbGet(
+        `SELECT date_trunc('milliseconds', NOW())
+                + CASE WHEN NOW() = date_trunc('milliseconds', NOW()) THEN INTERVAL '0' ELSE INTERVAL '1 millisecond' END
+                AS now`,
+    );
     return row.now;
 }
 

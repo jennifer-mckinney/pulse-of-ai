@@ -16,9 +16,10 @@
 //   social → Social, news → News, academic → Academic, policy → Policy,
 //   nonprofit → Non-profit, developer → Developer, forums → Forums,
 //   blog → Blogs
-// Forums is first-class canon with ZERO seeded sources (the prototype
-// renders it; the top-50 source registry has no forum source yet) — routes
-// enumerate it honestly as zero, never invent sources for it. The legacy
+// Forums holds Stack Overflow and Hacker News since workbook Rev. 3 (the
+// source registry of record, src/config/source-registry.js). Routes
+// enumerate every canonical category even when it has no posts in a window
+// (an honest zero), never inventing data for it. The legacy
 // 'tech' slug is retired (migration 007 maps residual rows to developer).
 
 'use strict';

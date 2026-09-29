@@ -1,133 +1,83 @@
 // src/workers/collector.scheduler.js
-// Registers per-source BullMQ v5 job schedulers on the collect queues.
+// Registers one BullMQ v5 job scheduler per COLLECTING registry source on
+// the collect queue of its source_type (collect.rss / collect.api /
+// collect.bulk — the DB and registry vocabulary). Invoked by the worker
+// process (src/workers/start.js) at start and every RESCHEDULE_MS.
 //
-// STATUS: NOT yet invoked by src/workers/start.js. No collect processors
-// exist yet — collect workers (and wiring this scheduler into the worker
-// entry point) land in a later phase. Until then this module is exercised
-// only by its unit and Redis integration tests.
-//
-// Design (BullMQ v5 job schedulers, not legacy `repeat`):
-//   - One job scheduler PER SOURCE, keyed by String(source.id). Distinct
-//     scheduler ids prevent BullMQ from deduplicating all same-queue sources
-//     into a single repeating job.
-//   - Stagger via `startDate`: source at index i first fires at
-//     now + i * (COLLECT_WINDOW_MS / total), spreading the 50 sources evenly
-//     across the window instead of a thundering herd. (Legacy `delay` is
-//     ignored by repeatable jobs — `startDate` is the supported mechanism.)
-//   - Stale cleanup: before upserting, schedulers whose id is no longer in
-//     the active-source set are removed, so deactivated/deleted sources stop
-//     collecting without a Redis flush.
+//   - Only sources whose runtime gate status is 'collecting' are scheduled
+//     (src/config/source-registry.js sourceStatus: kill switches, missing
+//     credentials and the blocked 4 are never scheduled).
+//   - Scheduler id = the source slug, so each source has its own scheduler.
+//   - Cadence: every max(COLLECT_WINDOW_MS, the source's poll interval) — the
+//     2–3 minute cycle, stretched where a documented rate limit needs it.
+//   - Stagger via `startDate` across the window (thundering-herd guard).
+//   - Stale cleanup: a scheduler whose source is no longer collecting (kill
+//     switch, retired, credential removed) is removed.
 
 'use strict';
 
 const { dbAll } = require('../db/connection');
+const { COLLECT_QUEUES } = require('../queues/index');
 const {
-    collectRedditQueue,
-    collectRssQueue,
-    collectArxivQueue,
-    collectScraperQueue,
-} = require('../queues/index');
+    getSource, sourceStatus, pollIntervalSec, collectWindowMs, DEFAULT_COLLECT_WINDOW_MS,
+} = require('../config/source-registry');
 
-// Collection window with a guarded default: a missing, non-numeric, or
-// non-positive COLLECT_WINDOW_MS env value falls back to 2 minutes instead
-// of producing NaN/zero repeat intervals.
-const DEFAULT_COLLECT_WINDOW_MS = 120000;
-const parsedWindow = parseInt(process.env.COLLECT_WINDOW_MS || '', 10);
-const COLLECT_WINDOW_MS =
-    Number.isFinite(parsedWindow) && parsedWindow > 0
-        ? parsedWindow
-        : DEFAULT_COLLECT_WINDOW_MS;
+// Collection window: src/config/source-registry.js collectWindowMs (150 s default).
+const COLLECT_WINDOW_MS = collectWindowMs();
 
-// Map source_type → queue
-const QUEUE_BY_TYPE = {
-    reddit:  collectRedditQueue,
-    rss:     collectRssQueue,
-    arxiv:   collectArxivQueue,
-    scraper: collectScraperQueue,
-};
+/** Map source_type → queue. */
+const QUEUE_BY_TYPE = COLLECT_QUEUES;
 
 /**
- * Load all active data sources from the DB and upsert one BullMQ job
- * scheduler per source, staggered evenly across COLLECT_WINDOW_MS.
- *
- * Scheduler id: String(source.id) — one scheduler per source (upsert makes
- * re-runs idempotent). Each scheduled job is named 'collect' and carries
- * { sourceId, sourceName, sourceType, config }.
- *
- * Stale schedulers (ids not present in the current active-source set) are
- * removed from every collect queue before upserting, so sources deactivated
- * since the last run stop being collected.
- *
+ * @param {{ env?: object, log?: Function }} [opts]
  * @returns {Promise<number>} count of sources with an upserted scheduler
  */
-async function scheduleAllSources() {
-    const sources = await dbAll(
-        'SELECT id, name, source_type, config FROM data_sources WHERE active = true',
-    );
-    const list = sources || [];
+async function scheduleAllSources({ env = process.env, log = () => {} } = {}) {
+    const rows = await dbAll(
+        `SELECT id, name, source_type FROM data_sources
+         WHERE active = true AND source_type <> 'demo'
+         ORDER BY name`,
+    ) || [];
+    const windowMs = collectWindowMs(env);
 
-    // Partition sources by target queue; skip unknown types (data problem,
-    // not a scheduler crash) and track active scheduler ids per queue.
-    const activeIdsByQueue = new Map(); // Queue → Set<string scheduler id>
+    const activeIdsByQueue = new Map();
     const schedulable = [];
-    for (const source of list) {
-        const queue = QUEUE_BY_TYPE[source.source_type];
+    for (const row of rows) {
+        const src = getSource(row.name);
+        if (!src) { log(`[scheduler] '${row.name}' is not a registry source — not scheduled`); continue; }
+        const st = sourceStatus(src, env);
+        if (st.status !== 'collecting') continue;
+        const queue = QUEUE_BY_TYPE[row.source_type];
         if (!queue) {
-            console.warn(
-                `[scheduler] unknown source_type "${source.source_type}" for source "${source.name}" — skipping`,
-            );
+            log(`[scheduler] unknown source_type "${row.source_type}" for "${row.name}" — skipping`);
             continue;
         }
         if (!activeIdsByQueue.has(queue)) activeIdsByQueue.set(queue, new Set());
-        activeIdsByQueue.get(queue).add(String(source.id));
-        schedulable.push({ source, queue });
+        activeIdsByQueue.get(queue).add(row.name);
+        schedulable.push({ row, src, queue });
     }
 
-    // Stale cleanup: any scheduler on a collect queue whose id is not in the
-    // active set belongs to a deactivated/deleted source — remove it.
     for (const queue of Object.values(QUEUE_BY_TYPE)) {
-        const activeIds = activeIdsByQueue.get(queue) || new Set();
-        const existing = await queue.getJobSchedulers();
-        for (const scheduler of existing || []) {
-            // getJobSchedulers() exposes the scheduler id as `key`
+        const active = activeIdsByQueue.get(queue) || new Set();
+        for (const scheduler of (await queue.getJobSchedulers()) || []) {
             const id = scheduler.key !== undefined ? scheduler.key : scheduler.id;
-            if (!activeIds.has(id)) {
-                await queue.removeJobScheduler(id);
-            }
+            if (!active.has(id)) await queue.removeJobScheduler(id);
         }
     }
 
-    if (schedulable.length === 0) {
-        return 0;
-    }
-
-    // Spread sources evenly across the collection window (thundering-herd guard)
-    const staggerMs = Math.floor(COLLECT_WINDOW_MS / schedulable.length);
+    if (schedulable.length === 0) return 0;
+    const staggerMs = Math.floor(windowMs / schedulable.length);
     const now = Date.now();
-
-    let scheduled = 0;
     for (let i = 0; i < schedulable.length; i++) {
-        const { source, queue } = schedulable[i];
+        const { row, src, queue } = schedulable[i];
         await queue.upsertJobScheduler(
-            String(source.id),                     // per-source scheduler id
-            {
-                every: COLLECT_WINDOW_MS,          // one collection per window
-                startDate: now + i * staggerMs,    // staggered first run
-            },
-            {
-                name: 'collect',
-                data: {
-                    sourceId:   source.id,
-                    sourceName: source.name,
-                    sourceType: source.source_type,
-                    config:     source.config,
-                },
-            },
+            row.name,
+            { every: Math.max(windowMs, pollIntervalSec(src, env) * 1000), startDate: now + i * staggerMs },
+            { name: 'collect', data: { slug: row.name, sourceId: row.id, sourceType: row.source_type } },
         );
-        scheduled++;
     }
-
-    return scheduled;
+    log(`[scheduler] ${schedulable.length} collecting sources scheduled across ${Math.round(windowMs / 1000)}s`);
+    return schedulable.length;
 }
 
-module.exports = { scheduleAllSources, COLLECT_WINDOW_MS, QUEUE_BY_TYPE };
+module.exports = { scheduleAllSources, collectWindowMs, COLLECT_WINDOW_MS, QUEUE_BY_TYPE, DEFAULT_COLLECT_WINDOW_MS };

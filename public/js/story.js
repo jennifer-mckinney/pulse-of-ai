@@ -472,6 +472,8 @@
         const minutes = minutesAgoFrom(post.collected_at, Date.now());
         const metaParts = [];
         if (post.source_name) metaParts.push(String(post.source_name));
+        // Credit the source's terms require next to its content (NPR …).
+        if (post.attribution) metaParts.push('via ' + String(post.attribution));
         // Category meta: display label lowercased (prototype mini-post
         // casing — 'blogs', 'non-profit'), never the raw slug.
         if (post.platform) metaParts.push(catLabel(post.platform).toLowerCase());
@@ -914,6 +916,18 @@
         if (els.intro) els.intro.setAttribute('data-mode', intro.dataMode);
     }
 
+    // loadByline: source / category counts from the registry (GET
+    // /api/sources). On any failure the static no-numbers byline stays.
+    function loadByline() {
+        if (!els || !els.introByline || typeof fetch !== 'function') return Promise.resolve();
+        return fetch(ENDPOINTS.sources)
+            .then(res => (res.ok ? res.json() : null))
+            .then((rows) => {
+                if (rows && els.introByline) els.introByline.textContent = chaptersMod.introByline(rows);
+            })
+            .catch(() => { /* keep the static byline */ });
+    }
+
     function loadAndRender() {
         if (state.loading) return Promise.resolve();
         state.loading = true;
@@ -1020,6 +1034,7 @@
             intro: document.getElementById('intro'),
             introKicker: document.getElementById('intro-kicker'),
             introSub: document.getElementById('intro-sub'),
+            introByline: document.getElementById('intro-byline'),
             cardCol: document.getElementById('card-col'),
             rail: document.getElementById('rail'),
             skipBtn: document.getElementById('skip-btn'),
@@ -1043,6 +1058,7 @@
         window.addEventListener('resize', onScroll);
 
         loadAndRender();
+        loadByline();
         // Snapshot poll (FR: refresh cycle 2–3 min; api.config REFRESH_MS).
         state.refreshTimer = setInterval(loadAndRender, apiConfig.REFRESH_MS);
         onScroll();

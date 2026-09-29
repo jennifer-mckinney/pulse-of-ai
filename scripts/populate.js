@@ -5,14 +5,18 @@
 //   node scripts/populate.js --once [--size N] [--no-embed] [--wait-embeddings S] [--force]
 //   node scripts/populate.js --loop            (compose service `populate`, profile "demo")
 //
-// ─── Why this is DEMO data, and how it stays honest ──────────────────────────
-// Live collection is NOT implemented yet: nothing consumes the collect.*
-// queues (src/workers/start.js runs ingest/embed/correlate only),
-// src/workers/collector.scheduler.js is not invoked, and POST /api/refresh is a
-// placeholder that completes its job with 0 posts. So population is always the
-// demo path today. `liveCollectionStatus()` below is the seam: when real
-// collectors land, it reports them available and this step becomes
-// "collect, with demo as the fallback".
+// ─── Collect first, demo only as the fallback (ADR 0001) ─────────────────────
+// --once runs ONE real collection job over the source registry
+// (src/collectors/runner.js: every collecting source, gated, rate-limited,
+// scored through the real pipeline with audit rows) and then checks the
+// trailing hour: when it holds LIVE posts (from real sources), no demo post
+// is written and the page reads LIVE. Only when collection yields nothing in
+// the trailing hour (offline, every source failing, collection switched off)
+// does the demo path below run — labelled DEMO end to end.
+// --loop (compose service `populate`) never collects itself — the worker's
+// scheduler does — it only keeps the demo fallback alive: each cycle writes
+// a demo batch ONLY while the trailing hour has no live posts, so the page
+// turns LIVE on its own once real posts arrive (and demo posts age out).
 //
 // The demo path never inserts made-up scores. Each batch:
 //   1. writes FICTIONAL posts (no people, no handles, no personal data; every
@@ -64,7 +68,9 @@ const { saveSentiment } = require('../src/pipeline/sentiment');
 const { saveRelevance } = require('../src/pipeline/relevance');
 const { saveDQI } = require('../src/pipeline/discourse');
 const { runBiasChecks } = require('../src/pipeline/bias');
-const { CAT_LABELS } = require('../src/config/categories');
+const { resolveCurrentMethodology } = require('../src/pipeline/methodology');
+const { SOURCES, sourceStatus } = require('../src/config/source-registry');
+const { CAT_LABELS, CATEGORY_SLUGS } = require('../src/config/categories');
 const { launchCities } = require('../public/js/config/cities.config.js');
 
 const DEMO_SOURCE_TYPE = 'demo';
@@ -75,12 +81,16 @@ const DEMO_PREFIX = '[Demo] ';
 // thinner first batch would leave those chapters empty until the feed caught up.
 const DEFAULT_ONCE_SIZE = 240;
 const LOOP_INTERVAL_MS = positiveInt(process.env.DEMO_FEED_INTERVAL_MS, 150000);
-// 14 = two posts for each of the 7 categories the registry covers: the
-// category cursor below walks the sources with a stride coprime to 7, so a
-// 14-post batch gives every category exactly two posts. Balanced batches keep
-// the job-level parity check (which compares per-category sentiment means)
-// from being decided by a single post; its verdicts are still the real ones.
-const LOOP_BATCH = positiveInt(process.env.DEMO_FEED_BATCH, 14);
+// One demo feed per canonical category the registry covers (G10-18: all 8,
+// Forums included — the list comes from the registry, not from whatever
+// rows happen to be in the database).
+const DEMO_CATEGORIES = Object.freeze(CATEGORY_SLUGS.filter(c => SOURCES.some(s => s.category === c)));
+// Two posts per demo feed: the category cursor below walks the feeds with a
+// stride of 3, coprime to 8, so a 16-post batch gives every category exactly
+// two posts. Balanced batches keep the job-level parity check (which
+// compares per-category sentiment means) from being decided by a single
+// post; its verdicts are still the real ones.
+const LOOP_BATCH = positiveInt(process.env.DEMO_FEED_BATCH, 2 * DEMO_CATEGORIES.length);
 const EMBEDDINGS_URL = process.env.EMBEDDINGS_SERVICE_URL || 'http://localhost:8000';
 
 // ─── Fictional corpus ────────────────────────────────────────────────────────
@@ -128,8 +138,12 @@ function log(msg) {
 }
 
 /** Parse CLI flags. @returns {object} */
+// G10-9: the live collection of `--once` (standup) stops starting sources
+// after this many seconds; in-flight requests are aborted.
+const DEFAULT_COLLECT_DEADLINE_SEC = 240;
+
 function parseArgs(argv) {
-    const opts = { mode: 'once', size: null, embed: true, waitEmbeddings: 180, force: false };
+    const opts = { mode: 'once', size: null, embed: true, waitEmbeddings: 180, force: false, deadlineSec: DEFAULT_COLLECT_DEADLINE_SEC };
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
         if (a === '--once') opts.mode = 'once';
@@ -138,6 +152,7 @@ function parseArgs(argv) {
         else if (a === '--force') opts.force = true;
         else if (a === '--size') opts.size = positiveInt(argv[++i], null);
         else if (a === '--wait-embeddings') opts.waitEmbeddings = Math.max(0, parseInt(argv[++i], 10) || 0);
+        else if (a === '--collect-deadline') opts.deadlineSec = positiveInt(argv[++i], DEFAULT_COLLECT_DEADLINE_SEC);
         else if (a === '--help' || a === '-h') opts.help = true;
         else throw new Error(`unknown argument '${a}'`);
     }
@@ -146,32 +161,37 @@ function parseArgs(argv) {
 }
 
 /**
- * Seam for real collectors. Today no collector consumes the collect.* queues,
- * so live collection is reported unavailable (with the reason) and the demo
- * path runs. When collectors land, return { available: true } here and call
- * them before falling back to demo.
+ * Whether real collection can run under this env: at least one registry
+ * source is 'collecting' (gate open, not killed, contact URL set).
+ * @returns {{ available: boolean, collecting: number, reason: string|null }}
  */
-function liveCollectionStatus() {
+function liveCollectionStatus(env = process.env) {
+    const collecting = SOURCES.filter(s => sourceStatus(s, env).status === 'collecting').length;
+    if (collecting > 0) return { available: true, collecting, reason: null };
+    // D1: a fresh clone has no contact URL — collection is off by design.
+    if (!(env.COLLECTOR_CONTACT_URL || '').trim()) {
+        return {
+            available: false,
+            collecting: 0,
+            reason: 'live collection is OFF: COLLECTOR_CONTACT_URL is not set, so every source is disabled '
+                + '(ADR 0001 D1: a clone collects nothing until its operator sets their own contact URL) — DEMO data only',
+        };
+    }
+    const sample = sourceStatus(SOURCES.find(s => s.slug === 'npr'), env);
     return {
         available: false,
-        reason: 'live collectors are not implemented yet (no collect.* consumer in '
-            + 'src/workers/start.js; POST /api/refresh completes with 0 posts)',
+        collecting: 0,
+        reason: sample.status === 'disabled' ? sample.reason : 'no registry source is collecting under this environment',
     };
 }
 
-/** Latest non-deprecated methodology_versions row per component. */
+/**
+ * Methodology ids for the demo path: the versions the CODE implements
+ * (src/pipeline/methodology.js), exactly as live collection records them.
+ */
 async function currentMethodology() {
-    const rows = await db.dbAll(
-        `SELECT DISTINCT ON (component) id, component
-         FROM methodology_versions
-         WHERE deprecated_at IS NULL
-         ORDER BY component, effective_from DESC`,
-    );
-    const mv = Object.fromEntries(rows.map(r => [r.component, r.id]));
-    for (const c of ['sentiment', 'relevance', 'discourse', 'bias']) {
-        if (!mv[c]) throw new Error(`methodology '${c}' is not registered — run migrations and \`npm run seed\``);
-    }
-    return mv;
+    const mv = await resolveCurrentMethodology();
+    return { sentiment: mv.sentimentMvId, relevance: mv.relevanceMvId, discourse: mv.discourseMvId, bias: mv.biasMvId, ingest: mv.ingestMvId };
 }
 
 /**
@@ -180,13 +200,12 @@ async function currentMethodology() {
  * @returns {Promise<Array<{id, category}>>}
  */
 async function ensureDemoSources() {
-    const cats = await db.dbAll(
-        `SELECT DISTINCT category FROM data_sources
-         WHERE source_type <> $1 ORDER BY category`,
+    const seeded = await db.dbGet(
+        `SELECT COUNT(*)::int AS n FROM data_sources WHERE source_type <> $1`,
         [DEMO_SOURCE_TYPE],
     );
-    if (cats.length === 0) throw new Error('no data_sources registered — run `npm run seed` first');
-    for (const { category } of cats) {
+    if (seeded.n === 0) throw new Error('no data_sources registered — run `npm run seed` first');
+    for (const category of DEMO_CATEGORIES) {
         const label = CAT_LABELS[category] || category;
         await db.dbRun(
             `INSERT INTO data_sources (name, display_name, source_type, category, config, active)
@@ -206,7 +225,42 @@ async function ensureDemoSources() {
         );
     }
     return db.dbAll(
-        `SELECT id, category FROM data_sources WHERE source_type = $1 ORDER BY category`,
+        `SELECT id, category FROM data_sources WHERE source_type = $1 AND category = ANY($2::text[]) ORDER BY category`,
+        [DEMO_SOURCE_TYPE, [...DEMO_CATEGORIES]],
+    );
+}
+
+/**
+ * LIVE posts (real registry sources, not demo feeds) in the trailing hour
+ * that the GLOBE can render (G10-8): the
+ * same rule as GET /api/posts/aggregated-by-location — scored (a
+ * sentiment_results row) and located (location non-empty; a publisher-city
+ * location counts). A live post the globe cannot show must not stop the
+ * demo fallback, or standup ends with an empty globe.
+ */
+async function livePostsInLastHour() {
+    const row = await db.dbGet(
+        `SELECT COUNT(DISTINCT rp.id)::int AS n
+         FROM raw_posts rp
+         JOIN data_sources ds      ON ds.id = rp.source_id
+         JOIN sentiment_results sr ON sr.raw_post_id = rp.id
+         WHERE ds.source_type <> $1
+           AND rp.location IS NOT NULL AND rp.location <> ''
+           AND rp.collected_at >= NOW() - INTERVAL '1 hour'`,
+        [DEMO_SOURCE_TYPE],
+    );
+    return row.n;
+}
+
+/** Trailing-hour posts per category, split live / demo (the population summary). */
+async function populationByCategory() {
+    return db.dbAll(
+        `SELECT ds.category,
+                COUNT(*) FILTER (WHERE ds.source_type <> $1)::int AS live,
+                COUNT(*) FILTER (WHERE ds.source_type = $1)::int  AS demo
+         FROM raw_posts rp JOIN data_sources ds ON ds.id = rp.source_id
+         WHERE rp.collected_at >= NOW() - INTERVAL '1 hour'
+         GROUP BY ds.category ORDER BY ds.category`,
         [DEMO_SOURCE_TYPE],
     );
 }
@@ -331,8 +385,8 @@ async function runDemoBatch({ size, embed, seed, enqueue = enqueueEmbeddings }) 
 
             const post = await db.dbGet(
                 `INSERT INTO raw_posts
-                    (source_id, external_id, content, content_hash, raw_payload, location)
-                 VALUES ($1, $2, $3, $4, $5::jsonb, $6)
+                    (source_id, external_id, content, content_hash, raw_payload, location, ingest_mv_id)
+                 VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
                  ON CONFLICT (source_id, external_id) DO NOTHING
                  RETURNING id`,
                 [
@@ -342,6 +396,7 @@ async function runDemoBatch({ size, embed, seed, enqueue = enqueueEmbeddings }) 
                     normalised.contentHash,
                     JSON.stringify(normalised.rawPayload),
                     city.name,
+                    mv.ingest,   // G10-11: the ingest version this demo post was stored under
                 ],
             );
             if (!post) continue;
@@ -390,26 +445,71 @@ const DEFAULT_DEPS = Object.freeze({
     waitForEmbeddings: (ids, secs) => waitForEmbeddings(ids, secs),
 });
 
-/** One population pass: live collection if available, else demo. */
-async function populateOnce(opts, seed, deps = DEFAULT_DEPS) {
-    const live = liveCollectionStatus();
-    if (live.available) {
-        // Real collectors drop in here; demo stays the fallback when they return nothing.
-    } else {
-        log(`data source: DEMO — ${live.reason}`);
-    }
+/**
+ * One real collection job (the runner), with the embed queue only when
+ * embeddings are available. Injectable for tests via opts.collect.
+ */
+async function collectLive(opts, embed) {
+    if (opts.collect) return opts.collect({ embed });
+    const { runCollection, defaultQueues } = require('../src/collectors/runner');
+    const q = defaultQueues();
+    // G10-9: every source's progress is logged (the old verbose-only path
+    // was never switched on), and the collection has a deadline.
+    return runCollection({
+        triggeredBy: 'standup',
+        queues: { enqueueEmbeds: embed ? q.enqueueEmbeds : async () => {}, enqueueIngestRetry: q.enqueueIngestRetry },
+        log,
+        deadlineMs: (opts.deadlineSec || DEFAULT_COLLECT_DEADLINE_SEC) * 1000,
+    });
+}
 
+/** Demo batch with the standard progress line. */
+async function demoPass(opts, seed, embed, why, deps = DEFAULT_DEPS) {
+    log(`data source: DEMO — ${why}`);
+    const r = await runDemoBatch({ size: opts.size, embed, seed, enqueue: deps.enqueueEmbeddings });
+    log(`job ${r.jobId}: ${r.postIds.length} fictional posts scored by the real pipeline `
+        + `(sentiment, relevance, discourse), bias checks run (${r.violations} violation(s)), `
+        + `${r.embedQueued} embed job(s) queued`);
+    return { ...r, embed, mode: 'demo' };
+}
+
+/**
+ * --once: collect first; demo only when the trailing hour has no live posts.
+ * @returns {Promise<{ mode: 'live'|'demo', embed: boolean, postIds: string[], ... }>}
+ */
+async function populateOnce(opts, seed, deps = DEFAULT_DEPS) {
     let embed = opts.embed;
     if (embed && !(await deps.embeddingsReady())) {
         log(`embeddings service not ready at ${EMBEDDINGS_URL} — scoring without embeddings this pass`);
         embed = false;
     }
 
-    const r = await runDemoBatch({ size: opts.size, embed, seed, enqueue: deps.enqueueEmbeddings });
-    log(`job ${r.jobId}: ${r.postIds.length} fictional posts scored by the real pipeline `
-        + `(sentiment, relevance, discourse), bias checks run (${r.violations} violation(s)), `
-        + `${r.embedQueued} embed job(s) queued`);
-    return { ...r, embed };
+    const live = liveCollectionStatus(opts.env || process.env);
+    let collected = null;
+    if (live.available) {
+        log(`collecting: ${live.collecting} of ${SOURCES.length} registry sources are collecting — running one real collection job`);
+        try {
+            collected = await collectLive(opts, embed);
+            log(`${collected.jobId ? `job ${collected.jobId}` : 'no job row (nothing new to score)'}: ${collected.sourcesQueried} sources queried, ${collected.postsCollected} items collected, `
+                + `${collected.postsProcessed} new posts scored (sentiment, relevance, discourse), `
+                + `bias ${collected.bias ? `${collected.bias.violationsFound} violation(s)` : 'not run'}, `
+                + `${collected.embedQueued} embed job(s) queued`);
+        } catch (err) {
+            log(`collection failed: ${require('../src/collectors/redact').scrub(err.message)}`);
+        }
+    } else {
+        log(`collection unavailable: ${live.reason}`);
+    }
+
+    const livePosts = await livePostsInLastHour();
+    if (livePosts > 0 && !opts.force) {
+        log(`data source: LIVE — ${livePosts} real posts in the trailing hour; no demo batch written`);
+        return { mode: 'live', livePosts, collected, embed, postIds: [] };
+    }
+    const why = livePosts > 0 ? '--force: a fictional batch added beside the live posts'
+        : live.available ? 'collection yielded no posts in the trailing hour — falling back to fictional demo posts'
+            : `live collection unavailable (${live.reason})`;
+    return { ...(await demoPass(opts, seed, embed, why, deps)), collected };
 }
 
 // ─── Entry points ────────────────────────────────────────────────────────────
@@ -420,8 +520,9 @@ async function runOnce(opts, deps = {}) {
     let skip = false;
     if (!opts.force) {
         const existing = await demoPostsInLastHour();
-        if (existing >= opts.size) {
-            log(`trailing hour already holds ${existing} demo posts (>= ${opts.size}) — `
+        const livePosts = await livePostsInLastHour();
+        if (existing >= opts.size && livePosts === 0 && !liveCollectionStatus(opts.env || process.env).available) {
+            log(`trailing hour already holds ${existing} demo posts (>= ${opts.size}) and collection is unavailable — `
                 + 'skipping the initial batch (use --force to add another)');
             skip = true;
         }
@@ -431,8 +532,9 @@ async function runOnce(opts, deps = {}) {
         batch = await populateOnce(opts, seed, d);
     }
 
-    // Copilot 4129574047: embeddings are decided per run, not per batch. A
-    // skipped batch (idempotent re-run) still backfills the trailing hour.
+    // Copilot 4129574047 (#9): embeddings are decided per run, not per
+    // batch. A skipped batch (idempotent re-run) still backfills the
+    // trailing hour's demo posts that have no embedding.
     let embed;
     if (batch) {
         embed = batch.embed;
@@ -442,39 +544,66 @@ async function runOnce(opts, deps = {}) {
         embed = await d.embeddingsReady();
         if (!embed) log(`embeddings service not ready at ${EMBEDDINGS_URL} — no embedding backfill this run`);
     }
-    if (!embed) return 0;
-
-    const queued = new Set(batch ? batch.postIds : []);
-    const backfill = (await unembeddedDemoPostsInLastHour()).filter(id => !queued.has(id));
-    if (backfill.length > 0) {
-        await d.enqueueEmbeddings(backfill);
-        log(`backfill: ${backfill.length} trailing-hour demo post(s) had no embedding — embed job(s) queued`);
+    if (embed) {
+        const queued = new Set(batch && batch.mode === 'demo' ? batch.postIds : []);
+        const backfill = (await unembeddedDemoPostsInLastHour()).filter(id => !queued.has(id));
+        if (backfill.length > 0) {
+            await d.enqueueEmbeddings(backfill);
+            log(`backfill: ${backfill.length} trailing-hour demo post(s) had no embedding — embed job(s) queued`);
+        }
+        const all = [...queued, ...backfill];
+        if (all.length > 0 && opts.waitEmbeddings > 0) {
+            log(`waiting up to ${opts.waitEmbeddings}s for the worker to embed ${all.length} posts...`);
+            const done = await d.waitForEmbeddings(all, opts.waitEmbeddings);
+            log(`embeddings stored: ${done}/${all.length}`
+                + (done < all.length ? ' (timed out — the worker keeps embedding the rest)' : ''));
+        }
     }
-    const all = [...queued, ...backfill];
-    if (all.length > 0 && opts.waitEmbeddings > 0) {
-        log(`waiting up to ${opts.waitEmbeddings}s for the worker to embed ${all.length} posts...`);
-        const done = await d.waitForEmbeddings(all, opts.waitEmbeddings);
-        log(`embeddings stored: ${done}/${all.length}`
-            + (done < all.length ? ' (timed out — the worker keeps embedding the rest)' : ''));
-    }
+    await printSummary();
     return 0;
 }
 
+/** Population summary: trailing-hour posts per category, LIVE / DEMO / MIXED. */
+async function printSummary() {
+    const rows = await populationByCategory();
+    const live = rows.reduce((n, r) => n + r.live, 0);
+    const demo = rows.reduce((n, r) => n + r.demo, 0);
+    const mode = live + demo === 0 ? 'NONE' : demo === 0 ? 'LIVE' : live === 0 ? 'DEMO' : 'MIXED';
+    log(`population (trailing hour): ${mode} — ${live} live post(s), ${demo} demo post(s)`);
+    for (const r of rows) log(`  ${r.category.padEnd(10)} live ${String(r.live).padStart(4)}  demo ${String(r.demo).padStart(4)}`);
+    return { mode, live, demo, rows };
+}
+
 /**
- * The demo feed: one batch every intervalMs until SIGTERM / SIGINT.
+ * One cycle of the demo fallback: a fictional batch ONLY while the trailing
+ * hour holds no live posts (the worker collects live data).
+ */
+async function loopCycle(opts, seed, deps = DEFAULT_DEPS) {
+    const livePosts = await livePostsInLastHour();
+    if (livePosts > 0) {
+        log(`data source: LIVE — ${livePosts} real posts in the trailing hour; demo feed idle`);
+        return { mode: 'live', livePosts, postIds: [] };
+    }
+    const embed = opts.embed && await deps.embeddingsReady();
+    return demoPass(opts, seed, embed, 'no live posts in the trailing hour', deps);
+}
+
+/**
+ * The demo fallback: one cycle every intervalMs until SIGTERM / SIGINT.
  *
- * Copilot 4129574059: a signal that arrives WHILE a batch is running must
- * not be followed by a full interval sleep (compose would SIGKILL the
- * container before cleanup). The in-flight batch is finished (its job row
+ * Copilot 4129574059 (#9): a signal that arrives WHILE a cycle is running
+ * must not be followed by a full interval sleep (compose would SIGKILL the
+ * container before cleanup). The in-flight cycle is finished (its job row
  * is completed, never left 'running'), then `stopping` is re-checked before
  * sleeping, and a signal during the sleep cancels the timer at once.
  *
  * @param {object} opts   parsed flags
- * @param {object} [deps] test seams: populateOnce, intervalMs, plus the
- *                        DEFAULT_DEPS collaborators passed to populateOnce
+ * @param {object} [deps] test seams: populateOnce (the per-cycle step,
+ *                        default loopCycle), intervalMs, plus the
+ *                        DEFAULT_DEPS collaborators
  */
 async function runLoop(opts, deps = {}) {
-    const d = { ...DEFAULT_DEPS, populateOnce, intervalMs: LOOP_INTERVAL_MS, ...deps };
+    const d = { ...DEFAULT_DEPS, populateOnce: loopCycle, intervalMs: LOOP_INTERVAL_MS, ...deps };
     let stopping = false;
     let timer = null;
     let wake = null;
@@ -490,7 +619,8 @@ async function runLoop(opts, deps = {}) {
     process.on('SIGINT', stop);
 
     try {
-        log(`demo feed started: ${opts.size} fictional posts every ${Math.round(d.intervalMs / 1000)}s`);
+        log(`demo fallback started: every ${Math.round(d.intervalMs / 1000)}s, ${opts.size} fictional posts `
+            + 'ONLY while the trailing hour holds no live posts (the worker collects live data)');
         while (!stopping) {
             const seed = Math.floor(Date.now() / d.intervalMs);
             try {
@@ -558,9 +688,17 @@ if (require.main === module) {
 }
 
 module.exports = {
+    DEFAULT_COLLECT_DEADLINE_SEC,
+    DEMO_CATEGORIES,
+    LOOP_BATCH,
     parseArgs,
     liveCollectionStatus,
     currentMethodology,
+    populateOnce,
+    loopCycle,
+    livePostsInLastHour,
+    populationByCategory,
+    printSummary,
     ensureDemoSources,
     runDemoBatch,
     unembeddedDemoPostsInLastHour,

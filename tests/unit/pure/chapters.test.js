@@ -483,9 +483,11 @@ describe('resolveChapter() — raw token values (textContent is the XSS boundary
 describe('module export shape', () => {
     test('exports exactly the documented public API', () => {
         expect(Object.keys(chapters).sort()).toEqual([
+            'BYLINE_FALLBACK',
             'FALLBACK_COPY',
             'INTRO_KICKERS',
             'STORY',
+            'introByline',
             'introFacts',
             'resolveChapter',
             'resolveIntro',
@@ -639,5 +641,21 @@ describe('resolveIntro — kicker by data origin, numbers interpolated (FR-19)',
         expect(intro.kicker).not.toMatch(/LIVE|DEMO/);
         expect(intro.sub).not.toMatch(/Right now/);
         expect(intro.demoLabel).toBe(false);
+    });
+});
+
+describe('introByline (registry-driven, ADR 0001)', () => {
+    const { introByline, BYLINE_FALLBACK } = require('../../../public/js/chapters.js');
+    test('counts registry sources and their categories — never a hardcoded 50', () => {
+        const rows = [
+            { registry: true, category: 'news' }, { registry: true, category: 'forums' },
+            { registry: true, category: 'news' }, { registry: false, category: 'news', source_type: 'demo' },
+            { registry: true, category: 'blog', retired: true },
+        ];
+        expect(introByline(rows)).toBe('INTERACTIVE · 3 SOURCES · 2 CATEGORIES · EVERY SCORE AUDITABLE');
+    });
+    test('no registry rows → no numbers', () => {
+        expect(introByline(null)).toBe(BYLINE_FALLBACK);
+        expect(introByline([{ registry: false }])).toBe('INTERACTIVE · EVERY SCORE AUDITABLE');
     });
 });

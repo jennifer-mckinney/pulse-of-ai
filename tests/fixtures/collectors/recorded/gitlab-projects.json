@@ -1,0 +1,70 @@
+[
+  {
+    "id": 86745288,
+    "name": "zambo",
+    "description": "Zambo: the cross-AI execution layer. 100+ native tools over one MCP endpoint, with a verifiable execution receipt for every call (AER-1 open draft). Free: 20 calls/tool/day, no account. Day Pass $0.99 USDC on Base for 24h; Zambo Pass $29/month ($19/month for verified $ZAMBO holders). https://zambo.dev",
+    "last_activity_at": "2026-09-28T23:32:30.376Z",
+    "topics": [
+      "MCP-server",
+      "agent-tools",
+      "ai-agents",
+      "ai-audit",
+      "ai-infrastructure",
+      "artificial-intelligence",
+      "automation",
+      "autonomous-agents",
+      "benchmark",
+      "cross-ai-continuity",
+      "developer-tools",
+      "llm-agents",
+      "mcp",
+      "model-context-protocol",
+      "receipts",
+      "verifiable-execution",
+      "verifiable-receipts",
+      "x402"
+    ]
+  },
+  {
+    "id": 2321198,
+    "name": "aGrUM",
+    "description": "aGrUM is a C++ library designed for easily building applications using graphical models such as Bayesian networks, influence diagrams, decision trees, GAI networks or Markov decision processes.",
+    "last_activity_at": "2026-09-28T14:58:39.644Z",
+    "topics": [
+      "artificial-intelligence",
+      "bayesian-network",
+      "causal-inference",
+      "causal-models",
+      "causality",
+      "cpp20",
+      "credal-network",
+      "explainable-ai",
+      "influence-diagram",
+      "machine-learning-algorithms",
+      "markov-network",
+      "parallel-algorithm",
+      "probabilistic-classifiers",
+      "probabilistic-graphical-models",
+      "probabilistic-models",
+      "python",
+      "python3",
+      "statistical-learning",
+      "structural-learning"
+    ]
+  },
+  {
+    "id": 85409653,
+    "name": "ai-folio.gitlab.io",
+    "description": "Source code for ai-folio.gitlab.io, a personal blog and portfolio exploring AI news, tools, and industry trends.",
+    "last_activity_at": "2026-09-16T13:09:37.536Z",
+    "topics": [
+      "AI",
+      "artificial-intelligence",
+      "blog",
+      "gitlab-pages",
+      "machine-learning",
+      "news",
+      "tech"
+    ]
+  }
+]

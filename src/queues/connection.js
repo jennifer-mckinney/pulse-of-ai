@@ -11,7 +11,7 @@
  * so every queue, worker and the /api/health probe authenticates. When it
  * is unset or empty no password is sent (a local, auth-less Redis).
  * @param {NodeJS.ProcessEnv} env
- * @returns {{ host: string, port: number, password?: string }}
+ * @returns {{ host: string, port: number, password?: string, db?: number }}
  */
 function redisConnection(env) {
     const conn = {
@@ -19,6 +19,12 @@ function redisConnection(env) {
         port: parseInt(env.REDIS_PORT || '6379', 10),
     };
     if (env.REDIS_PASSWORD) conn.password = env.REDIS_PASSWORD;
+    // Optional logical database (REDIS_DB): isolates a second stack or a
+    // local run's queues, job schedulers and heartbeat from the dev keyspace
+    // on a shared Redis. Applied here so the queues, the worker heartbeat and
+    // the /api/health probe always read and write the same database.
+    const db = parseInt(env.REDIS_DB || '', 10);
+    if (Number.isInteger(db) && db > 0) conn.db = db;
     return conn;
 }
 

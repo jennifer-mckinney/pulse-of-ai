@@ -7,7 +7,12 @@
 //
 // Algorithm: keyword overlap against a curated 20-term AI domain lexicon.
 //   score = |unique matched keywords| / KEYWORD_LIST.length, capped at 1.0.
-//   Phrase keywords are matched as substrings; single-word keywords match word boundaries.
+//   Every keyword is matched as a case-insensitive substring (registered as
+//   relevance@1.1.0 — src/config/methodology-registry.js).
+//
+// Embedding gate: EMBED_GATE_MIN_SCORE = 1 / KEYWORD_LIST.length — a post is
+//   embedded when at least one lexicon keyword matches. The previous 0.40
+//   gate needed 8 of the 20 keywords and was never reached (ADR 0001).
 //
 // Phase D upgrade: replace keyword scoring with cosine similarity against AI-topic centroid
 //   embedding (all-MiniLM-L6-v2). Justification stored in methodology_versions config.
@@ -136,5 +141,28 @@ async function saveRelevance(postId, jobId, mvId) {
     });
 }
 
+// ─── Embedding gate ───────────────────────────────────────────────────────────
+
+/** Minimum relevance score for a post to be embedded: one lexicon match. */
+const EMBED_GATE_MIN_SCORE = 1 / KEYWORD_LIST.length;
+
+/**
+ * Whether a relevance score passes the embedding gate.
+ * @param {number|string|null} score  relevance_results.score (pg NUMERIC may arrive as a string)
+ * @returns {boolean}
+ */
+function passesEmbedGate(score) {
+    const n = Number(score);
+    // Tolerance absorbs NUMERIC round-trips of exactly 1/20.
+    return Number.isFinite(n) && n >= EMBED_GATE_MIN_SCORE - 1e-9;
+}
+
 // MODEL_NAME exported for scripts/replay.js (code identity of a replay).
-module.exports = { computeRelevance, saveRelevance, KEYWORD_LIST, MODEL_NAME };
+module.exports = {
+    computeRelevance,
+    saveRelevance,
+    passesEmbedGate,
+    EMBED_GATE_MIN_SCORE,
+    KEYWORD_LIST,
+    MODEL_NAME,
+};
