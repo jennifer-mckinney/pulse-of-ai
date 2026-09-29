@@ -4,11 +4,46 @@
 # (without this file's directory as cwd) resolve to the same project.
 name: pulse-of-ai
 
+# Environment of every Node role (migrate, web, worker, populate): the
+# database, Redis, and the two base secrets (AUDIT_HASH_KEY,
+# CORRELATION_SALT). Container-side connection settings are fixed to the
+# compose network; the host-side .env values (POSTGRES_HOST=localhost,
+# POSTGRES_PORT=5434, ...) are for `npm run dev` on the host and are
+# deliberately overridden here.
+x-app-env: &app-env
+  NODE_ENV: production
+  PORT: "3000"
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: ${POSTGRES_DB:-pulse_of_ai}
+  POSTGRES_USER: ${POSTGRES_USER:-pulse_user}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required (npm run standup generates it)}
+  EMBEDDINGS_SERVICE_URL: http://embeddings:8000
+  EMBED_MODEL: ${EMBED_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+  AUDIT_HASH_KEY: ${AUDIT_HASH_KEY:-}
+  CORRELATION_SALT: ${CORRELATION_SALT:-}
+  CORRELATION_MIN_CONFIDENCE: ${CORRELATION_MIN_CONFIDENCE:-0.85}
+  RETENTION_DETAIL_DAYS: ${RETENTION_DETAIL_DAYS:-90}
+  DEMO_FEED_INTERVAL_MS: ${DEMO_FEED_INTERVAL_MS:-150000}
+  DEMO_FEED_BATCH: ${DEMO_FEED_BATCH:-14}
+
+# Third-party collector credentials and settings — merged into `worker`
+# ONLY (F9-2). web is the internet-facing process: an RCE or debug leak
+# there must not expose paid API keys via /proc/self/environ, and migrate /
+# populate never collect. Collector code runs in the worker; anything web
+# needs for source STATUS is a non-secret name or flag, never a credential.
+# scripts/test/check-compose.sh fails if a credential reaches another role.
+x-collector-env: &collector-env
+  REDDIT_USER_AGENT: ${REDDIT_USER_AGENT:-}
+  TWITTER_BEARER_TOKEN: ${TWITTER_BEARER_TOKEN:-}
+  GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+  SEMANTIC_SCHOLAR_API_KEY: ${SEMANTIC_SCHOLAR_API_KEY:-}
+
 # Shared definition for every Node service of the full solution (migrate,
 # web, worker, populate): ONE image (./Dockerfile), role picked by `command`.
-# Container-side connection settings are fixed to the compose network; the
-# host-side .env values (POSTGRES_HOST=localhost, POSTGRES_PORT=5434, ...)
-# are for `npm run dev` on the host and are deliberately overridden here.
 x-app: &app
   image: ${PULSE_APP_IMAGE:-pulse-of-ai/app:local}
   # Built ONCE, by the web service (see there); the other roles reuse the tag
@@ -17,24 +52,7 @@ x-app: &app
   profiles: ["full"]
   restart: unless-stopped
   environment:
-    NODE_ENV: production
-    PORT: "3000"
-    POSTGRES_HOST: postgres
-    POSTGRES_PORT: "5432"
-    POSTGRES_DB: ${POSTGRES_DB:-pulse_of_ai}
-    POSTGRES_USER: ${POSTGRES_USER:-pulse_user}
-    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
-    REDIS_HOST: redis
-    REDIS_PORT: "6379"
-    REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required (npm run standup generates it)}
-    EMBEDDINGS_SERVICE_URL: http://embeddings:8000
-    EMBED_MODEL: ${EMBED_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
-    AUDIT_HASH_KEY: ${AUDIT_HASH_KEY:-}
-    CORRELATION_SALT: ${CORRELATION_SALT:-}
-    CORRELATION_MIN_CONFIDENCE: ${CORRELATION_MIN_CONFIDENCE:-0.85}
-    RETENTION_DETAIL_DAYS: ${RETENTION_DETAIL_DAYS:-90}
-    DEMO_FEED_INTERVAL_MS: ${DEMO_FEED_INTERVAL_MS:-150000}
-    DEMO_FEED_BATCH: ${DEMO_FEED_BATCH:-14}
+    <<: *app-env
 
 services:
   # Primary database — PostgreSQL 16 with pgvector extension
@@ -160,6 +178,9 @@ services:
   worker:
     <<: *app
     command: ["node", "src/workers/start.js"]
+    # The only role with collector credentials (F9-2).
+    environment:
+      <<: [*app-env, *collector-env]
     healthcheck:
       disable: true
     depends_on:

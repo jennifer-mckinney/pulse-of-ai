@@ -12,6 +12,9 @@
 # Checks:
 #   F9-1  every published port has an explicit host IP, and by default that
 #         IP is the loopback address (nothing listens on 0.0.0.0)
+#   F9-2  collector credentials are set on `worker` only; web, migrate and
+#         populate get the base secrets (DB, Redis, AUDIT_HASH_KEY,
+#         CORRELATION_SALT) and nothing else credential-shaped
 #
 # CI runs it in the docker-images job (.github/workflows/ci.yml);
 # tests/integration/composeConfig.test.js runs it under jest.
@@ -53,6 +56,24 @@ not_lo=$(jq -r '.services | to_entries[] | .key as $s
     | (.value.ports // [])[] | select((.host_ip // "") != "127.0.0.1")
     | "\($s): \(.published)->\(.target) binds \(.host_ip // "0.0.0.0")"' <<< "$cfg")
 check "by default every published port binds 127.0.0.1" "$not_lo"
+
+# ─── F9-2: collector credentials reach the worker only ───────────────────────
+# Base secrets every app role needs; any OTHER credential-shaped variable is
+# a collector credential and may be set on `worker` only (web is the
+# internet-facing process; migrate / populate need none).
+BASE_SECRETS='["POSTGRES_PASSWORD","REDIS_PASSWORD","AUDIT_HASH_KEY","CORRELATION_SALT"]'
+CRED_RE='(_TOKEN|_SECRET|_API_KEY|_KEY|_PASSWORD|_CLIENT_SECRET)$'
+leaks=$(jq -r --argjson base "$BASE_SECRETS" --arg re "$CRED_RE" '.services | to_entries[]
+    | select(.key != "worker") | .key as $s
+    | (.value.environment // {}) | keys[]
+    | select(test($re)) | select(. as $k | $base | index($k) | not)
+    | "\($s) receives collector credential \(.)"' <<< "$cfg")
+check "collector credentials are passed to worker only" "$leaks"
+missing=$(jq -r '(.services.worker.environment // {}) as $w
+    | ["TWITTER_BEARER_TOKEN","GITHUB_TOKEN","SEMANTIC_SCHOLAR_API_KEY"][]
+    | select(. as $k | $w | has($k) | not)
+    | "worker lacks \(.) (x-collector-env)"' <<< "$cfg")
+check "worker receives the collector credentials (x-collector-env)" "$missing"
 
 #@@CHECKS@@
 
