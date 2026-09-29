@@ -6,22 +6,58 @@
 'use strict';
 
 const crypto = require('crypto');
+const { Parser } = require('htmlparser2');
 const { JsonApiCollector } = require('../base');
 
 const WIKI_API = 'https://en.wikipedia.org/w/api.php';
 const SET_TTL_MS = 24 * 3600 * 1000;
 
+// F10-3: comment HTML is cut to this size before parsing.
+const COMMENT_HTML_CAP = 64 * 1024;
+const SIGNATURE_HREF_RE = /(?:User(?:_talk)?:|Special:Contributions\/)/i;
+const escapeHtml = t => t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
 /**
  * Remove signatures from DiscussionTools comment HTML: links to User:,
- * User talk: and Special:Contributions pages, and the "12:34, 5 May 2026
- * (UTC)" timestamp that closes every signature.
+ * User talk: and Special:Contributions pages (with their text), the
+ * "12:34, 5 May 2026 (UTC)" timestamp that closes every signature, and
+ * leftover "(talk)" / "(contribs)" markers. Tokenised with htmlparser2
+ * (linear, F10-3); the result is HTML-escaped text, so the normaliser's own
+ * htmlToText decodes it exactly once.
  */
 function stripSignatures(html) {
-    return String(html || '')
-        .replace(/<a\b[^>]*href="[^"]*(?:User(?:_talk)?:|Special:Contributions\/)[^"]*"[^>]*>[\s\S]*?<\/a>/gi, ' ')
-        .replace(/\d{1,2}:\d{2},\s+\d{1,2}\s+[A-Z][a-z]+\s+\d{4}\s+\(UTC\)/g, ' ')
-        .replace(/\(\s*(?:talk|contribs)?\s*\)/gi, ' ')
-        .replace(/[–—-]\s*$/g, '');
+    const parts = [];
+    let inSig = 0;
+    const parser = new Parser({
+        onopentag(name, attrs) {
+            if (name === 'a' && (inSig || SIGNATURE_HREF_RE.test(attrs.href || ''))) inSig++;
+            else if (['p', 'br', 'li', 'div', 'dd', 'dl'].includes(name)) parts.push(' ');
+        },
+        onclosetag(name) {
+            if (name === 'a' && inSig) inSig--;
+        },
+        ontext(t) {
+            if (!inSig) parts.push(t);
+        },
+    }, { decodeEntities: true, lowerCaseTags: true });
+    parser.write(String(html || '').slice(0, COMMENT_HTML_CAP));
+    parser.end();
+    const text = parts.join('')
+        .replace(/\d{1,2}:\d{2},\s{1,4}\d{1,2}\s{1,4}[A-Z][a-z]{2,9}\s{1,4}\d{4}\s{1,4}\(UTC\)/g, ' ')
+        .replace(/\(\s{0,4}(?:(?:talk|contribs)\s{0,4})?\)/gi, ' ')
+        .replace(/\s+/g, ' ')
+        .replace(/\s?[\u2013\u2014-]\s?$/, '')
+        .trim();
+    return escapeHtml(text);
+}
+
+/** Plain text of a heading's HTML (linear). */
+function headingText(html) {
+    const parts = [];
+    const parser = new Parser({ ontext(t) { parts.push(t); } }, { decodeEntities: true });
+    parser.write(String(html || '').slice(0, 4096));
+    parser.end();
+    return parts.join('').replace(/\s+/g, ' ').trim();
 }
 
 /** Flatten DiscussionTools thread items into comments (with their heading). */
@@ -29,7 +65,7 @@ function flattenThreads(items, heading = '') {
     const out = [];
     for (const it of items || []) {
         if (it.type === 'heading') {
-            out.push(...flattenThreads(it.replies, String(it.html || '').replace(/<[^>]+>/g, '')));
+            out.push(...flattenThreads(it.replies, headingText(it.html)));
         } else if (it.type === 'comment') {
             out.push({ id: it.id, html: it.html, timestamp: it.timestamp, heading });
             out.push(...flattenThreads(it.replies, heading));

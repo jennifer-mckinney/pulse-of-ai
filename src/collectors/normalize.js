@@ -15,6 +15,7 @@
 'use strict';
 
 const crypto = require('crypto');
+const { Parser } = require('htmlparser2');
 const { CITY_REGISTRY, findCity } = require('../../public/js/config/cities.config.js');
 
 // Links whose path names a person (profile / user namespace) are not stored:
@@ -25,32 +26,63 @@ const MAX_TEXT = 4000;
 const MAX_TITLE = 300;
 const NEAREST_CITY_KM = 50;
 
-const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', hellip: '…', mdash: '—', ndash: '–', rsquo: '’', lsquo: '‘', rdquo: '”', ldquo: '“' };
+// F10-3: every text step here is LINEAR in the input. Upstream text is cut
+// to RAW_TEXT_CAP / RAW_TITLE_CAP characters BEFORE any parsing or
+// redaction (then truncated again to MAX_TEXT / MAX_TITLE after), HTML is
+// tokenised by htmlparser2 (no backtracking regex over markup), and the
+// e-mail pattern is bounded and anchored so it cannot restart at every
+// offset of a long run.
+const RAW_TEXT_CAP = 4 * MAX_TEXT;     // 16 000 chars
+const RAW_TITLE_CAP = 4 * MAX_TITLE;   //  1 200 chars
+// htmlToText's own bound, for callers other than toPayload.
+const HTML_PARSE_CAP = 64 * 1024;
 
-/** Strip HTML to plain text: drop script/style, tags, decode entities, collapse whitespace. */
+const SKIP_TAGS = new Set(['script', 'style', 'noscript', 'template']);
+const BLOCK_TAGS = new Set(['br', 'p', 'li', 'div', 'tr', 'td', 'th', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'pre', 'hr', 'ul', 'ol', 'section', 'article']);
+
+/**
+ * Strip HTML to plain text with a streaming tokenizer: drop script/style,
+ * separate block elements with a space, decode entities, collapse
+ * whitespace. Linear time.
+ */
 function htmlToText(html) {
     if (html === null || html === undefined) return '';
-    return String(html)
-        .replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, ' ')
-        .replace(/<br\s*\/?>|<\/p>|<\/li>|<\/div>/gi, ' ')
-        .replace(/<[^>]+>/g, ' ')
-        .replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e) => {
-            if (e[0] === '#') {
-                const cp = e[1].toLowerCase() === 'x' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
-                return Number.isFinite(cp) && cp > 0 && cp < 0x110000 ? String.fromCodePoint(cp) : ' ';
-            }
-            return ENTITIES[e.toLowerCase()] !== undefined ? ENTITIES[e.toLowerCase()] : m;
-        })
-        .replace(/\s+/g, ' ')
-        .trim();
+    const parts = [];
+    let skip = 0;
+    const parser = new Parser({
+        onopentagname(name) {
+            if (SKIP_TAGS.has(name)) skip++;
+            else if (BLOCK_TAGS.has(name)) parts.push(' ');
+        },
+        onclosetag(name) {
+            if (SKIP_TAGS.has(name)) skip = Math.max(0, skip - 1);
+            else if (BLOCK_TAGS.has(name)) parts.push(' ');
+        },
+        ontext(t) {
+            if (!skip) parts.push(t);
+        },
+    }, { decodeEntities: true, lowerCaseTags: true });
+    parser.write(String(html).slice(0, HTML_PARSE_CAP));
+    parser.end();
+    return parts.join('').replace(/\s+/g, ' ').trim();
 }
 
 // In-text identities: e-mail addresses and @handles (mentions, pings) are
 // replaced before storage — the text keeps its meaning, not the person.
-const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+// Bounded quantifiers plus a lookbehind: a match can only START at the
+// beginning of a local part, so a long run of word characters is scanned
+// once (F10-3 measured the old unbounded pattern quadratic).
+const EMAIL_RE = /(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,8}\.[A-Za-z]{2,24}(?![A-Za-z])/g;
 const HANDLE_RE = /(^|[^A-Za-z0-9_.])@[A-Za-z0-9_][A-Za-z0-9_.-]{1,38}/g;
 function redactIdentities(text) {
     return String(text || '').replace(EMAIL_RE, '[email]').replace(HANDLE_RE, '$1@[user]');
+}
+
+/** Cut raw upstream text before any processing (F10-3). */
+function capRaw(v, n) {
+    if (v === null || v === undefined) return '';
+    const s = String(v);
+    return s.length > n ? s.slice(0, n) : s;
 }
 
 function truncate(s, n) {
@@ -101,8 +133,8 @@ function externalId(routeId, id) {
  */
 function toPayload(item, source, route) {
     if (!item) return null;
-    const title = truncate(redactIdentities(htmlToText(item.title)), MAX_TITLE);
-    const body = redactIdentities(htmlToText(item.text));
+    const title = truncate(redactIdentities(htmlToText(capRaw(item.title, RAW_TITLE_CAP))), MAX_TITLE);
+    const body = truncate(redactIdentities(htmlToText(capRaw(item.text, RAW_TEXT_CAP))), MAX_TEXT);
     const joined = body && body !== title && !title.includes(body) ? (title ? `${title}\n\n${body}` : body) : title;
     const text = truncate(joined, MAX_TEXT);
     const id = externalId(route.id, item.id || item.url);
@@ -137,4 +169,4 @@ function toPayload(item, source, route) {
     };
 }
 
-module.exports = { IDENTITY_URL_RE, redactIdentities, toPayload, htmlToText, nearestCity, externalId, isoDate, truncate, MAX_TEXT };
+module.exports = { IDENTITY_URL_RE, EMAIL_RE, RAW_TEXT_CAP, RAW_TITLE_CAP, HTML_PARSE_CAP, capRaw, redactIdentities, toPayload, htmlToText, nearestCity, externalId, isoDate, truncate, MAX_TEXT };

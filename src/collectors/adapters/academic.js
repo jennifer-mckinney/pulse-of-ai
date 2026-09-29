@@ -6,6 +6,7 @@
 'use strict';
 
 const xml2js = require('xml2js');
+const { Parser } = require('htmlparser2');
 const { Collector, JsonApiCollector, BulkFileCollector, RssAtomCollector, rssItem } = require('../base');
 const { findCity } = require('../../../public/js/config/cities.config.js');
 const { htmlToText } = require('../normalize');
@@ -148,17 +149,57 @@ class JstorDatasetCollector extends BulkFileCollector {
     }
 }
 
+// F10-3: the alert HTML is cut to this size before parsing (the message
+// itself is capped at 2 MB by the IMAP reader, F10-4).
+const SCHOLAR_HTML_CAP = 128 * 1024;
+
 /**
  * Parse one Scholar alert email (HTML) into items. Each result is an <h3>
  * with the paper link followed by the author/venue line (never read) and a
  * snippet div (class gse_alrt_sni). Links are NOT followed or stored.
+ * Tokenised with htmlparser2 in one linear pass (F10-3) — no regex over the
+ * markup.
  */
 function parseScholarAlert(html, date, messageId) {
+    const blocks = [];
+    let cur = null;
+    let inA = 0;
+    let inSnippet = 0;
+    let divDepth = 0;
+    const parser = new Parser({
+        onopentag(name, attrs) {
+            if (name === 'h3') {
+                cur = { title: '', snippet: '', titleDone: false };
+                blocks.push(cur);
+            } else if (!cur) {
+                return;
+            } else if (name === 'a' && !cur.titleDone) {
+                inA++;
+            } else if (name === 'div') {
+                if (inSnippet) divDepth++;
+                else if (/(^|\s)gse_alrt_sni(\s|$)/.test(attrs.class || '')) { inSnippet = 1; divDepth = 0; }
+            }
+        },
+        onclosetag(name) {
+            if (!cur) return;
+            if (name === 'a' && inA) { inA--; if (!inA) cur.titleDone = true; }
+            else if (name === 'div' && inSnippet) {
+                if (divDepth) divDepth--;
+                else inSnippet = 0;
+            }
+        },
+        ontext(t) {
+            if (!cur) return;
+            if (inA) cur.title += t;
+            else if (inSnippet) cur.snippet += t;
+        },
+    }, { decodeEntities: true, lowerCaseTags: true });
+    parser.write(String(html || '').slice(0, SCHOLAR_HTML_CAP));
+    parser.end();
     const items = [];
-    const blocks = String(html || '').split(/<h3\b/i).slice(1);
-    blocks.forEach((block, i) => {
-        const title = htmlToText((block.match(/<a\b[^>]*>([\s\S]*?)<\/a>/i) || [])[1]);
-        const snippet = htmlToText((block.match(/<div[^>]*class="gse_alrt_sni"[^>]*>([\s\S]*?)<\/div>/i) || [])[1]);
+    blocks.forEach((b, i) => {
+        const title = b.title.replace(/\s+/g, ' ').trim();
+        const snippet = b.snippet.replace(/\s+/g, ' ').trim();
         if (title) items.push({ id: `${messageId}#${i}`, title, text: snippet, url: null, publishedAt: date });
     });
     return items;
