@@ -5,6 +5,9 @@
 // (src/config/source-registry.js sourceStatus) and the latest collection
 // state (src/collectors/state.js).
 //
+// 'blocked_by_source' (F10-5): a collecting source that refused access and
+// is in its cooldown or awaiting a probe; never online.
+//
 // "Online" = gate status 'collecting' AND a successful run within
 // ONLINE_WINDOW_MS. "Sources online N/51" counts exactly these: a source the
 // registry would collect but that has not succeeded recently is not online.
@@ -14,6 +17,11 @@
 const { dbAll } = require('../db/connection');
 const { SOURCES, getSource, sourceStatus, killSwitchEnv, GATE_STATUSES } = require('../config/source-registry');
 const { DEMO_SOURCE_TYPE } = require('../config/data-mode');
+const { refusalGate, resetEnv, BLOCKED_BY_SOURCE } = require('./refusal');
+
+// Runtime statuses: the registry gate statuses plus 'blocked_by_source' (a
+// collecting source that refused us — F10-5; never online).
+const RUNTIME_STATUSES = Object.freeze([...GATE_STATUSES, BLOCKED_BY_SOURCE]);
 
 const ONLINE_WINDOW_MS = 60 * 60 * 1000;
 
@@ -27,6 +35,12 @@ function registryFields(row, env, now) {
     const src = getSource(row.name);
     if (!src || row.source_type === DEMO_SOURCE_TYPE) return null;
     const st = sourceStatus(src, env);
+    // F10-5: a collecting source in the refused state (cooldown or awaiting
+    // its probe) is reported as blocked_by_source until it succeeds again
+    // or is reset.
+    const gate = refusalGate(row, src.slug, env, now);
+    const refused = st.status === 'collecting' && (gate.state === 'cooldown' || gate.state === 'probe');
+    const status = refused ? BLOCKED_BY_SOURCE : st.status;
     return {
         registry: true,
         slug: src.slug,
@@ -35,13 +49,17 @@ function registryFields(row, env, now) {
         auth_kind: src.auth.kind,
         program: src.auth.program,
         signup_url: src.auth.signup,
-        status: st.status,
-        status_reason: st.reason,
+        status,
+        status_reason: refused ? gate.reason : st.reason,
         missing_env: st.missing,
         open_routes: st.openRoutes,
         licence_refs_on_file: st.recorded,
         kill_switch_env: killSwitchEnv(src.slug),
-        online: isOnline(st.status, row.last_success_at, now),
+        online: isOnline(status, row.last_success_at, now),
+        access_denied_at: row.access_denied_at || null,
+        refused_until: row.refused_until || null,
+        refusal_count: row.refusal_count || 0,
+        reset_env: resetEnv(src.slug),
         last_attempt_at: row.last_attempt_at || null,
         last_success_at: row.last_success_at || null,
         last_item_count: row.last_item_count === undefined ? null : row.last_item_count,
@@ -68,7 +86,8 @@ async function sourceRows({ includeInactive = false, env = process.env, now = Da
         `SELECT ds.id, ds.name, ds.display_name, ds.source_type, ds.category, ds.active,
                 ds.retired_at, ds.retired_note,
                 s.last_attempt_at, s.last_success_at, s.last_item_count, s.last_error_kind, s.last_http_status,
-                s.last_error_at, s.consecutive_failures
+                s.last_error_at, s.consecutive_failures,
+                s.access_denied_at, s.access_denied_status, s.access_denied_kind, s.refused_until, s.refusal_count
          FROM data_sources ds
          LEFT JOIN source_collection_state s ON s.source_id = ds.id
          ${includeInactive ? '' : 'WHERE ds.active = true'}
@@ -89,7 +108,7 @@ async function sourceRows({ includeInactive = false, env = process.env, now = Da
 /** Counts for /api/health and the smoke check. */
 function summarize(rows) {
     const reg = rows.filter(r => r.registry);
-    const byStatus = Object.fromEntries(GATE_STATUSES.map(s => [s, 0]));
+    const byStatus = Object.fromEntries(RUNTIME_STATUSES.map(s => [s, 0]));
     for (const r of reg) byStatus[r.status]++;
     return {
         registry: SOURCES.length,
@@ -100,4 +119,4 @@ function summarize(rows) {
     };
 }
 
-module.exports = { sourceRows, summarize, isOnline, registryFields, ONLINE_WINDOW_MS };
+module.exports = { sourceRows, summarize, isOnline, registryFields, ONLINE_WINDOW_MS, RUNTIME_STATUSES };

@@ -227,12 +227,14 @@ async function run(opts, out) {
         (status === 200 && reg.length === 51 ? r.pass : r.fail)('source registry',
             `${reg.length}/51 registry sources served — collecting ${count('collecting')} (online ${online}), `
             + `awaiting key ${count('awaiting_key')}, awaiting approval ${count('awaiting_approval')}, `
-            + `awaiting licence ${count('awaiting_licence')}, blocked ${count('blocked')}, disabled ${count('disabled')}`);
+            + `awaiting licence ${count('awaiting_licence')}, blocked ${count('blocked')}, disabled ${count('disabled')}, `
+            + `blocked by source ${count('blocked_by_source')}`);
         for (const x of reg) {
             const label = x.status === 'collecting' ? (x.online ? 'online' : 'collecting') : x.status.replace(/_/g, ' ');
             const last = x.last_success_at ? `, last ok ${new Date(x.last_success_at).toISOString().slice(11, 19)}Z, ${x.last_item_count} items` : '';
             const why = x.status === 'collecting' ? (x.last_error_kind ? `, last error: ${x.last_error_kind}${x.last_http_status ? ` (HTTP ${x.last_http_status})` : ''}` : '')
-                : x.status === 'blocked' ? ' — blocked: no compliant access' : ` — needs ${(x.missing_env || []).join(', ') || x.status_reason}`;
+                : x.status === 'blocked' ? ' — blocked: no compliant access'
+                    : x.status === 'blocked_by_source' ? ` — ${x.status_reason}` : ` — needs ${(x.missing_env || []).join(', ') || x.status_reason}`;
             out(`      ${String(x.rank).padStart(2)}. ${x.slug.padEnd(18)} ${x.category.padEnd(9)} ${label}${last}${why}`);
         }
         const collecting = count('collecting');

@@ -4,6 +4,9 @@
 //   for each requested source (registry order):
 //     gate  — sourceStatus(): only 'collecting' sources run (kill switches,
 //             missing credentials, blocked: never fetched)
+//     refusal — src/collectors/refusal.js: a source that refused access
+//             (401/403/451, bot wall, robots) is skipped through its
+//             cooldown and reported 'blocked_by_source' (F10-5)
 //     claim — state.claim(): the source's poll interval is honoured across
 //             processes (worker schedule + POST /api/refresh)
 //     fetch — one collector per open route (src/collectors), through the
@@ -50,6 +53,7 @@ const { EMBED_GATE_MIN_SCORE } = require('../pipeline/relevance');
 const cycle = require('./cycle');
 const { scrub } = require('./redact');
 const { classifyError } = require('./errors');
+const { refusalGate, refusalOf, resetEnv, BLOCKED_BY_SOURCE } = require('./refusal');
 
 /** Default queue hooks: lazily bind BullMQ (opening Redis only when needed). */
 function defaultQueues() {
@@ -122,6 +126,18 @@ async function runCollection(o = {}) {
             const sourceId = ids.get(slug);
             if (!sourceId) { row.outcome = 'error'; row.error = 'data_sources row missing — run `npm run seed`'; continue; }
 
+            // F10-5: a source that refused us is not asked again until its
+            // cooldown ends (then one probe) or an operator resets it.
+            const refusal = await state.getRefusal(sourceId);
+            // Wall clock, not o.now (the collectors' item clock): the refusal
+            // timestamps are the database's.
+            const gate = refusalGate(refusal, slug, env, Date.now());
+            if (gate.state === 'cooldown') { row.status = BLOCKED_BY_SOURCE; row.reason = gate.reason; continue; }
+            if (gate.state === 'reset') {
+                await state.clearRefusal(sourceId, `manual reset (${resetEnv(slug)})`);
+                log(`[collect] ${slug}: refusal cleared by ${resetEnv(slug)}`);
+            }
+
             const claimed = await state.claim(sourceId, pollIntervalSec(src, env));
             if (!claimed) { row.reason = 'collected within its poll interval (rate limit)'; continue; }
             queried++;
@@ -175,10 +191,14 @@ async function runCollection(o = {}) {
                     }
                 }
             }
-            const ok = okRoutes > 0;
+            const classified = routeErrors.map(e => classifyError(e.err));
+            // F10-5: any refused route refuses the source (the source said no).
+            const refused = refusalOf(classified);
+            const ok = okRoutes > 0 && !refused;
             row.outcome = ok ? 'ok' : 'error';
             row.error = routeErrors.length ? scrub(routeErrors.map(e => e.text).join('; '), env) : null;
-            const cls = routeErrors.length ? classifyError(routeErrors[0].err) : { error_kind: null, http_status: null };
+            const refusedIdx = refused ? classified.findIndex(c => c.error_kind === refused.kind) : -1;
+            const cls = routeErrors.length ? classified[refusedIdx >= 0 ? refusedIdx : 0] : { error_kind: null, http_status: null };
             row.errorKind = cls.error_kind;
             row.httpStatus = cls.http_status;
             if (row.error) summary.errors.push(`${slug}: ${row.error}`);
@@ -188,6 +208,14 @@ async function runCollection(o = {}) {
                 cursor, httpCache, ok, itemCount: row.kept, newPosts: row.new,
                 error: row.error, errorKind: row.errorKind, httpStatus: row.httpStatus,
             });
+            if (refused) {
+                const r = await state.recordRefusal(sourceId, refused, slug);
+                row.status = BLOCKED_BY_SOURCE;
+                row.reason = `refused (${refused.kind}${refused.status ? ` HTTP ${refused.status}` : ''}); cooldown until ${new Date(r.refused_until).toISOString()}`;
+                log(`[collect] ${slug}: REFUSED by the source — ${row.reason}`);
+            } else if (ok && refusal && refusal.access_denied_at && gate.state === 'probe') {
+                await state.clearRefusal(sourceId, 'a probe run after the cooldown succeeded');
+            }
             await state.recordRun({
                 sourceId, jobId, gateStatus: st.status, outcome: row.outcome, itemsFetched: row.fetched,
                 postsNew: row.new, requests: http.requests - before, error: row.error,

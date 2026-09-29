@@ -9,6 +9,8 @@
 //   saveOutcome(...)                 cursor, validators, last success /
 //       error / counts, consecutive failures
 //   recordRun(...)                   one source_runs row per run
+//   getRefusal / recordRefusal / clearRefusal   the refused state (F10-5,
+//       migration 018; src/collectors/refusal.js has the rules)
 
 'use strict';
 
@@ -77,4 +79,66 @@ async function recordRun({
     );
 }
 
-module.exports = { sourceIdsBySlug, claim, saveOutcome, recordRun, CLAIM_SLACK_SEC };
+/** The refusal columns of a source (null when it has no state row yet). */
+async function getRefusal(sourceId) {
+    return dbGet(
+        `SELECT access_denied_at, access_denied_status, access_denied_kind, refused_until, refusal_count
+         FROM source_collection_state WHERE source_id = $1`,
+        [sourceId],
+    );
+}
+
+/**
+ * Enter (or extend) the refused state: the n-th consecutive refusal sets a
+ * cooldown of min(1 h × 2^(n-1), 24 h), and one critical 'source_refused'
+ * alert is opened unless one is already open for the source.
+ * @returns {Promise<{ refusal_count: number, refused_until: Date }>}
+ */
+async function recordRefusal(sourceId, { kind, status = null }, slug) {
+    const { COOLDOWN_BASE_MS, COOLDOWN_MAX_MS } = require('./refusal');
+    const row = await dbGet(
+        `UPDATE source_collection_state
+         SET access_denied_at = NOW(),
+             access_denied_status = $2::int,
+             access_denied_kind = $3::text,
+             refused_until = NOW() + make_interval(secs => LEAST($4::float8, $5::float8 * power(2, LEAST(refusal_count, 10)))),
+             refusal_count = refusal_count + 1,
+             updated_at = NOW()
+         WHERE source_id = $1
+         RETURNING refusal_count, refused_until`,
+        [sourceId, status, kind, COOLDOWN_MAX_MS / 1000, COOLDOWN_BASE_MS / 1000],
+    );
+    await dbRun(
+        `INSERT INTO alert_events (alert_type, severity, source_table, source_id, details)
+         SELECT 'source_refused', 'critical', 'data_sources', $1::uuid, $2::jsonb
+         WHERE NOT EXISTS (SELECT 1 FROM alert_events
+                           WHERE alert_type = 'source_refused' AND source_id = $1::uuid AND resolved_at IS NULL)`,
+        [sourceId, JSON.stringify({
+            slug, error_kind: kind, http_status: status,
+            refusal_count: row ? row.refusal_count : null,
+            refused_until: row ? row.refused_until : null,
+        })],
+    );
+    return row;
+}
+
+/** Leave the refused state and resolve its open alert, recording why. */
+async function clearRefusal(sourceId, resolution) {
+    await dbRun(
+        `UPDATE source_collection_state
+         SET access_denied_at = NULL, access_denied_status = NULL, access_denied_kind = NULL,
+             refused_until = NULL, refusal_count = 0, updated_at = NOW()
+         WHERE source_id = $1`,
+        [sourceId],
+    );
+    await dbRun(
+        `UPDATE alert_events
+         SET resolved_at = NOW(), details = COALESCE(details, '{}'::jsonb) || jsonb_build_object('resolution', $2::text)
+         WHERE alert_type = 'source_refused' AND source_id = $1::uuid AND resolved_at IS NULL`,
+        [sourceId, resolution],
+    );
+}
+
+module.exports = {
+    sourceIdsBySlug, claim, saveOutcome, recordRun, getRefusal, recordRefusal, clearRefusal, CLAIM_SLACK_SEC,
+};
