@@ -16,6 +16,9 @@
 //      jump to the explore beat, so the page is navigable before story.js.
 //   5. Initialize globe.js / story.js / ui.js when present — and tolerate
 //      their absence (they land in C2–C4).
+//   6. Render the Appropriate Legal Notices (AGPL-3.0-or-later plus the
+//      section 7(b) attribution, config/legal.config.js) into the header
+//      "about" panel, and wire the "about" chip that opens it.
 //
 // DOM discipline: createElement/textContent/classList ONLY — the repo Write
 // hook blocks innerHTML in client JS, and all strings here may echo API data.
@@ -26,6 +29,7 @@
     const designConfig = window.PulseDesignConfig;
     const apiConfig = window.PulseApiConfig;
     const storyConfig = window.PulseStoryConfig;
+    const legalConfig = window.PulseLegalConfig;
     const utils = window.PulseUtils;
 
     const loadedAt = Date.now();
@@ -139,6 +143,45 @@
         });
     }
 
+    // ── 6. Legal notices (AGPL-3.0-or-later, section 7(b) attribution) ────
+    // One list item per legalConfig.NOTICE entry, built with
+    // createElement/textContent; entries with an href become links. The
+    // panel starts hidden and the "about" chip toggles it (Escape closes).
+    function renderLegalNotice() {
+        const panel = document.getElementById('about-panel');
+        const chip = document.getElementById('about-chip');
+        if (!panel || !chip || !legalConfig || !Array.isArray(legalConfig.NOTICE)) return;
+
+        const list = document.createElement('ul');
+        list.className = 'about-list';
+        legalConfig.NOTICE.forEach((item) => {
+            const li = document.createElement('li');
+            li.className = 'about-item';
+            li.setAttribute('data-notice', item.id);
+            if (item.href) {
+                const a = document.createElement('a');
+                a.href = item.href;
+                a.rel = 'noopener noreferrer';
+                a.textContent = item.text;
+                li.appendChild(a);
+            } else {
+                li.textContent = item.text;
+            }
+            list.appendChild(li);
+        });
+        while (panel.firstChild) panel.removeChild(panel.firstChild);
+        panel.appendChild(list);
+
+        const setOpen = (open) => {
+            panel.hidden = !open;
+            chip.setAttribute('aria-expanded', open ? 'true' : 'false');
+        };
+        chip.addEventListener('click', () => setOpen(panel.hidden));
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && !panel.hidden) setOpen(false);
+        });
+    }
+
     // Shared shell surface for later modules (freeze timer on first receipt,
     // programmatic jump to explore).
     window.PulseMain = { freezeInsightTimer, scrollToExplore };
@@ -155,6 +198,7 @@
             setInterval(pollHealth, apiConfig.REFRESH_MS);
         }
         wireSkips();
+        renderLegalNotice();
         initModules();
     });
 }());
