@@ -113,7 +113,10 @@ router.get('/posts/aggregated-by-location', responseCache(10000), async (req, re
 
         const whereClause = conditions.map(c => `(${c})`).join(' AND ');
 
-        // Main query: sentiment totals per city
+        // Main query: sentiment totals per city. The demo source type is a
+        // BOUND parameter (G9-7), appended after the filter params so their
+        // $n numbering is unchanged (the breakdown query below reuses them).
+        const aggParams = [...params, DEMO_SOURCE_TYPE];
         const rows = await dbAll(
             `SELECT
                 rp.location                                                AS city,
@@ -121,7 +124,7 @@ router.get('/posts/aggregated-by-location', responseCache(10000), async (req, re
                 COUNT(*) FILTER (WHERE sr.indicator = 'neutral')::int     AS neutral,
                 COUNT(*) FILTER (WHERE sr.indicator = 'negative')::int    AS negative,
                 COUNT(*)::int                                              AS total,
-                COUNT(*) FILTER (WHERE ds.source_type = '${DEMO_SOURCE_TYPE}')::int AS demo_posts,
+                COUNT(*) FILTER (WHERE ds.source_type = $${aggParams.length})::int AS demo_posts,
                 MAX(rp.collected_at)                                       AS last_updated
              FROM raw_posts rp
              JOIN sentiment_results sr ON sr.raw_post_id = rp.id
@@ -130,7 +133,7 @@ router.get('/posts/aggregated-by-location', responseCache(10000), async (req, re
              GROUP BY rp.location
              HAVING COUNT(*) > 0
              ORDER BY total DESC`,
-            params,
+            aggParams,
         );
 
         // Per-source breakdown query: same WHERE clause, additionally grouped by source
