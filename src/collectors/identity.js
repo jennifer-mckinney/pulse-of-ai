@@ -12,7 +12,9 @@
 //                         /channel/, Wikipedia User: / User talk: /
 //                         Special:Contributions pages.
 //   redactText(text)      in the text: e-mail addresses → [email], @handles →
-//                         @[user], phone numbers (E.164, NANP) → [phone],
+//                         @[user], Reddit u/<name> and /u/<name> → u/[user]
+//                         and scheme-less reddit.com/u/<name> → [profile
+//                         link] (ingest@1.5.0), phone numbers (E.164, NANP) → [phone],
 //                         identity links → [profile link], "cc <Name>" →
 //                         "cc [name]", Wikipedia "Preceding unsigned comment
 //                         added by …" → removed, and a trailing sign-off
@@ -73,6 +75,14 @@ const EMAIL_RE = /(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}
 // e-mail address never reaches it (EMAIL_RE replaced it with [email], and a
 // local part's '@' is preceded by a word character).
 const HANDLE_RE = /(^|[^A-Za-z0-9_.])@[A-Za-z0-9_][A-Za-z0-9_.-]{0,38}/g;
+// ingest@1.5.0 (Reddit, research §4): "u/<name>" and "/u/<name>" name a
+// Reddit user. Bounded (Reddit names are 3-20 characters; up to 38 are
+// taken) and anchored on a non-word character or the start, so "menu/x" or
+// a URL path segment never matches; full reddit.com/u/ links are already
+// [profile link] by then.
+const U_HANDLE_RE = /(^|[^A-Za-z0-9_\/.-])\/?u\/[A-Za-z0-9_-]{1,38}/g;
+// A scheme-less reddit.com/u/<name> or /user/<name> link.
+const REDDIT_USER_PATH_RE = /\b(?:(?:www|old|new|np)\.)?reddit\.com\/(?:u|user)\/[A-Za-z0-9_-]{1,38}/gi;
 const URL_RE = /\bhttps?:\/\/[^\s<>"'`]{1,2048}/gi;
 // E.164 (+ and 7–15 digits, optional single separators) and NANP
 // ((NXX) NXX-XXXX with optional +1). Digits on either side block a match.
@@ -93,8 +103,10 @@ const SIGNOFF_RE = /(?:^|\s)[—–]{1,2}\s{0,3}[A-Z][a-z]{1,20}(?:\s[A-Z][a-z]{
 function redactText(text) {
     return String(text || '')
         .replace(URL_RE, m => (isIdentityUrl(m) ? '[profile link]' : m))
+        .replace(REDDIT_USER_PATH_RE, '[profile link]')
         .replace(EMAIL_RE, '[email]')
         .replace(HANDLE_RE, '$1@[user]')
+        .replace(U_HANDLE_RE, '$1u/[user]')
         .replace(E164_RE, '[phone]')
         .replace(NANP_RE, '[phone]')
         .replace(UNSIGNED_RE, ' ')
@@ -104,4 +116,4 @@ function redactText(text) {
         .trim();
 }
 
-module.exports = { isIdentityUrl, redactText, EMAIL_RE, HANDLE_RE, PATH_IDENTITY_RE };
+module.exports = { isIdentityUrl, redactText, EMAIL_RE, HANDLE_RE, U_HANDLE_RE, PATH_IDENTITY_RE };

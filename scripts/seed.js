@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 // scripts/seed.js
 // Seeds the database with:
-//   1. The 51 data_sources of the source registry of record
+//   1. The 52 data_sources of the source registry of record (SOURCES.length)
 //      (src/config/source-registry.js — the workbook, ADR 0001). The old
 //      50-row seed list is gone; migration 013 retired its rows (history kept).
 //   2. methodology_versions — every row of src/config/methodology-registry.js
 //      (shared with migrations 009, 011, 012, 014, 015, 017 and 024). The current
 //      (latest registered) version of each component: sentiment 1.0.0,
-//      relevance 1.1.0, discourse 1.1.0-DQI, bias 1.1.0, ingest 1.4.0,
+//      relevance 1.1.0, discourse 1.1.0-DQI, bias 1.1.0, ingest 1.5.0,
 //      audit_narration 1.3.0, embedding 1.0.0; every earlier released row
 //      of a component is inserted too and never edited.
 // Safe to re-run. Registry rows are UPSERTED (name = slug): display name,

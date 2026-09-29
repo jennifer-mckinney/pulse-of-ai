@@ -233,7 +233,7 @@ describe('migration 014 ↔ methodology registry (alignment)', () => {
 
     test('the code implements the CURRENT versions', () => {
         expect(CURRENT_VERSIONS).toEqual(expect.objectContaining({
-            sentiment: '1.0.0', relevance: '1.1.0', discourse: '1.1.0-DQI', ingest: '1.4.0',
+            sentiment: '1.0.0', relevance: '1.1.0', discourse: '1.1.0-DQI', ingest: '1.5.0',
         }));
     });
 
@@ -403,12 +403,36 @@ describe('migration 024 ↔ methodology registry (ingest@1.4.0, Copilot 41295657
         expect(SQL_024).not.toMatch(/DO UPDATE|UPDATE methodology_versions|DELETE|DROP/);
     });
 
-    test('ingest@1.4.0 is current, keeps the D2 claim and redacts single-character handles', () => {
+    test('ingest@1.4.0 keeps the D2 claim and redacts single-character handles (superseded by 1.5.0, never edited)', () => {
         const reg = registry('ingest', '1.4.0');
         const prev = registry('ingest', '1.3.0');
-        expect(latest('ingest').version).toBe('1.4.0');
         expect(reg.config.privacy_claim).toBe(prev.config.privacy_claim);
         expect(reg.config.text_redaction.at_handle_min_length).toBe(1);
         expect(redactIdentities('ping @a and @b_ and a@b.co')).toBe('ping @[user] and @[user] and [email]');
+    });
+});
+
+describe('migration 026 ↔ methodology registry (ingest@1.5.0, Reddit u/ names)', () => {
+    const { generate } = require('../../../scripts/generate-methodology-migration');
+    const { redactIdentities } = require('../../../src/collectors/normalize');
+    const SQL_026 = fs.readFileSync(
+        path.join(__dirname, '../../../src/db/migrations/026_ingest_reddit_handles.sql'), 'utf8');
+
+    test('026 is exactly the generated ingest@1.5.0 row, idempotent, and edits nothing', () => {
+        expect(SQL_026.endsWith(generate(['ingest@1.5.0']))).toBe(true);
+        expect((SQL_026.match(/INSERT INTO/g) || []).length).toBe(1);
+        expect(SQL_026).not.toMatch(/DO UPDATE|UPDATE methodology_versions|DELETE|DROP/);
+    });
+
+    test('ingest@1.5.0 is current and redacts Reddit user names; 1.4.0 is unchanged', () => {
+        const reg = registry('ingest', '1.5.0');
+        const prev = registry('ingest', '1.4.0');
+        expect(latest('ingest').version).toBe('1.5.0');
+        expect(reg.config.text_redaction.reddit_user_handles).toMatch(/u\/\[user\]/);
+        expect(prev.config.text_redaction.reddit_user_handles).toBeUndefined();
+        expect(reg.config.pii_fields_removed).toEqual(prev.config.pii_fields_removed);
+        expect(redactIdentities('thanks u/spez, /u/Jane_Doe and reddit.com/user/bob'))
+            .toBe('thanks u/[user], u/[user] and [profile link]');
+        expect(redactIdentities('r/MachineLearning and menu/u/x stay')).toBe('r/MachineLearning and menu/u/x stay');
     });
 });
