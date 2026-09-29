@@ -204,6 +204,33 @@ d=$(new_case)
 assert_eq "published_web_url: host port → localhost URL" "url=http://localhost:3500" \
     "$(lib_run "$d" "set -euo pipefail; STACK_PROJECT=t; docker() { echo '127.0.0.1:3500'; }; url=\$(published_web_url) || die x; echo \"url=\$url\"")"
 
+# ─── F9-1: placeholder or empty secrets stop standup ─────────────────────────
+d=$(new_case); write_example "$d"
+printf 'REDIS_PASSWORD=replace_with_random_64_hex_chars\n' >> "$d/.env.example"
+lib_run "$d" "$ENV_SETUP; ensure_env_file" >/dev/null
+assert_eq "REDIS_PASSWORD is a generated secret"      "64" "$(lib_run "$d" 'v=$(env_file_value REDIS_PASSWORD); [[ "$v" =~ ^[0-9a-f]{64}$ ]] && printf %s ${#v}')"
+lib_run "$d" "$ENV_SETUP; check_env_secrets" >/dev/null; rc=$?
+assert_eq "check_env_secrets: generated secrets pass" "0" "$rc"
+
+for key in POSTGRES_PASSWORD REDIS_PASSWORD AUDIT_HASH_KEY CORRELATION_SALT; do
+    d=$(new_case); write_example "$d"
+    printf 'REDIS_PASSWORD=replace_with_random_64_hex_chars\n' >> "$d/.env.example"
+    lib_run "$d" "$ENV_SETUP; ensure_env_file" >/dev/null
+    placeholder=$(grep "^$key=" "$d/.env.example" | cut -d= -f2-)
+    printf '%s=%s\n' "$key" "$placeholder" >> "$d/.env"
+    lib_run "$d" "$ENV_SETUP; check_env_secrets" >/dev/null; rc=$?
+    assert_eq "check_env_secrets: placeholder $key dies" "1" "$rc"
+    printf '%s=\n' "$key" >> "$d/.env"
+    lib_run "$d" "$ENV_SETUP; check_env_secrets" >/dev/null; rc=$?
+    assert_eq "check_env_secrets: empty $key dies" "1" "$rc"
+done
+# A placeholder with an inline comment is still the placeholder.
+d=$(new_case); write_example "$d"
+lib_run "$d" "$ENV_SETUP; ensure_env_file" >/dev/null
+printf 'POSTGRES_PASSWORD=changeme_before_production   # todo\n' >> "$d/.env"
+lib_run "$d" "$ENV_SETUP; check_env_secrets" >/dev/null; rc=$?
+assert_eq "check_env_secrets: commented placeholder dies" "1" "$rc"
+
 #@@CASES@@
 
 

@@ -89,7 +89,7 @@ effective() {
 # ─── Env file creation / merge (scripts/standup.sh) ──────────────────────────
 # Keys whose value standup GENERATES (openssl rand -hex 32) instead of
 # copying the .env.example placeholder. Values are never printed.
-STACK_SECRET_KEYS=(POSTGRES_PASSWORD AUDIT_HASH_KEY CORRELATION_SALT)
+STACK_SECRET_KEYS=(POSTGRES_PASSWORD REDIS_PASSWORD AUDIT_HASH_KEY CORRELATION_SALT)
 # Temp file of an env file being created (removed on any exit — F9-4).
 STACK_ENV_TMP=''
 
@@ -210,20 +210,29 @@ secure_env_file() {
         || die "could not chmod 600 $STACK_ENV_FILE — it holds secrets; fix its ownership and re-run"
 }
 
-# Placeholder or empty secrets are not secrets. Existing values are never
-# rewritten, so this only reports them.
+# F9-1: a placeholder or empty secret is not a secret — the .env.example
+# placeholders are public, so a stack started with one is open to anyone who
+# can reach its ports. Existing values are never rewritten, so standup STOPS
+# and names the key instead (the value itself is never printed).
 check_env_secrets() {
-    local key example_val current
+    local key example_val current bad=()
     for key in "${STACK_SECRET_KEYS[@]}"; do
         example_val=$(grep -E "^${key}=" "$STACK_EXAMPLE_FILE" | head -n 1 || true)
         example_val=$(env_value_body "${example_val#*=}")
         current=$(env_file_value "$key")
         if [[ -z "$current" ]]; then
-            warn "$key is empty in $STACK_ENV_FILE — set it (openssl rand -hex 32)"
+            bad+=("$key (empty)")
         elif [[ -n "$example_val" && "$current" == "$example_val" ]]; then
-            warn "$key still has the .env.example placeholder — replace it (openssl rand -hex 32)"
+            bad+=("$key (the .env.example placeholder)")
         fi
     done
+    (( ${#bad[@]} == 0 )) && return 0
+    local b msg=''
+    for b in "${bad[@]}"; do msg+=$'\n'"      - $b"; done
+    die "these secrets in $STACK_ENV_FILE are not secret:$msg
+    Set each to a fresh value (openssl rand -hex 32). For POSTGRES_PASSWORD on an
+    EXISTING database volume, also change it inside postgres (README: 'Upgrading an
+    existing dev database'), or reset the stack with: npm run teardown -- --purge"
 }
 
 # ─── Compose project ─────────────────────────────────────────────────────────

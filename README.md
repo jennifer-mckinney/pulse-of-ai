@@ -128,7 +128,7 @@ The script checks these first and prints how to fix anything that is missing.
 
 ### What it does
 
-1. Creates `.env` from `.env.example` if you don't have one, generating strong random `POSTGRES_PASSWORD`, `AUDIT_HASH_KEY` and `CORRELATION_SALT` values. It never prints them. An existing `.env` is left as it is: only keys that are missing get added, and it warns about any secret that still has its placeholder value.
+1. Creates `.env` from `.env.example` if you don't have one, generating strong random `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `AUDIT_HASH_KEY` and `CORRELATION_SALT` values. It never prints them. An existing `.env` keeps its values: only keys that are missing get added (standup refuses to add secrets to a group- or world-writable file), and the file is set to mode 600. If a secret is empty or still has its `.env.example` placeholder, standup stops and names it.
 2. Builds two images: `pulse-of-ai/app` (Node 22; one image for web, worker, migrate and populate) and `pulse-of-ai/embeddings` (Python 3.13, FastAPI and sentence-transformers, CPU only). Both run as non-root users.
 3. Starts the compose `full` profile. A one-shot `migrate` job applies migrations 001–011 and the seed, and web and the worker start only after it exits successfully.
 4. Waits for health, with timeouts. If a service fails, its logs are printed.
@@ -148,9 +148,9 @@ Re-running is safe. The images come from the build cache, running containers are
 | `migrate` | none | One-shot job: migrations and seed |
 | `postgres` | `5434` in `.env` (`POSTGRES_PORT`) | PostgreSQL 16 + pgvector (`postgres_data` volume) |
 | `postgres_test` | `5433` (`POSTGRES_TEST_PORT`) | Test database (not used by the running app) |
-| `redis` | `6379` (`REDIS_PORT`) | BullMQ queue backend (`redis_data` volume) |
+| `redis` | `6379` (`REDIS_PORT`) | BullMQ queue backend (`redis_data` volume). Password required (`REDIS_PASSWORD`) |
 
-The web and embeddings ports bind to `127.0.0.1` by default (`PULSE_BIND_ADDR`). To run a second stack beside this one, give it its own project name and ports:
+Every published port (web and the databases and redis) binds to `127.0.0.1` by default (`PULSE_BIND_ADDR`). Setting `PULSE_BIND_ADDR=0.0.0.0` exposes all of them to your network, databases included. To run a second stack beside this one, give it its own project name and ports:
 
 ```bash
 COMPOSE_PROJECT_NAME=pulse-demo WEB_PORT=3200 EMBEDDINGS_PORT=8100 \
@@ -273,7 +273,8 @@ Copy `.env.example` to `.env` and fill in the values below.
 | `REDIS_PORT` | No | Redis host port (default `6379`) |
 | `WEB_PORT` | No | Standup: host port of the web service (default `3000`) |
 | `EMBEDDINGS_PORT` | No | Standup: host port of the embeddings service (default `8000`) |
-| `PULSE_BIND_ADDR` | No | Standup: interface the web and embeddings ports bind to (default `127.0.0.1`) |
+| `PULSE_BIND_ADDR` | No | Interface every published port binds to: web, postgres, postgres_test, redis (default `127.0.0.1`) |
+| `REDIS_PASSWORD` | Yes (Docker) | Redis `requirepass`; BullMQ, the worker and `/api/health` authenticate with it. Standup generates it |
 | `DEMO_FEED_INTERVAL_MS` | No | Standup demo feed: ms between fictional batches (default `150000`) |
 | `DEMO_FEED_BATCH` | No | Standup demo feed: posts per batch (default `14`) |
 

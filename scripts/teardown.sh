@@ -34,12 +34,16 @@ done
 check_docker
 STACK_PROJECT=$(stack_project)
 
-# `down` matches containers by project label, so the password value is
-# irrelevant — but compose still interpolates the file, and the postgres
-# services declare POSTGRES_PASSWORD as required. Supply a placeholder only
-# when no env file provides one.
+# `down` matches containers by project label, so the password values are
+# irrelevant — but compose still interpolates the file, and the services
+# declare POSTGRES_PASSWORD / REDIS_PASSWORD as required. Supply a
+# placeholder only when no env file provides one.
 if [[ -z "$(effective POSTGRES_PASSWORD)" ]]; then
     export POSTGRES_PASSWORD=teardown-placeholder
+fi
+# Same for the Redis password (required by the redis service and x-app).
+if [[ -z "$(effective REDIS_PASSWORD)" ]]; then
+    export REDIS_PASSWORD=teardown-placeholder
 fi
 
 containers=$(project_containers | wc -l | tr -d ' ')

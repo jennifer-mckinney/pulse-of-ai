@@ -138,12 +138,19 @@ jobs:
       - name: Validate docker-compose.yml profiles
         env:
           POSTGRES_PASSWORD: ci_password
+          REDIS_PASSWORD: ci_password
         run: |
           docker compose config --quiet
           docker compose --profile full --profile demo config --quiet
           default_services="$(docker compose config --services | sort | tr '\n' ' ')"
           echo "default profile: ${default_services}"
           test "${default_services}" = "postgres postgres_test redis "
+
+      # Security / operations policy on the resolved config: no port without
+      # an explicit host IP (loopback by default), and the checks listed in
+      # the script header.
+      - name: Compose policy checks
+        run: bash scripts/test/check-compose.sh
 
       - name: Lint standup / teardown scripts
         run: |

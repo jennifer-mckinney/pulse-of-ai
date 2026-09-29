@@ -7,8 +7,10 @@
 # What it does, in order (safe to re-run — every step is idempotent):
 #   1. checks prerequisites: docker, compose v2+, a running daemon
 #   2. creates .env from .env.example if missing, generating strong random
-#      POSTGRES_PASSWORD / AUDIT_HASH_KEY / CORRELATION_SALT (never printed);
-#      an existing .env keeps every value — only missing keys are appended
+#      POSTGRES_PASSWORD / REDIS_PASSWORD / AUDIT_HASH_KEY / CORRELATION_SALT
+#      (never printed); an existing .env keeps every value — only missing
+#      keys are appended — and is kept at mode 600. A secret that is empty
+#      or still the .env.example placeholder stops the run.
 #   3. builds the app + embeddings images
 #   4. starts compose profile "full": postgres, postgres_test, redis, the
 #      one-shot migrate job (migrations + seed), web, worker, embeddings

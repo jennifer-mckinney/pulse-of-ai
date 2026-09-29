@@ -29,13 +29,24 @@ const { Queue } = require('bullmq');
 // ─── Connection ───────────────────────────────────────────────────────────────
 
 /**
- * Shared Redis connection config used by all queues and workers.
- * In production override with REDIS_URL (e.g. redis://user:pass@host:6379).
+ * Redis connection config from an environment object.
+ * REDIS_PASSWORD (F9-1): the compose stack runs Redis with --requirepass,
+ * so every queue, worker and the /api/health probe authenticates. When it
+ * is unset or empty no password is sent (a local, auth-less Redis).
+ * @param {NodeJS.ProcessEnv} env
+ * @returns {{ host: string, port: number, password?: string }}
  */
-const connection = {
-    host: process.env.REDIS_HOST || '127.0.0.1',
-    port: parseInt(process.env.REDIS_PORT || '6379', 10),
-};
+function redisConnection(env) {
+    const conn = {
+        host: env.REDIS_HOST || '127.0.0.1',
+        port: parseInt(env.REDIS_PORT || '6379', 10),
+    };
+    if (env.REDIS_PASSWORD) conn.password = env.REDIS_PASSWORD;
+    return conn;
+}
+
+/** Shared Redis connection config used by all queues and workers. */
+const connection = redisConnection(process.env);
 
 // ─── Default job options ──────────────────────────────────────────────────────
 
@@ -87,6 +98,7 @@ const correlateQueue = new Queue('correlate', { connection, defaultJobOptions: B
 
 module.exports = {
     connection,
+    redisConnection,
     BASE_JOB_OPTIONS,
     collectRedditQueue,
     collectRssQueue,
