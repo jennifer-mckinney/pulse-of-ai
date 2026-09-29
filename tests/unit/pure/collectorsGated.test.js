@@ -199,16 +199,16 @@ describe('free-key and approval APIs', () => {
         const source = fs.readFileSync(path.join(FIXTURE_ROOT, 'gated/scholar-alert.eml'));
         const calls = [];
         const fakeImap = (opts) => ({
-            connect: async () => calls.push(['connect', opts.host, opts.port, opts.secure]),
+            connect: async () => calls.push(['connect', opts.host, opts.port, opts.secure, opts.tls]),
             getMailboxLock: async box => { calls.push(['lock', box]); return { release: () => calls.push(['release']) }; },
             search: async q => { calls.push(['search', q.from]); return [7, 8]; },
-            fetchOne: async uid => ({ source }),
+            fetchOne: async (uid, what) => (what.size ? { size: source.length } : { source }),
             logout: async () => calls.push(['logout']),
         });
         const env = { SCHOLAR_ALERTS_IMAP_HOST: 'imap.example', SCHOLAR_ALERTS_IMAP_USER: 'u', SCHOLAR_ALERTS_IMAP_PASSWORD: 'p' };
         const { c, cursor, transport } = make('google_scholar', 'alert-mailbox', [], env, { imapFactory: fakeImap, cursor: { lastUid: 7 } });
         const r = await c.collect();
-        expect(calls[0]).toEqual(['connect', 'imap.example', 993, true]);
+        expect(calls[0]).toEqual(['connect', 'imap.example', 993, true, { minVersion: 'TLSv1.2', rejectUnauthorized: true }]);
         expect(calls).toContainEqual(['search', 'scholaralerts-noreply@google.com']);
         expect(cursor.lastUid).toBe(8);
         expect(r.payloads.map(p => p.title)).toEqual(['Scaling laws for large language models revisited', 'Auditing artificial intelligence hiring tools']);
@@ -217,6 +217,66 @@ describe('free-key and approval APIs', () => {
         expect(transport.calls).toHaveLength(0);
         expect(calls[calls.length - 1]).toEqual(['logout']);
         expect(parseScholarAlert('', null, 'x')).toEqual([]);
+    });
+
+    // F10-7 / G10-20: DKIM, size cap, logout always, no server text in errors.
+    describe('Scholar IMAP hardening (F10-7)', () => {
+        const genuine = fs.readFileSync(path.join(FIXTURE_ROOT, 'gated/scholar-alert.eml'), 'utf8');
+        const noAuth = genuine.replace(/^Authentication-Results:[\s\S]*?(?=^From:)/m, '');
+        const env = { SCHOLAR_ALERTS_IMAP_HOST: 'imap.example', SCHOLAR_ALERTS_IMAP_USER: 'mailbox-user-9431', SCHOLAR_ALERTS_IMAP_PASSWORD: 'mailbox-pass-7777' };
+        function imap(messages, over = {}) {
+            const calls = [];
+            const factory = () => ({
+                connect: over.connect || (async () => calls.push('connect')),
+                getMailboxLock: async () => ({ release: () => calls.push('release') }),
+                search: async () => Object.keys(messages).map(Number),
+                fetchOne: async (uid, what) => {
+                    calls.push(what.size ? `size ${uid}` : `source ${uid}`);
+                    const m = messages[uid];
+                    return what.size ? { size: m.size !== undefined ? m.size : Buffer.byteLength(m.source) } : { source: Buffer.from(m.source) };
+                },
+                logout: over.logout || (async () => calls.push('logout')),
+                close: () => calls.push('close'),
+            });
+            return { calls, factory };
+        }
+        const run = (factory) => make('google_scholar', 'alert-mailbox', [], env, { imapFactory: factory, cursor: {} }).c;
+
+        test('a spoofed From: with no DKIM pass for google.com is dropped (warning, cursor advances)', async () => {
+            const spoofDkim = genuine.replace('header.i=@google.com', 'header.i=@evil.example');
+            const lowerHeader = `Authentication-Results: mx.example.invalid; dkim=fail\n${genuine}`;
+            const { factory } = imap({ 1: { source: noAuth }, 2: { source: spoofDkim }, 3: { source: lowerHeader }, 4: { source: genuine } });
+            const c = run(factory);
+            const r = await c.collect();
+            expect(r.payloads).toHaveLength(2);   // only uid 4's two papers
+            expect(c.cursor.lastUid).toBe(4);
+            expect(c.warnings.filter(w => /no DKIM pass/.test(w))).toHaveLength(3);
+        });
+
+        test('a message over 2 MB is skipped before its body is downloaded', async () => {
+            const { calls, factory } = imap({ 5: { source: genuine, size: 3 * 1024 * 1024 }, 6: { source: genuine } });
+            const c = run(factory);
+            const r = await c.collect();
+            expect(calls).toContain('size 5');
+            expect(calls).not.toContain('source 5');
+            expect(r.payloads).toHaveLength(2);
+            expect(c.warnings[0]).toMatch(/uid 5 skipped: over 2097152 bytes/);
+        });
+
+        test('an IMAP failure logs out anyway and its public message carries no server text or secret', async () => {
+            const { calls, factory } = imap({}, { connect: async () => { throw Object.assign(new Error('AUTHENTICATIONFAILED for mailbox-user-9431 / mailbox-pass-7777'), { code: 'NoConnection' }); } });
+            const err = await run(factory).collect().catch(e => e);
+            expect(err.message).toBe('IMAP connect failed (NoConnection)');
+            expect(err.kind).toBe('network');
+            expect(err.detail).not.toMatch(/mailbox-user-9431|mailbox-pass-7777/);
+            expect(calls).toContain('logout');
+        });
+
+        test('a failing logout falls back to close; the result stands', async () => {
+            const { calls, factory } = imap({ 9: { source: genuine } }, { logout: async () => { throw new Error('gone'); } });
+            expect((await run(factory).collect()).payloads).toHaveLength(2);
+            expect(calls).toContain('close');
+        });
     });
 });
 

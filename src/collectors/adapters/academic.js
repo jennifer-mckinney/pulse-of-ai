@@ -10,7 +10,8 @@ const { Parser } = require('htmlparser2');
 const { Collector, JsonApiCollector, BulkFileCollector, RssAtomCollector, rssItem, rejectDtdEntities } = require('../base');
 const { findCity } = require('../../../public/js/config/cities.config.js');
 const { htmlToText } = require('../normalize');
-const { ParseError } = require('../errors');
+const { ParseError, HttpError } = require('../errors');
+const { scrub } = require('../redact');
 
 /** arXiv export API (Atom). One request per run; the API allows 1 per 3 s. */
 class ArxivCollector extends RssAtomCollector {
@@ -206,15 +207,50 @@ function parseScholarAlert(html, date, messageId) {
     return items;
 }
 
+// F10-4 / F10-7: a Scholar alert is a few KB; a message over this size is
+// skipped unread (its UID still advances the cursor).
+const MAX_ALERT_BYTES = 2 * 1024 * 1024;
+const SCHOLAR_SENDER = 'scholaralerts-noreply@google.com';
+// The receiving server's verdict: DKIM passed for a google.com signature.
+const DKIM_GOOGLE_RE = /(?:^|[;\s])dkim=pass\b[^;]{0,300}?\bheader\.(?:d=google\.com|i=[^;\s]{0,64}@google\.com)\b/i;
+
+/**
+ * F10-7: accept a message only when the TOPMOST Authentication-Results
+ * header (the one the receiving server prepended — later ones can be
+ * supplied by the sender) reports dkim=pass for google.com, and From is the
+ * Scholar sender. A spoofed From: without Google's signature is dropped.
+ * @param {object} mail  mailparser output
+ */
+function isAuthenticScholarAlert(mail) {
+    const lines = Array.isArray(mail && mail.headerLines) ? mail.headerLines : [];
+    const top = lines.find(h => h && h.key === 'authentication-results');
+    if (!top || !DKIM_GOOGLE_RE.test(String(top.line || '').slice(0, 4096))) return false;
+    const from = mail.from && Array.isArray(mail.from.value) ? mail.from.value : [];
+    return from.length === 1 && String(from[0].address || '').toLowerCase() === SCHOLAR_SENDER;
+}
+
+/** An IMAP failure with no server text in its message (F10-7); detail is scrubbed. */
+function imapError(stage, err, env) {
+    const code = (err && (err.code || err.serverResponseCode || err.name)) || 'error';
+    return new HttpError(`IMAP ${stage} failed (${String(code).replace(/[^\w.-]/g, '').slice(0, 40)})`, {
+        kind: 'network', detail: scrub(String((err && err.message) || ''), env).slice(0, 500),
+    });
+}
+
 /**
  * Google Scholar alert mailbox over IMAP (the only official automated
  * delivery). Reads messages from scholaralerts-noreply@google.com newer
  * than the last UID seen. `ctx.imapFactory` is injectable for tests.
+ *
+ * F10-7: TLS 1.2+ with certificate verification, messages over 2 MB skipped
+ * before download, DKIM (google.com) required, logout always attempted
+ * (G10-20), and IMAP errors reported without server text.
  */
 class ScholarImapCollector extends Collector {
     constructor(ctx) {
         super(ctx);
         this.imapFactory = ctx.imapFactory || ((opts) => new (require('imapflow').ImapFlow)(opts));
+        this.warnings = this.warnings || [];
     }
 
     async fetchItems() {
@@ -223,26 +259,51 @@ class ScholarImapCollector extends Collector {
             host: this.env.SCHOLAR_ALERTS_IMAP_HOST.trim(),
             port: Number(this.env.SCHOLAR_ALERTS_IMAP_PORT) || 993,
             secure: true,
+            tls: { minVersion: 'TLSv1.2', rejectUnauthorized: true },
             auth: { user: this.env.SCHOLAR_ALERTS_IMAP_USER.trim(), pass: this.env.SCHOLAR_ALERTS_IMAP_PASSWORD },
             logger: false,
         });
-        await client.connect();
         const items = [];
-        const lock = await client.getMailboxLock(this.env.SCHOLAR_ALERTS_MAILBOX || 'INBOX');
+        let lock = null;
+        let stage = 'connect';
         try {
+            await client.connect();
+            stage = 'mailbox';
+            lock = await client.getMailboxLock(this.env.SCHOLAR_ALERTS_MAILBOX || 'INBOX');
+            stage = 'search';
             const since = new Date(this.now() - 7 * 86400000);
-            const uids = await client.search({ from: 'scholaralerts-noreply@google.com', since }, { uid: true });
+            const uids = await client.search({ from: SCHOLAR_SENDER, since }, { uid: true });
             const lastUid = this.cursor.lastUid || 0;
-            const fresh = (uids || []).filter(u => u > lastUid);
+            const fresh = (uids || []).filter(u => u > lastUid).sort((a, b) => a - b);
             for (const uid of fresh) {
-                const msg = await client.fetchOne(uid, { source: true }, { uid: true });
-                const mail = await simpleParser(msg.source);
-                items.push(...parseScholarAlert(mail.html || '', mail.date, mail.messageId || String(uid)));
+                stage = 'fetch';
+                const meta = await client.fetchOne(uid, { size: true }, { uid: true });
+                const size = meta && Number.isFinite(meta.size) ? meta.size : null;
+                let msg = null;
+                if (size !== null && size <= MAX_ALERT_BYTES) msg = await client.fetchOne(uid, { source: true }, { uid: true });
+                const bytes = msg && msg.source ? msg.source.length : 0;
+                if (!msg || !msg.source || bytes > MAX_ALERT_BYTES) {
+                    this.warnings.push(`message uid ${uid} skipped: ${size === null ? 'size unknown' : `over ${MAX_ALERT_BYTES} bytes`}`);
+                } else {
+                    const mail = await simpleParser(msg.source);
+                    if (isAuthenticScholarAlert(mail)) {
+                        items.push(...parseScholarAlert(mail.html || '', mail.date, mail.messageId || String(uid)));
+                    } else {
+                        this.warnings.push(`message uid ${uid} dropped: no DKIM pass for google.com`);
+                    }
+                }
                 this.cursor.lastUid = Math.max(this.cursor.lastUid || 0, uid);
             }
+        } catch (err) {
+            if (err instanceof ParseError) throw err;
+            throw imapError(stage, err, this.env);
         } finally {
-            lock.release();
-            await client.logout();
+            if (lock) { try { lock.release(); } catch { /* released with the connection */ } }
+            try {
+                await client.logout();
+            } catch {
+                try { if (typeof client.close === 'function') client.close(); } catch { /* already closed */ }
+            }
         }
         return items;
     }
@@ -251,4 +312,5 @@ class ScholarImapCollector extends Collector {
 module.exports = {
     ArxivCollector, PubmedCollector, SpringerCollector, ElsevierCollector, IeeeCollector,
     JstorDatasetCollector, ScholarImapCollector, parseScholarAlert, affiliationCity,
+    isAuthenticScholarAlert, MAX_ALERT_BYTES,
 };

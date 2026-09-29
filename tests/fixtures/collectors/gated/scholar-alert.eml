@@ -1,3 +1,6 @@
+Authentication-Results: mx.example.invalid;
+ dkim=pass header.i=@google.com header.s=20230601 header.b=AbCdEf;
+ spf=pass smtp.mailfrom=scholaralerts-noreply@google.com
 From: Google Scholar Alerts <scholaralerts-noreply@google.com>
 To: alerts@example.invalid
 Subject: "large language model" - new results
