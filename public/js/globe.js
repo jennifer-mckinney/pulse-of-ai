@@ -74,6 +74,11 @@
     const FIB_COUNT = 2600;            // Fibonacci-sphere fallback dot count
     const HEAT_FALLOFF_RAD = 0.38;     // land-heat nearest-city falloff ≈ 22°
     const LAND_NEUTRAL = 'rgba(158,190,235,1)'; // untinted land dot color
+    // D3 (ADR 0001, "Separate layer, excluded from bias."): the
+    // publisher-location layer — posts placed at their publisher's home city
+    // — is a dashed ring in this neutral ink, never a filled sentiment dot.
+    const PUBLISHER_RING = 'rgba(234,241,250,0.85)';
+    const PUBLISHER_DASH = [3, 3];
 
     // FR-25: self-hosted land geometry only — the vendored file is the
     // world-atlas 110m land TopoJSON already converted to GeoJSON with
@@ -208,6 +213,9 @@
                 volume: Number.isFinite(Number(c.volume))
                     ? Number(c.volume)
                     : (Number.isFinite(Number(c.total)) ? Number(c.total) : 0),
+                // D3: how many of the city's posts sit in the
+                // publisher-location layer (absent → 0).
+                publisher: publisherCount(c),
                 top: normalizeCategorySlug(
                     c.top !== undefined && c.top !== null
                         ? c.top
@@ -218,6 +226,35 @@
             });
         }
         return out;
+    }
+
+    // publisherCount: the row's publisher-located posts (D3), from the
+    // renderer shape (publisher) or the API/normalized shape
+    // (publisher_posts), clamped to [0, volume].
+    function publisherCount(c) {
+        const raw = c.publisher !== undefined ? c.publisher : c.publisher_posts;
+        const n = Number(raw);
+        if (!Number.isFinite(n) || n <= 0) return 0;
+        const vol = Number.isFinite(Number(c.volume)) ? Number(c.volume)
+            : (Number.isFinite(Number(c.total)) ? Number(c.total) : 0);
+        return Math.min(Math.floor(n), Math.max(0, vol));
+    }
+
+    // publisherLayer: how a city is drawn in the publisher-location layer.
+    //   none — no publisher-located posts: the plain sentiment dot;
+    //   ring — mixed: the dot plus a dashed outer ring;
+    //   only — every post is publisher-located: a hollow dashed marker
+    //          instead of the filled dot, so the layer never reads as
+    //          content-located discussion.
+    function publisherLayer(c) {
+        const pub = publisherCount(c);
+        const vol = Number.isFinite(Number(c.volume)) ? Number(c.volume) : 0;
+        if (pub <= 0) return { mode: 'none', publisher: 0, share: 0 };
+        return {
+            mode: vol > 0 && pub >= vol ? 'only' : 'ring',
+            publisher: pub,
+            share: vol > 0 ? pub / vol : 1,
+        };
     }
 
     // sphereRadius: R = min(W,H) × 0.38 × zoom.
@@ -500,6 +537,9 @@
         cityColor,
         topCategoryFromSources,
         adaptCities,
+        publisherCount,
+        publisherLayer,
+        PUBLISHER_RING,
         sphereRadius,
         project,
         angleDelta,
@@ -901,16 +941,33 @@
                 const isHot = c.id === p.hoveredId || c.id === p.selectedId;
                 ctx.globalAlpha = dimmed ? 0.13 : (0.55 + pt[2] * 0.45);
 
-                // Glow halo (×3 radius radial gradient).
-                const gg = ctx.createRadialGradient(pt[0], pt[1], 0, pt[0], pt[1], r * 3);
-                gg.addColorStop(0, col);
-                gg.addColorStop(1, 'rgba(0,0,0,0)');
-                ctx.globalAlpha *= 0.35;
-                ctx.fillStyle = gg;
-                ctx.beginPath(); ctx.arc(pt[0], pt[1], r * 3, 0, TWO_PI); ctx.fill();
-                ctx.globalAlpha = dimmed ? 0.2 : 0.95;
-                ctx.fillStyle = col;
-                ctx.beginPath(); ctx.arc(pt[0], pt[1], r, 0, TWO_PI); ctx.fill();
+                const pubLayer = publisherLayer(c);
+                if (pubLayer.mode !== 'only') {
+                    // Glow halo (×3 radius radial gradient).
+                    const gg = ctx.createRadialGradient(pt[0], pt[1], 0, pt[0], pt[1], r * 3);
+                    gg.addColorStop(0, col);
+                    gg.addColorStop(1, 'rgba(0,0,0,0)');
+                    ctx.globalAlpha *= 0.35;
+                    ctx.fillStyle = gg;
+                    ctx.beginPath(); ctx.arc(pt[0], pt[1], r * 3, 0, TWO_PI); ctx.fill();
+                    ctx.globalAlpha = dimmed ? 0.2 : 0.95;
+                    ctx.fillStyle = col;
+                    ctx.beginPath(); ctx.arc(pt[0], pt[1], r, 0, TWO_PI); ctx.fill();
+                }
+                // D3 publisher-location layer: a dashed neutral ring — a
+                // hollow marker when every post is publisher-located, an
+                // outer ring around the sentiment dot when mixed.
+                if (pubLayer.mode !== 'none') {
+                    ctx.save();
+                    ctx.setLineDash(PUBLISHER_DASH);
+                    ctx.globalAlpha = dimmed ? 0.2 : 0.9;
+                    ctx.strokeStyle = PUBLISHER_RING;
+                    ctx.lineWidth = 1.3;
+                    ctx.beginPath();
+                    ctx.arc(pt[0], pt[1], pubLayer.mode === 'only' ? r : r + 3.5, 0, TWO_PI);
+                    ctx.stroke();
+                    ctx.restore();
+                }
 
                 // Pulse ring — phase-staggered by longitude; suppressed
                 // entirely under prefers-reduced-motion (G10).

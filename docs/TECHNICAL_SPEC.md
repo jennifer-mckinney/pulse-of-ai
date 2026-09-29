@@ -905,6 +905,8 @@ Threshold: |confidence_A - confidence_B| > 0.05 → flag for review
 | Equalized odds | group | |TPR_A - TPR_B| | > 0.08 | warning | Hardt et al. 2016 |
 | Counterfactual fairness | sample | |conf_A - conf_B| | > 0.05 | review flag | Russell et al. 2017 |
 
+**Location basis (bias@1.2.0, ADR 0001 decision D3 — "Separate layer, excluded from bias.").** Location concentration counts only posts located by their content (or with no recorded basis). Posts placed at the publisher's home city (`raw_payload.location_basis = 'publisher'`) are excluded, and the assessment's evidence records `excluded_location_bases` and `excluded_posts`. The globe shows them as a separate, labelled publisher-location layer (a dashed ring), with a legend key and tooltip wording.
+
 ### Alert Flow
 ```
 bias_assessments.is_violation = TRUE

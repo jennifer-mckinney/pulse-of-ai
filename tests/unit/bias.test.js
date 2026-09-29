@@ -395,3 +395,71 @@ describe('runBiasChecks()', () => {
         expect(rows.every(r => r.methodology_version_id === biasMv)).toBe(true);
     });
 });
+
+// ─── D3: publisher-located posts (bias@1.2.0) ────────────────────────────────
+
+describe('checkLocationConcentration() — D3 publisher exclusion (bias@1.2.0)', () => {
+    async function setBasis(postId, basis) {
+        await dbRun(`UPDATE raw_posts SET raw_payload = jsonb_build_object('location_basis', $2::text) WHERE id = $1`, [postId, basis]);
+    }
+
+    it('excludes location_basis publisher posts when the version lists it, and records how many', async () => {
+        const srcId  = await insertSource('d3-src');
+        const jobId  = await insertJob();
+        const mvIds  = await insertMethodologyVersions();
+        const biasMv = await insertBiasMv({ location_basis_excluded: ['publisher'] });
+
+        // 8 London posts placed at the PUBLISHER's city, 2 content-located
+        // posts in Berlin and 2 in Tokyo: with the publisher posts London
+        // would be 8/12 = 0.67 (> 0.60); without them nothing dominates.
+        for (let i = 0; i < 8; i++) {
+            const id = await insertPostWithSentiment(srcId, jobId, mvIds.sentimentMvId, { location: 'London', externalId: `pub-${i}` });
+            await setBasis(id, 'publisher');
+        }
+        for (const [city, n] of [['Berlin', 2], ['Tokyo', 2]]) {
+            for (let i = 0; i < n; i++) {
+                const id = await insertPostWithSentiment(srcId, jobId, mvIds.sentimentMvId, { location: city, externalId: `${city}-${i}` });
+                await setBasis(id, 'content');
+            }
+        }
+
+        const result = await checkLocationConcentration(jobId, biasMv);
+        expect(result.isViolation).toBe(false);
+        expect(result.metricValue).toBeCloseTo(0.5, 5);
+        const a = await dbGet(`SELECT evidence FROM bias_assessments WHERE job_id = $1 AND assessment_type = 'location_concentration'`, [jobId]);
+        expect(a.evidence).toMatchObject({ total: 4, excluded_location_bases: ['publisher'], excluded_posts: 8 });
+        expect(a.evidence.rows.map(r => r.location).sort()).toEqual(['Berlin', 'Tokyo']);
+        expect(await dbGet(`SELECT 1 FROM alert_events WHERE alert_type = 'location_concentration'`)).toBeUndefined();
+    });
+
+    it('a job of only publisher-located posts has no located sample (no alert)', async () => {
+        const srcId  = await insertSource('d3-src-2');
+        const jobId  = await insertJob();
+        const mvIds  = await insertMethodologyVersions();
+        const biasMv = await insertBiasMv({ location_basis_excluded: ['publisher'] });
+        for (let i = 0; i < 5; i++) {
+            const id = await insertPostWithSentiment(srcId, jobId, mvIds.sentimentMvId, { location: 'London', externalId: `p-${i}` });
+            await setBasis(id, 'publisher');
+        }
+        const result = await checkLocationConcentration(jobId, biasMv);
+        expect(result).toEqual({ isViolation: false, metricValue: 0, groupValue: null });
+        const a = await dbGet(`SELECT group_value, evidence FROM bias_assessments WHERE job_id = $1`, [jobId]);
+        expect(a.group_value).toBe('none');
+        expect(a.evidence.excluded_posts).toBe(5);
+    });
+
+    it('an older version without the list still counts publisher posts (replays of bias@1.1.0 jobs are unchanged)', async () => {
+        const srcId  = await insertSource('d3-src-3');
+        const jobId  = await insertJob();
+        const mvIds  = await insertMethodologyVersions();
+        const biasMv = await insertBiasMv();
+        for (let i = 0; i < 4; i++) {
+            const id = await insertPostWithSentiment(srcId, jobId, mvIds.sentimentMvId, { location: 'London', externalId: `o-${i}` });
+            await setBasis(id, 'publisher');
+        }
+        const result = await checkLocationConcentration(jobId, biasMv);
+        expect(result).toMatchObject({ isViolation: true, groupValue: 'London', metricValue: 1 });
+        const a = await dbGet(`SELECT evidence FROM bias_assessments WHERE job_id = $1`, [jobId]);
+        expect(a.evidence.excluded_posts).toBeUndefined();
+    });
+});

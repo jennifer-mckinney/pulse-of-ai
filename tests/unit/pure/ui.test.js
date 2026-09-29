@@ -169,6 +169,15 @@ describe('bar geometry', () => {
         expect(P.tooltipBarWidth(0.2, 0.4)).toBeCloseTo(45);
         expect(P.tooltipBarWidth(0.2, 0)).toBe(0);
     });
+    test('publisherTipText (D3): names the publisher-location layer, null without one', () => {
+        expect(P.publisherTipText({ total: 5, publisher_posts: 0 })).toBeNull();
+        expect(P.publisherTipText({ total: 5 })).toBeNull();
+        expect(P.publisherTipText({ total: 5, publisher_posts: 2 })).toBe(
+            'publisher location: 2 of 5 posts placed at the publisher\'s home city, '
+            + 'not where the discussion happened (excluded from location bias)');
+        expect(P.publisherTipText({ total: 3, publisher_posts: 3 })).toMatch(/^publisher location: all 3 posts placed/);
+        expect(P.publisherTipText({ total: 1, publisher_posts: 1 })).toMatch(/^publisher location: the only post placed/);
+    });
 });
 
 // ── Audit mapping ───────────────────────────────────────────────────────────

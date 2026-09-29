@@ -107,6 +107,16 @@ async function writeAlertEvent({ alertType, severity, details }) {
 async function checkLocationConcentration(jobId, biasMvId) {
     const config    = await getBiasConfig(biasMvId);
     const threshold = config.location_concentration_max;
+    // D3 (ADR 0001, Jennifer 2026-09-29: "Separate layer, excluded from
+    // bias."): from bias@1.2.0 the config lists location bases excluded from
+    // this check. A post placed at its PUBLISHER's home city
+    // (raw_payload.location_basis = 'publisher') says where the outlet is,
+    // not where the discussion happened, so it is not evidence of
+    // geographic concentration. Older versions carry no list, so replaying
+    // their jobs keeps their original behaviour. A post with no recorded
+    // basis (demo feeds, pre-collector rows) counts as content-located.
+    const excludedBases = Array.isArray(config.location_basis_excluded)
+        ? config.location_basis_excluded.filter(b => typeof b === 'string') : [];
 
     // Count distinct posts per non-null location for this job
     const rows = await dbAll(
@@ -119,10 +129,26 @@ async function checkLocationConcentration(jobId, biasMvId) {
          )
            AND rp.location IS NOT NULL
            AND rp.location != ''
+           AND NOT (COALESCE(rp.raw_payload->>'location_basis', 'content') = ANY($2::text[]))
          GROUP BY rp.location
          ORDER BY post_count DESC`,
-        [jobId],
+        [jobId, excludedBases],
     );
+    // How many located posts the exclusion removed (evidence, never hidden).
+    const excluded = excludedBases.length === 0 ? 0 : (await dbGet(
+        `SELECT COUNT(*)::int AS n
+         FROM raw_posts rp
+         WHERE rp.id IN (
+             SELECT DISTINCT raw_post_id
+             FROM decision_audit_log
+             WHERE job_id = $1 AND decision_type = 'sentiment'
+         )
+           AND rp.location IS NOT NULL
+           AND rp.location != ''
+           AND COALESCE(rp.raw_payload->>'location_basis', 'content') = ANY($2::text[])`,
+        [jobId, excludedBases],
+    )).n;
+    const exclusion = excludedBases.length === 0 ? {} : { excluded_location_bases: excludedBases, excluded_posts: excluded };
 
     // No located posts — cannot compute concentration
     if (rows.length === 0) {
@@ -136,7 +162,7 @@ async function checkLocationConcentration(jobId, biasMvId) {
             threshold,
             isViolation:    false,
             severity:       null,
-            evidence:       { rows: [], total: 0 },
+            evidence:       { rows: [], total: 0, ...exclusion },
             biasMvId,
         });
         return { isViolation: false, metricValue: 0, groupValue: null };
@@ -162,7 +188,7 @@ async function checkLocationConcentration(jobId, biasMvId) {
         threshold,
         isViolation,
         severity,
-        evidence:       { rows, total, dominantLocation: dominant.location },
+        evidence:       { rows, total, dominantLocation: dominant.location, ...exclusion },
         biasMvId,
     });
 

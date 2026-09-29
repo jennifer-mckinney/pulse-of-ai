@@ -344,6 +344,8 @@ body {
 .tip-city { font-weight: 700; font-size: 15px; }
 .tip-sent { font-size: 13px; font-weight: 600; }
 .tip-sub { font-size: 10.5px; color: var(--ink-dim); margin-top: 2px; }
+.tip-pub { font-size: 9.5px; color: var(--ink-dim); margin-top: 4px; padding-left: 14px; position: relative; line-height: 1.35; }
+.tip-pub::before { content: ''; position: absolute; left: 0; top: 2px; width: 8px; height: 8px; border-radius: 50%; border: 1.2px dashed rgba(234,241,250,0.85); }
 .tip-bars { margin-top: 10px; display: flex; flex-direction: column; gap: 5px; }
 .tip-bar-row { display: grid; grid-template-columns: 66px 1fr 32px; gap: 8px; align-items: center; }
 .tip-bar-lbl { font-size: 10px; color: var(--ink-dim); }
@@ -450,6 +452,9 @@ body {
 .legend { position: fixed; left: 28px; bottom: 24px; z-index: 20; display: flex; align-items: center; gap: 10px; font-size: 10.5px; color: var(--ink-dim); }
 .legend-grad { width: 90px; height: 4px; border-radius: 2px; }
 .legend-sep { margin-left: 10px; padding-left: 14px; border-left: 1px solid var(--line); }
+/* D3 publisher-location layer key: the dashed ring the globe draws. */
+.legend-pub { display: inline-flex; align-items: center; gap: 6px; margin-left: 10px; padding-left: 14px; border-left: 1px solid var(--line); }
+.legend-pub::before { content: ''; width: 9px; height: 9px; border-radius: 50%; border: 1.3px dashed rgba(234,241,250,0.85); }
 /* NOTE: the prototype's .scroll-cue class + its translateX-based `cue`
    keyframe are deliberately OMITTED — the class is dead (nothing renders it;
    the intro uses .intro-cue with the translateY-only `cue-y` keyframe, per

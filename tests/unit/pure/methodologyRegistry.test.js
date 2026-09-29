@@ -436,3 +436,31 @@ describe('migration 026 ↔ methodology registry (ingest@1.5.0, Reddit u/ names)
         expect(redactIdentities('r/MachineLearning and menu/u/x stay')).toBe('r/MachineLearning and menu/u/x stay');
     });
 });
+
+describe('migration 027 ↔ methodology registry (bias@1.2.0, decision D3)', () => {
+    const { generate } = require('../../../scripts/generate-methodology-migration');
+    const SQL_027 = fs.readFileSync(
+        path.join(__dirname, '../../../src/db/migrations/027_bias_publisher_location.sql'), 'utf8');
+
+    test('027 is exactly the generated bias@1.2.0 row, idempotent, and edits nothing', () => {
+        expect(SQL_027.endsWith(generate(['bias@1.2.0']))).toBe(true);
+        expect((SQL_027.match(/INSERT INTO/g) || []).length).toBe(1);
+        expect(SQL_027).not.toMatch(/DO UPDATE|UPDATE methodology_versions|DELETE|DROP/);
+        expect(SQL_027).toMatch(/"Separate layer, excluded from bias\."/);
+    });
+
+    test('bias@1.2.0 excludes publisher-located posts and otherwise equals 1.1.0 (never edited)', () => {
+        const reg = registry('bias', '1.2.0');
+        const prev = registry('bias', '1.1.0');
+        expect(reg.config.location_basis_excluded).toEqual(['publisher']);
+        expect(prev.config.location_basis_excluded).toBeUndefined();
+        for (const k of ['location_concentration_max', 'platform_parity_max_diff', 'negative_dominance_max',
+            'layer_names', 'citations', 'planned_layers', 'layer_order', 'legal_basis']) {
+            expect(reg.config[k]).toEqual(prev.config[k]);
+        }
+        expect(reg.config.layer_notes.platform_sentiment_parity).toBe(prev.config.layer_notes.platform_sentiment_parity);
+        expect(reg.config.layer_notes.location_concentration).toMatch(/publisher-location layer/);
+        expect(prev.config.layer_notes.location_concentration).toBeUndefined();
+        expect(reg.justification).toMatch(/"Separate layer, excluded from bias\."/);
+    });
+});

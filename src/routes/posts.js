@@ -3,7 +3,9 @@
 //
 // Returns sentiment counts grouped by city for the globe frontend.
 // Includes lat/lng from a hardcoded lookup of major cities (Phase E: geocoding service).
-// Every row also carries its data origin: demo_posts (posts from demo feeds,
+// Every row also carries publisher_posts (D3: posts placed at the publisher's
+// home city, location_basis 'publisher' — drawn as the globe's separate
+// publisher-location layer) and its data origin: demo_posts (posts from demo feeds,
 // source_type 'demo') and data_mode ('demo' | 'live' | 'mixed') — the
 // response stays a plain array so existing consumers are unaffected; the
 // frontend sums demo_posts across rows to label the whole view.
@@ -125,6 +127,9 @@ router.get('/posts/aggregated-by-location', responseCache(10000), async (req, re
                 COUNT(*) FILTER (WHERE sr.indicator = 'negative')::int    AS negative,
                 COUNT(*)::int                                              AS total,
                 COUNT(*) FILTER (WHERE ds.source_type = $${aggParams.length})::int AS demo_posts,
+                -- D3: posts placed at the publisher's home city (a separate
+                -- globe layer, excluded from the location bias check)
+                COUNT(*) FILTER (WHERE rp.raw_payload->>'location_basis' = 'publisher')::int AS publisher_posts,
                 MAX(rp.collected_at)                                       AS last_updated
              FROM raw_posts rp
              JOIN sentiment_results sr ON sr.raw_post_id = rp.id
@@ -193,6 +198,11 @@ router.get('/posts/aggregated-by-location', responseCache(10000), async (req, re
                 // demo_posts across rows to label the whole view.
                 demo_posts:   r.demo_posts,
                 data_mode:    deriveDataMode(r.demo_posts, r.total),
+                // D3 (ADR 0001, "Separate layer, excluded from bias."):
+                // posts in this row located at their PUBLISHER's home city,
+                // not by their content. The globe draws them as a separate,
+                // labelled publisher-location layer.
+                publisher_posts: r.publisher_posts,
                 last_updated: r.last_updated,
                 sources:      sourcesByCity[r.city] || [],   // per-source stacked bar
             };

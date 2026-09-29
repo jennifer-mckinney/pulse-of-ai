@@ -194,6 +194,19 @@
         };
     }
 
+    // publisherTipText (D3, ADR 0001): the tooltip line for a city's
+    // publisher-location layer, or null when it has none. "Publisher
+    // location" posts are placed at the outlet's home city, not where the
+    // discussion happened, and the location bias check excludes them.
+    function publisherTipText(c) {
+        const n = c && Number.isFinite(Number(c.publisher_posts)) ? Math.max(0, Math.floor(Number(c.publisher_posts))) : 0;
+        if (n <= 0) return null;
+        const total = c && Number.isFinite(Number(c.total)) ? Number(c.total) : n;
+        const of = n >= total ? (n === 1 ? 'the only post' : 'all ' + n + ' posts') : n + ' of ' + total + ' posts';
+        return 'publisher location: ' + of + ' placed at the publisher\'s home city, '
+            + 'not where the discussion happened (excluded from location bias)';
+    }
+
     // tooltipBarWidth: tooltip share bars scale against the largest of the
     // shown rows (prototype: share / maxShare × 90%).
     function tooltipBarWidth(share, maxShare) {
@@ -1060,6 +1073,7 @@
         composeDimTest,
         tooltipPosition,
         tooltipBarWidth,
+        publisherTipText,
         detailBarWidth,
         sentBarGeometry,
         stageLabel,
@@ -1471,6 +1485,10 @@
         head.appendChild(sent);
         els.tip.appendChild(head);
         els.tip.appendChild(el('div', 'tip-sub mono', c.total + ' posts/hr'));
+        // D3: the publisher-location layer, worded so it never reads as
+        // where people are talking.
+        const pubLine = publisherTipText(c);
+        if (pubLine) els.tip.appendChild(el('div', 'tip-pub mono', pubLine));
 
         const rows = catBreakdown(c).slice(0, DETAIL_CATS_MAX);
         const maxShare = rows.length > 0 ? rows[0].share : 0;
