@@ -18,6 +18,10 @@
 
 const { dbGet, dbAll, dbRun } = require('../db/connection');
 
+// group_value of a location-concentration assessment whose located sample is
+// below the version's location_min_sample (bias@1.3.0): no violation.
+const INSUFFICIENT_SAMPLE = 'insufficient sample';
+
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 /**
@@ -171,6 +175,35 @@ async function checkLocationConcentration(jobId, biasMvId) {
     const total      = rows.reduce((sum, r) => sum + r.post_count, 0);
     const dominant   = rows[0];                        // already sorted DESC
     const metricValue = dominant.post_count / total;
+
+    // P10-5 (bias@1.3.0): a share computed over a handful of located posts
+    // measures the job's shape, not the discourse (one BBC run is 100 %
+    // London). Below config.location_min_sample content-located posts the
+    // check records an "insufficient sample" assessment — the share is still
+    // stated — and raises NO violation and NO alert. Older versions carry no
+    // minimum, so their replays are unchanged.
+    const minSample = Number.isInteger(config.location_min_sample) && config.location_min_sample > 0
+        ? config.location_min_sample : 0;
+    if (total < minSample) {
+        await writeBiasAssessment({
+            jobId,
+            assessmentType: 'location_concentration',
+            groupField:     'location',
+            groupValue:     INSUFFICIENT_SAMPLE,
+            metricName:     'share_of_total',
+            metricValue,
+            threshold,
+            isViolation:    false,
+            severity:       null,
+            evidence:       {
+                rows, total, dominantLocation: dominant.location, ...exclusion,
+                insufficient_sample: true, min_sample: minSample,
+            },
+            biasMvId,
+        });
+        return { isViolation: false, metricValue, groupValue: INSUFFICIENT_SAMPLE, insufficientSample: true };
+    }
+
     const isViolation = metricValue > threshold;
 
     // Severity: critical above 80%, warning otherwise
@@ -423,6 +456,7 @@ async function runBiasChecks(jobId, biasMvId) {
 }
 
 module.exports = {
+    INSUFFICIENT_SAMPLE,
     runBiasChecks,
     checkLocationConcentration,
     checkPlatformSentimentParity,

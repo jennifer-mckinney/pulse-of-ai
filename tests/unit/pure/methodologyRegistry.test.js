@@ -464,3 +464,31 @@ describe('migration 027 ↔ methodology registry (bias@1.2.0, decision D3)', () 
         expect(reg.justification).toMatch(/"Separate layer, excluded from bias\."/);
     });
 });
+
+describe('migration 028 ↔ methodology registry (bias@1.3.0, P10-5)', () => {
+    const { generate } = require('../../../scripts/generate-methodology-migration');
+    const SQL_028 = fs.readFileSync(
+        path.join(__dirname, '../../../src/db/migrations/028_bias_min_sample.sql'), 'utf8');
+
+    test('028 ends with exactly the generated bias@1.3.0 row and removes nothing', () => {
+        expect(SQL_028.endsWith(generate(['bias@1.3.0']))).toBe(true);
+        expect(SQL_028).not.toMatch(/DO UPDATE|UPDATE methodology_versions|DELETE|DROP|TRUNCATE/);
+        expect(SQL_028).toMatch(/CREATE TABLE IF NOT EXISTS alert_resolutions/);
+    });
+
+    test('the SQL re-evaluation uses the registered minimum sample and threshold', () => {
+        const reg = registry('bias', '1.3.0');
+        expect(reg.config.location_min_sample).toBe(30);
+        expect(SQL_028).toMatch(new RegExp(`content_located < ${reg.config.location_min_sample}\\b`));
+        expect(SQL_028).toMatch(new RegExp(`<= ${reg.config.location_concentration_max}\\b`));
+        expect(reg.config.location_basis_excluded).toEqual(['publisher']);
+    });
+
+    test('bias@1.3.0 is current; 1.2.0 carries no minimum (never edited)', () => {
+        expect(latest('bias').version).toBe('1.3.0');
+        expect(registry('bias', '1.2.0').config.location_min_sample).toBeUndefined();
+        const reg = registry('bias', '1.3.0');
+        const prev = registry('bias', '1.2.0');
+        for (const k of Object.keys(prev.config)) if (k !== 'layer_notes') expect(reg.config[k]).toEqual(prev.config[k]);
+    });
+});

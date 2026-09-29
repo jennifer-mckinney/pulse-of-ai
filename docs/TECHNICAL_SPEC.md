@@ -907,6 +907,8 @@ Threshold: |confidence_A - confidence_B| > 0.05 → flag for review
 
 **Location basis (bias@1.2.0, ADR 0001 decision D3 — "Separate layer, excluded from bias.").** Location concentration counts only posts located by their content (or with no recorded basis). Posts placed at the publisher's home city (`raw_payload.location_basis = 'publisher'`) are excluded, and the assessment's evidence records `excluded_location_bases` and `excluded_posts`. The globe shows them as a separate, labelled publisher-location layer (a dashed ring), with a legend key and tooltip wording.
 
+**Minimum sample (bias@1.3.0, P10-5).** Location concentration needs at least 30 content-located posts in the job; below that the assessment is recorded as "insufficient sample" (share stated, no violation, no alert) and the receipt shows the layer as n-a. Stale alerts are resolved through `alert_resolutions` (migration 028), never deleted.
+
 ### Alert Flow
 ```
 bias_assessments.is_violation = TRUE

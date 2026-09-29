@@ -463,3 +463,39 @@ describe('checkLocationConcentration() — D3 publisher exclusion (bias@1.2.0)',
         expect(a.evidence.excluded_posts).toBeUndefined();
     });
 });
+
+// ─── P10-5: minimum located sample (bias@1.3.0) ──────────────────────────────
+
+describe('checkLocationConcentration() — minimum sample (bias@1.3.0)', () => {
+    const { INSUFFICIENT_SAMPLE } = require('../../src/pipeline/bias');
+
+    it('below location_min_sample: "insufficient sample", share stated, no violation, no alert', async () => {
+        const srcId  = await insertSource('ms-src');
+        const jobId  = await insertJob();
+        const mvIds  = await insertMethodologyVersions();
+        const biasMv = await insertBiasMv({ location_concentration_max: 0.35, location_min_sample: 30 });
+        for (let i = 0; i < 12; i++) {
+            await insertPostWithSentiment(srcId, jobId, mvIds.sentimentMvId, { location: 'London', externalId: `ms-${i}` });
+        }
+        const result = await checkLocationConcentration(jobId, biasMv);
+        expect(result).toMatchObject({ isViolation: false, metricValue: 1, groupValue: INSUFFICIENT_SAMPLE, insufficientSample: true });
+        const a = await dbGet(`SELECT group_value, is_violation, severity, evidence FROM bias_assessments WHERE job_id = $1`, [jobId]);
+        expect(a).toMatchObject({ group_value: 'insufficient sample', is_violation: false, severity: null });
+        expect(a.evidence).toMatchObject({ insufficient_sample: true, min_sample: 30, total: 12, dominantLocation: 'London' });
+        expect(await dbGet(`SELECT 1 FROM alert_events`)).toBeUndefined();
+    });
+
+    it('at the minimum the check runs normally and can alert', async () => {
+        const srcId  = await insertSource('ms-src-2');
+        const jobId  = await insertJob();
+        const mvIds  = await insertMethodologyVersions();
+        const biasMv = await insertBiasMv({ location_concentration_max: 0.35, location_min_sample: 30 });
+        for (let i = 0; i < 30; i++) {
+            await insertPostWithSentiment(srcId, jobId, mvIds.sentimentMvId, { location: i < 20 ? 'London' : 'Paris', externalId: `mt-${i}` });
+        }
+        const result = await checkLocationConcentration(jobId, biasMv);
+        expect(result.isViolation).toBe(true);
+        expect(result.metricValue).toBeCloseTo(20 / 30, 5);
+        expect(await dbGet(`SELECT 1 AS ok FROM alert_events WHERE alert_type = 'location_concentration'`)).toEqual({ ok: 1 });
+    });
+});

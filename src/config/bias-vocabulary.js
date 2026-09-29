@@ -119,6 +119,10 @@ function alertDetail(row, biasConfig) {
  * @param {object|null}   biasConfig   methodology_versions.config (component='bias')
  * @returns {Array<{ name, assessment_type, value, threshold, citation, status, severity, note }>}
  */
+// Mirrors src/pipeline/bias.js INSUFFICIENT_SAMPLE (kept here so this
+// config module does not load the pipeline's DB layer).
+const INSUFFICIENT_SAMPLE = 'insufficient sample';
+
 function buildLayers(assessments, biasConfig) {
     // Latest row per assessment_type (rows arrive oldest→newest per route query)
     // Keyed by the CANONICAL type so a synonym row and its pipeline-vocabulary
@@ -128,18 +132,26 @@ function buildLayers(assessments, biasConfig) {
         latestByType.set(canonicalAssessmentType(row.assessment_type), row);
     }
 
-    const layers = [...latestByType.entries()].map(([type, row]) => ({
-        name:            layerName(type, biasConfig),
-        assessment_type: type,
-        value:           row.metric_value,
-        threshold:       row.threshold,
-        citation:        citationFor(type, biasConfig),
-        status:          row.is_violation ? 'fail' : 'pass',
-        severity:        severityLabel(row),
-        // P0-3: computed layers carry the config's methodology note (what
-        // the check actually measures), null when the config has none.
-        note:            layerNoteFor(type, biasConfig),
-    }));
+    const layers = [...latestByType.entries()].map(([type, row]) => {
+        // P10-5 (bias@1.3.0): too few located posts to judge — stated as
+        // not applicable, never as a pass (src/pipeline/bias.js).
+        const insufficient = !row.is_violation && row.group_value === INSUFFICIENT_SAMPLE;
+        const min = biasConfig && Number.isInteger(biasConfig.location_min_sample) ? biasConfig.location_min_sample : null;
+        return {
+            name:            layerName(type, biasConfig),
+            assessment_type: type,
+            value:           row.metric_value,
+            threshold:       row.threshold,
+            citation:        citationFor(type, biasConfig),
+            status:          row.is_violation ? 'fail' : (insufficient ? 'n-a' : 'pass'),
+            severity:        severityLabel(row),
+            // P0-3: computed layers carry the config's methodology note (what
+            // the check actually measures), null when the config has none.
+            note:            insufficient
+                ? `insufficient sample: fewer than ${min || 'the minimum'} content-located posts in this job, so no alert`
+                : layerNoteFor(type, biasConfig),
+        };
+    });
 
     // Planned layers: declared in versioned config, never computed → 'n-a'
     const planned = (biasConfig && biasConfig.planned_layers) || [];

@@ -75,6 +75,20 @@ const BIAS_1_1_0_CONFIG = Object.freeze({
         legal_basis: 'EU AI Act Article 13 - Transparency and provision of information',
     });
 
+// bias@1.2.0's config (decision D3): 1.1.0 plus the publisher exclusion.
+const BIAS_1_2_0_CONFIG = Object.freeze({
+    ...BIAS_1_1_0_CONFIG,
+    // Read by src/pipeline/bias.js checkLocationConcentration
+    location_basis_excluded: ['publisher'],
+    location_concentration_scope: 'posts located by their content (location_basis content, or no basis recorded); '
+        + 'posts placed at the publisher\'s home city (location_basis publisher) are excluded and counted in the evidence',
+    layer_notes: {
+        ...BIAS_1_1_0_CONFIG.layer_notes,
+        location_concentration: 'content-located posts only: posts placed at the publisher\'s home city are shown as a '
+            + 'separate publisher-location layer and excluded from this check (ADR 0001 D3)',
+    },
+});
+
 const METHODOLOGY_VERSIONS = [
     {
         component: 'sentiment',
@@ -400,21 +414,7 @@ const METHODOLOGY_VERSIONS = [
         component: 'bias',
         version: '1.2.0',
         model_name: 'pulse-bias-monitor-v1',
-        config: (() => {
-            const prev = BIAS_1_1_0_CONFIG;
-            return {
-                ...prev,
-                // Read by src/pipeline/bias.js checkLocationConcentration
-                location_basis_excluded: ['publisher'],
-                location_concentration_scope: 'posts located by their content (location_basis content, or no basis recorded); '
-                    + 'posts placed at the publisher\'s home city (location_basis publisher) are excluded and counted in the evidence',
-                layer_notes: {
-                    ...prev.layer_notes,
-                    location_concentration: 'content-located posts only: posts placed at the publisher\'s home city are shown as a '
-                        + 'separate publisher-location layer and excluded from this check (ADR 0001 D3)',
-                },
-            };
-        })(),
+        config: BIAS_1_2_0_CONFIG,
         justification: 'bias@1.2.0 applies decision D3 (ADR 0001, Jennifer 2026-09-29, verbatim: "Separate layer, excluded from bias."). '
             + 'A post from an editorial source with no content-level location is placed at the publisher\'s home city (BBC in London, NPR in '
             + 'Washington, D.C.) and recorded with location_basis publisher. That city says where the outlet is, not where the '
@@ -426,6 +426,37 @@ const METHODOLOGY_VERSIONS = [
             + 'categories, Barocas & Selbst 2016; location concentration, Suresh & Guttag 2021; negative dominance), with '
             + 'thresholds in this config so they are auditable and versioned (AI Act Article 13). Equalized odds and '
             + 'counterfactual fairness remain declared planned layers reported as not yet enforced.',
+    },
+    // bias@1.3.0 — P10-5: a minimum located sample for location
+    // concentration (30 content-located posts, else "insufficient sample"
+    // and no alert). Otherwise bias@1.2.0 (migration 028).
+    {
+        component: 'bias',
+        version: '1.3.0',
+        model_name: 'pulse-bias-monitor-v1',
+        config: {
+            ...BIAS_1_2_0_CONFIG,
+            // Read by src/pipeline/bias.js checkLocationConcentration
+            location_min_sample: 30,
+            location_min_sample_rule: 'fewer than 30 content-located posts in the job: the assessment is recorded as '
+                + '"insufficient sample" with its share stated, no violation and no alert',
+            layer_notes: {
+                ...BIAS_1_2_0_CONFIG.layer_notes,
+                location_concentration: 'content-located posts only (publisher-located posts are a separate layer, ADR 0001 D3); '
+                    + 'needs at least 30 of them, else "insufficient sample" and no alert',
+            },
+        },
+        justification: 'bias@1.3.0 adds a minimum sample to the location-concentration check (PR #10 review P10-5). A share computed '
+            + 'over a handful of located posts measures the shape of one collection run, not the discourse: a scheduled run of one '
+            + 'editorial source had all its located posts in one city and read 1.000, raising critical alerts that said nothing '
+            + 'about the posts. The check now needs at least 30 content-located posts in the job; below that it records an '
+            + '"insufficient sample" assessment with the share still stated, and raises no violation and no alert. As in bias@1.2.0 '
+            + '(decision D3, "Separate layer, excluded from bias."), posts placed at the publisher\'s home city are excluded from '
+            + 'this check and counted in its evidence. Platform sentiment parity (Barocas & Selbst 2016) and negative dominance are '
+            + 'unchanged, every threshold, layer name, citation and planned layer is as in bias@1.1.0 (AI Act Article 13), and '
+            + 'equalized odds and counterfactual fairness remain declared planned layers reported as not yet enforced. Open '
+            + 'location-concentration alerts that this version would not raise are resolved by migration 028 with an audited '
+            + 'alert_resolutions record, never deleted.',
     },
 ];
 
