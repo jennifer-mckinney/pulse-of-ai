@@ -90,9 +90,13 @@ async function runCollection(o = {}) {
     const queues = o.queues || defaultQueues();
 
     let jobId = o.jobId || null;
+    let joinedCycle = false;   // G10-2: this run is in the cycle's inflight_runs
+    let queried = 0;
+    const newPostIds = [];     // posts scored by this run (counted even if it throws)
     const ensureJob = async () => {
         if (!jobId && o.cycle) {
             jobId = await cycle.currentCycleJob(o.cycle.windowMs);
+            joinedCycle = true;
             summary.jobId = jobId;
         } else if (!jobId) {
             const job = await dbGet(
@@ -114,8 +118,6 @@ async function runCollection(o = {}) {
         const mv = await resolveCurrentMethodology();
         const ids = await state.sourceIdsBySlug(slugs);
         let http = null;
-        const newPostIds = [];
-        let queried = 0;
 
         for (const slug of slugs) {
             const src = getSource(slug);
@@ -259,8 +261,8 @@ async function runCollection(o = {}) {
         }
 
         if (jobId && o.cycle) {
-            // The cycle job stays open; closeCycles() runs its bias checks.
-            await cycle.addToCycle(jobId, { collected: summary.postsCollected, processed: summary.postsProcessed, sources: queried });
+            // The cycle job stays open; closeCycles() runs its bias checks
+            // (counts are added when the run leaves the cycle, below).
         } else if (jobId) {
             await dbRun(
                 `UPDATE processing_jobs
@@ -281,6 +283,13 @@ async function runCollection(o = {}) {
             ).catch(() => {});
         }
         throw err;
+    } finally {
+        // G10-2: leave the cycle whatever happened — a run that throws after
+        // scoring still accounts its posts, and the cycle can close.
+        if (joinedCycle) {
+            await cycle.leaveCycle(jobId, { collected: summary.postsCollected, processed: newPostIds.length, sources: queried })
+                .catch(e => log(`[collect] could not leave cycle ${jobId}: ${e.message}`));
+        }
     }
 }
 

@@ -10,6 +10,11 @@ jest.mock('../../src/queues/index', () => ({
     embedQueue: { add: jest.fn().mockResolvedValue({ id: 'embed-job-1' }) },
 }));
 jest.mock('../../src/pipeline/ingest', () => ({ scorePost: jest.fn() }));
+// G10-2: the retry joins the post's cycle while it runs, else the current one.
+jest.mock('../../src/collectors/cycle', () => ({
+    joinCycle: jest.fn(async id => id),
+    leaveCycle: jest.fn().mockResolvedValue(),
+}));
 jest.mock('../../src/pipeline/methodology', () => ({
     resolveCurrentMethodology: jest.fn().mockResolvedValue({ sentimentMvId: 's', relevanceMvId: 'r', discourseMvId: 'd' }),
 }));
@@ -22,7 +27,18 @@ const { EMBED_GATE_MIN_SCORE, computeRelevance } = require('../../src/pipeline/r
 
 const job = (data = {}) => ({ data: { rawPostId: 'post-1', sourceId: 'src-1', jobId: 'job-1', ...data } });
 
+const cycle = require('../../src/collectors/cycle');
+
 beforeEach(() => jest.clearAllMocks());
+
+test('G10-2: a retry against a closed job scores under the current cycle, and always leaves it', async () => {
+    cycle.joinCycle.mockResolvedValueOnce('cycle-now');
+    scorePost.mockRejectedValueOnce(new Error('db blip'));
+    await expect(processIngestJob(job())).rejects.toThrow('db blip');
+    expect(cycle.joinCycle).toHaveBeenCalledWith('job-1', expect.any(Number));
+    expect(scorePost).toHaveBeenCalledWith('post-1', 'cycle-now', expect.any(Object));
+    expect(cycle.leaveCycle).toHaveBeenCalledWith('cycle-now', {});
+});
 
 test('the ingest worker imports only functions that exist (the saveProcessedPost defect)', () => {
     const real = jest.requireActual('../../src/pipeline/ingest');

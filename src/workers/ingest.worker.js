@@ -20,6 +20,8 @@ const { scorePost } = require('../pipeline/ingest');
 const { passesEmbedGate, EMBED_GATE_MIN_SCORE } = require('../pipeline/relevance');
 const { resolveCurrentMethodology } = require('../pipeline/methodology');
 const { embedQueue } = require('../queues/index');
+const { joinCycle, leaveCycle } = require('../collectors/cycle');
+const { collectWindowMs } = require('../config/source-registry');
 
 /**
  * @param {{ data: { rawPostId: string, sourceId?: string, jobId: string } }} job
@@ -29,7 +31,16 @@ async function processIngestJob(job) {
     const { rawPostId, jobId } = job.data || {};
     if (!rawPostId || !jobId) throw new Error('ingest job needs rawPostId and jobId');
     const mv = await resolveCurrentMethodology();
-    const { relevance } = await scorePost(rawPostId, jobId, mv);
+    // G10-2: score under the post's cycle only while it is still running
+    // (then it cannot close mid-score); a retry against a closed or non-cycle
+    // job scores under the CURRENT cycle, whose bias checks will include it.
+    const cycleId = await joinCycle(jobId, collectWindowMs());
+    let relevance;
+    try {
+        ({ relevance } = await scorePost(rawPostId, cycleId, mv));
+    } finally {
+        await leaveCycle(cycleId, {});
+    }
     if (!passesEmbedGate(relevance.score)) {
         return { rawPostId, relevance: Number(relevance.score), embedJobId: null };
     }
