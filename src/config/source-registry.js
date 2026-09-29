@@ -672,7 +672,7 @@ const SOURCES = [
         closedStatus: 'awaiting_key',
         routes: [
             { id: 'diary-rss', adapter: 'rss', params: { urls: ['https://www.openstreetmap.org/diary/rss'], geo: true }, scope: 'filter' },
-            { id: 'forum-search', adapter: 'discourse', params: { baseUrl: 'https://community.openstreetmap.org', search: 'artificial intelligence order:latest' }, scope: 'filter' },
+            { id: 'forum-ai-tag', adapter: 'discourse', params: { baseUrl: 'https://community.openstreetmap.org', tag: 'ai' }, scope: 'ai', note: 'Discourse /tag/ai.json (the /search path is not used)' },
             { id: 'blog-rss', adapter: 'rss', params: { urls: ['https://blog.openstreetmap.org/feed/'] }, scope: 'filter' },
         ],
         termsUrl: 'https://osmfoundation.org/wiki/Terms_of_Use',

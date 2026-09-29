@@ -1,0 +1,80 @@
+// src/collectors/state.js
+// Per-source collection state and run outcomes (migration 012).
+//
+//   claim(sourceId, minIntervalSec)  atomic cadence guard: sets
+//       last_attempt_at = NOW() only when the previous attempt is older than
+//       the source's poll interval, and returns the stored cursor + HTTP
+//       validators; null when another process (the worker schedule or
+//       POST /api/refresh) ran the source inside its interval.
+//   saveOutcome(...)                 cursor, validators, last success /
+//       error / counts, consecutive failures
+//   recordRun(...)                   one source_runs row per run
+
+'use strict';
+
+const { dbGet, dbAll, dbRun } = require('../db/connection');
+
+// Scheduler jitter slack: a run due every N s may start a few seconds early.
+const CLAIM_SLACK_SEC = 10;
+
+/** slug → data_sources.id for registry rows. */
+async function sourceIdsBySlug(slugs) {
+    const rows = await dbAll('SELECT id, name FROM data_sources WHERE name = ANY($1::text[])', [slugs]);
+    return new Map(rows.map(r => [r.name, r.id]));
+}
+
+async function claim(sourceId, minIntervalSec) {
+    await dbRun(
+        'INSERT INTO source_collection_state (source_id) VALUES ($1) ON CONFLICT (source_id) DO NOTHING',
+        [sourceId],
+    );
+    const interval = Math.max(0, (minIntervalSec || 0) - CLAIM_SLACK_SEC);
+    return dbGet(
+        `UPDATE source_collection_state
+         SET last_attempt_at = NOW(), updated_at = NOW()
+         WHERE source_id = $1
+           AND (last_attempt_at IS NULL OR last_attempt_at <= NOW() - make_interval(secs => $2))
+         RETURNING cursor, http_cache`,
+        [sourceId, interval],
+    );
+}
+
+async function saveOutcome(sourceId, { cursor, httpCache, ok, itemCount, newPosts, error }) {
+    await dbRun(
+        `UPDATE source_collection_state
+         SET cursor = $2::jsonb,
+             http_cache = $3::jsonb,
+             last_success_at = CASE WHEN $4 THEN NOW() ELSE last_success_at END,
+             last_item_count = CASE WHEN $4 THEN $5 ELSE last_item_count END,
+             last_new_posts  = CASE WHEN $4 THEN $6 ELSE last_new_posts END,
+             last_error      = $7,
+             last_error_at   = CASE WHEN $7 IS NULL THEN last_error_at ELSE NOW() END,
+             consecutive_failures = CASE WHEN $4 THEN 0 ELSE consecutive_failures + 1 END,
+             updated_at = NOW()
+         WHERE source_id = $1`,
+        [sourceId, JSON.stringify(cursor || {}), JSON.stringify(httpCache || {}), ok, itemCount, newPosts, error || null],
+    );
+}
+
+async function recordRun({ sourceId, jobId, gateStatus, outcome, itemsFetched = 0, postsNew = 0, requests = 0, error = null, startedAt }) {
+    await dbRun(
+        `INSERT INTO source_runs
+            (source_id, job_id, gate_status, outcome, items_fetched, posts_new, requests, error, started_at, finished_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())`,
+        [sourceId, jobId, gateStatus, outcome, itemsFetched, postsNew, requests, error, startedAt || new Date()],
+    );
+}
+
+/** Latest state per registry source, keyed by slug (for /api/sources, health, smoke). */
+async function stateBySlug() {
+    const rows = await dbAll(
+        `SELECT ds.name AS slug, s.last_attempt_at, s.last_success_at, s.last_item_count,
+                s.last_new_posts, s.last_error, s.last_error_at, s.consecutive_failures
+         FROM data_sources ds
+         LEFT JOIN source_collection_state s ON s.source_id = ds.id
+         WHERE ds.source_type <> 'demo'`,
+    );
+    return new Map(rows.map(r => [r.slug, r]));
+}
+
+module.exports = { sourceIdsBySlug, claim, saveOutcome, recordRun, stateBySlug, CLAIM_SLACK_SEC };

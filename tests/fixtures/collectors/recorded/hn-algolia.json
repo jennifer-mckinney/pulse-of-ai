@@ -1,0 +1,29 @@
+{
+  "hits": [
+    {
+      "objectID": "49887331",
+      "title": "AI Agents Are About to Flood the Workforce. No One's Ready for It",
+      "url": "https://www.wired.com/story/ai-agents-are-about-to-flood-the-workforce-no-ones-ready-for-it/",
+      "created_at_i": 1790648751
+    },
+    {
+      "objectID": "49887186",
+      "title": "Meta's New Muse AI Agent Read My Private Messages. I Never Asked It To",
+      "url": "https://www.inc.com/jason-aten/metas-new-muse-ai-agent-read-my-private-messages-i-never-asked-it-to/91408202",
+      "created_at_i": 1790647435
+    },
+    {
+      "objectID": "49887154",
+      "title": "Show HN: Talktome - let your AI Agent call you",
+      "url": "https://github.com/rohanprichard/talktome",
+      "story_text": "I built TalkToMe, an open-source macOS app that lets an agent call you from its current session. You answer, talk, and hear its replies. The agent keeps its tools, files, and history.<p>It works with Codex (Tested extensively, quite smooth), Claude Code (not tested heavily), Hermes, and other agents that can run shell commands. You can use ElevenLabs or local models to power the conversation. It&#x27;s really surreal to see your agent call you for something!",
+      "created_at_i": 1790647268
+    },
+    {
+      "objectID": "49887152",
+      "title": "Muse gives user's home address without permission, sending buyer to his house",
+      "url": "https://www.theguardian.com/technology/2026/sep/28/metas-ai-agent-muse-home-address",
+      "created_at_i": 1790647259
+    }
+  ]
+}

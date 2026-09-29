@@ -25,7 +25,9 @@
     "test:watch": "jest --watch",
     "test:quick": "bash scripts/test/run-unit.sh",
     "test:e2e": "playwright test",
-    "verify": "bash scripts/test/run-all.sh"
+    "verify": "bash scripts/test/run-all.sh",
+    "collect:smoke": "node scripts/collect-smoke.js",
+    "collect": "node scripts/collect.js"
   },
   "keywords": [
     "ai",
@@ -46,7 +48,9 @@
     "cors": "^2.8.5",
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
+    "imapflow": "^2.1.2",
     "ioredis": "^5.9.3",
+    "mailparser": "^3.9.31",
     "natural": "^8.1.0",
     "node-cron": "^4.2.1",
     "node-fetch": "^3.3.2",
@@ -55,7 +59,8 @@
     "rss-parser": "^3.13.0",
     "sentiment": "^5.0.2",
     "unique-names-generator": "^4.7.1",
-    "ws": "^8.13.0"
+    "ws": "^8.13.0",
+    "xml2js": "^0.5.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",

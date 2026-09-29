@@ -1,0 +1,29 @@
+{
+  "has_more": true,
+  "quota_max": 300,
+  "quota_remaining": 290,
+  "items": [
+    {
+      "question_id": 50762,
+      "title": "LLM always returns 17 when I ask it &#39;Give me a number between 1 and 30&#39;",
+      "body": "<p>I am using Chatgpt and Gemini, whenever I ask it the question 'Give me a number between 1 and 30' it always responds with 17.\nI thought LLM were non-deterministic. Is there a core reason this number is chosen every time?</p>\n<p>By whenever I mean 15 different times across 3 devices. All of them returned 17. I have not done a larger test.</p>\n",
+      "creation_date": 1790642656,
+      "link": "https://ai.stackexchange.com/questions/50762/llm-always-returns-17-when-i-ask-it-give-me-a-number-between-1-and-30",
+      "tags": [
+        "large-language-models",
+        "chatgpt"
+      ]
+    },
+    {
+      "question_id": 50761,
+      "title": "AGI running on a analog computer?",
+      "body": "<p>Digital computers dont seem to be able to produce sentience, what about analog computers?Have we tried working with analog computers and training AI within them?</p>\n",
+      "creation_date": 1790553002,
+      "link": "https://ai.stackexchange.com/questions/50761/agi-running-on-a-analog-computer",
+      "tags": [
+        "agi",
+        "computational-learning-theory"
+      ]
+    }
+  ]
+}
