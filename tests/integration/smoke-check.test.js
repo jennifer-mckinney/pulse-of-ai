@@ -76,6 +76,37 @@ describe('scripts/smoke-check.js', () => {
         expect(text).toContain('SMOKE: FAIL');
     }, 30000);
 
+    // P9-7: worker liveness + Redis reachability come from /api/health.
+    // Without a running worker it WARNs by default; standup passes
+    // --expect-worker, which makes it a FAIL.
+    it('reports worker liveness: WARN without a worker, FAIL when a worker is expected', async () => {
+        const health = require('../../src/routes/health');
+        health._setRedisClientForTests({ ping: async () => 'PONG', get: async () => null });
+        try {
+            await populateDemo();
+            let lines = [];
+            await run({ baseUrl, expectEmbeddings: false }, l => lines.push(l));
+            expect(lines.join('\n')).toContain('[WARN] worker heartbeat — redis reachable, worker not alive');
+            lines = [];
+            const code = await run({ baseUrl, expectEmbeddings: false, expectWorker: true }, l => lines.push(l));
+            expect(code).toBe(1);
+            expect(lines.join('\n')).toContain('[FAIL] worker heartbeat');
+
+            const at = new Date().toISOString();
+            health._setRedisClientForTests({ ping: async () => 'PONG', get: async () => at });
+            lines = [];
+            await run({ baseUrl, expectEmbeddings: false, expectWorker: true }, l => lines.push(l));
+            expect(lines.join('\n')).toContain(`[PASS] worker heartbeat — redis reachable, last beat ${at}`);
+        } finally {
+            health._setRedisClientForTests(null);
+        }
+    }, 60000);
+
+    it('parses --expect-worker', () => {
+        const { parseArgs } = require('../../scripts/smoke-check');
+        expect(parseArgs(['--expect-worker']).expectWorker).toBe(true);
+    });
+
     it('fails the embeddings check when embeddings were expected', async () => {
         await populateDemo();
         const lines = [];

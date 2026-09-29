@@ -17,6 +17,13 @@
 //   active_sources registry sources flagged active, EXCLUDING demo feeds
 //   demo_feeds     number of demo feed sources (never counted as sources)
 //
+//   redis          { reachable } — an authenticated PING answered (P9-7)
+//   worker         { alive, last_heartbeat } — the worker's heartbeat
+//                  (src/workers/heartbeat.js); alive = a beat within its TTL
+//
+// Redis probes are bounded (REDIS_PROBE_TIMEOUT_MS): a down or hanging Redis
+// reports reachable:false, never fails or stalls the endpoint.
+//
 // Used by the frontend dashboard status indicator.
 // Mirrors GET /api/health in the API contract.
 
@@ -29,7 +36,52 @@ const { DEMO_SOURCE_TYPE, deriveDataMode } = require('../config/data-mode');
 // server code reads this public/ file).
 const { findCity } = require('../../public/js/config/cities.config.js');
 
+const { createRedisClient } = require('../queues/connection');
+const { readHeartbeat } = require('../workers/heartbeat');
+
 const router = Router();
+
+const REDIS_PROBE_TIMEOUT_MS = 1500;
+let redisClient = null;   // created on first use; injectable for tests
+
+/* istanbul ignore next -- real client construction; tests inject a fake */
+function redis() {
+    if (!redisClient) {
+        redisClient = createRedisClient();
+        // Connection errors surface as reachable:false on the next probe;
+        // without a listener ioredis would log them as unhandled.
+        redisClient.on('error', () => {});
+    }
+    return redisClient;
+}
+
+/** Test hook: inject a { ping, get } client (null restores the real one). */
+function _setRedisClientForTests(client) {
+    redisClient = client;
+}
+
+function withTimeout(promise, ms) {
+    let timer;
+    return Promise.race([
+        promise,
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('timeout')), ms); }),
+    ]).finally(() => clearTimeout(timer));
+}
+
+/** { redis: { reachable }, worker: { alive, last_heartbeat } } — never throws. */
+async function queueStatus() {
+    const client = redis();
+    try {
+        await withTimeout(Promise.resolve().then(() => client.ping()), REDIS_PROBE_TIMEOUT_MS);
+    } catch {
+        return { redis: { reachable: false }, worker: { alive: false, last_heartbeat: null } };
+    }
+    let worker = { alive: false, last_heartbeat: null };
+    try {
+        worker = await withTimeout(readHeartbeat(client), REDIS_PROBE_TIMEOUT_MS);
+    } catch { /* reachable, but the read failed: worker unknown */ }
+    return { redis: { reachable: true }, worker };
+}
 
 router.get('/health', async (req, res) => {
     try {
@@ -106,6 +158,7 @@ router.get('/health', async (req, res) => {
             },
             active_sources: sourceCounts.active_sources,
             demo_feeds:     sourceCounts.demo_feeds,
+            ...(await queueStatus()),
         });
     /* istanbul ignore start -- Database failure; requires error injection testing infrastructure */
     } catch (err) {
@@ -116,3 +169,4 @@ router.get('/health', async (req, res) => {
 });
 
 module.exports = router;
+module.exports._setRedisClientForTests = _setRedisClientForTests;

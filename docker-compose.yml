@@ -4,6 +4,15 @@
 # (without this file's directory as cwd) resolve to the same project.
 name: pulse-of-ai
 
+# Log rotation for EVERY service (P9-7): Docker's json-file driver keeps
+# logs forever by default, and a long-running demo feed or a crash-looping
+# service would fill the disk. 5 files × 10 MB per container.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 # Environment of every Node role (migrate, web, worker, populate): the
 # database, Redis, and the two base secrets (AUDIT_HASH_KEY,
 # CORRELATION_SALT). Container-side connection settings are fixed to the
@@ -54,12 +63,14 @@ x-app: &app
   pull_policy: never
   profiles: ["full"]
   restart: unless-stopped
+  logging: *logging
   environment:
     <<: *app-env
 
 services:
   # Primary database — PostgreSQL 16 with pgvector extension
   postgres:
+    logging: *logging
     image: pgvector/pgvector:pg16
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-pulse_of_ai}
@@ -80,6 +91,7 @@ services:
 
   # Isolated test database — separate port, separate volume, wiped per test suite
   postgres_test:
+    logging: *logging
     image: pgvector/pgvector:pg16
     environment:
       POSTGRES_DB: ${POSTGRES_TEST_DB:-pulse_of_ai_test}
@@ -104,6 +116,7 @@ services:
   # redis-server with its usual privilege drop to the `redis` user.
   # Backslashes and double quotes are escaped for redis.conf quoting.
   redis:
+    logging: *logging
     image: redis:7-alpine
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required (npm run standup generates it)}
@@ -184,8 +197,19 @@ services:
     # The only role with collector credentials (F9-2).
     environment:
       <<: [*app-env, *collector-env]
+    # Healthy = the worker's heartbeat file is fresh (P9-7). It is written
+    # every 15 s only after the heartbeat reached Redis, so a stuck worker or
+    # one that lost Redis turns unhealthy (src/workers/heartbeat.js).
     healthcheck:
-      disable: true
+      test: ["CMD", "node", "src/workers/healthcheck.js"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    # SIGTERM → w.close() waits for in-flight jobs; an embed job retrying
+    # with exponential backoff can take minutes, so give it 3 minutes
+    # before SIGKILL (P9-7).
+    stop_grace_period: 180s
     depends_on:
       postgres:
         condition: service_healthy
@@ -199,6 +223,7 @@ services:
   # FastAPI + sentence-transformers. The model downloads on first start into
   # the hf_cache volume and is reused by every later start / rebuild.
   embeddings:
+    logging: *logging
     image: ${PULSE_EMBEDDINGS_IMAGE:-pulse-of-ai/embeddings:local}
     build:
       context: ./python

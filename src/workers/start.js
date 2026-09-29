@@ -18,6 +18,8 @@
 
 const { Worker } = require('bullmq');
 const { connection } = require('../queues/index');
+const { createRedisClient } = require('../queues/connection');
+const { startHeartbeat } = require('./heartbeat');
 const { processIngestJob }   = require('./ingest.worker');
 const { processEmbedJob }    = require('./embed.worker');
 const { processCorrelateJob }= require('./correlate.worker');
@@ -47,10 +49,27 @@ console.log(
     `Workers started — ingest:${INGEST_CONCURRENCY} embed:${EMBED_CONCURRENCY} correlate:${CORRELATE_CONCURRENCY}`,
 );
 
-// Graceful shutdown on SIGTERM (docker stop) or SIGINT (ctrl+c)
+// Liveness (P9-7): Redis key for /api/health + file for the container
+// healthcheck (src/workers/healthcheck.js). A failed beat is logged; the
+// stale file then turns the container unhealthy.
+const heartbeatRedis = createRedisClient();
+heartbeatRedis.on('error', () => {});
+let lastBeatError = '';
+const stopHeartbeat = startHeartbeat(heartbeatRedis, {
+    onError: (err) => {
+        if (err.message !== lastBeatError) console.error(`[heartbeat] ${err.message}`);
+        lastBeatError = err.message;
+    },
+});
+
+// Graceful shutdown on SIGTERM (docker stop) or SIGINT (ctrl+c). w.close()
+// waits for in-flight jobs, so compose gives this process a long
+// stop_grace_period (docker-compose.yml, worker).
 async function shutdown() {
     console.log('Shutting down workers...');
+    stopHeartbeat();
     await Promise.all(workers.map(w => w.close()));
+    await heartbeatRedis.quit().catch(() => {});
     process.exit(0);
 }
 

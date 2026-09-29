@@ -16,6 +16,8 @@
 #         populate get the base secrets (DB, Redis, AUDIT_HASH_KEY,
 #         CORRELATION_SALT) and nothing else credential-shaped
 #   F9-8  the unauthenticated embeddings API publishes no host port
+#   P9-7  every service rotates json-file logs; the worker has a healthcheck
+#         and a stop_grace_period of at least 150 s
 #
 # CI runs it in the docker-images job (.github/workflows/ci.yml);
 # tests/integration/composeConfig.test.js runs it under jest.
@@ -80,6 +82,24 @@ check "worker receives the collector credentials (x-collector-env)" "$missing"
 emb_ports=$(jq -r '(.services.embeddings.ports // [])[]
     | "embeddings publishes \(.host_ip // "0.0.0.0"):\(.published)->\(.target)"' <<< "$cfg")
 check "embeddings publishes no host port (compose network only)" "$emb_ports"
+
+# ─── P9-7: log rotation everywhere; worker health + stop grace ──────────────
+nolog=$(jq -r '.services | to_entries[] | .key as $s | .value.logging as $l
+    | select(($l.driver // "") != "json-file" or ($l.options["max-size"] // "") == "" or ($l.options["max-file"] // "") == "")
+    | "\($s): logging \($l // {} | tostring) (needs json-file with max-size and max-file)"' <<< "$cfg")
+check "every service rotates its json-file logs (max-size, max-file)" "$nolog"
+worker_hc=$(jq -r '.services.worker.healthcheck as $h
+    | if ($h == null) or ($h.disable == true) or (($h.test // []) | length == 0)
+      then "worker has no healthcheck" else empty end' <<< "$cfg")
+check "worker has a healthcheck" "$worker_hc"
+# stop_grace_period resolves to a Go duration string (e.g. 3m0s); convert.
+grace=$(jq -r '.services.worker.stop_grace_period // ""' <<< "$cfg")
+grace_s=$(awk -v d="$grace" 'BEGIN { s = 0; while (match(d, /^[0-9.]+(h|ms|m|s)/)) {
+    tok = substr(d, 1, RLENGTH); d = substr(d, RLENGTH + 1); n = tok + 0
+    if (tok ~ /ms$/) s += n / 1000; else if (tok ~ /h$/) s += n * 3600; else if (tok ~ /m$/) s += n * 60; else s += n }
+    print int(s) }')
+check "worker stop_grace_period >= 150s (a retrying run can finish)" \
+    "$( (( grace_s >= 150 )) || echo "worker stop_grace_period is '${grace:-unset}' (${grace_s}s)")"
 
 #@@CHECKS@@
 

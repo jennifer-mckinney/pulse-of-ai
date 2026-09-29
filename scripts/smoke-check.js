@@ -5,7 +5,7 @@
 // so it needs no host tooling beyond Docker: it talks to the API on
 // 127.0.0.1:$PORT and to the database through src/db/connection.
 //
-//   node scripts/smoke-check.js [--base-url URL] [--expect-embeddings]
+//   node scripts/smoke-check.js [--base-url URL] [--expect-embeddings] [--expect-worker]
 //
 // Checks (PASS / FAIL / WARN per line):
 //   - GET /api/health → 200, db_connected true; its data_mode matches the
@@ -13,6 +13,8 @@
 //     /api/posts/aggregated-by-location for the trailing hour (demo_posts /
 //     total), not a re-run of health's own SQL — tolerating a demo batch
 //     landing between the reads (G9-2)
+//   - worker heartbeat: /api/health reports Redis reachable and the worker
+//     alive (P9-7) — WARN by default, FAIL with --expect-worker (standup)
 //   - GET / serves the story page (index.html + its main.js bundle)
 //   - the page's own API calls return DATA, not just 200: aggregated cities
 //     in the trailing hour (with coordinates), themes, latest bias job,
@@ -47,10 +49,12 @@ function parseArgs(argv) {
     const opts = {
         baseUrl: `http://127.0.0.1:${process.env.PORT || 3000}`,
         expectEmbeddings: false,
+        expectWorker: false,
     };
     for (let i = 0; i < argv.length; i++) {
         if (argv[i] === '--base-url') opts.baseUrl = argv[++i];
         else if (argv[i] === '--expect-embeddings') opts.expectEmbeddings = true;
+        else if (argv[i] === '--expect-worker') opts.expectWorker = true;
         else throw new Error(`unknown argument '${argv[i]}'`);
     }
     return opts;
@@ -191,6 +195,20 @@ async function run(opts, out) {
             + `('${result.expected}': ${result.globe.demo} of ${result.globe.posts} placed trailing-hour posts `
             + `from demo feeds), ${health && health.active_sources} real active sources, `
             + `${health && health.demo_feeds} demo feeds`);
+    });
+
+    await check(r, 'worker heartbeat', async () => {
+        const { body } = await getJson(base, '/api/health');
+        const reachable = Boolean(body && body.redis && body.redis.reachable);
+        const w = (body && body.worker) || {};
+        if (reachable && w.alive) {
+            r.pass('worker heartbeat', `redis reachable, last beat ${w.last_heartbeat}`);
+            return;
+        }
+        const detail = reachable
+            ? `redis reachable, worker not alive (last beat ${w.last_heartbeat || 'never'})`
+            : 'redis NOT reachable from web';
+        (opts.expectWorker ? r.fail : r.warn)('worker heartbeat', detail);
     });
 
     await check(r, 'GET / serves the story page', async () => {

@@ -140,22 +140,23 @@ deadline=$(( t_up + CORE_TIMEOUT ))
 while :; do
     IFS='|' read -r m_state _ m_exit <<< "$(svc_status migrate)"
     IFS='|' read -r w_state w_health _ <<< "$(svc_status web)"
-    IFS='|' read -r k_state _ _ <<< "$(svc_status worker)"
+    IFS='|' read -r k_state k_health _ <<< "$(svc_status worker)"
 
     if [[ "$m_state" == "exited" && "$m_exit" != "0" ]]; then
         show_failure migrate
         die "the migrate job failed (exit $m_exit) — migrations or seed did not apply"
     fi
-    if [[ "$m_state" == "exited" && "$m_exit" == "0" && "$w_health" == "healthy" && "$k_state" == "running" ]]; then
+    # The worker must be HEALTHY: its heartbeat reached Redis (P9-7).
+    if [[ "$m_state" == "exited" && "$m_exit" == "0" && "$w_health" == "healthy" && "$k_health" == "healthy" ]]; then
         break
     fi
     if (( $(date +%s) >= deadline )); then
         show_failure migrate web worker
-        die "timed out after ${CORE_TIMEOUT}s: migrate=${m_state:-missing}/${m_exit:-?} web=${w_state:-missing}/${w_health:-?} worker=${k_state:-missing}"
+        die "timed out after ${CORE_TIMEOUT}s: migrate=${m_state:-missing}/${m_exit:-?} web=${w_state:-missing}/${w_health:-?} worker=${k_state:-missing}/${k_health:-?}"
     fi
     sleep 2
 done
-ok "migrate job completed (migrations + seed), web healthy, worker running ($(elapsed "$t_up")s)"
+ok "migrate job completed (migrations + seed), web healthy, worker healthy ($(elapsed "$t_up")s)"
 
 step "Waiting for the embeddings service (first start downloads the model; timeout ${EMBED_TIMEOUT}s)"
 t_emb=$(date +%s)
@@ -234,7 +235,7 @@ else
     info "embeddings: SKIPPED (service not ready)"
 fi
 
-smoke_args=()
+smoke_args=(--expect-worker)
 (( EMBEDDINGS_OK )) && smoke_args+=(--expect-embeddings)
 set +e
 compose_full exec -T web node scripts/smoke-check.js ${smoke_args[@]+"${smoke_args[@]}"}

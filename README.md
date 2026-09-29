@@ -135,6 +135,8 @@ The script checks these first and prints how to fix anything that is missing.
 5. Populates data (see below) and starts the `populate` feed.
 6. Runs a smoke check. It looks at the API, the page, and the page's own data calls (globe, themes, bias, ribbon, drill-down). It counts posts, audit decisions, bias assessments and embeddings, opens one receipt and checks its four audience views and bias lineage, and runs `npm run replay` on that post, which must PASS. It ends with a population summary.
 
+`GET /api/health` also reports `redis.reachable` and `worker.alive` / `worker.last_heartbeat`, and every container's logs rotate (json-file, 5 × 10 MB).
+
 Re-running is safe. The images come from the build cache, running containers are kept, and a second population batch is skipped while the trailing hour is still full.
 
 ### What runs where
@@ -142,7 +144,7 @@ Re-running is safe. The images come from the build cache, running containers are
 | Service | Host port (override) | Role |
 |---|---|---|
 | `web` | `3000` (`WEB_PORT`) | Express API and the static frontend (`public/`) |
-| `worker` | none | BullMQ workers for ingest, embed and correlate (`src/workers/start.js`) |
+| `worker` | none | BullMQ workers for ingest, embed and correlate (`src/workers/start.js`). Healthy while its Redis heartbeat is fresh; `docker stop` gives it 180 s to finish in-flight jobs |
 | `embeddings` | none (compose network only: `embeddings:8000`) | `/embeddings` and `/health`, unauthenticated, so never published; standup checks it with `compose exec`. The model downloads once into the `hf_cache` volume |
 | `populate` | none | Demo feed. Adds a batch of fictional posts every 150 s (profile `demo`) |
 | `migrate` | none | One-shot job: migrations and seed |
