@@ -7,7 +7,7 @@ sentence-transformers==2.7.0
 # per docs/TECHNICAL_SPEC.md §5 — add the dependency when actually adopted.
 
 # Database
-psycopg2-binary>=2.9.9
+psycopg2-binary>=2.9.13
 pgvector>=0.2.4
 
 # HTTP server (used if running without Infinity)
