@@ -164,6 +164,7 @@ async function runCollection(o = {}) {
                 if (err && err.detail) log(`[collect] ${slug}: ${text} — detail: ${err.detail}`);
             };
             let okRoutes = 0;
+            let queueFailed = false;
             let collectors = [];
             try {
                 collectors = buildCollectors(src, { env, http, cursor, httpCache, now: o.now, ...(o.collectorCtx || {}) });
@@ -201,15 +202,24 @@ async function runCollection(o = {}) {
                         newPostIds.push(stored.postId);
                     } catch (err) {
                         summary.scoringRetries++;
-                        log(`[collect] ${slug}: scoring failed for ${stored.postId} (${err.message}) — queued for retry`);
-                        await queues.enqueueIngestRetry({ rawPostId: stored.postId, sourceId, jobId }).catch(() => {});
+                        try {
+                            await queues.enqueueIngestRetry({ rawPostId: stored.postId, sourceId, jobId });
+                            log(`[collect] ${slug}: scoring failed for ${stored.postId} (${err.message}) — queued for retry`);
+                        } catch (qerr) {
+                            // G10-4: never swallowed. The run is an error; the
+                            // unscored post is re-queued by the sweep
+                            // (src/collectors/sweep.js) within 24 h.
+                            queueFailed = true;
+                            fail(`${c.route.id}: scoring failed and the retry could not be queued (${qerr.message})`,
+                                Object.assign(new Error('queue'), { kind: 'queue' }));
+                        }
                     }
                 }
             }
             const classified = routeErrors.map(e => classifyError(e.err));
             // F10-5: any refused route refuses the source (the source said no).
             const refused = refusalOf(classified);
-            const ok = okRoutes > 0 && !refused;
+            const ok = okRoutes > 0 && !refused && !queueFailed;
             row.outcome = ok ? 'ok' : 'error';
             row.error = routeErrors.length ? scrub(routeErrors.map(e => e.text).join('; '), env) : null;
             const refusedIdx = refused ? classified.findIndex(c => c.error_kind === refused.kind) : -1;

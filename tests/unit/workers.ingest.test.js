@@ -76,5 +76,11 @@ test('the gate is reachable: 1/20, not the old 0.40', () => {
 test('errors propagate so BullMQ retries; malformed jobs are rejected', async () => {
     scorePost.mockRejectedValue(new Error('db down'));
     await expect(processIngestJob(job())).rejects.toThrow('db down');
-    await expect(processIngestJob({ data: { rawPostId: 'x' } })).rejects.toThrow(/rawPostId and jobId/);
+    await expect(processIngestJob({ data: { jobId: 'j' } })).rejects.toThrow(/needs rawPostId/);
+    // G10-4: a sweep re-queue has no job id — it scores under the current cycle.
+    scorePost.mockResolvedValue({ relevance: { score: '0' } });
+    cycle.joinCycle.mockResolvedValueOnce('cycle-now');
+    await processIngestJob({ data: { rawPostId: 'x', jobId: null } });
+    expect(cycle.joinCycle).toHaveBeenLastCalledWith(null, expect.any(Number));
+    expect(scorePost).toHaveBeenLastCalledWith('x', 'cycle-now', expect.any(Object));
 });

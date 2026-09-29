@@ -29,7 +29,9 @@ const { collectWindowMs } = require('../config/source-registry');
  */
 async function processIngestJob(job) {
     const { rawPostId, jobId } = job.data || {};
-    if (!rawPostId || !jobId) throw new Error('ingest job needs rawPostId and jobId');
+    // jobId is null for posts re-queued by the unscored sweep (G10-4):
+    // they score under the current cycle.
+    if (!rawPostId) throw new Error('ingest job needs rawPostId');
     const mv = await resolveCurrentMethodology();
     // G10-2: score under the post's cycle only while it is still running
     // (then it cannot close mid-score); a retry against a closed or non-cycle

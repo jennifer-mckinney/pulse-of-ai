@@ -37,7 +37,7 @@ class ParseError extends CollectorError {}
 /** The public error kinds (source_collection_state.last_error_kind, source_runs.error_kind). */
 const ERROR_KINDS = Object.freeze([
     'access_denied', 'robots', 'robots_unreachable', 'gate', 'parse', 'timeout', 'network', 'http_4xx', 'http_5xx',
-    'too_large', 'redirect_refused', 'host_refused', 'deadline', 'store', 'internal',
+    'too_large', 'redirect_refused', 'host_refused', 'deadline', 'store', 'queue', 'internal',
 ]);
 
 const TIMEOUT_RE = /\b(timeout|timed out|aborted due to timeout)\b/i;

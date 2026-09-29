@@ -22,7 +22,8 @@
 'use strict';
 
 const { Worker } = require('bullmq');
-const { connection } = require('../queues/index');
+const { connection, ingestQueue } = require('../queues/index');
+const { sweepUnscored } = require('../collectors/sweep');
 const { createRedisClient } = require('../queues/connection');
 const { startHeartbeat } = require('./heartbeat');
 const { processCollectJob, processRefreshJob } = require('./collect.worker');
@@ -88,6 +89,15 @@ async function closeDueCycles() {
         }
     } catch (err) {
         console.error(`[cycle] closing failed: ${err.message}`);
+    }
+    // G10-4: re-queue posts from the last 24 h that were never scored.
+    try {
+        const s = await sweepUnscored({
+            enqueue: (data, key) => ingestQueue.add('ingest-sweep', data, { jobId: key }),
+        });
+        if (s.found) log(`[sweep] ${s.found} unscored post(s): ${s.queued} re-queued, ${s.failed} failed`);
+    } catch (err) {
+        console.error(`[sweep] failed: ${err.message}`);
     }
 }
 
