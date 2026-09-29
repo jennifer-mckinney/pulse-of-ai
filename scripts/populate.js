@@ -222,9 +222,9 @@ async function ensureDemoSources() {
     );
 }
 
-/** LIVE posts (real registry sources, not demo feeds) in the trailing hour. */
 /**
- * Live posts in the trailing hour that the GLOBE can render (G10-8): the
+ * LIVE posts (real registry sources, not demo feeds) in the trailing hour
+ * that the GLOBE can render (G10-8): the
  * same rule as GET /api/posts/aggregated-by-location — scored (a
  * sentiment_results row) and located (location non-empty; a publisher-city
  * location counts). A live post the globe cannot show must not stop the
