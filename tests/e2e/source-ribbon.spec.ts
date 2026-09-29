@@ -23,7 +23,7 @@ test('ribbon: explore-only, proportional segments, sparklines, 12h label, hover 
     // always (allCategoryRows pads quiet categories with zero rows — the
     // prototype marimekko's "all categories, always" contract). The forums
     // segment's volume is whatever the server holds for forums — on a fresh
-    // database the fixture seed spreads its posts over all 51 registry
+    // database the fixture seed spreads its posts over all the registry
     // sources, forum sources included (the old "honest zero" assumed a
     // pre-registry seed and only held on a stale database).
     await enterExplore(page);

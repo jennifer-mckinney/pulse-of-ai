@@ -19,6 +19,8 @@
 // follow the data mode like the intro kicker (G9-5): it once read
 // "LIVE · REFRESH CYCLE 2–3 MIN" whatever the data was.
 import { test, expect, Page } from '@playwright/test';
+// Counts come from the registry itself (SOURCES.length), never a literal.
+const { SOURCES } = require('../../src/config/source-registry');
 import {
     consoleErrors, expectNoConsoleErrors, gotoAndWaitForData,
     scrollToBeat, scrollToProg, evidence,
@@ -174,8 +176,8 @@ test('backend demo data: DEMO kicker, computed demo intro, Demo data markers, de
     await expect(health.locator('.kv-row', { hasText: 'demo feeds' }))
         .toContainText('1 (fictional demo population, not sources)');
     const sourcesRow = await health.locator('.kv-row', { hasText: 'sources online' }).innerText();
-    expect(sourcesRow).toMatch(/\d+ \/ 51 /);   // the registry's 51, demo feed excluded
-    await expect(health.locator('.src-list .src-row')).toHaveCount(51);
+    expect(sourcesRow).toMatch(new RegExp(`\\d+ / ${SOURCES.length} `));   // the registry's size, demo feed excluded
+    await expect(health.locator('.src-list .src-row')).toHaveCount(SOURCES.length);
     expectNoConsoleErrors(errors);
 });
 

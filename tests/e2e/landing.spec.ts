@@ -4,6 +4,8 @@
 // reflects the live /api/health state (seeded: 1 unresolved alert →
 // yellow). Zero console errors.
 import { test, expect } from '@playwright/test';
+// Counts come from the registry itself (SOURCES.length), never a literal.
+const { SOURCES } = require('../../src/config/source-registry');
 import {
     consoleErrors, expectNoConsoleErrors, gotoAndWaitForData, evidence,
 } from './helpers';
@@ -62,7 +64,7 @@ test('landing: canvas painted, intro lede, header chips, seeded health state', a
     // Byline counts come from the source registry (GET /api/sources), not a
     // hardcoded "7 source categories" / "50 sources" claim (ADR 0001).
     await expect(page.locator('#intro-byline'))
-        .toHaveText('INTERACTIVE · 51 SOURCES · 8 CATEGORIES · EVERY SCORE AUDITABLE');
+        .toHaveText(`INTERACTIVE · ${SOURCES.length} SOURCES · 8 CATEGORIES · EVERY SCORE AUDITABLE`);
     await expect(page.locator('#intro-skip')).toBeVisible();
 
     // Header chips: time-to-insight timer + health chip.
