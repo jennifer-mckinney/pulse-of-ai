@@ -15,6 +15,10 @@
 #
 # Exit code: 0 when every case passed, 1 otherwise.
 
+# Case code is passed to lib_run in SINGLE quotes on purpose: it expands
+# inside the case's subshell, after the library is sourced.
+# shellcheck disable=SC2016
+
 set -uo pipefail
 
 LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")/../lib" && pwd)/stack.sh"
@@ -30,6 +34,9 @@ fail() { FAILED=$((FAILED + 1)); printf 'FAIL %s\n     %s\n' "$1" "$2"; }
 assert_eq() {
     if [[ "$2" == "$3" ]]; then pass "$1"; else fail "$1" "expected [$2], got [$3]"; fi
 }
+
+# tmp_files DIR: standup's secrets temp files (.env.tmp.<pid>) left in DIR.
+tmp_files() { find "$1" -maxdepth 1 -name '*.tmp.*' -print; }
 
 # new_case: fresh scratch dir; prints its path.
 new_case() {
@@ -109,13 +116,13 @@ assert_eq "ensure_env_file: creates the env file"          "0" "$rc"
 assert_eq "ensure_env_file: new file is mode 600"          "600" "$(file_mode "$d/.env")"
 assert_eq "ensure_env_file: non-secret line kept verbatim" "3000" "$(lib_run "$d" 'env_file_value WEB_PORT')"
 assert_eq "ensure_env_file: secret generated (64 hex)"     "64" "$(lib_run "$d" 'v=$(env_file_value POSTGRES_PASSWORD); [[ "$v" =~ ^[0-9a-f]{64}$ ]] && printf %s ${#v}')"
-assert_eq "ensure_env_file: no temp file left"             "" "$(ls -A "$d" | grep '\.tmp\.' || true)"
+assert_eq "ensure_env_file: no temp file left"             "" "$(tmp_files "$d")"
 
 # F9-4: a failing secret generator must not leave the secrets temp file.
 d=$(new_case); write_example "$d"
 lib_run "$d" "$ENV_SETUP; gen_secret() { return 1; }; ensure_env_file" >/dev/null; rc=$?
 assert_eq "ensure_env_file: generator failure exits non-zero" "1" "$rc"
-assert_eq "ensure_env_file: generator failure leaves no temp" "" "$(ls -A "$d" | grep '\.tmp\.' || true)"
+assert_eq "ensure_env_file: generator failure leaves no temp" "" "$(tmp_files "$d")"
 assert_eq "ensure_env_file: generator failure writes no .env" "no" "$([[ -e "$d/.env" ]] && echo yes || echo no)"
 
 # F9-4: interrupted mid-write (TERM while generating) — temp file removed.
@@ -126,7 +133,7 @@ d=$(new_case); write_example "$d"
 lib_run "$d" "$ENV_SETUP; sh -c 'echo \$PPID' > \"$d/main.pid\"; MAIN=\$(cat \"$d/main.pid\"); gen_secret() { kill -TERM \"\$MAIN\"; sleep 1; echo x; }; ensure_env_file" >/dev/null; rc=$?
 
 assert_eq "ensure_env_file: TERM exits 143"           "143" "$rc"
-assert_eq "ensure_env_file: TERM leaves no temp file" "" "$(ls -A "$d" | grep '\.tmp\.' || true)"
+assert_eq "ensure_env_file: TERM leaves no temp file" "" "$(tmp_files "$d")"
 assert_eq "ensure_env_file: TERM writes no .env"      "no" "$([[ -e "$d/.env" ]] && echo yes || echo no)"
 
 

@@ -45,9 +45,9 @@ env_value_body() {
         n=${#raw}
         while (( i < n )); do
             c=${raw:i:1}
-            if [[ "$q" == '"' && "$c" == '\' ]] && (( i + 1 < n )); then
+            if [[ "$q" == '"' && "$c" == "\\" ]] && (( i + 1 < n )); then
                 case "${raw:i+1:1}" in
-                    '"'|'\') out+=${raw:i+1:1}; i=$((i + 2)); continue ;;
+                    \"|\\) out+=${raw:i+1:1}; i=$((i + 2)); continue ;;
                 esac
             fi
             [[ "$c" == "$q" ]] && break

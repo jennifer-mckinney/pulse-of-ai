@@ -110,8 +110,8 @@ unpinned=$(jq -r '.services | to_entries[]
     | select((.value.image // "") | test("@sha256:[0-9a-f]{64}$") | not)
     | "\(.key): image \(.value.image) is not pinned by digest"' <<< "$cfg")
 check "every pulled compose image is pinned by @sha256 digest" "$unpinned"
-unpinned_df=$(cd "$ROOT" && grep -HnE '^ARG [A-Z_]+_IMAGE=' Dockerfile python/Dockerfile \
-    | grep -vE '@sha256:[0-9a-f]{64}$' || true)
+unpinned_df=$(cd "$ROOT" && { grep -HnE '^ARG [A-Z_]+_IMAGE=' Dockerfile python/Dockerfile \
+    | grep -vE '@sha256:[0-9a-f]{64}$' || true; })
 check "Dockerfile base images are pinned by @sha256 digest" "$unpinned_df"
 unpinned_ci=$(grep -nE '^[[:space:]]+image:' "$ROOT/.github/workflows/ci.yml" \
     | grep -vE '@sha256:[0-9a-f]{64}' | sed 's/^/ci.yml:/' || true)
