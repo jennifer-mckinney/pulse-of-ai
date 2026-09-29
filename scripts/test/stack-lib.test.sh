@@ -174,6 +174,26 @@ lib_run "$d" "$ENV_SETUP; ensure_env_file && secure_env_file" >/dev/null; rc=$?
 assert_eq "merge: complete group-writable file is accepted" "0" "$rc"
 assert_eq "merge: complete file tightened to 600"           "600" "$(file_mode "$d/.env")"
 
+# Copilot 4129574000: ensure_env_file ALONE hardens an existing file, and
+# only then prints its success line.
+d=$(new_case); write_example "$d"
+printf 'POSTGRES_PASSWORD=a\nAUDIT_HASH_KEY=b\nCORRELATION_SALT=c\nWEB_PORT=1\n' > "$d/.env"; chmod 644 "$d/.env"
+out=$(lib_run "$d" "$ENV_SETUP; ensure_env_file"); rc=$?
+assert_eq "existing complete 0644 file: ensure_env_file succeeds" "0" "$rc"
+assert_eq "existing complete 0644 file: mode 600 after ensure_env_file" "600" "$(file_mode "$d/.env")"
+assert_eq "existing complete 0644 file: success line says mode 600" "yes" "$(grep -q 'kept existing.*mode 600' <<< "$out" && echo yes || echo no)"
+d=$(new_case); write_example "$d"
+printf 'POSTGRES_PASSWORD=abc\n' > "$d/.env"; chmod 644 "$d/.env"
+lib_run "$d" "$ENV_SETUP; ensure_env_file" >/dev/null; rc=$?
+assert_eq "existing 0644 file + appended keys: mode 600 after ensure_env_file" "600" "$(file_mode "$d/.env")"
+# chmod failing (e.g. a file owned by someone else) → die, and NO success line.
+d=$(new_case); write_example "$d"
+printf 'POSTGRES_PASSWORD=a\nAUDIT_HASH_KEY=b\nCORRELATION_SALT=c\nWEB_PORT=1\n' > "$d/.env"; chmod 644 "$d/.env"
+out=$(lib_run "$d" "$ENV_SETUP; chmod() { return 1; }; ensure_env_file"); rc=$?
+assert_eq "chmod failure: ensure_env_file exits non-zero" "1" "$rc"
+assert_eq "chmod failure: no success line printed" "" "$(grep 'kept existing' <<< "$out" || true)"
+assert_eq "chmod failure: error names chmod 600" "yes" "$(grep -q 'could not chmod 600' "$d/stderr" && echo yes || echo no)"
+
 # ─── G9-3: run_with_timeout kills the whole process group ────────────────────
 alive() { kill -0 "$1" 2>/dev/null && echo alive || echo dead; }
 

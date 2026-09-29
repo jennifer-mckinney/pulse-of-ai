@@ -140,6 +140,7 @@ _stack_drop_env_tmp() {
 
 # Create the env file from .env.example (generating the secret keys), or
 # append the keys an existing file lacks. Existing values are never changed.
+# Every path leaves the file at mode 600 before it reports success (F9-3).
 ensure_env_file() {
     local line key
     if [[ ! -f "$STACK_ENV_FILE" ]]; then
@@ -186,7 +187,10 @@ ensure_env_file() {
     fi
 
     if (( ${#missing[@]} == 0 )); then
-        ok "kept existing $STACK_ENV_FILE (all keys present, values untouched)"
+        # Copilot 4129574000: harden BEFORE reporting success, so the "ok"
+        # line never describes a file that is still group/world-readable.
+        secure_env_file
+        ok "kept existing $STACK_ENV_FILE (all keys present, values untouched; mode 600)"
         return 0
     fi
     # Make sure the append starts on its own line.
@@ -198,7 +202,8 @@ ensure_env_file() {
         env_line_for "$key" "$line" >> "$STACK_ENV_FILE" \
             || die "could not generate a value for $key (needs openssl or /dev/urandom)"
     done
-    ok "kept existing $STACK_ENV_FILE; added missing key(s): ${missing[*]}"
+    secure_env_file   # mode 600 before the success line (see above)
+    ok "kept existing $STACK_ENV_FILE; added missing key(s): ${missing[*]} (mode 600)"
 }
 
 # F9-3: the env file holds secrets — always mode 600, and say so when it is
