@@ -16,8 +16,19 @@
 
 const { dbGet, dbAll, dbRun } = require('../db/connection');
 
-// Scheduler jitter slack: a run due every N s may start a few seconds early.
-const CLAIM_SLACK_SEC = 10;
+// Scheduler jitter slack (G10-16): a run due every N s may start early by up
+// to 20% of the collection window (a fixed 10 s was less than the jitter of
+// a busy worker, so due runs were refused as "within the poll interval"),
+// never more than 20% of the source's own interval.
+const CLAIM_SLACK_FRACTION = 0.2;
+const CLAIM_SLACK_SEC = 10;   // floor
+
+/** Slack in seconds for a source polled every `intervalSec` under a window of `windowMs`. */
+function claimSlackSec(intervalSec, windowMs) {
+    const byWindow = CLAIM_SLACK_FRACTION * (windowMs || 0) / 1000;
+    const byInterval = CLAIM_SLACK_FRACTION * (intervalSec || 0);
+    return Math.max(Math.min(CLAIM_SLACK_SEC, byInterval), Math.min(byWindow, byInterval));
+}
 
 /** slug → data_sources.id for registry rows. */
 async function sourceIdsBySlug(slugs) {
@@ -25,12 +36,12 @@ async function sourceIdsBySlug(slugs) {
     return new Map(rows.map(r => [r.name, r.id]));
 }
 
-async function claim(sourceId, minIntervalSec) {
+async function claim(sourceId, minIntervalSec, windowMs = require('../config/source-registry').collectWindowMs()) {
     await dbRun(
         'INSERT INTO source_collection_state (source_id) VALUES ($1) ON CONFLICT (source_id) DO NOTHING',
         [sourceId],
     );
-    const interval = Math.max(0, (minIntervalSec || 0) - CLAIM_SLACK_SEC);
+    const interval = Math.max(0, (minIntervalSec || 0) - claimSlackSec(minIntervalSec, windowMs));
     return dbGet(
         `UPDATE source_collection_state
          SET last_attempt_at = NOW(), updated_at = NOW()
@@ -166,5 +177,5 @@ async function clearRefusal(sourceId, resolution) {
 
 module.exports = {
     sourceIdsBySlug, claim, saveOutcome, recordRun, getRefusal, recordRefusal, clearRefusal,
-    dbKillSwitch, setDbKillSwitch, CLAIM_SLACK_SEC,
+    dbKillSwitch, setDbKillSwitch, CLAIM_SLACK_SEC, CLAIM_SLACK_FRACTION, claimSlackSec,
 };

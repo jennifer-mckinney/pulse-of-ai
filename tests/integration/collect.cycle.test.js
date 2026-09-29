@@ -179,3 +179,16 @@ it('retryJobFor: a running refresh job keeps its retry; a running cycle is joine
     expect(moved).toEqual({ jobId: cyc, joined: true });
     expect((await retryJobFor(null, WINDOW)).jobId).toBe(cyc);
 });
+
+it('G10-16: a scheduled run has a deadline of half the window (a slow source is cut, not left running)', async () => {
+    const slow = (url, { signal }) => new Promise((resolve, reject) => {
+        const t = setTimeout(() => resolve({ status: 200, headers: {}, body: '{"hits":[]}' }), 2000);
+        signal.addEventListener('abort', () => { clearTimeout(t); reject(Object.assign(new Error('aborted'), { name: 'AbortError' })); });
+    });
+    const s = await runCollection({
+        slugs: ['hacker_news'], triggeredBy: 'cron', cycle: { windowMs: 200 }, env: TEST_ENV,
+        transport: slow, now: () => Date.parse(RECORDED_AT),
+        queues: { enqueueEmbeds: async () => {}, enqueueIngestRetry: async () => {} },
+    });
+    expect(s.sources[0]).toMatchObject({ outcome: 'error', errorKind: 'deadline' });
+});

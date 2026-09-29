@@ -43,7 +43,7 @@
 'use strict';
 
 const { dbGet, dbAll, dbRun } = require('../db/connection');
-const { SOURCES, getSource, sourceStatus, pollIntervalSec } = require('../config/source-registry');
+const { SOURCES, getSource, sourceStatus, pollIntervalSec, collectWindowMs } = require('../config/source-registry');
 const { buildCollectors } = require('./index');
 const { HttpClient } = require('./http');
 const state = require('./state');
@@ -92,7 +92,11 @@ async function runCollection(o = {}) {
     const queues = o.queues || defaultQueues();
     // G10-9: an optional collection deadline (o.signal, or o.deadlineMs).
     // Once it fires no further source starts and in-flight requests abort.
-    const signal = o.signal || (o.deadlineMs ? AbortSignal.timeout(o.deadlineMs) : null);
+    // G10-16: a scheduled (cycle) run gets a deadline of half the collection
+    // window by default, so one slow source cannot overrun into the next
+    // cycle and hold the cycle open.
+    const deadlineMs = o.deadlineMs || (o.cycle && !o.signal ? Math.round(o.cycle.windowMs / 2) : null);
+    const signal = o.signal || (deadlineMs ? AbortSignal.timeout(deadlineMs) : null);
 
     let jobId = o.jobId || null;
     let joinedCycle = false;   // G10-2: this run is in the cycle's inflight_runs
@@ -159,7 +163,7 @@ async function runCollection(o = {}) {
                 log(`[collect] ${slug}: refusal cleared by ${resetEnv(slug)}`);
             }
 
-            const claimed = await state.claim(sourceId, pollIntervalSec(src, env));
+            const claimed = await state.claim(sourceId, pollIntervalSec(src, env), o.cycle ? o.cycle.windowMs : collectWindowMs(env));
             if (!claimed) { row.reason = 'collected within its poll interval (rate limit)'; continue; }
             queried++;
             http = http || new HttpClient({ env, transport: o.transport, sleep: o.collectorCtx && o.collectorCtx.sleep, signal });
