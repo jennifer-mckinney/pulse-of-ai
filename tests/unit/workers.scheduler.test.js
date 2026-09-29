@@ -24,7 +24,7 @@ const { COLLECT_QUEUES } = require('../../src/queues/index');
 const { scheduleAllSources, collectWindowMs, DEFAULT_COLLECT_WINDOW_MS } = require('../../src/workers/collector.scheduler');
 const { SOURCES } = require('../../src/config/source-registry');
 
-const ENV = { COLLECTOR_CONTACT_URL: 'https://example.org/c', COLLECT_WINDOW_MS: '150000' };
+const ENV = { COLLECTOR_CONTACT_URL: 'https://example.org/c', PERMISSION_GATED_FEEDS_ACCEPTED_BY: 'Test Operator 2026-09-29', COLLECT_WINDOW_MS: '150000' };
 const NOW = 1790000000000;
 const rows = (slugs) => slugs.map(slug => {
     const s = SOURCES.find(x => x.slug === slug);

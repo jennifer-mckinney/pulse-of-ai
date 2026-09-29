@@ -48,7 +48,10 @@ x-app-env: &app-env
 # that evaluates or runs collection gets them (web, worker, populate).
 # Empty means "not set".
 x-collector-settings: &collector-settings
-  COLLECTOR_CONTACT_URL: ${COLLECTOR_CONTACT_URL:-https://github.com/jennifer-mckinney/pulse-of-ai}
+  # D1: no default contact URL — a fresh clone collects nothing (demo only)
+  # until the operator sets their own. See .env.example.
+  COLLECTOR_CONTACT_URL: ${COLLECTOR_CONTACT_URL:-}
+  PERMISSION_GATED_FEEDS_ACCEPTED_BY: ${PERMISSION_GATED_FEEDS_ACCEPTED_BY:-}
   COLLECTORS_ENABLED: ${COLLECTORS_ENABLED:-true}
   COLLECTORS_DISABLED: ${COLLECTORS_DISABLED:-}
   COLLECT_WINDOW_MS: ${COLLECT_WINDOW_MS:-150000}

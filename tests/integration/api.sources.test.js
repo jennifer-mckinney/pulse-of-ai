@@ -86,6 +86,7 @@ describe('GET /api/sources', () => {
 
         it('serves all 51 registry sources in workbook order with status and terms citation', async () => {
             setEnv('COLLECTOR_CONTACT_URL', 'https://example.org/c');
+            setEnv('PERMISSION_GATED_FEEDS_ACCEPTED_BY', 'Test Operator 2026-09-29');
             for (const k of ['X_BEARER_TOKEN', 'YOUTUBE_API_KEY', 'COLLECTORS_DISABLED', 'COLLECTORS_ENABLED']) setEnv(k, undefined);
             await seedSources();
             const res = await request(app).get('/api/sources');
@@ -101,10 +102,12 @@ describe('GET /api/sources', () => {
             expect(by.hacker_news.category).toBe('forums');
             // env var NAMES only — never a value
             expect(JSON.stringify(res.body)).not.toContain('https://example.org/c');
+            expect(JSON.stringify(res.body)).not.toContain('Test Operator');
         });
 
         it('marks a collecting source online after a recent successful run', async () => {
             setEnv('COLLECTOR_CONTACT_URL', 'https://example.org/c');
+            setEnv('PERMISSION_GATED_FEEDS_ACCEPTED_BY', undefined);
             await seedSources();
             await dbRun(`INSERT INTO source_collection_state (source_id, last_success_at, last_item_count)
                          SELECT id, NOW(), 7 FROM data_sources WHERE name = 'npr'`);
@@ -115,8 +118,9 @@ describe('GET /api/sources', () => {
             expect(by.npr).toMatchObject({ online: true, last_item_count: 7 });
             expect(by.arxiv.online).toBe(false);
             const health = await request(app).get('/api/health');
-            expect(health.body.sources).toMatchObject({ registry: 51, seeded: 51, collecting: 31, online: 1,
-                by_status: { collecting: 31, awaiting_key: 4, awaiting_approval: 7, awaiting_licence: 5, blocked: 4, disabled: 0 } });
+            // D1: without the operator acknowledgement the 8 gated feeds wait.
+            expect(health.body.sources).toMatchObject({ registry: 51, seeded: 51, collecting: 23, online: 1,
+                by_status: { collecting: 23, awaiting_key: 4, awaiting_approval: 10, awaiting_licence: 10, blocked: 4, disabled: 0 } });
         });
 
         it('a kill switch shows the source as disabled', async () => {

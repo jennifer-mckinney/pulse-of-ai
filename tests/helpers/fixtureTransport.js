@@ -48,6 +48,11 @@ function fixtureTransport(routes) {
     return transport;
 }
 
-const TEST_ENV = Object.freeze({ COLLECTOR_CONTACT_URL: 'https://example.org/pulse-contact' });
+// An operator environment: a contact URL and the permission-gated feeds'
+// acknowledgement (D1) — tests of a fresh clone pass {} instead.
+const TEST_ENV = Object.freeze({
+    COLLECTOR_CONTACT_URL: 'https://example.org/pulse-contact',
+    PERMISSION_GATED_FEEDS_ACCEPTED_BY: 'Test Operator 2026-09-29',
+});
 
 module.exports = { fixtureTransport, readFixture, RECORDED_AT, TEST_ENV, FIXTURE_ROOT: ROOT };

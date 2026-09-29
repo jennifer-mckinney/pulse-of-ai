@@ -128,13 +128,49 @@ describe('gate status (Jennifer\'s rulings, ADR 0001)', () => {
         expect(status('telegram', { ...ENV, TELEGRAM_BOT_TOKEN: 't' }).status).toBe('blocked');
     });
 
-    test('permission-gated news RSS is ENABLED now under the legal-risk ruling', () => {
-        for (const slug of ['bbc_news', 'nbc_news', 'ars_technica', 'nyt', 'washington_post',
-            'guardian', 'al_jazeera', 'wsj']) {
+    // D1 ("Off for others, on for you"): the 8 ruling-4 feeds open only when
+    // the OPERATOR records their acceptance of the legal risk.
+    const GATED = ['bbc_news', 'nbc_news', 'ars_technica', 'nyt', 'washington_post', 'guardian', 'al_jazeera', 'wsj'];
+    const ACK = { ...ENV, PERMISSION_GATED_FEEDS_ACCEPTED_BY: 'Test Operator 2026-09-29' };
+
+    test('exactly the 8 ruling-4 feeds are permission-gated, each on the acknowledgement', () => {
+        const gated = SOURCES.filter(s => s.routes.some(r => r.permissionGated)).map(s => s.slug).sort();
+        expect(gated).toEqual([...GATED].sort());
+        for (const s of SOURCES) {
+            for (const r of s.routes) {
+                if (r.permissionGated) expect(r.requires).toEqual([registry.PERMISSION_GATED_ACK_ENV]);
+                else expect(r.requires || []).not.toContain(registry.PERMISSION_GATED_ACK_ENV);
+            }
+        }
+        expect(registry.PERMISSION_GATED_ACK_ENV).toBe('PERMISSION_GATED_FEEDS_ACCEPTED_BY');
+        expect(registry.envClass('PERMISSION_GATED_FEEDS_ACCEPTED_BY')).toBe('setting');
+    });
+
+    test('permission-gated news RSS stays CLOSED without the operator acknowledgement', () => {
+        for (const slug of GATED) {
             const st = status(slug);
+            expect(st.status).toMatch(/^awaiting_(approval|licence)$/);
+            expect(st.reason).toMatch(/permission-gated feed.*PERMISSION_GATED_FEEDS_ACCEPTED_BY/);
+            expect(st.missing).toContain('PERMISSION_GATED_FEEDS_ACCEPTED_BY');
+        }
+        // A blank or whitespace-only acknowledgement is not one.
+        expect(status('bbc_news', { ...ENV, PERMISSION_GATED_FEEDS_ACCEPTED_BY: '   ' }).status).toBe('awaiting_approval');
+    });
+
+    test('the acknowledgement opens them under the legal-risk ruling', () => {
+        for (const slug of GATED) {
+            const st = status(slug, ACK);
             expect(st.status).toBe('collecting');
             expect(st.reason).toMatch(/Jennifer explicitly accepted that legal risk/);
+            expect(st.reason).toMatch(/operator's acknowledgement \(PERMISSION_GATED_FEEDS_ACCEPTED_BY\)/);
         }
+    });
+
+    test('a licensed route of a gated source does not need the acknowledgement', () => {
+        const st = status('nyt', { ...ENV, NYT_API_KEY: 'k', NYT_LICENSE_REF: 'r' });
+        expect(st.status).toBe('collecting');
+        expect(st.openRoutes).toEqual(['article-search']);
+        expect(st.reason).not.toMatch(/legal risk/);
     });
 
     test('paid APIs wait for their key: X, AP, Reuters, CNN', () => {
@@ -159,8 +195,9 @@ describe('gate status (Jennifer\'s rulings, ADR 0001)', () => {
 
     test('a paid tier replaces the free feed when its key is set', () => {
         const src = registry.getSource('guardian');
-        expect(registry.openRoutes(src, ENV).map(r => r.id)).toEqual(['ai-tag-rss']);
-        expect(registry.openRoutes(src, { ...ENV, GUARDIAN_API_KEY: 'k' }).map(r => r.id)).toEqual(['content-api']);
+        expect(registry.openRoutes(src, ENV).map(r => r.id)).toEqual([]);
+        expect(registry.openRoutes(src, ACK).map(r => r.id)).toEqual(['ai-tag-rss']);
+        expect(registry.openRoutes(src, { ...ACK, GUARDIAN_API_KEY: 'k' }).map(r => r.id)).toEqual(['content-api']);
     });
 
     test('CFR is held until CFR confirms (robots "Disallow: /feed/" read conservatively)', () => {
@@ -186,15 +223,29 @@ describe('gate status (Jennifer\'s rulings, ADR 0001)', () => {
         expect(status('wechat', { SOURCE_WECHAT_ENABLED: 'false' }).status).toBe('disabled');
     });
 
-    test('status counts with no keys set', () => {
+    const countStatuses = (env) => {
         const counts = {};
         for (const s of SOURCES) {
-            const st = registry.sourceStatus(s, ENV).status;
+            const st = registry.sourceStatus(s, env).status;
             counts[st] = (counts[st] || 0) + 1;
         }
-        expect(counts).toEqual({
+        return counts;
+    };
+
+    test('status counts with no keys set: contact URL only (gated feeds closed)', () => {
+        expect(countStatuses(ENV)).toEqual({
+            collecting: 23, awaiting_key: 4, awaiting_approval: 10, awaiting_licence: 10, blocked: 4,
+        });
+    });
+
+    test('status counts with the contact URL and the acknowledgement', () => {
+        expect(countStatuses(ACK)).toEqual({
             collecting: 31, awaiting_key: 4, awaiting_approval: 7, awaiting_licence: 5, blocked: 4,
         });
+    });
+
+    test('a fresh clone (no contact URL) collects nothing: every non-blocked source is disabled', () => {
+        expect(countStatuses({})).toEqual({ disabled: 47, blocked: 4 });
     });
 
     test('attribution is recorded where the terms require it', () => {

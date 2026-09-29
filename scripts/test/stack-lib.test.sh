@@ -51,7 +51,8 @@ new_case() {
 # or POSTGRES_TEST_PORT for another stack) are removed first: every case
 # sees only what it sets.
 HERMETIC_UNSET=(COMPOSE_PROJECT_NAME WEB_PORT POSTGRES_PORT POSTGRES_TEST_PORT REDIS_PORT
-    PULSE_BIND_ADDR POSTGRES_PASSWORD REDIS_PASSWORD AUDIT_HASH_KEY CORRELATION_SALT)
+    PULSE_BIND_ADDR POSTGRES_PASSWORD REDIS_PASSWORD AUDIT_HASH_KEY CORRELATION_SALT
+    COLLECTOR_CONTACT_URL PERMISSION_GATED_FEEDS_ACCEPTED_BY)
 HERMETIC_ENV_U=()
 for v in "${HERMETIC_UNSET[@]}"; do HERMETIC_ENV_U+=(-u "$v"); done
 
@@ -317,6 +318,75 @@ run_teardown "$d" --; rc=$?
 assert_eq "teardown: shared dev project stops (plain)"        "0" "$rc"
 assert_eq "teardown: warns about the shared dev project"      "yes" "$(grep -q "shared dev project" "$d/out" && echo yes || echo no)"
 assert_eq "teardown: notes postgres_test on 5433"             "yes" "$(grep -q "postgres_test" "$d/out" && grep -q "5433" "$d/out" && echo yes || echo no)"
+
+# ─── D1: live collection is the operator's decision ──────────────────────────
+write_operator_example() {
+    write_example "$1"
+    printf 'COLLECTOR_CONTACT_URL=\nPERMISSION_GATED_FEEDS_ACCEPTED_BY=\n' >> "$1/.env.example"
+}
+
+# Merge path: an existing env file without the operator keys gets neither.
+d=$(new_case); write_operator_example "$d"
+printf 'POSTGRES_PASSWORD=a\nAUDIT_HASH_KEY=b\nCORRELATION_SALT=c\n' > "$d/.env"; chmod 600 "$d/.env"
+lib_run "$d" "$ENV_SETUP; ensure_env_file" >/dev/null
+assert_eq "D1 merge: contact URL never injected into an existing file" "no" \
+    "$(grep -q '^COLLECTOR_CONTACT_URL' "$d/.env" && echo yes || echo no)"
+assert_eq "D1 merge: acknowledgement never injected into an existing file" "no" \
+    "$(grep -q '^PERMISSION_GATED_FEEDS_ACCEPTED_BY' "$d/.env" && echo yes || echo no)"
+assert_eq "D1 merge: other missing keys still appended" "3000" "$(lib_run "$d" 'env_file_value WEB_PORT')"
+
+# Create path: copied from .env.example, i.e. EMPTY.
+d=$(new_case); write_operator_example "$d"
+lib_run "$d" "$ENV_SETUP; ensure_env_file" >/dev/null
+assert_eq "D1 create: contact URL line present and empty" "yes|" \
+    "$(grep -q '^COLLECTOR_CONTACT_URL=$' "$d/.env" && echo yes)|$(lib_run "$d" 'env_file_value COLLECTOR_CONTACT_URL')"
+
+# Non-interactive (--yes / no terminal): nothing asked, nothing written, demo only.
+d=$(new_case); printf 'COLLECTOR_CONTACT_URL=\n' > "$d/.env"; before=$(cat "$d/.env")
+out=$(lib_run "$d" 'collector_operator_setup 0; echo "live=$STACK_LIVE_COLLECTION"' < /dev/null)
+assert_eq "D1 non-interactive: live collection off" "live=0" "$(printf '%s\n' "$out" | tail -n 1)"
+assert_eq "D1 non-interactive: says DEMO data only" "yes" "$(grep -q 'DEMO data only' "$d/stderr" && echo yes || echo no)"
+assert_eq "D1 non-interactive: no prompt printed" "no" "$(printf '%s' "$out" | grep -q 'COLLECTOR_CONTACT_URL (https' && echo yes || echo no)"
+assert_eq "D1 non-interactive: env file unchanged" "$before" "$(cat "$d/.env")"
+
+# Interactive: an invalid URL is re-asked; valid answers are saved and read back.
+d=$(new_case); printf 'COLLECTOR_CONTACT_URL=\nPERMISSION_GATED_FEEDS_ACCEPTED_BY=\n' > "$d/.env"
+out=$(printf 'not-a-url\nhttps://example.org/me\nAda Lovelace 2026-09-29\n' \
+    | lib_run "$d" 'collector_operator_setup 1; echo "live=$STACK_LIVE_COLLECTION"')
+assert_eq "D1 interactive: live collection on" "live=1" "$(printf '%s\n' "$out" | grep -o 'live=[01]' | tail -n 1)"
+assert_eq "D1 interactive: invalid URL re-asked" "yes" "$(grep -q 'not an https:// URL' "$d/stderr" && echo yes || echo no)"
+assert_eq "D1 interactive: contact URL saved" "https://example.org/me" "$(lib_run "$d" 'env_file_value COLLECTOR_CONTACT_URL')"
+assert_eq "D1 interactive: acknowledgement saved" "Ada Lovelace 2026-09-29" "$(lib_run "$d" 'env_file_value PERMISSION_GATED_FEEDS_ACCEPTED_BY')"
+assert_eq "D1 interactive: empty assignment replaced, not duplicated" "1" "$(grep -c '^COLLECTOR_CONTACT_URL=' "$d/.env" | tr -d ' ')"
+
+# Interactive, blank answers: nothing written, demo only.
+d=$(new_case); printf 'COLLECTOR_CONTACT_URL=\n' > "$d/.env"; before=$(cat "$d/.env")
+out=$(printf '\n\n' | lib_run "$d" 'collector_operator_setup 1; echo "live=$STACK_LIVE_COLLECTION"')
+assert_eq "D1 interactive blank: live collection off" "live=0" "$(printf '%s\n' "$out" | grep -o 'live=[01]' | tail -n 1)"
+assert_eq "D1 interactive blank: env file unchanged" "$before" "$(cat "$d/.env")"
+
+# A malformed acknowledgement is refused; a blank one keeps the feeds closed.
+d=$(new_case); printf 'COLLECTOR_CONTACT_URL=https://example.org/x\n' > "$d/.env"
+printf 'yes\n\n' | lib_run "$d" 'collector_operator_setup 1' >/dev/null
+assert_eq "D1 ack: '<name> <date>' required" "yes" "$(grep -q "expected '<name> <YYYY-MM-DD>'" "$d/stderr" && echo yes || echo no)"
+assert_eq "D1 ack: nothing written without a valid answer" "" "$(lib_run "$d" 'env_file_value PERMISSION_GATED_FEEDS_ACCEPTED_BY')"
+
+# An existing value is never re-asked nor overwritten; the shell value counts.
+d=$(new_case); printf 'COLLECTOR_CONTACT_URL=https://keep.example/\nPERMISSION_GATED_FEEDS_ACCEPTED_BY=Kept 2026-01-01\n' > "$d/.env"
+before=$(cat "$d/.env")
+out=$(printf 'https://other.example/\nOther 2026-02-02\n' | lib_run "$d" 'collector_operator_setup 1; echo "live=$STACK_LIVE_COLLECTION"')
+assert_eq "D1 existing: no prompt, file unchanged" "live=1|$before" "$(printf '%s\n' "$out" | tail -n 1)|$(cat "$d/.env")"
+assert_eq "D1 set_env_value refuses to overwrite a value" "1" "$(lib_run "$d" 'set_env_value COLLECTOR_CONTACT_URL https://x.example/; echo $?')"
+d=$(new_case); : > "$d/.env"
+out=$(lib_run "$d" 'COLLECTOR_CONTACT_URL=https://shell.example/; collector_operator_setup 0; echo "live=$STACK_LIVE_COLLECTION"' < /dev/null)
+assert_eq "D1 shell env: contact URL from the shell turns collection on" "live=1" "$(printf '%s\n' "$out" | tail -n 1)"
+assert_eq "D1 shell env: nothing written" "" "$(cat "$d/.env")"
+
+# Quotes, backslashes and '#' round-trip through set_env_value.
+d=$(new_case); : > "$d/.env"
+lib_run "$d" 'set_env_value PERMISSION_GATED_FEEDS_ACCEPTED_BY "A \"B\" \\ #c 2026-09-29"' >/dev/null
+assert_eq "D1 set_env_value round-trips quotes, backslash, #" 'A "B" \ #c 2026-09-29' \
+    "$(lib_run "$d" 'env_file_value PERMISSION_GATED_FEEDS_ACCEPTED_BY')"
 
 #@@CASES@@
 

@@ -154,6 +154,15 @@ function parseArgs(argv) {
 function liveCollectionStatus(env = process.env) {
     const collecting = SOURCES.filter(s => sourceStatus(s, env).status === 'collecting').length;
     if (collecting > 0) return { available: true, collecting, reason: null };
+    // D1: a fresh clone has no contact URL — collection is off by design.
+    if (!(env.COLLECTOR_CONTACT_URL || '').trim()) {
+        return {
+            available: false,
+            collecting: 0,
+            reason: 'live collection is OFF: COLLECTOR_CONTACT_URL is not set, so every source is disabled '
+                + '(ADR 0001 D1: a clone collects nothing until its operator sets their own contact URL) — DEMO data only',
+        };
+    }
     const sample = sourceStatus(SOURCES.find(s => s.slug === 'npr'), env);
     return {
         available: false,

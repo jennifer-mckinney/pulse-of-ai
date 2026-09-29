@@ -146,10 +146,13 @@ describe('scripts/populate.js — demo population through the real pipeline', ()
 
     it('reports live collection available when registry sources are collecting', () => {
         expect(populate.liveCollectionStatus({ COLLECTOR_CONTACT_URL: 'https://example.org/c' }))
+            .toEqual({ available: true, collecting: 23, reason: null });
+        expect(populate.liveCollectionStatus({ COLLECTOR_CONTACT_URL: 'https://example.org/c', PERMISSION_GATED_FEEDS_ACCEPTED_BY: 'A 2026-09-29' }))
             .toEqual({ available: true, collecting: 31, reason: null });
         const off = populate.liveCollectionStatus({});
         expect(off.available).toBe(false);
-        expect(off.reason).toMatch(/COLLECTOR_CONTACT_URL/);
+        expect(off.reason).toMatch(/OFF: COLLECTOR_CONTACT_URL is not set.*DEMO data only/);
+        expect(populate.liveCollectionStatus({ COLLECTOR_CONTACT_URL: '  ' }).reason).toMatch(/DEMO data only/);
         expect(populate.liveCollectionStatus({ COLLECTOR_CONTACT_URL: 'x', COLLECTORS_ENABLED: 'false' }).reason)
             .toMatch(/kill switch/);
     });

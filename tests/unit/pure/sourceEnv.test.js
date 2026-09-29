@@ -60,8 +60,21 @@ test('credentials, keys and permission references ship EMPTY', () => {
     }
 });
 
-test('the contact URL and global switch have working defaults', () => {
-    expect(exampleValue('COLLECTOR_CONTACT_URL')).toMatch(/^https:\/\//);
+// D1 ("Off for others, on for you"): a clone collects NOTHING until its
+// operator sets their own contact URL, and the permission-gated feeds stay
+// closed until the operator records their acceptance. No default anywhere.
+test('the contact URL and the permission-gated acknowledgement ship EMPTY (D1)', () => {
+    expect(exampleValue('COLLECTOR_CONTACT_URL')).toBe('');
+    expect(exampleValue('PERMISSION_GATED_FEEDS_ACCEPTED_BY')).toBe('');
+    expect(settingsBlock).toContain('  COLLECTOR_CONTACT_URL: ${COLLECTOR_CONTACT_URL:-}\n');
+    expect(settingsBlock).toContain('  PERMISSION_GATED_FEEDS_ACCEPTED_BY: ${PERMISSION_GATED_FEEDS_ACCEPTED_BY:-}\n');
+    // No contact URL is baked in anywhere the containers or standup read.
+    for (const f of ['.env.example', 'docker-compose.yml', 'scripts/standup.sh', 'scripts/lib/stack.sh', 'Dockerfile']) {
+        expect([f, fs.readFileSync(path.join(ROOT, f), 'utf8')]).not.toEqual([f, expect.stringMatching(/github\.com\/jennifer-mckinney\/pulse-of-ai/)]);
+    }
+});
+
+test('the global switch has a working default', () => {
     expect(exampleValue('COLLECTORS_ENABLED')).toBe('true');
 });
 

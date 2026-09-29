@@ -69,6 +69,14 @@ const LEGAL_RISK_RULING = 'Enabled by Jennifer\'s 2026-09-29 ruling ("Build all,
     + 'the public RSS is collected although the terms require permission for automated analysis; '
     + 'Jennifer explicitly accepted that legal risk (ADR 0001).';
 
+// D1 (Jennifer, 2026-09-29: "Off for others, on for you"): the 8 ruling-4
+// feeds above are collected only once the OPERATOR records that they accept
+// the same legal risk — PERMISSION_GATED_FEEDS_ACCEPTED_BY = "<name> <date>".
+// A fresh clone ships it empty, so those routes stay closed; a licensed or
+// paid route of the same source is not affected. Every such route requires
+// it and is marked permissionGated (tests/unit/pure/sourceRegistry.test.js).
+const PERMISSION_GATED_ACK_ENV = 'PERMISSION_GATED_FEEDS_ACCEPTED_BY';
+
 const AI_QUERY = 'artificial intelligence';
 
 const SOURCES = [
@@ -216,7 +224,7 @@ const SOURCES = [
         sourceType: 'rss',
         auth: { kind: 'permission', program: 'BBC permission (Terms of Use §15)', signup: 'https://www.bbc.co.uk/usingthebbc/terms-of-use' },
         closedStatus: 'awaiting_approval', ruling: LEGAL_RISK_RULING,
-        routes: [{ id: 'technology-rss', adapter: 'rss', params: { urls: ['https://feeds.bbci.co.uk/news/technology/rss.xml'] }, scope: 'filter' }],
+        routes: [{ id: 'technology-rss', adapter: 'rss', requires: [PERMISSION_GATED_ACK_ENV], permissionGated: true, params: { urls: ['https://feeds.bbci.co.uk/news/technology/rss.xml'] }, scope: 'filter' }],
         recordEnv: ['BBC_LICENSE_REF'],
         termsUrl: 'https://www.bbc.co.uk/usingthebbc/terms-of-use',
         termsNote: '§8a: computer analysis needs permission; §15: RSS metadata and business use need permission.',
@@ -229,7 +237,7 @@ const SOURCES = [
         auth: { kind: 'permission', program: 'NYT Licensing text-and-data-mining licence (paid tier: Article Search API)', signup: 'https://nytlicensing.com/data-solutions/' },
         closedStatus: 'awaiting_licence', ruling: LEGAL_RISK_RULING,
         routes: [
-            { id: 'technology-rss', adapter: 'rss', params: { urls: ['https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml'] }, scope: 'filter' },
+            { id: 'technology-rss', adapter: 'rss', requires: [PERMISSION_GATED_ACK_ENV], permissionGated: true, params: { urls: ['https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml'] }, scope: 'filter' },
             {
                 id: 'article-search', adapter: 'nyt-article-search', requires: ['NYT_API_KEY', 'NYT_LICENSE_REF'],
                 params: { subject: 'Artificial Intelligence' }, scope: 'ai', replaces: ['technology-rss'],
@@ -262,7 +270,7 @@ const SOURCES = [
         auth: { kind: 'permission', program: 'Guardian Open Platform commercial key (paid tier)', signup: 'https://bonobo.capi.gutools.co.uk/register/commercial' },
         closedStatus: 'awaiting_licence', ruling: LEGAL_RISK_RULING,
         routes: [
-            { id: 'ai-tag-rss', adapter: 'rss', params: { urls: ['https://www.theguardian.com/technology/artificialintelligenceai/rss'] }, scope: 'ai' },
+            { id: 'ai-tag-rss', adapter: 'rss', requires: [PERMISSION_GATED_ACK_ENV], permissionGated: true, params: { urls: ['https://www.theguardian.com/technology/artificialintelligenceai/rss'] }, scope: 'ai' },
             {
                 id: 'content-api', adapter: 'guardian-content-api', requires: ['GUARDIAN_API_KEY'],
                 params: { tag: 'technology/artificialintelligenceai' }, scope: 'ai', replaces: ['ai-tag-rss'],
@@ -279,7 +287,7 @@ const SOURCES = [
         sourceType: 'rss',
         auth: { kind: 'permission', program: 'Al Jazeera Content Sales licence', signup: 'https://contentsales.aljazeera.net/' },
         closedStatus: 'awaiting_licence', ruling: LEGAL_RISK_RULING,
-        routes: [{ id: 'all-news-rss', adapter: 'rss', params: { urls: ['https://www.aljazeera.com/xml/rss/all.xml'] }, scope: 'filter' }],
+        routes: [{ id: 'all-news-rss', adapter: 'rss', requires: [PERMISSION_GATED_ACK_ENV], permissionGated: true, params: { urls: ['https://www.aljazeera.com/xml/rss/all.xml'] }, scope: 'filter' }],
         recordEnv: ['ALJAZEERA_LICENSE_REF'],
         termsUrl: 'https://www.aljazeera.com/terms-and-conditions',
         termsNote: 'Terms §6 ban automated analysis "for the purpose of identifying trends, correlations or patterns".',
@@ -292,7 +300,7 @@ const SOURCES = [
         auth: { kind: 'permission', program: 'Dow Jones Factiva / feeds licence (paid tier)', signup: 'https://www.dowjones.com/' },
         closedStatus: 'awaiting_licence', ruling: LEGAL_RISK_RULING,
         routes: [
-            { id: 'technology-rss', adapter: 'rss', params: { urls: ['https://feeds.content.dowjones.io/public/rss/RSSWSJD'] }, scope: 'filter' },
+            { id: 'technology-rss', adapter: 'rss', requires: [PERMISSION_GATED_ACK_ENV], permissionGated: true, params: { urls: ['https://feeds.content.dowjones.io/public/rss/RSSWSJD'] }, scope: 'filter' },
             {
                 id: 'dow-jones-feed', adapter: 'licensed-feed', requires: ['DOWJONES_API_KEY', 'DOWJONES_FEED_URL'],
                 params: {}, scope: 'filter', replaces: ['technology-rss'],
@@ -340,7 +348,7 @@ const SOURCES = [
         sourceType: 'rss',
         auth: { kind: 'permission', program: 'NBCUniversal permission (no published program)', signup: 'https://www.nbcnews.com/id/wbna5216556' },
         closedStatus: 'awaiting_approval', ruling: LEGAL_RISK_RULING,
-        routes: [{ id: 'tech-rss', adapter: 'rss', params: { urls: ['https://feeds.nbcnews.com/nbcnews/public/tech'] }, scope: 'filter' }],
+        routes: [{ id: 'tech-rss', adapter: 'rss', requires: [PERMISSION_GATED_ACK_ENV], permissionGated: true, params: { urls: ['https://feeds.nbcnews.com/nbcnews/public/tech'] }, scope: 'filter' }],
         recordEnv: ['NBC_LICENSE_REF'],
         attribution: 'NBCNews.com',
         termsUrl: 'https://www.nbcnews.com/id/wbna5216556',
@@ -353,7 +361,7 @@ const SOURCES = [
         sourceType: 'rss',
         auth: { kind: 'permission', program: 'WP Licensing & Syndication', signup: 'https://www.washingtonpost.com/licensing-syndication/' },
         closedStatus: 'awaiting_licence', ruling: LEGAL_RISK_RULING,
-        routes: [{ id: 'technology-rss', adapter: 'rss', params: { urls: ['https://feeds.washingtonpost.com/rss/business/technology'] }, scope: 'filter' }],
+        routes: [{ id: 'technology-rss', adapter: 'rss', requires: [PERMISSION_GATED_ACK_ENV], permissionGated: true, params: { urls: ['https://feeds.washingtonpost.com/rss/business/technology'] }, scope: 'filter' }],
         recordEnv: ['WAPO_LICENSE_REF'],
         termsUrl: 'https://www.washingtonpost.com/terms-of-service/',
         termsNote: 'Terms ban automated harvesting other than search indexing and use with ML/AI tools.',
@@ -830,7 +838,7 @@ const SOURCES = [
         sourceType: 'rss',
         auth: { kind: 'permission', program: 'Condé Nast permission (no published program)', signup: 'https://www.condenast.com/user-agreement' },
         closedStatus: 'awaiting_approval', ruling: LEGAL_RISK_RULING,
-        routes: [{ id: 'ai-rss', adapter: 'rss', params: { urls: ['https://arstechnica.com/ai/feed/'] }, scope: 'ai' }],
+        routes: [{ id: 'ai-rss', adapter: 'rss', requires: [PERMISSION_GATED_ACK_ENV], permissionGated: true, params: { urls: ['https://arstechnica.com/ai/feed/'] }, scope: 'ai' }],
         recordEnv: ['ARSTECHNICA_LICENSE_REF'],
         termsUrl: 'https://www.condenast.com/user-agreement',
         termsNote: 'The User Agreement bans automated gathering or aggregation other than search indexing, including data mining.',
@@ -870,6 +878,7 @@ const ENV_DOCS = {
     COLLECTORS_ENABLED: { group: 'kill-switch', signup: null, description: 'Global kill switch: false stops every collector' },
     COLLECTORS_DISABLED: { group: 'kill-switch', signup: null, description: 'Comma-separated source slugs to turn off (per-source kill switch)' },
     COLLECT_WINDOW_MS: { group: 'collector', signup: null, description: 'Collection cycle length in ms (default 150000)' },
+    PERMISSION_GATED_FEEDS_ACCEPTED_BY: { group: 'collector', signup: null, description: 'Operator acknowledgement ("<name> <YYYY-MM-DD>") that opens the 8 permission-gated news feeds of ADR 0001 ruling 4 (BBC, NYT, Guardian, Al Jazeera, WSJ, NBC, Washington Post, Ars Technica): their terms require permission for automated analysis, and setting this records that you accept that legal risk. Empty keeps them closed' },
     YOUTUBE_API_KEY: { group: 'free-key', signup: 'https://console.cloud.google.com/apis/library/youtube.googleapis.com', description: 'YouTube Data API v3 key' },
     SPRINGER_API_KEY: { group: 'free-key', signup: 'https://dev.springernature.com', description: 'Springer Nature Meta API key' },
     SCHOLAR_ALERTS_IMAP_HOST: { group: 'free-key', signup: 'https://scholar.google.com/intl/en/scholar/help.html', description: 'IMAP host of the dedicated Scholar-alert mailbox' },
@@ -1000,10 +1009,21 @@ function sourceStatus(src, env = process.env) {
         return { ...base, status: 'disabled', reason: 'COLLECTOR_CONTACT_URL is not set (the User-Agent must carry a contact URL)' };
     }
     if (routes.length > 0) {
+        const gated = routes.some(r => r.permissionGated);
         const reason = src.auth.kind === 'blocked'
             ? 'collecting under the official permission recorded in env'
-            : src.ruling ? src.ruling : `collecting via ${routes.map(r => r.id).join(', ')}`;
+            : gated && src.ruling
+                ? `${src.ruling} Opened on this installation by the operator's acknowledgement (${PERMISSION_GATED_ACK_ENV}).`
+                : `collecting via ${routes.map(r => r.id).join(', ')}`;
         return { ...base, status: 'collecting', reason };
+    }
+    if (src.routes.some(r => r.permissionGated)) {
+        return {
+            ...base,
+            status: src.closedStatus,
+            reason: `permission-gated feed (ADR 0001 ruling 4): closed until the operator records acceptance of the legal risk in ${PERMISSION_GATED_ACK_ENV}`
+                + `, or the licensed route is configured (waiting for ${missing.join(', ')}; ${src.auth.program})`,
+        };
     }
     return { ...base, status: src.closedStatus, reason: `waiting for ${missing.join(', ')} (${src.auth.program})` };
 }
@@ -1050,6 +1070,7 @@ function registryEnvVars() {
 // it is deliberately listed here.
 const SETTING_ENV = Object.freeze([
     'COLLECTOR_CONTACT_URL', 'COLLECTORS_ENABLED', 'COLLECTORS_DISABLED', 'COLLECT_WINDOW_MS',
+    'PERMISSION_GATED_FEEDS_ACCEPTED_BY',
     'NCBI_TOOL', 'SCHOLAR_ALERTS_IMAP_PORT', 'SCHOLAR_ALERTS_MAILBOX',
 ]);
 
@@ -1060,6 +1081,7 @@ function envClass(name) {
 }
 
 module.exports = {
+    PERMISSION_GATED_ACK_ENV,
     SETTING_ENV,
     envClass,
     AUTH_KINDS,

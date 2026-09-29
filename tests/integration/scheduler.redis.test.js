@@ -39,7 +39,7 @@ const queues = require('../../src/queues/index');
 const { scheduleAllSources, COLLECT_WINDOW_MS } = require('../../src/workers/collector.scheduler');
 
 const ALL_QUEUES = Object.values(queues.COLLECT_QUEUES);
-const ENV = { COLLECTOR_CONTACT_URL: 'https://example.org/c', COLLECT_WINDOW_MS: String(COLLECT_WINDOW_MS) };
+const ENV = { COLLECTOR_CONTACT_URL: 'https://example.org/c', PERMISSION_GATED_FEEDS_ACCEPTED_BY: 'Test Operator 2026-09-29', COLLECT_WINDOW_MS: String(COLLECT_WINDOW_MS) };
 
 // Two same-type (rss) registry sources.
 function makeSource(overrides = {}) {

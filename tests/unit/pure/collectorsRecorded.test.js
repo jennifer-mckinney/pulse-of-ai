@@ -219,7 +219,11 @@ describe('buildCollectors (registry-wide)', () => {
     test('with no keys: only keyless routes are built; blocked and gated build nothing', () => {
         for (const s of SOURCES) {
             const cs = buildCollectors(s, { env: TEST_ENV, http });
-            for (const c of cs) expect(c.route.requires || []).toEqual([]);
+            // Only operator settings (D1: the permission-gated acknowledgement)
+            // may be required by a route that builds without any credential.
+            for (const c of cs) {
+                expect(c.route.requires || []).toEqual(c.route.permissionGated ? ['PERMISSION_GATED_FEEDS_ACCEPTED_BY'] : []);
+            }
             if (['wechat', 'telegram', 'researchgate', 'cato', 'x', 'ap', 'reuters', 'cnn', 'tiktok'].includes(s.slug)) {
                 expect(cs).toHaveLength(0);
             }
