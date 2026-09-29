@@ -8,7 +8,9 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
+const { listMigrationFiles } = require('../../../scripts/migrate');
 
 const DIR = path.join(__dirname, '../../../src/db/migrations');
 const files = fs.readdirSync(DIR).filter(f => f.endsWith('.sql')).sort();
@@ -29,4 +31,31 @@ test('the source-collection migrations follow embedding@1.0.0 (012)', () => {
         '014_methodology_alignment.sql',
         '015_ingest_text_redaction.sql',
     ]);
+});
+
+describe('scripts/migrate.js listMigrationFiles (runtime guard)', () => {
+    function dirWith(names) {
+        const d = fs.mkdtempSync(path.join(os.tmpdir(), 'migrations-'));
+        for (const n of names) fs.writeFileSync(path.join(d, n), '-- test\n');
+        return d;
+    }
+
+    test('returns the real migrations in apply order', () => {
+        expect(listMigrationFiles(DIR)).toEqual(files);
+    });
+
+    test('refuses a file-sync conflict copy ("012_x 2.sql")', () => {
+        const d = dirWith(['001_a.sql', '002_b.sql', '002_b 2.sql']);
+        expect(() => listMigrationFiles(d)).toThrow(/not NNN_snake_case\.sql: 002_b 2\.sql/);
+    });
+
+    test('refuses a number used twice', () => {
+        const d = dirWith(['001_a.sql', '002_b.sql', '002_c.sql']);
+        expect(() => listMigrationFiles(d)).toThrow(/migration number 002 used twice/);
+    });
+
+    test('ignores non-SQL files', () => {
+        const d = dirWith(['001_a.sql', 'README.md']);
+        expect(listMigrationFiles(d)).toEqual(['001_a.sql']);
+    });
 });
