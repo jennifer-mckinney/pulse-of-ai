@@ -31,10 +31,13 @@ it('queues one ingest retry per stored-but-unscored post; bias and embeds skip t
     expect(stored.n).toBeGreaterThan(0);
     expect(s.scoringRetries).toBe(stored.n);
     expect(queues.enqueueIngestRetry).toHaveBeenCalledTimes(stored.n);
-    expect(queues.enqueueIngestRetry.mock.calls[0][0]).toEqual({ rawPostId: expect.any(String), sourceId: expect.any(String), jobId: s.jobId });
+    // Each retry holds a slot on its job (Copilot 4129565673).
+    expect(queues.enqueueIngestRetry.mock.calls[0][0]).toEqual({ rawPostId: expect.any(String), sourceId: expect.any(String), jobId: s.jobId, reserved: true });
     expect(s.postsProcessed).toBe(0);
     expect(s.bias).toBeNull();
     expect(queues.enqueueEmbeds).not.toHaveBeenCalled();
-    const job = await dbGet('SELECT status FROM processing_jobs WHERE id = $1', [s.jobId]);
-    expect(job.status).toBe('completed');
+    // The job waits for its retries before its bias checks and completion.
+    const job = await dbGet('SELECT status, inflight_runs FROM processing_jobs WHERE id = $1', [s.jobId]);
+    expect(job).toEqual({ status: 'awaiting_retries', inflight_runs: stored.n });
+    expect(s.awaitingRetries).toBe(true);
 });
