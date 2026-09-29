@@ -257,7 +257,12 @@ describe('gate status (Jennifer\'s rulings, ADR 0001)', () => {
         const src = registry.getSource('guardian');
         expect(registry.openRoutes(src, ENV).map(r => r.id)).toEqual([]);
         expect(registry.openRoutes(src, ACK).map(r => r.id)).toEqual(['ai-tag-rss']);
-        expect(registry.openRoutes(src, { ...ACK, GUARDIAN_API_KEY: 'k' }).map(r => r.id)).toEqual(['content-api']);
+        // P10-7: the commercial key alone does not open the Content API; its
+        // licence reference is required too (like Elsevier and IEEE).
+        expect(registry.openRoutes(src, { ...ACK, GUARDIAN_API_KEY: 'k' }).map(r => r.id)).toEqual(['ai-tag-rss']);
+        expect(registry.openRoutes(src, { ...ACK, GUARDIAN_API_KEY: 'k', GUARDIAN_COMMERCIAL_LICENSE_REF: 'L-1' }).map(r => r.id))
+            .toEqual(['content-api']);
+        expect(registry.sourceStatus(src, { ...ENV, GUARDIAN_API_KEY: 'k' }).missing).toContain('GUARDIAN_COMMERCIAL_LICENSE_REF');
     });
 
     test('CFR is held until CFR confirms (robots "Disallow: /feed/" read conservatively)', () => {
@@ -320,6 +325,63 @@ describe('gate status (Jennifer\'s rulings, ADR 0001)', () => {
         const so = registry.getSource('stack_overflow');
         expect(registry.pollIntervalSec(so, ENV)).toBe(900);
         expect(registry.pollIntervalSec(so, { STACKEXCHANGE_KEY: 'k' })).toBe(registry.DEFAULT_POLL_SEC);
+    });
+
+    // D4 (Jennifer, 2026-09-29: "Keep 2–3 minutes for all") and P10-7.
+    describe('D4 cadence band and the keyed-route quota audit', () => {
+        const ALL_OPEN = Object.fromEntries(registry.registryEnvVars().map(k => [k, 'x']));
+        const ENV_ALL = { ...ALL_OPEN, COLLECTORS_ENABLED: 'true', COLLECTORS_DISABLED: '', COLLECT_WINDOW_MS: '' };
+        // Documented quotas that cannot be met even at 180 s (reported), and
+        // IEEE, whose quota is set at key registration and not published.
+        const EXCEPTIONS = { youtube: 900, stack_overflow: 900, ieee_xplore: 900 };
+
+        test('every source runs every 2–3 minutes, except the reported quota exceptions', () => {
+            for (const s of SOURCES) {
+                for (const env of [ENV, ENV_ALL]) {
+                    const sec = registry.pollIntervalSec(s, env);
+                    const keylessSo = s.slug === 'stack_overflow' && !env.STACKEXCHANGE_KEY;
+                    const opened = s.slug !== 'stack_overflow' && env === ENV_ALL;
+                    if ((EXCEPTIONS[s.slug] && (keylessSo || opened))) expect([s.slug, sec]).toEqual([s.slug, EXCEPTIONS[s.slug]]);
+                    else {
+                        expect([s.slug, sec >= registry.CADENCE_BAND_SEC.min]).toEqual([s.slug, true]);
+                        expect([s.slug, sec <= registry.CADENCE_BAND_SEC.max]).toEqual([s.slug, true]);
+                    }
+                }
+            }
+        });
+
+        test('every route with a documented quota meets it at its cadence', () => {
+            const audited = [];
+            for (const s of SOURCES) for (const r of s.routes) {
+                for (const env of [ENV, { ...ENV, STACKEXCHANGE_KEY: 'k' }]) {
+                    const a = registry.quotaAudit(s, r, env);
+                    if (!a) continue;
+                    audited.push(`${s.slug}/${r.id}`);
+                    expect([s.slug, r.id, a.fitsQuota]).toEqual([s.slug, r.id, true]);
+                    if (!a.inBand) expect(Object.keys(EXCEPTIONS)).toContain(s.slug);
+                    if (!a.inBand && !a.unpublished) expect(a.minIntervalSec).toBeGreaterThan(registry.CADENCE_BAND_SEC.max);
+                }
+            }
+            for (const k of ['nyt/article-search', 'guardian/content-api', 'youtube/data-api', 'tiktok/research-api', 'x/recent-search',
+                'sciencedirect/search-api', 'springerlink/meta-api', 'ieee_xplore/metadata-api', 'govinfo/search-api',
+                'congress_gov/bill-api', 'stack_overflow/questions', 'gitlab/topic-projects', 'github/repo-search', 'reddit/data-api']) {
+                expect(audited).toContain(k);
+            }
+        });
+
+        test('NYT Article Search polls at 180 s (500/day); its RSS stays at 150 s', () => {
+            const nyt = registry.getSource('nyt');
+            expect(registry.pollIntervalSec(nyt, ACK)).toBe(150);
+            expect(registry.pollIntervalSec(nyt, { ...ACK, NYT_API_KEY: 'k', NYT_LICENSE_REF: 'L' })).toBe(180);
+            const a = registry.quotaAudit(nyt, nyt.routes.find(r => r.id === 'article-search'), {});
+            expect(a).toMatchObject({ intervalSec: 180, runsPerDay: 480, perDay: 500, fitsQuota: true, inBand: true });
+        });
+
+        test('Stack Overflow keyless cannot fit the band (300/day, 2 requests/run needs >= 576 s)', () => {
+            const so = registry.getSource('stack_overflow');
+            expect(registry.quotaAudit(so, so.routes[0], ENV)).toMatchObject({ minIntervalSec: 576, inBand: false, fitsQuota: true });
+            expect(registry.quotaAudit(so, so.routes[0], { STACKEXCHANGE_KEY: 'k' })).toMatchObject({ intervalSec: 150, inBand: true, fitsQuota: true });
+        });
     });
 });
 

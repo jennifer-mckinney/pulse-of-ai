@@ -110,7 +110,7 @@ const SOURCES = [
         termsUrl: 'https://www.whatsapp.com/legal/terms-of-service',
         termsNote: 'Web collection needs Meta\'s express written permission (Automated Data Collection Terms); the only compliant route is the Meta Content Library researcher program.',
         rateLimit: { minIntervalMs: 0, note: 'local export files; no network' },
-        pollIntervalSec: 3600,
+        pollIntervalSec: DEFAULT_POLL_SEC,
     },
     {
         rank: 2, slug: 'instagram', name: 'Instagram (Meta)', category: 'social', region: 'global', homeCity: null,
@@ -126,7 +126,7 @@ const SOURCES = [
         termsUrl: 'https://help.instagram.com/581066165581870',
         termsNote: 'Instagram Terms forbid automated collection without express permission; researcher access through the Meta Content Library.',
         rateLimit: { minIntervalMs: 0, note: 'local export files; no network' },
-        pollIntervalSec: 3600,
+        pollIntervalSec: DEFAULT_POLL_SEC,
     },
     {
         rank: 3, slug: 'youtube', name: 'YouTube (Alphabet)', category: 'social', region: 'global', homeCity: null,
@@ -136,12 +136,16 @@ const SOURCES = [
         routes: [{
             id: 'data-api', adapter: 'youtube', requires: ['YOUTUBE_API_KEY'],
             params: { query: AI_QUERY, maxResults: 25 }, scope: 'ai',
+            // D4 exception (reported): search.list is capped at 100 calls/day
+            // and each run makes one, so no cadence under 864 s fits.
+            pollIntervalSec: 900,
+            quota: { perDay: 100, requestsPerRun: 1, basis: 'YouTube Data API: 100 search.list calls/day (plus 10,000 units/day for videos.list)', cannotFitBand: true },
             note: 'search.list (type=video, order=date) then videos.list for full descriptions; the keyless Atom feed is NOT used (robots.txt + Terms)',
         }],
         termsUrl: 'https://developers.google.com/youtube/terms/developer-policies',
         termsNote: 'Stored API data must be refreshed or deleted within 30 days; derived-metrics clause to be confirmed in the API compliance audit.',
         rateLimit: { minIntervalMs: 1000, note: 'search.list quota 100 calls/day; 10,000 units/day for other endpoints' },
-        pollIntervalSec: 900,
+        pollIntervalSec: DEFAULT_POLL_SEC,
     },
     {
         rank: 4, slug: 'facebook', name: 'Facebook (Meta)', category: 'social', region: 'global', homeCity: null,
@@ -157,7 +161,7 @@ const SOURCES = [
         termsUrl: 'https://www.facebook.com/terms.php',
         termsNote: 'Facebook Terms §3.2 bar automated collection without prior permission; researcher access through the Meta Content Library.',
         rateLimit: { minIntervalMs: 0, note: 'local export files; no network' },
-        pollIntervalSec: 3600,
+        pollIntervalSec: DEFAULT_POLL_SEC,
     },
     {
         rank: 5, slug: 'tiktok', name: 'TikTok (ByteDance)', category: 'social', region: 'global', homeCity: null,
@@ -168,12 +172,15 @@ const SOURCES = [
             id: 'research-api', adapter: 'tiktok-research',
             requires: ['TIKTOK_RESEARCH_CLIENT_KEY', 'TIKTOK_RESEARCH_CLIENT_SECRET'],
             params: { keywords: ['artificial intelligence', 'AI'], maxCount: 50 }, scope: 'ai',
+            // D4: 1,000 requests/day at 2 per run (token + query) → 180 s = 960.
+            pollIntervalSec: 180,
+            quota: { perDay: 1000, requestsPerRun: 2, basis: 'TikTok Research API FAQ: 1,000 requests/day, up to 100,000 records/day' },
             note: 'POST /v2/research/video/query/ with a client-credentials token',
         }],
         termsUrl: 'https://www.tiktok.com/legal/page/global/terms-of-service-research-api/en',
         termsNote: 'Refresh data at least every 30 days; outputs must not be linkable to a user; public-dashboard use to be confirmed in the application.',
         rateLimit: { minIntervalMs: 1000, note: '1,000 requests/day, up to 100,000 records/day' },
-        pollIntervalSec: 900,
+        pollIntervalSec: DEFAULT_POLL_SEC,
     },
     {
         rank: 6, slug: 'wechat', name: 'WeChat / Weixin (Tencent)', category: 'social', region: 'CN', homeCity: null,
@@ -194,7 +201,7 @@ const SOURCES = [
             remedy: 'Written authorization from Tencent naming Pulse of AI and the feed it may read.',
         },
         rateLimit: { minIntervalMs: 2000, note: 'per the authorization, when granted' },
-        pollIntervalSec: 900,
+        pollIntervalSec: 180,
     },
     {
         rank: 7, slug: 'telegram', name: 'Telegram', category: 'social', region: 'global', homeCity: null,
@@ -225,12 +232,17 @@ const SOURCES = [
         routes: [{
             id: 'recent-search', adapter: 'x-recent-search', requires: ['X_BEARER_TOKEN'],
             params: { query: '("artificial intelligence" OR AI) -is:retweet lang:en', maxResults: 20 }, scope: 'ai',
-            note: 'GET /2/tweets/search/recent with since_id; 20 posts per run caps spend near 1,000 reads/day',
+            // D4: no request cap binds (3M reads/month; since_id reads each
+            // post once). Spend is at most 20 reads per run: at 180 s that
+            // is 9,600 reads/day ($48/day) in the worst case — reported.
+            pollIntervalSec: 180,
+            quota: { perMonthReads: 3000000, readsPerRunMax: 20, requestsPerRun: 1, basis: 'X pay-per-use: $0.005 per post read, up to 3M reads/month' },
+            note: 'GET /2/tweets/search/recent with since_id; at most 20 posts read per run',
         }],
         termsUrl: 'https://docs.x.com/developer-terms/agreement',
         termsNote: 'Honour deletion requests within 24 hours; no redistribution; scraping outside the API is prohibited.',
         rateLimit: { minIntervalMs: 1000, note: 'pay-per-use; spend capped by maxResults and cadence' },
-        pollIntervalSec: 1800,
+        pollIntervalSec: DEFAULT_POLL_SEC,
     },
 
     // ── 2. News (11) ──────────────────────────────────────────────────────────
@@ -256,6 +268,9 @@ const SOURCES = [
             {
                 id: 'article-search', adapter: 'nyt-article-search', requires: ['NYT_API_KEY', 'NYT_LICENSE_REF'],
                 params: { subject: 'Artificial Intelligence' }, scope: 'ai', replaces: ['technology-rss'],
+                // D4: 500/day cannot sustain 150 s (576 runs/day); 180 s = 480.
+                pollIntervalSec: 180,
+                quota: { perDay: 500, perMinute: 5, requestsPerRun: 1, basis: 'developer.nytimes.com: 500 requests/day, 5/minute' },
                 note: 'Paid tier: Article Search API under an NYT Licensing TDM licence (5 requests/min, 500/day)',
             },
         ],
@@ -287,8 +302,13 @@ const SOURCES = [
         routes: [
             { id: 'ai-tag-rss', adapter: 'rss', requires: [PERMISSION_GATED_ACK_ENV], permissionGated: true, params: { urls: ['https://www.theguardian.com/technology/artificialintelligenceai/rss'] }, scope: 'ai' },
             {
-                id: 'content-api', adapter: 'guardian-content-api', requires: ['GUARDIAN_API_KEY'],
+                // P10-7 / D4: the commercial key AND its licence reference,
+                // consistent with Elsevier and IEEE (the key alone is issued
+                // to anyone; the licence is the permission the terms need).
+                id: 'content-api', adapter: 'guardian-content-api', requires: ['GUARDIAN_API_KEY', 'GUARDIAN_COMMERCIAL_LICENSE_REF'],
                 params: { tag: 'technology/artificialintelligenceai' }, scope: 'ai', replaces: ['ai-tag-rss'],
+                pollIntervalSec: 180,
+                quota: { perDay: 500, requestsPerRun: 1, basis: 'commercial quota is per contract; clamped to the published free-key cap of 500/day as a ceiling' },
                 note: 'Paid tier: Content API with a COMMERCIAL key ("sentiment analysis where content is not reproduced")',
             },
         ],
@@ -404,6 +424,7 @@ const SOURCES = [
         closedStatus: 'awaiting_key',
         routes: [{
             id: 'meta-api', adapter: 'springer', requires: ['SPRINGER_API_KEY'],
+            quota: { perMinute: 150, requestsPerRun: 1, basis: 'Springer Nature: 150 requests/minute for API users' },
             params: { query: 'keyword:"artificial intelligence" sort:date', pageSize: 25 }, scope: 'ai',
         }],
         termsUrl: 'https://dev.springernature.com/terms-conditions/',
@@ -447,6 +468,7 @@ const SOURCES = [
         closedStatus: 'awaiting_approval',
         routes: [{
             id: 'search-api', adapter: 'elsevier', requires: ['ELSEVIER_API_KEY', 'ELSEVIER_APPROVAL_REF'],
+            quota: { perDay: 2857, requestsPerRun: 1, basis: 'Elsevier: 20,000 requests/week (2,857/day) at 2 requests/s' },
             params: { query: AI_QUERY, show: 25 }, scope: 'ai',
             note: 'The key alone is self-service; the use-case approval reference is required too (ADR 0001)',
         }],
@@ -470,7 +492,7 @@ const SOURCES = [
         termsUrl: 'https://policies.google.com/terms',
         termsNote: 'robots.txt disallows /scholar; the alert route never requests Scholar pages. Setting the mailbox credential is Jennifer\'s sign-off (research §3.24).',
         rateLimit: { minIntervalMs: 0, note: 'one IMAP session per run' },
-        pollIntervalSec: 900,
+        pollIntervalSec: DEFAULT_POLL_SEC,
     },
     {
         rank: 25, slug: 'researchgate', name: 'ResearchGate', category: 'academic', region: 'global', homeCity: null,
@@ -491,7 +513,7 @@ const SOURCES = [
             remedy: 'A data-access grant from ResearchGate.',
         },
         rateLimit: { minIntervalMs: 0, note: 'local dataset; no network' },
-        pollIntervalSec: 3600,
+        pollIntervalSec: DEFAULT_POLL_SEC,
     },
     {
         rank: 26, slug: 'ieee_xplore', name: 'IEEE Xplore', category: 'academic', region: 'global', homeCity: null,
@@ -500,12 +522,17 @@ const SOURCES = [
         closedStatus: 'awaiting_licence',
         routes: [{
             id: 'metadata-api', adapter: 'ieee', requires: ['IEEE_API_KEY', 'IEEE_LICENSE_REF'],
+            // D4 exception (reported): the quota is set at key registration
+            // and not published, so the cadence stays conservative until the
+            // issued quota is known.
+            pollIntervalSec: 900,
+            quota: { requestsPerRun: 1, basis: 'set at key registration; not published', unpublished: true },
             params: { query: AI_QUERY, maxRecords: 25 }, scope: 'ai',
         }],
         termsUrl: 'https://developer.ieee.org/API_Terms_of_Use2',
         termsNote: 'Non-commercial licence; content per individual query, not bulk; no AI/ML training; limits set at registration.',
         rateLimit: { minIntervalMs: 1000, note: 'set at key registration' },
-        pollIntervalSec: 900,
+        pollIntervalSec: DEFAULT_POLL_SEC,
     },
     {
         rank: 27, slug: 'jstor', name: 'JSTOR (ITHAKA)', category: 'academic', region: 'global', homeCity: null,
@@ -520,7 +547,7 @@ const SOURCES = [
         termsUrl: 'https://about.jstor.org/terms/',
         termsNote: 'Terms ban automatic downloading or export, including scraping; datasets come only through Text Analysis Support.',
         rateLimit: { minIntervalMs: 0, note: 'local dataset; no network' },
-        pollIntervalSec: 3600,
+        pollIntervalSec: DEFAULT_POLL_SEC,
     },
 
     // ── 4. Policy (7) ─────────────────────────────────────────────────────────
@@ -536,6 +563,7 @@ const SOURCES = [
             },
             {
                 id: 'search-api', adapter: 'govinfo-search', requires: ['GOVINFO_API_KEY'], scope: 'ai',
+                quota: { perDay: 24000, requestsPerRun: 1, basis: 'api.data.gov: 1,000 requests/hour per key' },
                 params: { query: 'collection:(BILLS OR CREC OR FR OR CHRG OR CRPT) AND title:("artificial intelligence")', pageSize: 50 },
             },
         ],
@@ -552,6 +580,7 @@ const SOURCES = [
         closedStatus: 'awaiting_key',
         routes: [{
             id: 'bill-api', adapter: 'congress', requires: ['CONGRESS_API_KEY'], params: { limit: 250 }, scope: 'filter',
+            quota: { perDay: 120000, requestsPerRun: 1, basis: 'Congress.gov API: 5,000 requests/hour' },
             note: 'No keyword search exists (query= is ignored): recent bills are filtered for AI locally',
         }],
         license: 'Public domain',
@@ -594,7 +623,7 @@ const SOURCES = [
             remedy: 'Cato allowlisting the named Pulse of AI collector User-Agent.',
         },
         rateLimit: { minIntervalMs: 2000, note: 'once allowlisted' },
-        pollIntervalSec: 900,
+        pollIntervalSec: 180,
     },
     {
         rank: 32, slug: 'rand', name: 'RAND Corporation', category: 'policy', region: 'US', homeCity: 'Santa Monica',
@@ -725,7 +754,7 @@ const SOURCES = [
         auth: { kind: 'none', program: 'GitHub REST search (token advised) + GitHub blog AI feed', signup: 'https://github.com/settings/tokens' },
         closedStatus: 'awaiting_key',
         routes: [
-            { id: 'repo-search', adapter: 'github-search', optional: ['GITHUB_TOKEN'], params: { kind: 'repositories', q: 'topic:artificial-intelligence', sort: 'updated' }, scope: 'ai' },
+            { id: 'repo-search', adapter: 'github-search', optional: ['GITHUB_TOKEN'], quota: { perMinute: 10, requestsPerRun: 2, basis: 'GitHub search: 10 requests/minute unauthenticated, shared by the two search routes' }, params: { kind: 'repositories', q: 'topic:artificial-intelligence', sort: 'updated' }, scope: 'ai' },
             { id: 'issue-search', adapter: 'github-search', optional: ['GITHUB_TOKEN'], params: { kind: 'issues', q: 'AI in:title type:issue', sort: 'created', createdWithinHours: 24 }, scope: 'filter' },
             { id: 'ai-ml-blog-rss', adapter: 'rss', params: { urls: ['https://github.blog/ai-and-ml/feed/'] }, scope: 'ai', homeCity: 'San Francisco' },
         ],
@@ -740,13 +769,15 @@ const SOURCES = [
         auth: { kind: 'none', program: 'GitLab REST API (token optional) + forum (Discourse)', signup: 'https://gitlab.com/-/user_settings/personal_access_tokens' },
         closedStatus: 'awaiting_key',
         routes: [
-            { id: 'topic-projects', adapter: 'gitlab-projects', optional: ['GITLAB_TOKEN'], params: { topic: 'artificial-intelligence', perPage: 20 }, scope: 'ai' },
+            { id: 'topic-projects', adapter: 'gitlab-projects', optional: ['GITLAB_TOKEN'], params: { topic: 'artificial-intelligence', perPage: 20 }, scope: 'ai', quota: { perDay: 1440, requestsPerRun: 1, basis: 'gitlab.com: 60 requests/hour unauthenticated (5,000 with a token)' } },
             { id: 'forum-latest', adapter: 'discourse', params: { baseUrl: 'https://forum.gitlab.com' }, scope: 'filter' },
         ],
         termsUrl: 'https://docs.gitlab.com/user/gitlab_com/rate_limits/',
         termsNote: 'Unauthenticated 60 requests/hour, 5,000/hour with a token; the website terms ban scraping, the API is the sanctioned route.',
         rateLimit: { minIntervalMs: 2000, note: '60 requests/hour unauthenticated' },
-        pollIntervalSec: 300,
+        // D4: one gitlab.com API request per run (the forum is another host):
+        // 150 s = 24/hour, inside the 60/hour keyless quota.
+        pollIntervalSec: DEFAULT_POLL_SEC,
     },
     {
         rank: 43, slug: 'docker_hub', name: 'Docker Hub', category: 'developer', region: 'global', homeCity: null,
@@ -788,6 +819,10 @@ const SOURCES = [
         routes: [{
             id: 'questions', adapter: 'stackexchange', optional: ['STACKEXCHANGE_KEY'],
             params: { sites: [{ site: 'stackoverflow', tagged: 'artificial-intelligence' }, { site: 'ai' }], pageSize: 30 }, scope: 'ai',
+            // D4 exception (reported): keyless quota 300/day at 2 requests
+            // per run needs >= 576 s; with STACKEXCHANGE_KEY (10,000/day)
+            // the 150 s band fits.
+            quota: { perDay: 300, perDayWithKey: 10000, requestsPerRun: 2, basis: 'Stack Exchange API: 300/day without a key, 10,000 with one', cannotFitBandWithoutKey: true },
         }],
         pollIntervalSecWithEnv: { STACKEXCHANGE_KEY: DEFAULT_POLL_SEC },
         license: 'CC BY-SA 4.0',
@@ -828,6 +863,7 @@ const SOURCES = [
         closedStatus: 'awaiting_approval', ruling: REDDIT_RULING,
         routes: [{
             id: 'data-api', adapter: 'reddit',
+            quota: { perMinute: 100, requestsPerRun: 25, basis: 'Reddit: 100 queries/minute per OAuth client id, averaged over 10 minutes; shared budget src/collectors/reddit/budget.js' },
             requires: ['REDDIT_CLIENT_ID', 'REDDIT_CLIENT_SECRET', 'REDDIT_USER_AGENT', 'REDDIT_API_APPROVAL_REF'],
             optional: ['REDDIT_MIN_AI_POSTS_7D'],
             // Submissions only; the 48 h retention window is also the age cap.
@@ -982,7 +1018,8 @@ const ENV_DOCS = {
     CNN_API_KEY: { group: 'paid', signup: 'https://www.cnn.com/intlsyndication/', description: 'Delivery credential, when the contract uses one' },
     NYT_API_KEY: { group: 'paid', signup: 'https://developer.nytimes.com', description: 'NYT developer key (paid tier; used only with NYT_LICENSE_REF)' },
     NYT_LICENSE_REF: { group: 'paid', signup: 'https://nytlicensing.com/data-solutions/', description: 'NYT Licensing TDM licence reference' },
-    GUARDIAN_API_KEY: { group: 'paid', signup: 'https://bonobo.capi.gutools.co.uk/register/commercial', description: 'Guardian COMMERCIAL Content API key (paid tier)' },
+    GUARDIAN_API_KEY: { group: 'paid', signup: 'https://bonobo.capi.gutools.co.uk/register/commercial', description: 'Guardian COMMERCIAL Content API key (paid tier; used only with GUARDIAN_COMMERCIAL_LICENSE_REF)' },
+    GUARDIAN_COMMERCIAL_LICENSE_REF: { group: 'paid', signup: 'https://bonobo.capi.gutools.co.uk/register/commercial', description: 'Guardian commercial licence reference (the key alone is not the permission the Open Platform terms require)' },
     DOWJONES_API_KEY: { group: 'paid', signup: 'https://www.dowjones.com/', description: 'Dow Jones feed credential (paid tier)' },
     DOWJONES_FEED_URL: { group: 'paid', signup: 'https://www.dowjones.com/', description: 'Dow Jones contract feed URL' },
     IEEE_API_KEY: { group: 'paid', signup: 'https://developer.ieee.org', description: 'IEEE Xplore API key' },
@@ -1098,12 +1135,48 @@ function sourceStatus(src, env = process.env) {
     return { ...base, status: src.closedStatus, reason: `waiting for ${missing.join(', ')} (${src.auth.program})` };
 }
 
-/** Effective seconds between runs (a key can shorten a keyless cadence). */
+/**
+ * Effective seconds between runs. D4 (Jennifer, 2026-09-29: "Keep 2–3
+ * minutes for all"): the source's cadence (150 s, the band) unless an OPEN
+ * route's documented quota needs longer (route.pollIntervalSec, e.g. NYT
+ * Article Search at 180 s for 500/day), in which case the longest such
+ * route governs. A key can shorten a keyless cadence (pollIntervalSecWithEnv).
+ */
 function pollIntervalSec(src, env = process.env) {
     for (const [k, sec] of Object.entries(src.pollIntervalSecWithEnv || {})) {
         if (nonEmpty(env[k])) return sec;
     }
-    return src.pollIntervalSec || DEFAULT_POLL_SEC;
+    const base = src.pollIntervalSec || DEFAULT_POLL_SEC;
+    const routes = openRoutes(src, env);
+    return Math.max(base, ...routes.map(r => r.pollIntervalSec || 0));
+}
+
+// D4 band: every cadence is 2–3 minutes, except the routes whose DOCUMENTED
+// quota cannot be met even at 180 s (reported to Jennifer, ADR 0001 D4).
+const CADENCE_BAND_SEC = Object.freeze({ min: 120, max: 180 });
+
+/**
+ * The quota audit for one route: runs/day at its cadence against its
+ * documented caps. @returns {null | { route, intervalSec, runsPerDay,
+ * requestsPerDay, perDay, fitsQuota, inBand, minIntervalSec, note }}
+ */
+function quotaAudit(src, route, env = {}) {
+    const q = route.quota;
+    if (!q) return null;
+    const keyed = Object.keys(src.pollIntervalSecWithEnv || {}).some(k => nonEmpty(env[k]));
+    const intervalSec = keyed ? pollIntervalSec(src, env) : Math.max(src.pollIntervalSec || DEFAULT_POLL_SEC, route.pollIntervalSec || 0);
+    const perRun = q.requestsPerRun || 1;
+    const perDay = keyed && q.perDayWithKey ? q.perDayWithKey : q.perDay || null;
+    const runsPerDay = Math.floor(86400 / intervalSec);
+    const minByDay = perDay ? Math.ceil((86400 * perRun) / perDay) : 0;
+    const minByMinute = q.perMinute ? Math.ceil((60 * perRun) / q.perMinute) : 0;
+    const minIntervalSec = Math.max(minByDay, minByMinute);
+    return {
+        route: route.id, intervalSec, runsPerDay, requestsPerDay: runsPerDay * perRun, perDay,
+        fitsQuota: intervalSec >= minIntervalSec,
+        inBand: intervalSec >= CADENCE_BAND_SEC.min && intervalSec <= CADENCE_BAND_SEC.max,
+        minIntervalSec, unpublished: !!q.unpublished, note: q.basis,
+    };
 }
 
 // Collection window (the 2–3 minute cycle) with a guarded default: a
@@ -1264,6 +1337,8 @@ module.exports = {
     openRoutes,
     sourceStatus,
     pollIntervalSec,
+    quotaAudit,
+    CADENCE_BAND_SEC,
     collectWindowMs,
     DEFAULT_COLLECT_WINDOW_MS,
     registryEnvVars,

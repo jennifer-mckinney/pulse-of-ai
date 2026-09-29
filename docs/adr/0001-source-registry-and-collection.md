@@ -35,7 +35,8 @@ Each source resolves at runtime to one of `collecting`, `awaiting_key`, `awaitin
 
 Two interpretations are made explicit here for Jennifer to confirm:
 - **ScienceDirect and IEEE Xplore** need both the self-service key and the approval / licence reference (`ELSEVIER_APPROVAL_REF`, `IEEE_LICENSE_REF`): the key alone is issued to anyone and is not the permission their terms require.
-- **Stack Overflow and GitLab** run keyless at a cadence inside the documented anonymous quota (Stack Exchange 300/day → one run per 15 min; GitLab 60/hour → one run per 5 min). The optional key only raises the quota.
+- **Stack Overflow and GitLab** run keyless at a cadence inside the documented anonymous quota (Stack Exchange 300/day at 2 requests per run → one run per 15 min, a reported D4 exception; GitLab 60/hour at one gitlab.com request per run → the 150 s band since D4). The optional key only raises the quota.
+- **The Guardian Content API** needs both the commercial key and `GUARDIAN_COMMERCIAL_LICENSE_REF` (P10-7), consistent with ScienceDirect and IEEE.
 
 ### Kill switches
 Per source: `SOURCE_<SLUG>_ENABLED=false` (e.g. `SOURCE_BBC_NEWS_ENABLED=false`) or listing the slug in `COLLECTORS_DISABLED`. Globally: `COLLECTORS_ENABLED=false`. Any of these makes the source `disabled` before every run; no code change is needed. Container env is fixed at creation, so an env change applies only after the containers are recreated with `docker compose up -d worker web` (`docker restart` does not re-read `.env`). For an immediate takedown there is a database kill switch (F10-10, migration 020): `npm run source:disable -- <slug> --reason "<why>"` sets `data_sources.collection_disabled_at`, which the runner checks before every run in every process (worker and web); `npm run source:enable -- <slug>` clears it.
@@ -82,6 +83,29 @@ Recorded verbatim; each is implemented in the code and tests named.
 - The audit receipt shows the provenance (source, published time, the permalink or the fingerprint, "verifiable: provide the original URL or id to reproduce the fingerprint"), and its live ingestion step restates the ingest version's claim instead of "anything that could identify who wrote it was removed" (`audit_narration@1.3.0`, migration 017).
 - `npm run verify-provenance -- --post <id> --url <original> [--id <original id>]` proves the match (exit 0 MATCH, 1 NO MATCH, 3 no fingerprint or no key).
 - Tests: `tests/unit/pure/collectorIdentity.test.js`, `tests/unit/pure/methodologyRegistry.test.js` (017 ↔ registry), `tests/integration/provenance.test.js` (stored column, receipt, verify script), `tests/unit/pure/collectorsGated.test.js` (Telegram chat id).
+
+### D4 — cadence: "Keep 2–3 minutes for all"
+- Recorded verbatim (Jennifer, 2026-09-29): **"Keep 2–3 minutes for all"**. No cadence tiers: every source runs every 150 s (the band is 120–180 s), including the local-file and mailbox routes that previously ran hourly or every 15 minutes, and GitLab (was 5 minutes). A route whose DOCUMENTED quota cannot sustain 150 s carries its own `pollIntervalSec` inside the band; the longest open route governs the source (`pollIntervalSec()` in `src/config/source-registry.js`). The robots cache is F10-9.
+- Every keyed route with a published quota carries it (`route.quota`), and `quotaAudit()` checks it (`tests/unit/pure/sourceRegistry.test.js`, "D4 cadence band and the keyed-route quota audit"):
+
+| Source / route | Documented quota | Requests per run | Cadence | Runs (requests) per day | Result |
+|---|---|---|---|---|---|
+| NYT / article-search | 500/day, 5/min | 1 | 180 s | 480 (480) | clamped to 180 s |
+| Guardian / content-api | per contract; free-key cap 500/day used as ceiling | 1 | 180 s | 480 (480) | clamped to 180 s |
+| TikTok / research-api | 1,000 requests/day, 100,000 records/day | 2 (token + query) | 180 s | 480 (960) | clamped to 180 s |
+| X / recent-search | pay-per-use, 3M reads/month | 1 (≤ 20 reads) | 180 s | 480 (≤ 9,600 reads) | in band; spend flagged below |
+| ScienceDirect / search-api | 20,000/week (2,857/day) | 1 | 150 s | 576 | fits |
+| SpringerLink / meta-api | 150/min | 1 | 150 s | 576 | fits |
+| GovInfo / search-api | 1,000/hour | 1 | 150 s | 576 | fits |
+| Congress.gov / bill-api | 5,000/hour | 1 | 150 s | 576 | fits |
+| GitHub / repo + issue search | 10/min unauthenticated | 2 | 150 s | 576 (1,152) | fits |
+| GitLab / topic-projects | 60/hour keyless | 1 | 150 s | 576 (24/hour) | fits |
+| Reddit / data-api | 100 QPM (shared budget) | ≤ 25 | 150 s | budget-bounded | fits |
+| **YouTube / data-api** | **100 search.list calls/day** | 1 search | **900 s** | 96 | **cannot fit even at 180 s (480/day): needs ≥ 864 s** |
+| **Stack Overflow / questions (keyless)** | **300/day** | 2 | **900 s** | 96 (192) | **cannot fit even at 180 s: needs ≥ 576 s**; with `STACKEXCHANGE_KEY` (10,000/day) it runs at 150 s |
+| **IEEE Xplore / metadata-api** | **not published (set at key registration)** | 1 | **900 s** | 96 | **held until the issued quota is known** |
+
+- For Jennifer: the three bold rows are outside the band because their documented (or unknown) quota does not allow it. X is in the band but pay-per-use: `since_id` reads each post once, so spend is the volume of new AI posts, capped at 20 reads per run — at 180 s at most 9,600 reads/day ($48/day, about $1,440/month) in the worst case, against about $72/month at the previous 30-minute cadence.
 
 ### D3 — location: "Separate layer, excluded from bias."
 - Recorded verbatim (Jennifer, 2026-09-29): **"Separate layer, excluded from bias."** This closes the open question on the publisher-city location basis.

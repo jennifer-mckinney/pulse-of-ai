@@ -62,7 +62,7 @@ test('cadence: the window, stretched to each source\'s poll interval; staggered 
     const byId = Object.fromEntries(upserts().map(([, id, repeat]) => [id, repeat]));
     expect(byId.bbc_news.every).toBe(150000);
     expect(byId.stack_overflow.every).toBe(900000);   // 300/day keyless quota
-    expect(byId.gitlab.every).toBe(300000);
+    expect(byId.gitlab.every).toBe(150000);      // D4: 24 requests/hour of 60
     const starts = Object.values(byId).map(r => r.startDate).sort();
     expect(starts).toEqual([NOW, NOW + 50000, NOW + 100000]);
 });
@@ -80,7 +80,7 @@ test('a new credential schedules its source (X on collect.api)', async () => {
     dbAll.mockResolvedValue(rows(['x']));
     expect(await scheduleAllSources({ env: ENV })).toBe(0);
     expect(await scheduleAllSources({ env: { ...ENV, X_BEARER_TOKEN: 't' } })).toBe(1);
-    expect(COLLECT_QUEUES.api.upsertJobScheduler).toHaveBeenCalledWith('x', expect.objectContaining({ every: 1800000 }), expect.anything());
+    expect(COLLECT_QUEUES.api.upsertJobScheduler).toHaveBeenCalledWith('x', expect.objectContaining({ every: 180000 }) /* D4: 2–3 min band */, expect.anything());
 });
 
 test('non-registry rows and unknown types are skipped with a log line, never crash', async () => {
