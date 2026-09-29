@@ -89,22 +89,21 @@ describe('scripts/populate.js — demo population through the real pipeline', ()
         expect(job.completed_at).not.toBeNull();
     });
 
-    it('creates inactive demo sources only for categories the real registry covers', async () => {
+    it('creates one inactive demo source per registry category (all 8, idempotent)', async () => {
         await insertSource('real-social', 'social');
-        await insertSource('real-policy', 'policy');
         await registerPipelineMethodology();
 
         const first = await populate.ensureDemoSources();
         const again = await populate.ensureDemoSources();          // idempotent
 
-        expect(first.map(s => s.category)).toEqual(['policy', 'social']);
+        expect(first.map(s => s.category)).toEqual(['academic', 'blog', 'developer', 'forums', 'news', 'nonprofit', 'policy', 'social']);
         expect(again.map(s => s.id)).toEqual(first.map(s => s.id));
         const rows = await db.dbAll(
             `SELECT name, display_name, active FROM data_sources
-             WHERE source_type = 'demo' ORDER BY name`);
+             WHERE source_type = 'demo' AND name IN ('demo_forums', 'demo_policy') ORDER BY name`);
         expect(rows).toEqual([
+            { name: 'demo_forums', display_name: 'Demo feed — Forums (fictional)', active: false },
             { name: 'demo_policy', display_name: 'Demo feed — Policy (fictional)', active: false },
-            { name: 'demo_social', display_name: 'Demo feed — Social (fictional)', active: false },
         ]);
     });
 
@@ -216,7 +215,9 @@ describe('scripts/populate.js — demo population through the real pipeline', ()
 
     it('parses flags with the documented defaults', () => {
         expect(populate.parseArgs([])).toMatchObject({ mode: 'once', size: 240, embed: true, force: false });
-        expect(populate.parseArgs(['--loop'])).toMatchObject({ mode: 'loop', size: 14 });
+        // G10-18: two posts per demo feed, one feed per registry category (8).
+        expect(populate.DEMO_CATEGORIES).toEqual(['social', 'news', 'academic', 'policy', 'nonprofit', 'developer', 'forums', 'blog']);
+        expect(populate.parseArgs(['--loop'])).toMatchObject({ mode: 'loop', size: 16 });
         expect(populate.parseArgs(['--once', '--size', '5', '--no-embed', '--force', '--wait-embeddings', '0']))
             .toMatchObject({ size: 5, embed: false, force: true, waitEmbeddings: 0 });
         expect(() => populate.parseArgs(['--bogus'])).toThrow(/unknown argument/);
@@ -228,5 +229,25 @@ describe('scripts/populate.js — demo population through the real pipeline', ()
             expect(text.startsWith('[Demo]')).toBe(false);          // prefix is added once, at ingest
             expect(text).not.toMatch(/@\w|https?:\/\//);            // no handles, no links
         }
+    });
+});
+
+describe('G10-18: every category has a demo feed, and a loop batch covers each twice', () => {
+    it('ensures 8 demo feeds (Forums included) and a 16-post batch gives each category exactly 2 posts', async () => {
+        const { seedSources, seedMethodology } = require('../../scripts/seed');
+        await seedSources();
+        await seedMethodology();
+        const spy = jest.spyOn(process.stdout, 'write').mockImplementation(() => true);
+        try {
+            await populate.runDemoBatch({ size: populate.LOOP_BATCH, embed: false, seed: 3 });
+        } finally {
+            spy.mockRestore();
+        }
+        const feeds = await db.dbAll(`SELECT category FROM data_sources WHERE source_type = 'demo' ORDER BY category`);
+        expect(feeds.map(f => f.category)).toEqual(['academic', 'blog', 'developer', 'forums', 'news', 'nonprofit', 'policy', 'social']);
+        const per = await db.dbAll(`SELECT ds.category, COUNT(*)::int AS n FROM raw_posts rp JOIN data_sources ds ON ds.id = rp.source_id
+            WHERE ds.source_type = 'demo' GROUP BY ds.category`);
+        expect(per).toHaveLength(8);
+        for (const r of per) expect(r.n).toBe(2);
     });
 });

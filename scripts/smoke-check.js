@@ -29,7 +29,7 @@
 // embeddings when the model could not be downloaded); --expect-embeddings
 // makes it a FAIL.
 //
-//   - the source registry: GET /api/sources serves all 51 registry sources,
+//   - the source registry: GET /api/sources serves every registry source,
 //     and the per-source collection status is printed (collecting / online,
 //     awaiting key / approval / licence, blocked, disabled)
 //   - live collection: WARN unless at least one source collected
@@ -48,6 +48,7 @@ require('dotenv').config();
 const { execFileSync } = require('child_process');
 const db = require('../src/db/connection');
 const { deriveDataMode } = require('../src/config/data-mode');
+const { SOURCES } = require('../src/config/source-registry');
 
 const AUDIENCES = ['public', 'plain', 'config', 'researcher'];
 const LINEAGES = new Set(['recorded', 'inferred', 'current']);
@@ -224,8 +225,9 @@ async function run(opts, out) {
         const reg = Array.isArray(body) ? body.filter(x => x && x.registry === true) : [];
         const count = (st) => reg.filter(x => x.status === st).length;
         const online = reg.filter(x => x.online).length;
-        (status === 200 && reg.length === 51 ? r.pass : r.fail)('source registry',
-            `${reg.length}/51 registry sources served — collecting ${count('collecting')} (online ${online}), `
+        // G10-18: the registry's own size, not a hardcoded 51.
+        (status === 200 && reg.length === SOURCES.length ? r.pass : r.fail)('source registry',
+            `${reg.length}/${SOURCES.length} registry sources served — collecting ${count('collecting')} (online ${online}), `
             + `awaiting key ${count('awaiting_key')}, awaiting approval ${count('awaiting_approval')}, `
             + `awaiting licence ${count('awaiting_licence')}, blocked ${count('blocked')}, disabled ${count('disabled')}, `
             + `blocked by source ${count('blocked_by_source')}`);

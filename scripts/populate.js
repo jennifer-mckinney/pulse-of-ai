@@ -65,7 +65,7 @@ const { saveDQI } = require('../src/pipeline/discourse');
 const { runBiasChecks } = require('../src/pipeline/bias');
 const { resolveCurrentMethodology } = require('../src/pipeline/methodology');
 const { SOURCES, sourceStatus } = require('../src/config/source-registry');
-const { CAT_LABELS } = require('../src/config/categories');
+const { CAT_LABELS, CATEGORY_SLUGS } = require('../src/config/categories');
 const { launchCities } = require('../public/js/config/cities.config.js');
 
 const DEMO_SOURCE_TYPE = 'demo';
@@ -76,12 +76,16 @@ const DEMO_PREFIX = '[Demo] ';
 // thinner first batch would leave those chapters empty until the feed caught up.
 const DEFAULT_ONCE_SIZE = 240;
 const LOOP_INTERVAL_MS = positiveInt(process.env.DEMO_FEED_INTERVAL_MS, 150000);
-// 14 = two posts for each of the 7 categories the registry covers: the
-// category cursor below walks the sources with a stride coprime to 7, so a
-// 14-post batch gives every category exactly two posts. Balanced batches keep
-// the job-level parity check (which compares per-category sentiment means)
-// from being decided by a single post; its verdicts are still the real ones.
-const LOOP_BATCH = positiveInt(process.env.DEMO_FEED_BATCH, 14);
+// One demo feed per canonical category the registry covers (G10-18: all 8,
+// Forums included — the list comes from the registry, not from whatever
+// rows happen to be in the database).
+const DEMO_CATEGORIES = Object.freeze(CATEGORY_SLUGS.filter(c => SOURCES.some(s => s.category === c)));
+// Two posts per demo feed: the category cursor below walks the feeds with a
+// stride of 3, coprime to 8, so a 16-post batch gives every category exactly
+// two posts. Balanced batches keep the job-level parity check (which
+// compares per-category sentiment means) from being decided by a single
+// post; its verdicts are still the real ones.
+const LOOP_BATCH = positiveInt(process.env.DEMO_FEED_BATCH, 2 * DEMO_CATEGORIES.length);
 const EMBEDDINGS_URL = process.env.EMBEDDINGS_SERVICE_URL || 'http://localhost:8000';
 
 // ─── Fictional corpus ────────────────────────────────────────────────────────
@@ -191,13 +195,12 @@ async function currentMethodology() {
  * @returns {Promise<Array<{id, category}>>}
  */
 async function ensureDemoSources() {
-    const cats = await db.dbAll(
-        `SELECT DISTINCT category FROM data_sources
-         WHERE source_type <> $1 ORDER BY category`,
+    const seeded = await db.dbGet(
+        `SELECT COUNT(*)::int AS n FROM data_sources WHERE source_type <> $1`,
         [DEMO_SOURCE_TYPE],
     );
-    if (cats.length === 0) throw new Error('no data_sources registered — run `npm run seed` first');
-    for (const { category } of cats) {
+    if (seeded.n === 0) throw new Error('no data_sources registered — run `npm run seed` first');
+    for (const category of DEMO_CATEGORIES) {
         const label = CAT_LABELS[category] || category;
         await db.dbRun(
             `INSERT INTO data_sources (name, display_name, source_type, category, config, active)
@@ -217,8 +220,8 @@ async function ensureDemoSources() {
         );
     }
     return db.dbAll(
-        `SELECT id, category FROM data_sources WHERE source_type = $1 ORDER BY category`,
-        [DEMO_SOURCE_TYPE],
+        `SELECT id, category FROM data_sources WHERE source_type = $1 AND category = ANY($2::text[]) ORDER BY category`,
+        [DEMO_SOURCE_TYPE, [...DEMO_CATEGORIES]],
     );
 }
 
@@ -576,6 +579,8 @@ if (require.main === module) {
 
 module.exports = {
     DEFAULT_COLLECT_DEADLINE_SEC,
+    DEMO_CATEGORIES,
+    LOOP_BATCH,
     parseArgs,
     liveCollectionStatus,
     currentMethodology,

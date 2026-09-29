@@ -42,7 +42,7 @@ x-app-env: &app-env
   CORRELATION_MIN_CONFIDENCE: ${CORRELATION_MIN_CONFIDENCE:-0.85}
   RETENTION_DETAIL_DAYS: ${RETENTION_DETAIL_DAYS:-90}
   DEMO_FEED_INTERVAL_MS: ${DEMO_FEED_INTERVAL_MS:-150000}
-  DEMO_FEED_BATCH: ${DEMO_FEED_BATCH:-14}
+  DEMO_FEED_BATCH: ${DEMO_FEED_BATCH:-}
 
 # Collector SETTINGS (F9-2, src/config/source-registry.js envClass):
 # non-secret configuration, the permission / licence REFERENCES (names and
