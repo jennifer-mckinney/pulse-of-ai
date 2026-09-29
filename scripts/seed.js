@@ -23,7 +23,7 @@
 require('dotenv').config();
 const { dbRun, closePool } = require('../src/db/connection');
 const { SOURCES } = require('../src/config/source-registry');
-const { METHODOLOGY_VERSIONS } = require('../src/config/methodology-registry');
+const { METHODOLOGY_VERSIONS, METHODOLOGY_ERRATA } = require('../src/config/methodology-registry');
 
 /**
  * Non-secret data_sources.config for a registry entry. Env var NAMES are
@@ -79,9 +79,31 @@ async function seedMethodology() {
     return inserted;
 }
 
+/**
+ * P10-16: errata rows (methodology_errata, migration 030) for registered
+ * rows that do not describe the code that ran. Idempotent; a row whose
+ * corrected version is not registered is skipped.
+ * @returns {Promise<number>} rows inserted
+ */
+async function seedErrata() {
+    let inserted = 0;
+    for (const e of METHODOLOGY_ERRATA) {
+        const r = await dbRun(
+            `INSERT INTO methodology_errata (methodology_version_id, erratum_key, corrected_by, erratum)
+             SELECT id, $3, $4, $5 FROM methodology_versions WHERE component = $1 AND version = $2
+             ON CONFLICT (erratum_key) DO NOTHING
+             RETURNING id`,
+            [e.component, e.version, e.erratum_key, e.corrected_by, e.erratum],
+        );
+        if (r) inserted++;
+    }
+    return inserted;
+}
+
 async function main() {
     const sources = await seedSources();
     const methods = await seedMethodology();
+    await seedErrata();
     console.log(`✓ Seed complete: ${sources} registry data_sources upserted, ${methods} methodology_versions inserted.`);
 }
 
@@ -96,4 +118,4 @@ if (require.main === module) {
         });
 }
 
-module.exports = { sourceConfig, seedSources, seedMethodology, main };
+module.exports = { sourceConfig, seedSources, seedMethodology, seedErrata, main };

@@ -496,6 +496,27 @@ const METHODOLOGY_VERSIONS = [
     },
 ];
 
+// ─── Errata (P10-16) ─────────────────────────────────────────────────────────
+// A released methodology row is never edited, even when it turns out not to
+// describe the code that ran. An erratum is a NEW row in
+// methodology_errata (migration 030; scripts/seed.js inserts the same rows)
+// attached to the row it corrects; GET /api/methodology serves it with that
+// version.
+const METHODOLOGY_ERRATA = [
+    {
+        component: 'relevance',
+        version: '1.0.0',
+        erratum_key: 'relevance-1.0.0-config-mismatch',
+        corrected_by: 'relevance@1.1.0',
+        erratum: 'The registered relevance@1.0.0 config does not describe the code that produced its decisions. It lists 18 '
+            + 'keywords, 0.1 per match and an AI-relevance threshold of 0.99; the code that ran scored every post against the '
+            + '20-keyword lexicon later registered as relevance@1.1.0 (case-insensitive substring match, score = unique matched '
+            + 'keywords / 20, AI-relevant when at least one keyword matched). Read decisions recorded under 1.0.0 against '
+            + 'relevance@1.1.0\'s config; `npm run replay` re-runs them with that rule. The 1.0.0 row is kept unedited as it '
+            + 'was registered. Found by the replay tool (ADR 0001, methodology alignment); recorded 2026-09-29 (PR #10 review P10-16).',
+    },
+];
+
 /**
  * The version of each component that the CODE implements: the last registry
  * entry per component. The pipeline records these rows on every decision
@@ -508,4 +529,4 @@ const CURRENT_VERSIONS = Object.freeze(METHODOLOGY_VERSIONS.reduce((acc, m) => {
     return acc;
 }, {}));
 
-module.exports = { METHODOLOGY_VERSIONS, CURRENT_VERSIONS };
+module.exports = { METHODOLOGY_VERSIONS, CURRENT_VERSIONS, METHODOLOGY_ERRATA };

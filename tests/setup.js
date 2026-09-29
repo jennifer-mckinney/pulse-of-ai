@@ -31,6 +31,7 @@ const TABLES = [
     'source_collection_state',
     'raw_posts',
     'processing_jobs',
+    'methodology_errata',
     'methodology_versions',
     'data_sources',
 ].join(', ');
