@@ -28,3 +28,4 @@ compare it with the fixture before relying on the collector.
 | telegram-updates.json | Telegram Bot API getUpdates | https://core.telegram.org/bots/api#getupdates |
 | wechat-feed.xml, cato-feed.xml | authorized / allowlisted RSS | — |
 | scholar-alert.eml | Google Scholar alert email | https://scholar.google.com/intl/en/scholar/help.html |
+| osm-diary-ai.xml | hand-made OpenStreetMap diary entry (AI topic, geotagged in London) in the recorded feed's shape (G10-15) | — |

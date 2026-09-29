@@ -48,7 +48,9 @@ describe('RSS / Atom (publisher feeds, robots-gated)', () => {
             expect(p.location_basis).toBe('publisher');
             expect(p.source_slug).toBe('bbc_news');
         }
-        expect(r.payloads.length + r.dropped.outOfScope + r.dropped.old).toBe(4);
+        // G10-15: exact counts, not a sum that any split satisfies.
+        expect(r.payloads).toHaveLength(2);
+        expect(r.dropped).toEqual({ invalid: 0, old: 0, outOfScope: 2, duplicate: 0 });
     });
 
     test('Guardian AI tag (scope ai): every recent item kept, bylines never stored', async () => {
@@ -82,8 +84,16 @@ describe('RSS / Atom (publisher feeds, robots-gated)', () => {
     test('OpenStreetMap diary: geotags round to a registry city; /user/ links dropped', async () => {
         const r = await run('openstreetmap', 'diary-rss', [['https://www.openstreetmap.org/diary/rss', 'recorded/osm-diary.xml']]);
         expect(r.fetched).toBe(5);
-        const all = await run('openstreetmap', 'diary-rss', [['https://www.openstreetmap.org/diary/rss', 'recorded/osm-diary.xml']]);
-        expectNoIdentity(all.payloads);
+        // The recorded entries are all off-topic: exactly 5 filtered out.
+        expect(r.payloads).toHaveLength(0);
+        expect(r.dropped.outOfScope).toBe(5);
+        // G10-15: an AI entry geotagged in London (hand-made fixture) is kept,
+        // located from its geotag (basis 'content'), its /user/ link dropped.
+        const ai = await run('openstreetmap', 'diary-rss', [['https://www.openstreetmap.org/diary/rss', 'gated/osm-diary-ai.xml']]);
+        expect(ai.payloads).toHaveLength(1);
+        expect(ai.payloads[0]).toMatchObject({ location: 'London', location_basis: 'content', url: null });
+        expect(ai.payloads[0].id).toMatch(/^diary-rss:fp:[0-9a-f]{64}$|^diary-rss:[0-9a-f]{64}$/);
+        expectNoIdentity(ai.payloads);
     });
 
     test('a feed refused by robots is never fetched (CFR with the conservative reading)', async () => {
@@ -183,9 +193,19 @@ describe('JSON APIs (recorded)', () => {
     });
 
     test('Pew WordPress REST (AI category 299)', async () => {
-        const r = await run('pew', 'wp-rest-ai', [[/pewresearch\.org\/wp-json/, 'recorded/pew-ai.json']]);
+        // G10-15: the recording's posts are from 2026-09-17, older than the
+        // 7-day window at RECORDED_AT, so the old check passed with ZERO
+        // kept posts. Pew gets its own clock: the day after its newest post.
+        const pewNow = Date.parse('2026-09-18T14:00:00Z');
+        const source = getSource('pew');
+        const route = source.routes.find(x => x.id === 'wp-rest-ai');
+        const transport = fixtureTransport([[/pewresearch\.org\/wp-json/, 'recorded/pew-ai.json']]);
+        const http = new HttpClient({ transport, env: TEST_ENV, sleep: noSleep });
+        const r = await new ADAPTERS[route.adapter]({ source, route, env: TEST_ENV, http, cursor: {}, httpCache: {}, now: () => pewNow }).collect();
         expect(r.fetched).toBe(3);
+        expect(r.payloads).toHaveLength(3);
         expect(r.payloads.every(p => p.attribution === 'Pew Research Center')).toBe(true);
+        expectNoIdentity(r.payloads);
     });
 
     test('Internet Archive advanced search (subject AI, date window)', async () => {
