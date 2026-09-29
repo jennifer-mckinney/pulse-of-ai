@@ -234,7 +234,7 @@ compose_all up -d --no-build --no-deps populate >/dev/null 2>&1 \
     || { show_failure populate; die "could not start the demo fallback (service populate)"; }
 ok "demo fallback running: a fictional batch every $(( $(effective DEMO_FEED_INTERVAL_MS 150000) / 1000 ))s ONLY while the trailing hour has no live posts"
 DATA_MODE=$(curl -fsS --max-time 10 "http://localhost:$(compose_full port web 3000 2>/dev/null | head -n 1 | sed 's/.*://')/api/health" 2>/dev/null \
-    | sed -n 's/.*"data_mode":"\([a-z]*\)".*/\1/p' | tr '[:lower:]' '[:upper:]')
+    | sed -n 's/.*"data_mode":"\([a-z]*\)".*/\1/p' | tr '[:lower:]' '[:upper:]') || true   # G10-10: a failed probe never aborts standup (set -e + pipefail)
 
 # ─── 7. Smoke check ──────────────────────────────────────────────────────────
 step "Smoke check"

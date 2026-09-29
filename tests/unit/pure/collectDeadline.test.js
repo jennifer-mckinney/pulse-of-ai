@@ -54,3 +54,10 @@ test('populate --once has a collection deadline; standup bounds the populate ste
     const src = fs.readFileSync(path.join(__dirname, '../../../scripts/populate.js'), 'utf8');
     expect(src).not.toMatch(/opts\.verbose/);   // progress is logged unconditionally
 });
+
+test('G10-10: the DATA_MODE probe cannot abort standup under set -e / pipefail', () => {
+    const standup = fs.readFileSync(path.join(__dirname, '../../../scripts/standup.sh'), 'utf8');
+    const line = standup.split('\n').findIndex(l => l.startsWith('DATA_MODE=$('));
+    expect(line).toBeGreaterThan(-1);
+    expect(standup.split('\n')[line + 1]).toMatch(/\) \|\| true\b/);
+});
