@@ -231,6 +231,76 @@ printf 'POSTGRES_PASSWORD=changeme_before_production   # todo\n' >> "$d/.env"
 lib_run "$d" "$ENV_SETUP; check_env_secrets" >/dev/null; rc=$?
 assert_eq "check_env_secrets: commented placeholder dies" "1" "$rc"
 
+# ─── F9-7: project-name source ───────────────────────────────────────────────
+d=$(new_case)
+assert_eq "stack_project_source: default"   "default"   "$(lib_run "$d" 'stack_project_source')"
+printf 'COMPOSE_PROJECT_NAME=from-file\n' > "$d/.env"
+assert_eq "stack_project_source: env file"  "env file"  "$(lib_run "$d" 'stack_project_source')"
+assert_eq "stack_project_source: shell env" "shell env" "$(lib_run "$d" 'COMPOSE_PROJECT_NAME=from-shell; stack_project_source')"
+assert_eq "project_from_foreign_shell: differs → yes" "yes" "$(lib_run "$d" 'COMPOSE_PROJECT_NAME=other; project_from_foreign_shell && echo yes || echo no')"
+assert_eq "project_from_foreign_shell: same → no"    "no"  "$(lib_run "$d" 'COMPOSE_PROJECT_NAME=from-file; project_from_foreign_shell && echo yes || echo no')"
+assert_eq "project_from_foreign_shell: file only → no" "no" "$(lib_run "$d" 'project_from_foreign_shell && echo yes || echo no')"
+d=$(new_case)
+assert_eq "project_from_foreign_shell: shell vs default" "yes" "$(lib_run "$d" 'COMPOSE_PROJECT_NAME=other; project_from_foreign_shell && echo yes || echo no')"
+
+# ─── F9-7 / P9-4: teardown.sh against a fake docker ──────────────────────────
+# The fake records every call in $FAKE_LOG; the project "has" one container
+# until `down` runs.
+FAKE_BIN="$SCRATCH/fakebin"
+mkdir -p "$FAKE_BIN"
+cat > "$FAKE_BIN/docker" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FAKE_LOG"
+case "$1" in
+    info) exit 0 ;;
+    ps) [[ -e "$FAKE_STATE/down" ]] || echo c0ffee; exit 0 ;;
+    volume) exit 0 ;;
+    compose)
+        [[ "$2" == "version" ]] && { echo 2.30.0; exit 0; }
+        for a in "$@"; do [[ "$a" == down ]] && touch "$FAKE_STATE/down"; done
+        exit 0 ;;
+esac
+exit 0
+EOF
+chmod +x "$FAKE_BIN/docker"
+TEARDOWN="$(cd "$(dirname "$LIB")/.." && pwd)/teardown.sh"
+
+# run_teardown DIR [ENV=VAL...] -- [ARGS...]: stdin is NOT a terminal.
+run_teardown() {
+    local dir=$1; shift
+    local envs=()
+    while (( $# )) && [[ "$1" != "--" ]]; do envs+=("$1"); shift; done
+    shift
+    mkdir -p "$dir/state"; : > "$dir/docker.log"
+    env -u COMPOSE_PROJECT_NAME PATH="$FAKE_BIN:$PATH" FAKE_LOG="$dir/docker.log" FAKE_STATE="$dir/state" \
+        PULSE_ENV_FILE="$dir/.env" ${envs[@]+"${envs[@]}"} bash "$TEARDOWN" "$@" < /dev/null > "$dir/out" 2>&1
+}
+
+d=$(new_case); printf 'COMPOSE_PROJECT_NAME=mystack\nPOSTGRES_PASSWORD=x\nREDIS_PASSWORD=y\n' > "$d/.env"
+run_teardown "$d" --; rc=$?
+assert_eq "teardown: plain stop succeeds"                "0" "$rc"
+assert_eq "teardown: names the project source"           "yes" "$(grep -q "'mystack' (from env file" "$d/out" && echo yes || echo no)"
+assert_eq "teardown: runs down"                          "yes" "$(grep -q ' down' "$d/docker.log" && echo yes || echo no)"
+assert_eq "teardown: never --remove-orphans"             "no" "$(grep -q -- '--remove-orphans' "$d/docker.log" && echo yes || echo no)"
+
+d=$(new_case); printf 'COMPOSE_PROJECT_NAME=mystack\nPOSTGRES_PASSWORD=x\nREDIS_PASSWORD=y\n' > "$d/.env"
+run_teardown "$d" COMPOSE_PROJECT_NAME=otherapp --; rc=$?
+assert_eq "teardown: foreign shell project, no tty → refused" "1" "$rc"
+assert_eq "teardown: foreign shell project → nothing stopped" "no" "$(grep -q ' down' "$d/docker.log" && echo yes || echo no)"
+assert_eq "teardown: foreign shell project → explains"        "yes" "$(grep -q "shell env" "$d/out" && grep -q "mystack" "$d/out" && echo yes || echo no)"
+
+d=$(new_case); printf 'COMPOSE_PROJECT_NAME=mystack\nPOSTGRES_PASSWORD=x\nREDIS_PASSWORD=y\n' > "$d/.env"
+run_teardown "$d" COMPOSE_PROJECT_NAME=otherapp -- --yes; rc=$?
+assert_eq "teardown: foreign shell project + --yes proceeds"  "0" "$rc"
+assert_eq "teardown: --yes stops the named project"           "yes" "$(grep -q -- '-p otherapp .* down' "$d/docker.log" && echo yes || echo no)"
+assert_eq "teardown: --purge --yes still no --remove-orphans" "no" "$(run_teardown "$d" COMPOSE_PROJECT_NAME=otherapp -- --purge --yes; grep -q -- '--remove-orphans' "$d/docker.log" && echo yes || echo no)"
+
+d=$(new_case); printf 'POSTGRES_PASSWORD=x\nREDIS_PASSWORD=y\n' > "$d/.env"
+run_teardown "$d" --; rc=$?
+assert_eq "teardown: shared dev project stops (plain)"        "0" "$rc"
+assert_eq "teardown: warns about the shared dev project"      "yes" "$(grep -q "shared dev project" "$d/out" && echo yes || echo no)"
+assert_eq "teardown: notes postgres_test on 5433"             "yes" "$(grep -q "postgres_test" "$d/out" && grep -q "5433" "$d/out" && echo yes || echo no)"
+
 #@@CASES@@
 
 

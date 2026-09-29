@@ -247,6 +247,32 @@ stack_project() {
     printf '%s' "$project"
 }
 
+# Where the project name comes from (F9-7): 'shell env' | 'env file' |
+# 'default'. Printed next to the name so a stray exported
+# COMPOSE_PROJECT_NAME is visible before anything acts on it.
+stack_project_source() {
+    if [[ -n "${COMPOSE_PROJECT_NAME:-}" ]]; then
+        printf 'shell env'
+    elif [[ -n "$(env_file_value COMPOSE_PROJECT_NAME)" ]]; then
+        printf 'env file'
+    else
+        printf 'default'
+    fi
+}
+
+# The project this checkout's env file names (or the compose default).
+env_file_project() {
+    local v
+    v=$(env_file_value COMPOSE_PROJECT_NAME)
+    printf '%s' "${v:-pulse-of-ai}"
+}
+
+# True when the shell's COMPOSE_PROJECT_NAME overrides a DIFFERENT project
+# than the env file names — e.g. exported for another app in this terminal.
+project_from_foreign_shell() {
+    [[ "$(stack_project_source)" == "shell env" && "$COMPOSE_PROJECT_NAME" != "$(env_file_project)" ]]
+}
+
 # docker compose pinned to this repo's compose file, env file and project,
 # with the "full" profile (web, worker, embeddings, migrate).
 compose_full() {

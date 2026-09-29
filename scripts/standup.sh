@@ -73,7 +73,10 @@ check_env_secrets
 STACK_PROJECT=$(stack_project)
 APP_IMAGE=$(effective PULSE_APP_IMAGE pulse-of-ai/app:local)
 EMB_IMAGE=$(effective PULSE_EMBEDDINGS_IMAGE pulse-of-ai/embeddings:local)
-info "compose project: $STACK_PROJECT"
+info "compose project: $STACK_PROJECT (from $(stack_project_source))"
+if project_from_foreign_shell; then
+    warn "COMPOSE_PROJECT_NAME='$STACK_PROJECT' comes from your shell env, but $STACK_ENV_FILE names '$(env_file_project)' — standing up '$STACK_PROJECT'."
+fi
 
 # ─── 3. Build ────────────────────────────────────────────────────────────────
 if (( DO_BUILD )); then
@@ -118,7 +121,9 @@ port_hint="If a host port is taken, override it: WEB_PORT, POSTGRES_PORT, POSTGR
 step "Starting services (profile full)"
 t_up=$(date +%s)
 set +e
-run_with_timeout "$CORE_TIMEOUT" compose_full up -d --no-build --remove-orphans
+# No --remove-orphans (F9-7): containers of this project name that this
+# file does not define may belong to another app sharing the name.
+run_with_timeout "$CORE_TIMEOUT" compose_full up -d --no-build
 up_rc=$?
 set -e
 if (( up_rc == 124 )); then

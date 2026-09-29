@@ -184,7 +184,19 @@ npm run teardown -- --purge         # also delete the volumes (database, redis, 
 npm run teardown -- --purge --yes   # non-interactive purge
 ```
 
-Both act on one compose project only: `COMPOSE_PROJECT_NAME` if it's set, otherwise the one in `.env`, otherwise `pulse-of-ai`.
+Both act on one compose project only: `COMPOSE_PROJECT_NAME` if it's set, otherwise the one in `.env`, otherwise `pulse-of-ai`. The first line of output says which one it used and where the name came from (shell env, env file or default).
+
+- If `COMPOSE_PROJECT_NAME` comes from your shell and differs from the project in `.env` (for example, it's still exported for another app), teardown asks you to type the project name before it stops anything, even without `--purge`. `--yes` confirms non-interactively.
+- Containers that carry the project's name but aren't defined in this compose file (orphans) are left alone. They may belong to another app.
+- `pulse-of-ai` is the shared dev project that `npm run docker:up` and `npm run dev` use. Tearing it down also stops `postgres_test` on port 5433, the test database every jest run uses, so teardown warns before it does.
+
+### Upgrading an existing dev database
+
+- **Standup applies migrations for you.** The `migrate` job runs every pending migration and the idempotent seed before web and the worker start, on every `npm run standup`.
+- **Host-side development (`npm run dev`)**: after pulling, run `npm run migrate && npm run seed` against your dev database.
+- **Migrations are forward-only.** There are no down migrations, and older code isn't guaranteed to run against a newer schema. Take a backup first if you may need to go back: `docker compose exec postgres pg_dump -U pulse_user pulse_of_ai > backup.sql`.
+- **New secrets.** Standup adds keys that are missing from an existing `.env` (such as `REDIS_PASSWORD`) and stops if a secret is empty or still has its `.env.example` placeholder. If you only use `npm run docker:up`, add `REDIS_PASSWORD=$(openssl rand -hex 32)` to `.env` yourself: the redis service now requires a password.
+- **A placeholder `POSTGRES_PASSWORD` on an existing volume.** Postgres reads `POSTGRES_PASSWORD` only when it first creates the database, so editing `.env` alone breaks the connection. Change it inside Postgres as well, without putting it on a command line: run `docker compose exec postgres psql -U pulse_user -d pulse_of_ai`, then `\password pulse_user`, and put the same value in `.env`. Or start over with `npm run teardown -- --purge`, which deletes the data.
 
 Flags: `npm run standup -- --help`. `--no-build` skips the image build, and `--demo` adds a fresh demo batch even when the hour is already full. Timeouts: `STANDUP_TIMEOUT` (core services, default 300 s) and `STANDUP_EMBEDDINGS_TIMEOUT` (first model download, default 900 s).
 
