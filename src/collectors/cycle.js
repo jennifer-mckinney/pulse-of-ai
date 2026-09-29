@@ -21,12 +21,16 @@
 //   leaveCycle(jobId, counts)  add the run's counters and decrement
 //                              inflight_runs — always, in a finally, so a
 //                              run that throws after scoring still counts
+//   reserveRetry / releaseRetry  a queued scoring retry holds a slot on its
+//                              job until it scored (Copilot 4129565673)
 //   closeCycles(windowMs)      atomically claim (FOR UPDATE SKIP LOCKED →
 //                              status 'closing') every cron cycle past its
 //                              window + grace with NO run in flight (or past
 //                              the hard age cap), then run the bias checks
 //                              ONCE over its posts, counted from
-//                              decision_audit_log by job_id, and complete it
+//                              decision_audit_log by job_id, and complete it;
+//                              likewise every job 'awaiting_retries' whose
+//                              retries are done
 //
 // POST /api/refresh and the standup population run every source in one job
 // already, so they keep their own job-level checks (src/collectors/runner.js).
@@ -116,6 +120,22 @@ async function retryJobFor(jobId, windowMs) {
     return { jobId: await currentCycleJob(windowMs), joined: true };
 }
 
+/**
+ * Copilot 4129565673: a scoring retry queued by a run RESERVES a slot on its
+ * job (inflight_runs + 1) at enqueue time, so the job's bias checks wait for
+ * it: a cycle does not close, and a refresh / standup job stays
+ * 'awaiting_retries', until the retry scored under that job and released
+ * the slot (or its last attempt failed). A reservation is released exactly
+ * once.
+ */
+async function reserveRetry(jobId) {
+    await dbRun('UPDATE processing_jobs SET inflight_runs = inflight_runs + 1 WHERE id = $1', [jobId]);
+}
+
+async function releaseRetry(jobId) {
+    await dbRun('UPDATE processing_jobs SET inflight_runs = GREATEST(inflight_runs - 1, 0) WHERE id = $1', [jobId]);
+}
+
 async function leaveCycle(jobId, { collected = 0, processed = 0, sources = 0 } = {}) {
     await dbRun(
         `UPDATE processing_jobs
@@ -147,12 +167,16 @@ async function claimDueCycles(windowMs) {
     return dbTransaction(async (client) => {
         const due = await client.query(
             `SELECT id FROM processing_jobs
-             WHERE triggered_by = 'cron'
-               AND ((status = 'running'
-                     AND started_at <= NOW() - make_interval(secs => $1)
-                     AND (inflight_runs <= 0 OR started_at <= NOW() - make_interval(secs => $2)))
-                 -- a closer that died mid-close
-                 OR (status = 'closing' AND started_at <= NOW() - make_interval(secs => $2 * 2)))
+             WHERE (triggered_by = 'cron'
+                    AND ((status = 'running'
+                          AND started_at <= NOW() - make_interval(secs => $1)
+                          AND (inflight_runs <= 0 OR started_at <= NOW() - make_interval(secs => $2)))
+                      -- a closer that died mid-close
+                      OR (status = 'closing' AND started_at <= NOW() - make_interval(secs => $2 * 2))))
+                -- a refresh / standup job whose run ended with scoring
+                -- retries outstanding: finalized once they are done
+                OR (status = 'awaiting_retries'
+                    AND (inflight_runs <= 0 OR started_at <= NOW() - make_interval(secs => $2)))
              ORDER BY started_at ASC
              FOR UPDATE SKIP LOCKED`,
             [dueSec, capSec],
@@ -199,6 +223,6 @@ async function closeCycles(windowMs) {
 }
 
 module.exports = {
-    currentCycleJob, joinCycle, retryJobFor, leaveCycle, addToCycle, closeCycles, claimDueCycles, hardCapMs,
+    currentCycleJob, joinCycle, retryJobFor, leaveCycle, reserveRetry, releaseRetry, addToCycle, closeCycles, claimDueCycles, hardCapMs,
     CYCLE_GRACE_MS, CYCLE_LOCK_KEY,
 };

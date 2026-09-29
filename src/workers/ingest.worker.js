@@ -20,7 +20,8 @@ const { scorePost } = require('../pipeline/ingest');
 const { passesEmbedGate, EMBED_GATE_MIN_SCORE } = require('../pipeline/relevance');
 const { resolveCurrentMethodology } = require('../pipeline/methodology');
 const { embedQueue } = require('../queues/index');
-const { retryJobFor, leaveCycle } = require('../collectors/cycle');
+const { retryJobFor, leaveCycle, releaseRetry } = require('../collectors/cycle');
+const { dbGet } = require('../db/connection');
 const { collectWindowMs } = require('../config/source-registry');
 
 /**
@@ -28,11 +29,26 @@ const { collectWindowMs } = require('../config/source-registry');
  * @returns {Promise<{ rawPostId, relevance: number, embedJobId: string|null }>}
  */
 async function processIngestJob(job) {
-    const { rawPostId, jobId } = job.data || {};
+    const { rawPostId, jobId, reserved } = job.data || {};
     // jobId is null for posts re-queued by the unscored sweep (G10-4):
     // they score under the current cycle.
     if (!rawPostId) throw new Error('ingest job needs rawPostId');
     const mv = await resolveCurrentMethodology();
+    // Copilot 4129565673: a retry queued by a run holds a slot on its job
+    // (reserveRetry). While that job is still open it scores UNDER THAT JOB
+    // (its counts and bias checks include the post) and releases the slot
+    // on success; a failed attempt keeps the slot for BullMQ's next attempt
+    // (the last failed attempt releases it — onIngestJobFailed).
+    if (reserved && jobId) {
+        const own = await dbGet('SELECT status FROM processing_jobs WHERE id = $1', [jobId]);
+        if (own && (own.status === 'running' || own.status === 'awaiting_retries')) {
+            const { relevance } = await scorePost(rawPostId, jobId, mv);
+            await releaseRetry(jobId);
+            return embedIfGated(rawPostId, relevance);
+        }
+        // Closed anyway (hard age cap): the current cycle takes the post.
+        await releaseRetry(jobId);
+    }
     // G10-2: score under the post's own job while it is still running (a
     // cron cycle is joined so it cannot close mid-score; a running refresh
     // job keeps its posts); a retry against a closed job, or a sweep retry
@@ -45,6 +61,10 @@ async function processIngestJob(job) {
     } finally {
         if (target.joined) await leaveCycle(target.jobId, {});
     }
+    return embedIfGated(rawPostId, relevance);
+}
+
+async function embedIfGated(rawPostId, relevance) {
     if (!passesEmbedGate(relevance.score)) {
         return { rawPostId, relevance: Number(relevance.score), embedJobId: null };
     }
@@ -52,4 +72,17 @@ async function processIngestJob(job) {
     return { rawPostId, relevance: Number(relevance.score), embedJobId: embedJob.id };
 }
 
-module.exports = { processIngestJob, RELEVANCE_EMBED_THRESHOLD: EMBED_GATE_MIN_SCORE };
+/**
+ * BullMQ 'failed' hook: when a reserved retry's LAST attempt fails, its slot
+ * is released so the job's bias checks are not held forever.
+ * @returns {Promise<boolean>} whether a slot was released
+ */
+async function onIngestJobFailed(job) {
+    const data = (job && job.data) || {};
+    const attempts = (job && job.opts && job.opts.attempts) || 1;
+    if (!data.reserved || !data.jobId || (job.attemptsMade || 0) < attempts) return false;
+    await releaseRetry(data.jobId);
+    return true;
+}
+
+module.exports = { processIngestJob, onIngestJobFailed, RELEVANCE_EMBED_THRESHOLD: EMBED_GATE_MIN_SCORE };

@@ -225,10 +225,14 @@ async function runCollection(o = {}) {
                         newPostIds.push(stored.postId);
                     } catch (err) {
                         summary.scoringRetries++;
+                        // The retry holds a slot on this job until it has
+                        // scored, so the job's bias checks wait for it.
+                        await cycle.reserveRetry(jobId);
                         try {
-                            await queues.enqueueIngestRetry({ rawPostId: stored.postId, sourceId, jobId });
+                            await queues.enqueueIngestRetry({ rawPostId: stored.postId, sourceId, jobId, reserved: true });
                             log(`[collect] ${slug}: scoring failed for ${stored.postId} (${err.message}) — queued for retry`);
                         } catch (qerr) {
+                            await cycle.releaseRetry(jobId).catch(() => {});
                             // G10-4: never swallowed. The run is an error; the
                             // unscored post is re-queued by the sweep
                             // (src/collectors/sweep.js) within 24 h.
@@ -286,7 +290,22 @@ async function runCollection(o = {}) {
         }
 
         summary.postsProcessed = newPostIds.length;
-        if (newPostIds.length > 0 && !o.cycle) {
+        // Copilot 4129565673: with scoring retries outstanding, a non-cycle
+        // job's bias checks wait for them — the job goes to
+        // 'awaiting_retries' and closeCycles finalizes it (counts from the
+        // audit log, bias once) when the last retry has scored.
+        let awaitingRetries = false;
+        if (jobId && !o.cycle) {
+            awaitingRetries = !!(await dbGet(
+                `UPDATE processing_jobs
+                 SET status = 'awaiting_retries', posts_collected = $2, sources_queried = $3, error_details = $4
+                 WHERE id = $1 AND inflight_runs > 0 RETURNING id`,
+                [jobId, summary.postsCollected, queried,
+                    summary.errors.length ? summary.errors.join('\n').slice(0, 4000) : null],
+            ));
+            summary.awaitingRetries = awaitingRetries;
+        }
+        if (newPostIds.length > 0 && !o.cycle && !awaitingRetries) {
             const bias = await runBiasChecks(jobId, mv.biasMvId);
             summary.bias = { checksRun: bias.checksRun, violationsFound: bias.violationsFound };
         }
@@ -309,7 +328,7 @@ async function runCollection(o = {}) {
         if (jobId && o.cycle) {
             // The cycle job stays open; closeCycles() runs its bias checks
             // (counts are added when the run leaves the cycle, below).
-        } else if (jobId) {
+        } else if (jobId && !awaitingRetries) {
             await dbRun(
                 `UPDATE processing_jobs
                  SET status = 'completed', posts_collected = $2, posts_processed = $3,

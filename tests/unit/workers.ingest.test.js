@@ -13,6 +13,7 @@ jest.mock('../../src/pipeline/ingest', () => ({ scorePost: jest.fn() }));
 // G10-2: the retry joins the post's cycle while it runs, else the current one.
 jest.mock('../../src/collectors/cycle', () => ({
     retryJobFor: jest.fn(async id => ({ jobId: id, joined: true })),
+    releaseRetry: jest.fn().mockResolvedValue(),
     leaveCycle: jest.fn().mockResolvedValue(),
 }));
 jest.mock('../../src/pipeline/methodology', () => ({

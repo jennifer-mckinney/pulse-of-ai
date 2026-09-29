@@ -27,7 +27,7 @@ const { sweepUnscored } = require('../collectors/sweep');
 const { createRedisClient } = require('../queues/connection');
 const { startHeartbeat } = require('./heartbeat');
 const { processCollectJob, processRefreshJob } = require('./collect.worker');
-const { processIngestJob }   = require('./ingest.worker');
+const { processIngestJob, onIngestJobFailed } = require('./ingest.worker');
 const { processEmbedJob }    = require('./embed.worker');
 const { processCorrelateJob }= require('./correlate.worker');
 const { scheduleAllSources } = require('./collector.scheduler');
@@ -66,6 +66,11 @@ workers.forEach(w => {
         }
     });
     w.on('failed', (job, err) => {
+        // A reserved scoring retry's last failed attempt releases its slot
+        // (Copilot 4129565673), so the job's bias checks are not held.
+        if (w.name === 'ingest') {
+            onIngestJobFailed(job).catch(e => logError(`[ingest] could not release a retry slot: ${e.message}`));
+        }
         // F10-1: an error text can carry upstream detail — scrubbed.
         logError(`[${w.name}] job ${job?.id} failed: ${err.message}`);
     });
