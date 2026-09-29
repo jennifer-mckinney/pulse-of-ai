@@ -1,0 +1,236 @@
+%% Title: Object model · collector framework
+%% Summary: The collector base classes and their adapters by type, the HTTP client and its guards, the Reddit API helpers, and the module functions the runner, cycle and state layers expose.
+%% Sources: src/collectors/{base,index,http,robots,netguard,transport,errors,runner,cycle,state,refusal,status,retention,normalize,provenance,redact}.js, src/collectors/adapters/*.js, src/collectors/reddit/{api,budget}.js, src/config/source-registry.js. Spec: ADR 0001 (strategy / adapter pattern, gate status); TECHNICAL_SPEC.md section 17.
+classDiagram
+  direction LR
+
+  class Collector {
+    <<abstract, base.js>>
+    +source
+    +route
+    +env
+    +http HttpClient
+    +cursor
+    +httpCache
+    +warnings
+    +robotsGated$ false
+    +constructor(ctx) throws GateClosedError
+    +envUrl(name) string
+    +requestOptions(extra) object
+    +get(url, extra)
+    +getJson(url, extra)
+    +fetchItems()* items
+    +warn(text, err)
+    +collect() payloads, fetched, dropped, warnings
+  }
+  class RssAtomCollector {
+    +robotsGated$ true
+    +feedUrls() string[]
+    +parse(xml) feed
+    +fetchItems() items
+  }
+  class JsonApiCollector {
+    +envValue(name) string
+  }
+  class BulkFileCollector {
+    +pathEnv string
+    +mapRecord(rec) item
+    +accepts(rec) boolean
+    +listFiles() string[]
+    +fetchItems() items
+  }
+  Collector <|-- RssAtomCollector
+  Collector <|-- JsonApiCollector
+  Collector <|-- BulkFileCollector
+  Collector <|-- ScholarImapCollector
+
+  class RssAdapters {
+    <<RssAtomCollector subclasses>>
+    ArxivCollector
+    LicensedFeedCollector
+    WeChatAuthorizedFeedCollector blocked
+    CatoAllowlistedRssCollector blocked
+  }
+  class ApiAdapters {
+    <<JsonApiCollector subclasses>>
+    YouTube, TikTokResearch, XRecentSearch
+    NytArticleSearch, GuardianContentApi, ApMedia, ReutersConnect
+    Pubmed, Springer, Elsevier, Ieee
+    GovinfoSearch, Congress, Pew
+    WikipediaTalk, InternetArchive
+    GithubSearch, GitlabProjects, DockerHubNamespace, HfDailyPapers, Discourse
+    StackExchange, HnAlgolia, RedditCollector
+    TelegramBotApiCollector blocked
+  }
+  class BulkAdapters {
+    <<BulkFileCollector subclasses>>
+    MetaContentLibraryCollector
+    JstorDatasetCollector
+    ResearchGateGrantedDatasetCollector blocked
+  }
+  class ScholarImapCollector {
+    <<academic.js, IMAP mailbox>>
+    +fetchItems() items
+  }
+  RssAtomCollector <|-- RssAdapters
+  JsonApiCollector <|-- ApiAdapters
+  BulkFileCollector <|-- BulkAdapters
+
+  class HttpClient {
+    <<http.js>>
+    +requests number
+    +constructor(transport, env, limiter, sleep, timeoutMs 20000, robotsCache, signal)
+    +request(url, o) response
+    +json(url, o) object
+    +text(url, o) string
+    +fetchRobots(url)
+    +checkDeadline()
+  }
+  class HostLimiter {
+    +wait(host, minIntervalMs)
+  }
+  class RobotsPolicy {
+    <<robots.js, cached 24 h>>
+    +policyFor(origin)
+    +check(url, opts) allowed
+  }
+  class netguard {
+    <<module>>
+    +checkUrl(url, allowedHosts)
+    +isBlockedAddress(ip)
+    +createGuardedLookup(dnsLookup)
+    +hostAllowed(host, allowedHosts)
+  }
+  class transport {
+    <<module>>
+    +createNetworkTransport(request, lookup)
+    DEFAULT_MAX_BYTES 5 MB
+    ROBOTS_MAX_BYTES 500 KiB
+  }
+  Collector --> HttpClient : every request
+  HttpClient --> HostLimiter
+  HttpClient --> RobotsPolicy
+  HttpClient --> netguard : every hop
+  HttpClient --> transport : default transport
+
+  class CollectorError {
+    <<errors.js>>
+    +kind
+    +status
+  }
+  class ErrorTypes {
+    <<CollectorError subclasses>>
+    AccessDeniedError
+    RobotsDisallowedError
+    GateClosedError
+    HttpError
+    ParseError
+    HostRefusedError
+    RedirectRefusedError
+    ResponseTooLargeError
+    BudgetExhaustedError
+  }
+  CollectorError <|-- ErrorTypes
+
+  class RedditApi {
+    <<reddit/api.js, OAuth app-only>>
+    +grant()
+    +token()
+    +get(path, params)
+    +listing(path, params)
+    +about(subreddit)
+    +info(fullnames)
+  }
+  class DbBudget {
+    <<reddit/budget.js, reddit_api_budget>>
+    +take(reserve)
+    +observe(headers)
+  }
+  ApiAdapters ..> RedditApi : RedditCollector
+  RedditApi --> DbBudget
+
+  class runner {
+    <<module runner.js>>
+    +runCollection(o) summary
+    +defaultQueues()
+  }
+  class index {
+    <<module index.js>>
+    +ADAPTERS
+    +buildCollectors(source, ctx) Collector[]
+  }
+  class sourceRegistry {
+    <<module config/source-registry.js>>
+    +SOURCES 52
+    +GATE_STATUSES
+    +getSource(slug)
+    +sourceStatus(src, env)
+    +openRoutes(src, env)
+    +pollIntervalSec(src, env)
+    +collectWindowMs(env)
+    +routeAllowedHosts(route, env)
+    +attributionFor(slug)
+  }
+  class state {
+    <<module state.js>>
+    +claim(sourceId, minIntervalSec, windowMs)
+    +saveOutcome(sourceId, o)
+    +recordRun(o)
+    +countUnchangedRun(sourceId)
+    +dbKillSwitch(sourceId)
+    +setDbKillSwitch(sourceId, disabled, o)
+    +getRefusal(sourceId)
+    +recordRefusal(sourceId, refusal, slug)
+    +clearRefusal(sourceId, resolution)
+  }
+  class cycle {
+    <<module cycle.js>>
+    +currentCycleJob(windowMs)
+    +joinCycle(jobId, windowMs)
+    +retryJobFor(jobId, windowMs)
+    +leaveCycle(jobId, counts)
+    +reserveRetry / releaseRetry(jobId)
+    +closeCycles(windowMs)
+  }
+  class refusal {
+    <<module refusal.js>>
+    +refusalGate(row, slug, env, now)
+    +refusalOf(classified)
+    +cooldownMs(n)
+    +resetEnv(slug)
+  }
+  class status {
+    <<module status.js>>
+    +sourceRows(o)
+    +summarize(rows)
+    +isOnline(status, lastSuccessAt, now, lastErrorAt)
+  }
+  class normalize {
+    <<module normalize.js + identity.js + provenance.js>>
+    +toPayload(item, source, route, key)
+    +redactText(text)
+    +isIdentityUrl(url)
+    +provenanceFingerprint(key, slug, rawId, url)
+    +storedExternalId(routeId, rawId, key)
+  }
+  class retention {
+    <<module retention.js>>
+    +blankExpired(o)
+    +blankPosts(slug, postIds, o)
+    +retentionStatus(slug, o)
+  }
+  class redact {
+    <<module redact.js>>
+    +redactUrl(url)
+    +scrub(text, env)
+  }
+  runner --> sourceRegistry
+  runner --> state
+  runner --> refusal
+  runner --> index
+  runner --> cycle
+  runner --> redact
+  index --> Collector : builds one per open route
+  Collector --> normalize : collect()
+  status --> sourceRegistry
+  status --> refusal

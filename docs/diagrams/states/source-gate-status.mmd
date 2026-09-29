@@ -1,0 +1,66 @@
+%% Title: State · source gate status
+%% Summary: The runtime status of one registry source, as GET /api/sources, the health drawer and the scheduler see it, and what moves a source between statuses.
+%% Sources: src/config/source-registry.js (GATE_STATUSES, sourceStatus, killReason, openRoutes), src/collectors/status.js (registryFields, isOnline, RUNTIME_STATUSES), src/collectors/refusal.js, src/collectors/state.js, scripts/source-admin.js. Spec: TECHNICAL_SPEC.md section 17; ADR 0001 (gate status, kill switches, the blocked 4, the refused state, D1).
+stateDiagram-v2
+  direction LR
+
+  [*] --> disabled : fresh clone, COLLECTOR_CONTACT_URL empty (D1)
+
+  state "disabled" as disabled
+  state "awaiting_key" as awaiting_key
+  state "awaiting_approval" as awaiting_approval
+  state "awaiting_licence" as awaiting_licence
+  state "blocked" as blocked
+  state "collecting" as collecting
+  state "blocked_by_source" as blocked_by_source
+
+  disabled --> collecting : contact URL set and a route open
+  disabled --> awaiting_key : contact URL set, closedStatus awaiting_key
+  disabled --> awaiting_approval : contact URL set, closedStatus awaiting_approval
+  disabled --> awaiting_licence : contact URL set, closedStatus awaiting_licence
+  disabled --> blocked : auth kind blocked, no permission env (reported whatever else is set)
+
+  awaiting_key --> collecting : free key set in env
+  awaiting_approval --> collecting : approval ref and credentials set, or the operator ack for a permission-gated feed
+  awaiting_licence --> collecting : licence ref and key set, or the operator ack for a permission-gated feed
+  blocked --> collecting : the official permission env recorded (Tencent, Telegram, ResearchGate, Cato)
+
+  collecting --> disabled : env kill switch (COLLECTORS_ENABLED=false, COLLECTORS_DISABLED, SOURCE_SLUG_ENABLED=false) needs a container recreate
+  collecting --> disabled : database kill switch (source-admin disable), applies before the next run
+  disabled --> collecting : source-admin enable, or the env switch removed
+  collecting --> blocked_by_source : 401, 403, 451, bot challenge or robots disallow, cooldown 1 h doubling to 24 h
+  blocked_by_source --> collecting : cooldown over and the one probe run succeeds
+  blocked_by_source --> blocked_by_source : probe refused again, cooldown doubles
+  blocked_by_source --> collecting : SOURCE_SLUG_RESET date or source-admin reset
+
+  state collecting {
+    direction LR
+    [*] --> not_online
+    not_online --> online : a successful run in the last hour, not older than the last error
+    online --> not_online : an error since, or no success for an hour
+  }
+
+  note right of blocked_by_source
+    runtime only (status.js), never online,
+    one critical source_refused alert per episode,
+    resolved when the state clears
+  end note
+  note left of awaiting_approval
+    Reddit today, until Reddit approves the app
+    and all four REDDIT_* variables are set
+  end note
+
+  note left of disabled
+    source-admin commands (scripts/source-admin.js):
+    npm run source:disable -- slug --reason why
+    npm run source:enable -- slug
+    npm run source:reset -- slug --note why
+  end note
+
+  note right of collecting
+    legend: every status here is done on master
+  end note
+
+  classDef done fill:#e8f5e9,stroke:#2e7d32,color:#1b3d1f
+  classDef wip fill:#fff8e1,stroke:#b7791f,color:#5c3d00,stroke-dasharray:5 3
+  class disabled, awaiting_key, awaiting_approval, awaiting_licence, blocked, collecting, blocked_by_source done

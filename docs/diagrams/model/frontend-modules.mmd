@@ -1,0 +1,136 @@
+%% Title: Object model · frontend modules
+%% Summary: The browser UMD modules in their script order, the public API each exposes on window, the document events they exchange, and the API endpoints each one calls.
+%% Sources: public/index.html (script order), public/js/*.js, public/js/config/*.js. Spec: TECHNICAL_SPEC.md section 11; PRD section 4.3 (the FuN.zip prototype is the design of record).
+classDiagram
+  direction LR
+
+  class PulseDesignConfig {
+    <<config/design.config.js · data only>>
+    THEMES, DEFAULT_THEME
+    SENTIMENT_PALETTE, SENTIMENT_BUCKETS
+    CATEGORIES 8, CATEGORY_SLUGS, CAT_COLORS, CAT_LABELS
+    SEVERITY_COLORS
+    GLOBE
+  }
+  class PulseApiConfig {
+    <<config/api.config.js · data only>>
+    ENDPOINTS 11 paths
+    REFRESH_MS 150000
+    CITY_POSTS_LIMIT 3
+    TIMESERIES_HOURS 12
+  }
+  class PulseStoryConfig {
+    <<config/story.config.js · data only>>
+    STORY 11 beats
+  }
+  class PulseCityRegistry {
+    <<config/cities.config.js · also required by the server>>
+    CITY_REGISTRY
+    +findCity(name)
+    +launchCities() 30 tier-1 cities
+  }
+  class PulseLegalConfig {
+    <<config/legal.config.js · data only>>
+    UPSTREAM_URL
+    SOURCE_URL
+    NOTICE 6 lines
+  }
+  class PulseUtils {
+    <<utils.js>>
+    +esc(s)
+    +healthState(health) state, label
+    +catLabel(slug)
+    +netSentiment() · sentimentBucket()
+    +fmtPct() · fmtCount() · fmtNet()
+  }
+  class PulseData {
+    <<data.js>>
+    DEMO_DATA
+    +buildDemoData(cities)
+    +normalizeCities(raw)
+    +mergeWithBaseline(rows)
+    +loadCityData() cities, isDemo, dataMode
+    +dataModeOf(rows) demo, live, mixed, none
+    +labelsAsDemo(mode)
+  }
+  class PulseInsights {
+    <<insights.js>>
+    +computeInsights(cities)
+    +renderTemplate(template, values)
+    +ribbonRows() · allCategoryRows()
+    +partitionThemes(themes, mode)
+    +widestCategoryDivide() · catBreakdown()
+  }
+  class PulseChapters {
+    <<chapters.js>>
+    STORY · FALLBACK_COPY · INTRO_KICKERS
+    +resolveChapter(beat, ins, cities, opts)
+    +resolveIntro(ins, cities, dataMode) · introFacts() · introByline()
+  }
+  class PulseGlobe {
+    <<globe.js · Canvas-2D>>
+    +create(mount, deps) instance
+    +init() · getInstance()
+    +loadLandDots(url) vendor/world-atlas
+    math pure namespace
+    instance.setState(partial) · getState() · destroy()
+    callbacks onHover, onDrag, onCityClick
+    mark pulse:first-frame
+  }
+  class PulseStory {
+    <<story.js>>
+    +init()
+    +getState() prog, exploring, activeIndex, isDemo, dataMode
+    +getCities()
+    +consumePendingCity()
+    +setExploreSelection(cityId)
+    fires pulse:exploring-changed, pulse:drill,
+    pulse:trace, pulse:data
+  }
+  class PulseUI {
+    <<ui.js>>
+    +init()
+    +openAudit(post) audit drawer, 4 audiences
+    +openHealth() health drawer
+    explore filters, city detail, tooltip, source ribbon
+    listens to the four pulse:* events
+  }
+  class PulseMain {
+    <<main.js · page shell>>
+    +freezeInsightTimer()
+    +scrollToExplore()
+    sizes the scroll spacer, polls the health chip
+    renders the about panel
+    starts PulseGlobe, PulseStory and PulseUI
+  }
+
+  PulseUtils --> PulseDesignConfig
+  PulseData --> PulseCityRegistry
+  PulseInsights --> PulseUtils
+  PulseChapters --> PulseInsights
+  PulseChapters --> PulseStoryConfig
+  PulseGlobe --> PulseDesignConfig
+  PulseStory --> PulseData
+  PulseStory --> PulseChapters
+  PulseStory --> PulseGlobe : setState()
+  PulseStory --> PulseApiConfig
+  PulseUI --> PulseGlobe : hover, selection
+  PulseUI --> PulseStory : getCities(), events
+  PulseUI --> PulseMain : freezeInsightTimer()
+  PulseMain --> PulseLegalConfig
+  PulseMain --> PulseUtils : healthState()
+
+  class Endpoints {
+    <<called by the page>>
+    data.js - GET /api/posts/aggregated-by-location
+    story.js - GET /api/themes, POST /api/query, GET /api/sources
+    ui.js - POST /api/query, GET /api/sources/timeseries
+    ui.js - GET /api/audit/POST_ID
+    ui.js - GET /api/health, /api/bias/history, /api/methodology, /api/sources
+    main.js - GET /api/health
+    in ENDPOINTS but never called - /api/bias/latest, /api/refresh
+  }
+  PulseData ..> Endpoints
+  PulseStory ..> Endpoints
+  PulseUI ..> Endpoints
+  PulseMain ..> Endpoints

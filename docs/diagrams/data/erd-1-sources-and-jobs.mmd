@@ -1,0 +1,131 @@
+%% Title: Data model 1 of 3 · sources, collection state, jobs, alerts, Reddit
+%% Summary: The tables that describe the 52 registry sources, their collection state and runs, the processing jobs every score belongs to, alerts, and Reddit's selection, budget and maintenance state.
+%% Sources: src/db/migrations/001, 003, 013, 016, 018, 019, 020, 021, 023, 025. Spec: TECHNICAL_SPEC.md section 6. raw_posts is shown with its keys only (full columns in data model 2). Dotted lines are logical links without a foreign key.
+erDiagram
+
+  data_sources {
+    uuid id PK
+    text name UK "slug, e.g. bbc_news; demo_{category} for the demo feeds"
+    text display_name
+    text source_type "rss | api | bulk | demo; retired rows keep older values"
+    text category "8-category canon"
+    jsonb config
+    boolean active
+    timestamptz created_at
+    timestamptz retired_at "013: pre-registry rows retired"
+    text retired_note
+    timestamptz collection_disabled_at "020: database kill switch"
+    text collection_disabled_reason
+    text collection_disabled_by
+  }
+
+  source_collection_state {
+    uuid source_id PK, FK
+    jsonb cursor "per-route since ids"
+    jsonb http_cache "ETag / Last-Modified"
+    timestamptz last_attempt_at
+    timestamptz last_success_at
+    int last_item_count
+    int last_new_posts
+    text last_error "scrubbed"
+    timestamptz last_error_at
+    int consecutive_failures
+    text last_error_kind "016"
+    int last_http_status "016"
+    timestamptz access_denied_at "018: refused state"
+    int access_denied_status
+    text access_denied_kind
+    timestamptz refused_until
+    int refusal_count
+    bigint unchanged_runs "023"
+    timestamptz last_unchanged_at
+    timestamptz updated_at
+  }
+
+  source_runs {
+    uuid id PK
+    uuid source_id FK
+    uuid job_id FK "nullable"
+    text gate_status
+    text outcome "ok | error | skipped"
+    int items_fetched
+    int posts_new
+    int requests
+    text error "scrubbed"
+    text error_kind "016"
+    int http_status "016"
+    timestamptz started_at
+    timestamptz finished_at
+  }
+
+  processing_jobs {
+    uuid id PK
+    text triggered_by "cron | api | standup | manual | demo"
+    text status "running | closing | awaiting_retries | completed | failed"
+    int posts_collected
+    int posts_processed
+    int sources_queried
+    text error_details
+    timestamptz started_at
+    timestamptz completed_at
+    int inflight_runs "021"
+  }
+
+  alert_events {
+    uuid id PK
+    text alert_type "location_concentration | platform_sentiment_parity | negative_dominance | source_refused"
+    text severity "warning | critical"
+    text source_table
+    uuid source_id "not enforced"
+    jsonb details
+    timestamptz acknowledged_at
+    text acknowledged_by
+    timestamptz resolved_at
+    timestamptz created_at
+  }
+
+  raw_posts {
+    uuid id PK
+    uuid source_id FK
+    text external_id "UNIQUE with source_id"
+  }
+
+  reddit_subreddit_rankings {
+    uuid id PK
+    timestamptz ranked_at
+    timestamptz window_start
+    timestamptz window_end
+    int min_ai_posts
+    int top_n
+    boolean applied
+    text_array selected
+    jsonb ranking
+    jsonb exclusions
+    jsonb stats
+  }
+
+  reddit_api_budget {
+    smallint id PK "always 1"
+    timestamptz window_start
+    int used
+    timestamptz blocked_until
+    real upstream_remaining
+    timestamptz upstream_reset_at
+    timestamptz updated_at
+  }
+
+  reddit_maintenance {
+    text job PK "discovery | recheck"
+    timestamptz last_started_at
+    timestamptz last_completed_at
+    text last_outcome
+    text last_error_kind
+    jsonb last_stats
+    timestamptz updated_at
+  }
+
+  data_sources ||--o| source_collection_state : "has state"
+  data_sources ||--o{ source_runs : "run log"
+  processing_jobs |o--o{ source_runs : "runs that stored posts"
+  data_sources ||--o{ raw_posts : "source_id"
+  alert_events }o..o| data_sources : "source_refused alerts"

@@ -1,0 +1,43 @@
+%% Title: State · retention lifecycle of a stored post
+%% Summary: What becomes of a post over time: live Reddit text blanked at 48 hours or on upstream deletion, demo posts purged at the retention boundary, and real posts compacted into monthly rollups, with what is kept at each step.
+%% Sources: src/collectors/retention.js, src/collectors/reddit/{maintenance,recheck}.js, scripts/compact.js (purgeDemoPosts, compactMonth), src/db/migrations/001 (content NOT NULL), 005, 025. Spec: TECHNICAL_SPEC.md section 19 (three-tier model); ADR 0001 ruling 9.
+stateDiagram-v2
+  direction LR
+
+  [*] --> detail : stored (raw_posts, scores, audit rows, embedding)
+
+  state "Tier 1 · full detail<br/>shown on the page for its trailing hour,<br/>receipt available" as detail
+  state "Reddit text blanked<br/>content = removal notice,<br/>text_removed_at set;<br/>scores, audit rows, hash,<br/>fingerprint and embedding kept" as blanked
+  state "demo post purged<br/>post and every dependent row deleted<br/>(scores, audit, embedding, sightings)" as purged
+  state "Tier 2 · compacted month<br/>monthly_topic_rollups + monthly_source_rollups,<br/>embeddings deleted, audit rows kept" as compacted
+  state "content nulling blocked<br/>raw_posts.content is NOT NULL,<br/>so a real month cannot finish compacting" as blocked_null
+  state "scheduled compaction and<br/>per-source retention windows" as wip_sched
+
+  detail --> blanked : Reddit only, 48 h after collection (worker, every 5 min)
+  detail --> blanked : Reddit only, re-check finds it deleted or removed (every 6 h)
+  detail --> purged : demo feed only, older than RETENTION_DETAIL_DAYS (90) at npm run compact
+  detail --> compacted : real post, its month older than 90 days, npm run compact
+  compacted --> blocked_null : step 5, null raw_posts.content
+  blanked --> compacted : its month older than 90 days
+  detail --> wip_sched
+  purged --> [*]
+
+  note right of blanked
+    one data_retention_log row per batch,
+    action blanked_platform_terms
+    (owner decision: blank text, keep audit rows)
+  end note
+  note right of purged
+    data_retention_log action purged_demo,
+    demo posts never enter a rollup
+  end note
+
+  note right of wip_sched
+    legend: green = done on master,
+    dashed amber = wip, PR #10 Part 2
+  end note
+
+  classDef done fill:#e8f5e9,stroke:#2e7d32,color:#1b3d1f
+  classDef wip fill:#fff8e1,stroke:#b7791f,color:#5c3d00,stroke-dasharray:5 3
+  class detail, blanked, purged, compacted, blocked_null done
+  class wip_sched wip

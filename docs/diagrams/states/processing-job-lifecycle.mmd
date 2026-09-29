@@ -1,0 +1,35 @@
+%% Title: State · processing job lifecycle
+%% Summary: The statuses a processing_jobs row moves through, for scheduled collection cycles and for single jobs (refresh, standup, manual, demo), and when bias checks run.
+%% Sources: src/collectors/cycle.js (currentCycleJob, claimDueCycles, closeCycles), src/collectors/runner.js, src/routes/refresh.js, src/workers/collect.worker.js, scripts/populate.js, src/db/migrations/001, 019, 021. Spec: TECHNICAL_SPEC.md sections 7 (POST /api/refresh) and 9 (when bias checks run).
+stateDiagram-v2
+  direction LR
+
+  state "running" as running
+  state "closing" as closing
+  state "awaiting_retries" as awaiting
+  state "completed" as completed
+  state "failed" as failed
+
+  [*] --> running : cron cycle created at the first new post of a window (triggered_by cron)
+  [*] --> running : refresh (api), standup, manual or demo job created
+
+  running --> closing : cron only, window + 60 s grace over and inflight_runs 0, or hard cap reached
+  closing --> completed : posts counted from decision_audit_log, bias checks once when posts exist
+  closing --> failed : close error (scrubbed)
+
+  running --> completed : single job run finished, bias checks when it stored new posts
+  running --> awaiting : single job with reserved scoring retries still outstanding
+  awaiting --> closing : retries done (inflight_runs 0) or hard cap reached
+  running --> failed : run threw, enqueue failed (refresh 503), or a refresh job stale after REFRESH_STALE_MINUTES
+
+  completed --> [*]
+  failed --> [*]
+
+  note right of running
+    one running api job at a time:
+    partial unique index uq_processing_jobs_api_running
+    (migration 019)
+  end note
+
+  classDef done fill:#e8f5e9,stroke:#2e7d32,color:#1b3d1f
+  class running, closing, awaiting, completed, failed done
