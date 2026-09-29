@@ -98,3 +98,56 @@ describe('methodology registry shape', () => {
         }
     });
 });
+
+// Grumpy NIT a (PR #8): scripts/seed.js's header comment once claimed every
+// methodology row was "all v1.0.0" while bias was already 1.1.0. The header
+// must state, per component, the version the registry (the source seed.js
+// inserts from) actually registers — so a registry bump without a header
+// update fails here. Reads seed.js as TEXT (requiring it would open a pool).
+describe('scripts/seed.js header ↔ methodology registry (grumpy NIT a)', () => {
+    const SEED = fs.readFileSync(path.join(__dirname, '../../../scripts/seed.js'), 'utf8');
+
+    // The leading comment block (after the shebang), `//` stripped and the
+    // wrapped lines joined, then narrowed to the methodology item ("2. …"
+    // up to the "Safe to re-run" line).
+    function methodologyHeader() {
+        const lines = SEED.split('\n');
+        const comment = [];
+        for (const line of lines.slice(lines[0].startsWith('#!') ? 1 : 0)) {
+            if (!line.startsWith('//')) break;
+            comment.push(line.replace(/^\/\/\s?/, '').trim());
+        }
+        const text = comment.join(' ').replace(/\s+/g, ' ');
+        const m = text.match(/\b2\.\s+(.*?)\s+Safe to re-run/);
+        return m ? m[1] : '';
+    }
+
+    const SEMVER = String.raw`v?(\d+\.\d+\.\d+(?:-[A-Za-z0-9]+)?)`;
+    const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+    // Latest registered version per component (registry order = history).
+    const latest = {};
+    for (const m of METHODOLOGY_VERSIONS) latest[m.component] = m.version;
+
+    test('the header has a methodology item to check', () => {
+        expect(methodologyHeader()).toMatch(/methodology/i);
+    });
+
+    test.each(Object.keys(latest))('header states the registered version for %s', (component) => {
+        const re = new RegExp(`(?<![\\w])${escapeRe(component)}(?![\\w])\\s+${SEMVER}`);
+        const m = methodologyHeader().match(re);
+        expect(m && m[1]).toBe(latest[component]);
+    });
+
+    test('every "<component> <version>" pair in the header is a registered row', () => {
+        const registered = new Set(METHODOLOGY_VERSIONS.map((m) => `${m.component}@${m.version}`));
+        const pairs = [...methodologyHeader().matchAll(new RegExp(`([A-Za-z_]+)\\s+${SEMVER}`, 'g'))]
+            .map((m) => `${m[1]}@${m[2]}`);
+        expect(pairs.length).toBe(Object.keys(latest).length);
+        for (const pair of pairs) expect(registered).toContain(pair);
+    });
+
+    test('no blanket "all v1.0.0" claim survives', () => {
+        expect(methodologyHeader()).not.toMatch(/\ball v?\d+\.\d+\.\d+/i);
+    });
+});
