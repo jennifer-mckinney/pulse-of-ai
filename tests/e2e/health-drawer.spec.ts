@@ -76,3 +76,107 @@ test('health drawer: yellow banner, alert history, methodology table, sources st
 
     expectNoConsoleErrors(errors);
 });
+
+// FR-24 red state (PR #8 review): a critical unresolved alert must turn the
+// header chip AND the drawer banner red — both the load-time poll (main.js)
+// and the drawer's chip refresh (ui.js). /api/health is stubbed with a
+// critical alert; everything else stays live.
+test('health chip + banner go red for a critical alert', async ({ page }) => {
+    const errors = consoleErrors(page);
+    await page.route('**/api/health', async (route) => {
+        await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+                status: 'healthy',
+                db_connected: true,
+                last_job: null,
+                active_alerts: [
+                    { id: 'a1', alert_type: 'bias_violation', severity: 'critical', created_at: new Date().toISOString() },
+                    { id: 'a2', alert_type: 'bias_violation', severity: 'warning', created_at: new Date().toISOString() },
+                ],
+            }),
+        });
+    });
+    await gotoAndWaitForData(page);
+
+    const chip = page.locator('#health-chip');
+    await expect(chip).toHaveClass(/h-red/);
+    await expect(chip).not.toHaveClass(/h-yellow/);
+    await expect(page.locator('#health-label')).toHaveText('2 active alerts · 1 critical');
+
+    await chip.click();
+    const drawer = page.locator('#health-drawer');
+    await expect(drawer).toHaveClass(/open/);
+    const banner = drawer.locator('.health-banner');
+    await expect(banner.locator('.hb-title')).toHaveText('Red — 2 active alerts, 1 critical');
+    await expect(banner.locator('.health-light')).toHaveClass(/\bred\b/);
+    // The drawer's refetch keeps the chip red (ui.js path).
+    await expect(chip).toHaveClass(/h-red/);
+
+    expectNoConsoleErrors(errors);
+});
+
+// Whole-window history (PR #8 review): flagged rows listed individually with
+// the methodology version that produced them, pass rows collapsed into one
+// summary per layer, and an explicit notice when the flagged-row safety cap
+// truncated the list. /api/bias/history is stubbed so the cap case is
+// deterministic; everything else stays live.
+test('health drawer: pass summaries, lineage tags and the truncation notice', async ({ page }) => {
+    const errors = consoleErrors(page);
+    const now = Date.now();
+    const iso = (minAgo: number) => new Date(now - minAgo * 60000).toISOString();
+    await page.route('**/api/bias/history*', async (route) => {
+        await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+                window_hours: 12, window_start: iso(720), generated_at: iso(0),
+                total_count: 1181, alert_count: 501, pass_count: 680,
+                truncated: true, alert_cap: 500,
+                alerts: [{
+                    id: 'x1', time: iso(4), severity: 'alert', layer: 'Location concentration',
+                    assessment_type: 'location_concentration', group_value: 'London',
+                    metric_name: 'share_of_total_posts', value: 0.5, threshold: 0.35,
+                    detail: 'Location concentration: share_of_total_posts 0.500 (τ = 0.35) for London. Threshold exceeded.',
+                    citation: 'Suresh & Guttag (2021)', model_name: 'pulse-bias-monitor-v1',
+                    version: '1.1.0', lineage: 'inferred',
+                }],
+                pass_summary: [{
+                    severity: 'pass', layer: 'Negative dominance', assessment_type: 'negative_dominance',
+                    count: 680, first_time: iso(719), last_time: iso(2),
+                    metric_name: 'negative_share', latest_value: 0.21, threshold: 0.6,
+                    detail: '680 passing checks in the window · latest negative_share 0.210 (τ = 0.6).',
+                    citation: 'Suresh & Guttag (2021)', model_name: 'pulse-bias-monitor-v1',
+                    version: '1.1.0', lineage: 'recorded',
+                }],
+            }),
+        });
+    });
+    await gotoAndWaitForData(page);
+    await page.locator('#health-chip').click();
+    const drawer = page.locator('#health-drawer');
+    await expect(drawer).toHaveClass(/open/);
+
+    const feed = drawer.locator('.alert-feed');
+    await expect(feed.locator('.history-notice')).toHaveText(
+        'showing the newest 1 of 501 flagged assessments — the list is truncated at the '
+        + '500-row safety cap (full history via GET /api/bias/history)');
+
+    const rows = feed.locator('.alert-row');
+    await expect(rows).toHaveCount(2);
+    await expect(rows.nth(0)).toHaveClass(/sev-alert/);
+    await expect(rows.nth(0).locator('.alert-cite')).toHaveText(
+        'Suresh & Guttag (2021) · pulse-bias-monitor-v1@1.1.0 · inferred');
+
+    const summary = feed.locator('.alert-row.alert-summary');
+    await expect(summary).toHaveCount(1);
+    await expect(summary).toHaveClass(/sev-pass/);
+    await expect(summary.locator('.alert-time')).toHaveText(/^\d\d:\d\d UTC$/);
+    await expect(summary.locator('.alert-detail')).toContainText('680 passing checks in the window');
+    await expect(summary.locator('.alert-detail')).toContainText(/First pass \d\d:\d\d UTC\./);
+    await expect(summary.locator('.alert-cite')).toHaveText(
+        'Suresh & Guttag (2021) · pulse-bias-monitor-v1@1.1.0');
+
+    expectNoConsoleErrors(errors);
+});

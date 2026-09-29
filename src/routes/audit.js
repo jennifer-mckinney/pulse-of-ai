@@ -22,7 +22,8 @@
 // Returns:
 //   200 { post: {...}, narration: {...}, ingest: {...}|null,
 //         decisions: [...],
-//         bias: { job_id, assessed_at, model_name, version, layers } }
+//         bias: { job_id, assessed_at, model_name, version,
+//                 lineage, lineage_fallback, layers } }
 //   400 if post_id is not a valid UUID
 //   404 if the post does not exist
 //   500 on DB error (no stack trace returned to client)
@@ -41,6 +42,11 @@ const {
     renderIngestStep,
 } = require('../config/audit-narration');
 const { buildLayers } = require('../config/bias-vocabulary');
+const {
+    resolveBiasLineage,
+    currentBiasVersion,
+    loadBiasVersions,
+} = require('../config/bias-lineage');
 
 const router = Router();
 
@@ -146,36 +152,53 @@ router.get('/audit/:post_id', async (req, res) => {
             ? decisions[decisions.length - 1].job_id
             : null;
 
-        // model_name + version ride along so the drawer's bias step can show
-        // the same model@version pill as every other pipeline step — the
-        // fairness checks are versioned methodology like any inference.
+        // Methodology lineage (PR #8 review): the receipt names the bias
+        // version that PRODUCED these assessments, not the newest one.
+        // Rows record it in methodology_version_id (migration 010); older
+        // rows with a NULL column are resolved at read time from
+        // effective_from and labeled lineage 'inferred'
+        // (src/config/bias-lineage.js). model_name + version ride along so
+        // the drawer's bias step shows the same model@version pill as every
+        // other pipeline step.
         let biasAssessments = [];
         if (latestJobId) {
             biasAssessments = await dbAll(
                 `SELECT assessment_type, group_field, group_value, metric_name,
                         metric_value, threshold, is_violation, severity, created_at,
-                        methodology_version_id, mv.model_name, mv.version,
-                        mv.config AS methodology_config
-                 FROM bias_assessments ba
-                 LEFT JOIN methodology_versions mv ON mv.id = ba.methodology_version_id
-                 WHERE ba.job_id = $1
-                 ORDER BY ba.created_at ASC`,
+                        methodology_version_id
+                 FROM bias_assessments
+                 WHERE job_id = $1
+                 ORDER BY created_at ASC`,
                 [latestJobId],
             );
         }
-        const latestBias = biasAssessments[biasAssessments.length - 1];
-        const biasConfig = latestBias ? latestBias.methodology_config : null;
+        const biasVersions = await loadBiasVersions(dbAll);
+        const latestBias = biasAssessments[biasAssessments.length - 1] || null;
+        // One job = one pipeline run = one biasMvId, so the latest row's
+        // lineage speaks for the job. With no assessments, nothing produced
+        // anything: the CURRENT version supplies the planned-layer coverage,
+        // and lineage 'current' says exactly that.
+        const resolved = latestBias
+            ? resolveBiasLineage(latestBias, biasVersions)
+            : (() => {
+                const current = currentBiasVersion(biasVersions);
+                return { mv: current, lineage: current ? 'current' : null, fallback: false };
+            })();
+        const biasMv = resolved.mv;
+        const biasConfig = biasMv ? biasMv.config : null;
 
         const biasBlock = {
             job_id:      latestJobId,
-            assessed_at: biasAssessments.length > 0
-                ? biasAssessments[biasAssessments.length - 1].created_at
-                : null,
+            assessed_at: latestBias ? latestBias.created_at : null,
             // Versioned bias-monitor identity (e.g. pulse-bias-monitor-v1 @
-            // 1.0.0); null when no 'bias' methodology is registered — the
+            // 1.1.0); null when no 'bias' methodology is registered — the
             // frontend omits the pill rather than inventing one.
-            model_name:  latestBias ? latestBias.model_name : null,
-            version:     latestBias ? latestBias.version    : null,
+            model_name:  biasMv ? biasMv.model_name : null,
+            version:     biasMv ? biasMv.version    : null,
+            // 'recorded' | 'inferred' | 'current' | null; lineage_fallback
+            // is true only when an inferred row predates every version.
+            lineage:          resolved.lineage,
+            lineage_fallback: resolved.fallback,
             layers:      buildLayers(biasAssessments, biasConfig),
         };
 

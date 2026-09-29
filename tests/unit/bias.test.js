@@ -368,4 +368,30 @@ describe('runBiasChecks()', () => {
         const summary = await runBiasChecks(jobId, biasMv);
         expect(summary.violationsFound).toBeGreaterThanOrEqual(1);
     });
+
+    // PR #8 review / migration 010: every assessment row records the exact
+    // bias methodology version that produced it, so receipts and history
+    // never relabel old assessments with a newer version's metadata.
+    it('records methodology_version_id = biasMvId on every assessment row (empty and non-empty jobs)', async () => {
+        const srcId  = await insertSource('lineage-src');
+        const jobId  = await insertJob();
+        const mvIds  = await insertMethodologyVersions();
+        const biasMv = await insertBiasMv();
+        for (let i = 0; i < 3; i++) {
+            await insertPostWithSentiment(srcId, jobId, mvIds.sentimentMvId, {
+                location: 'London', indicator: 'positive', externalId: `lin-${i}`,
+            });
+        }
+        await runBiasChecks(jobId, biasMv);
+
+        const emptyJob = await insertJob();
+        await runBiasChecks(emptyJob, biasMv);   // exercises the no-data branches
+
+        const rows = await dbAll(
+            'SELECT job_id, methodology_version_id FROM bias_assessments WHERE job_id = ANY($1)',
+            [[jobId, emptyJob]],
+        );
+        expect(rows.length).toBe(6);
+        expect(rows.every(r => r.methodology_version_id === biasMv)).toBe(true);
+    });
 });

@@ -141,10 +141,13 @@ async function main() {
     for (const [type, gf, gv, metric, value, threshold, viol, sev, minAgo] of BIAS) {
         await dbRun(
             `INSERT INTO bias_assessments (job_id, assessment_type, group_field, group_value, metric_name,
-                                           metric_value, threshold, is_violation, severity, evidence, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW() - ($11::int * INTERVAL '1 minute'))`,
+                                           metric_value, threshold, is_violation, severity, evidence, created_at,
+                                           methodology_version_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW() - ($11::int * INTERVAL '1 minute'), $12)`,
+            // Lineage recorded like the pipeline does (migration 010).
             [job.id, type, gf, gv, metric, value, threshold, viol, sev,
-                JSON.stringify({ note: 'e2e fixture: synthetic assessment' }), minAgo]);
+                JSON.stringify({ note: 'e2e fixture: synthetic assessment' }), minAgo,
+                mv.bias ? mv.bias.id : null]);
     }
 
     // One unresolved alert → the yellow header chip / health banner.

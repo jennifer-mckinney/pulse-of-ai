@@ -376,6 +376,86 @@ describe('mapBiasHistory — severity mapping', () => {
     });
 });
 
+// PR #8 review: the history endpoint covers the WHOLE window — every flagged
+// row listed, pass rows summarized per layer, truncation stated — and every
+// row names the methodology version that produced it (lineage).
+describe('bias history — lineage, pass summaries, truncation notice', () => {
+    test('flagged rows carry model@version, marked when the lineage is inferred', () => {
+        const rows = P.mapBiasHistory({ alerts: [
+            { id: 1, time: '2026-09-28T07:42:00Z', severity: 'alert', layer: 'L', detail: 'd',
+              citation: 'c', model_name: 'bias-m', version: '1.1.0', lineage: 'recorded' },
+            { id: 2, time: '2026-09-28T07:40:00Z', severity: 'watch', layer: 'L', detail: 'd',
+              citation: null, model_name: 'bias-m', version: '0.9.0', lineage: 'inferred' },
+            { id: 3, time: '2026-09-28T07:30:00Z', severity: 'watch', layer: 'L', detail: 'd' },
+        ] });
+        expect(rows[0].methodology).toBe('bias-m@1.1.0');
+        expect(rows[1].methodology).toBe('bias-m@0.9.0 · inferred');
+        expect(rows[2].methodology).toBeNull();
+    });
+
+    test('mapPassSummary: one row per layer, last time + first-time detail', () => {
+        const rows = P.mapPassSummary({ pass_summary: [{
+            severity: 'pass', layer: 'Negative dominance', assessment_type: 'negative_dominance',
+            count: 240, first_time: '2026-09-27T20:05:00Z', last_time: '2026-09-28T07:55:00Z',
+            detail: '240 passing checks in the window · latest negative_share 0.210 (τ = 0.6).',
+            citation: 'Suresh & Guttag (2021)', model_name: 'bias-m', version: '1.1.0', lineage: 'recorded',
+        }] });
+        expect(rows).toEqual([{
+            id: 'pass-negative_dominance',
+            severity: 'pass',
+            summary: true,
+            time: '07:55 UTC',
+            layer: 'Negative dominance',
+            detail: '240 passing checks in the window · latest negative_share 0.210 (τ = 0.6). '
+                + 'First pass 20:05 UTC.',
+            citation: 'Suresh & Guttag (2021)',
+            methodology: 'bias-m@1.1.0',
+        }]);
+    });
+
+    test('mapPassSummary tolerates a missing / legacy payload', () => {
+        expect(P.mapPassSummary(null)).toEqual([]);
+        expect(P.mapPassSummary({ alerts: [] })).toEqual([]);
+    });
+
+    test('historyNotice: null when complete, explicit notice when truncated', () => {
+        expect(P.historyNotice({ truncated: false, alerts: [], alert_count: 0 })).toBeNull();
+        expect(P.historyNotice(null)).toBeNull();
+        expect(P.historyNotice({ truncated: true, alerts: new Array(500), alert_count: 612, alert_cap: 500 }))
+            .toBe('showing the newest 500 of 612 flagged assessments — the list is truncated '
+                + 'at the 500-row safety cap (full history via GET /api/bias/history)');
+    });
+});
+
+describe('bias step lineage', () => {
+    test('the regulator view names the methodology lineage; inferred is stated plainly', () => {
+        const m = P.mapAuditResponse({
+            post: { id: 'p1', content_snippet: 'x' },
+            decisions: [],
+            bias: { job_id: 'j', assessed_at: '2026-09-28T00:00:00Z', model_name: 'bias-m',
+                version: '0.9.0', lineage: 'inferred', lineage_fallback: false,
+                layers: [{ name: 'L', assessment_type: 'location_concentration', value: 0.1,
+                    threshold: 0.35, status: 'pass' }] },
+        });
+        const bias = m.steps[m.steps.length - 1];
+        expect(bias.audiences.config.methodology_lineage).toBe('inferred');
+        expect(bias.audiences.plain).toContain('inferred from assessment timestamps');
+    });
+
+    test('recorded lineage adds no caveat', () => {
+        const m = P.mapAuditResponse({
+            post: { id: 'p1', content_snippet: 'x' },
+            decisions: [],
+            bias: { job_id: 'j', assessed_at: null, model_name: 'bias-m', version: '1.1.0',
+                lineage: 'recorded', layers: [{ name: 'L', assessment_type: 'x', value: 0.1,
+                    threshold: 0.35, status: 'pass' }] },
+        });
+        const bias = m.steps[m.steps.length - 1];
+        expect(bias.audiences.config.methodology_lineage).toBe('recorded');
+        expect(bias.audiences.plain).not.toContain('inferred');
+    });
+});
+
 describe('healthBanner / sourcesStat / methodologyModel', () => {
     test('no alerts → green', () => {
         const b = P.healthBanner({ status: 'healthy', active_alerts: [] });

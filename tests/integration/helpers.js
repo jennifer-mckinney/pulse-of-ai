@@ -108,9 +108,14 @@ async function insertIngestMethodology() {
  * Insert a bias_assessments row directly (bypasses the pipeline).
  * @param {string} jobId
  * @param {{ assessmentType?, groupValue?, metricName?, metricValue?, threshold?,
- *           isViolation?, severity?, createdAt? }} opts
+ *           isViolation?, severity?, createdAt?, methodologyVersionId? }} opts
  *        severity: stored severity ('warning'|'critical') — only meaningful
  *        when isViolation is true. createdAt: Date/ISO for history-window tests.
+ *        methodologyVersionId: the recorded bias methodology lineage
+ *        (migration 010). Defaults to NULL, a pre-lineage row that the
+ *        routes resolve as lineage 'inferred'. Tests that need recorded
+ *        lineage pass a specific methodology_versions.id, so the recorded
+ *        path is never assumed by accident.
  */
 async function insertBiasAssessment(jobId, {
     assessmentType = 'location_concentration',
@@ -122,19 +127,19 @@ async function insertBiasAssessment(jobId, {
     isViolation    = false,
     severity       = null,
     createdAt      = null,
+    methodologyVersionId = null,
 } = {}) {
     const row = await dbRun(
         `INSERT INTO bias_assessments
             (job_id, assessment_type, group_field, group_value,
              metric_name, metric_value, threshold, is_violation, severity, created_at,
              methodology_version_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10::timestamptz, NOW()),
-                  (SELECT id FROM methodology_versions WHERE component = 'bias'
-                   ORDER BY effective_from DESC LIMIT 1))
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10::timestamptz, NOW()), $11)
          RETURNING id`,
         [jobId, assessmentType, groupField, groupValue, metricName, metricValue,
          threshold, isViolation, severity,
-         createdAt instanceof Date ? createdAt.toISOString() : createdAt],
+         createdAt instanceof Date ? createdAt.toISOString() : createdAt,
+         methodologyVersionId],
     );
     return row.id;
 }

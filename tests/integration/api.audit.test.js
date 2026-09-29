@@ -193,13 +193,15 @@ describe('GET /api/audit/:post_id', () => {
             const srcId  = await insertSource('audit-bias-1');
             const jobId  = await insertJob();
             const mvIds  = await insertMethodologyVersions();
-            await insertBiasMethodology();
+            const biasMvId = await insertBiasMethodology();
             const postId = await insertPostWithFullPipeline(srcId, jobId, mvIds, { externalId: 'aud-b-1' });
 
+            // Recorded lineage, as the pipeline writes it (migration 010).
             await insertBiasAssessment(jobId, {
                 assessmentType: 'location_concentration',
                 metricValue: 0.41, threshold: 0.35,
                 isViolation: true, severity: 'warning',
+                methodologyVersionId: biasMvId,
             });
             await insertBiasAssessment(jobId, {
                 assessmentType: 'platform_sentiment_parity',
@@ -207,6 +209,7 @@ describe('GET /api/audit/:post_id', () => {
                 metricName: 'max_comparative_diff',
                 metricValue: 0.031, threshold: 0.30,
                 isViolation: false,
+                methodologyVersionId: biasMvId,
             });
 
             const res = await request(app).get(`/api/audit/${postId}`);
@@ -215,6 +218,8 @@ describe('GET /api/audit/:post_id', () => {
             // Versioned bias-monitor identity for the drawer's model pill
             expect(res.body.bias.model_name).toBe('pulse-bias-monitor-v1');
             expect(res.body.bias.version).toBe('1.1.0');
+            // The version that PRODUCED these rows (migration 010 lineage).
+            expect(res.body.bias.lineage).toBe('recorded');
 
             const loc = res.body.bias.layers.find(l => l.assessment_type === 'location_concentration');
             expect(loc).toMatchObject({
@@ -281,6 +286,8 @@ describe('GET /api/audit/:post_id', () => {
                 assessed_at: null,
                 model_name:  null,   // no 'bias' methodology → no invented pill
                 version:     null,
+                lineage:     null,
+                lineage_fallback: false,
                 layers:      [],
             });
         });

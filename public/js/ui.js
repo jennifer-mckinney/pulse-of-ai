@@ -329,17 +329,26 @@
                 + (planned > 0 ? '; ' + planned + ' planned check'
                     + (planned === 1 ? ' is' : 's are') + ' not yet enforced' : '')
                 + '.';
-        const plainText = computed === 0
+        // Methodology lineage (PR #8 review): 'recorded' = the assessment
+        // rows name their version; 'inferred' = pre-lineage rows resolved
+        // from timestamps — said plainly rather than implied.
+        const lineage = (bias && bias.lineage) || null;
+        const plainText = (computed === 0
             ? 'No bias assessments are stored for this processing job.'
             : computed + ' fairness check' + (computed === 1 ? '' : 's')
                 + ' ran on this post’s processing job. Values, thresholds (τ) and'
-                + ' literature citations are listed per layer below.';
+                + ' literature citations are listed per layer below.')
+            + (lineage === 'inferred'
+                ? ' The methodology version was inferred from assessment timestamps'
+                    + ' (the rows predate recorded lineage).'
+                : '');
         const configView = {
             job_id: (bias && bias.job_id) || null,
             assessed_at: (bias && bias.assessed_at) || null,
             layers_computed: computed,
             layers_planned: planned,
         };
+        if (lineage) configView.methodology_lineage = lineage;
         const researcherText = layers.length === 0
             ? 'No assessments stored for this job.'
             : layers.map((l) => l.name + ' '
@@ -443,8 +452,20 @@
         return hh + ':' + mm + ' UTC';
     }
 
-    // mapBiasHistory: GET /api/bias/history payload → alert-feed rows.
-    // Unknown severity strings degrade to 'watch' (visible, never hidden).
+    // methodologyTag: the bias methodology that PRODUCED a history row
+    // (served lineage, PR #8 review) → 'model@version', suffixed
+    // ' · inferred' when the version was resolved from timestamps for a
+    // pre-lineage row. null when the API names no version (never invented).
+    function methodologyTag(row) {
+        if (!row || !row.model_name || !row.version) return null;
+        return row.model_name + '@' + row.version
+            + (row.lineage === 'inferred' ? ' · inferred' : '');
+    }
+
+    // mapBiasHistory: GET /api/bias/history payload → alert-feed rows (the
+    // FLAGGED alert|watch rows — pass rows arrive summarized, see
+    // mapPassSummary). Unknown severity strings degrade to 'watch' (visible,
+    // never hidden).
     function mapBiasHistory(payload) {
         const rows = payload && Array.isArray(payload.alerts) ? payload.alerts : [];
         return rows.map((a) => ({
@@ -454,7 +475,40 @@
             layer: a.layer || stageLabel(a.assessment_type),
             detail: a.detail || '',
             citation: a.citation || null,
+            methodology: methodologyTag(a),
         }));
+    }
+
+    // mapPassSummary: payload.pass_summary → one feed row per layer covering
+    // every passing check in the window (count + latest value in the served
+    // detail; last pass as the row time, first pass appended).
+    function mapPassSummary(payload) {
+        const rows = payload && Array.isArray(payload.pass_summary)
+            ? payload.pass_summary : [];
+        return rows.map((p) => {
+            const first = fmtAlertTime(p.first_time);
+            return {
+                id: 'pass-' + p.assessment_type,
+                severity: 'pass',
+                summary: true,
+                time: fmtAlertTime(p.last_time),
+                layer: p.layer || stageLabel(p.assessment_type),
+                detail: (p.detail || '') + (first ? ' First pass ' + first + '.' : ''),
+                citation: p.citation || null,
+                methodology: methodologyTag(p),
+            };
+        });
+    }
+
+    // historyNotice: truncation notice when the flagged-row safety cap bit;
+    // null when the list is the complete window.
+    function historyNotice(payload) {
+        if (!payload || payload.truncated !== true) return null;
+        const shown = Array.isArray(payload.alerts) ? payload.alerts.length : 0;
+        const cap = Number.isFinite(payload.alert_cap) ? payload.alert_cap : shown;
+        return 'showing the newest ' + shown + ' of ' + payload.alert_count
+            + ' flagged assessments — the list is truncated at the ' + cap
+            + '-row safety cap (full history via GET /api/bias/history)';
     }
 
     // healthBanner: GET /api/health payload → banner model. null payload =
@@ -920,6 +974,8 @@
         mapAuditResponse,
         fmtAlertTime,
         mapBiasHistory,
+        mapPassSummary,
+        historyNotice,
         healthBanner,
         sourcesStat,
         methodologyModel,
@@ -1791,18 +1847,24 @@
             inner.appendChild(kv);
         }
 
-        // ALERT HISTORY · LAST 12H from /api/bias/history.
+        // ALERT HISTORY · LAST 12H from /api/bias/history: every flagged row
+        // in the window, then one pass summary per layer, so the WHOLE window
+        // is accounted for (PR #8 review), plus a truncation notice when the
+        // flagged-row safety cap bit.
         inner.appendChild(el('div', 'sec-lbl mono', 'ALERT HISTORY · LAST 12H'));
         const rows = history !== null
-            ? mapBiasHistory(history)
+            ? mapBiasHistory(history).concat(mapPassSummary(history))
             : DEMO_BIAS_ALERTS;
         const feed = el('div', 'alert-feed');
+        const notice = history !== null ? historyNotice(history) : null;
+        if (notice) feed.appendChild(el('div', 'history-notice mono', notice));
         if (rows.length === 0) {
             feed.appendChild(el('div', 'empty mono',
                 'no assessments in the last 12 hours'));
         }
         for (const a of rows) {
-            const row = el('div', 'alert-row sev-' + a.severity);
+            const row = el('div', 'alert-row sev-' + a.severity
+                + (a.summary ? ' alert-summary' : ''));
             row.appendChild(el('span', 'alert-sev mono',
                 String(a.severity).toUpperCase()));
             const main = el('div', 'alert-main');
@@ -1810,8 +1872,9 @@
             layerLine.appendChild(el('span', 'alert-time mono', a.time));
             main.appendChild(layerLine);
             main.appendChild(el('div', 'alert-detail', a.detail));
-            if (a.citation) {
-                main.appendChild(el('div', 'alert-cite mono', a.citation));
+            const cite = [a.citation, a.methodology].filter(Boolean).join(' · ');
+            if (cite) {
+                main.appendChild(el('div', 'alert-cite mono', cite));
             }
             row.appendChild(main);
             feed.appendChild(row);

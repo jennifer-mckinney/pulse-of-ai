@@ -9,7 +9,9 @@
 // All thresholds are read from methodology_versions.config (DB-driven).
 // This makes them auditable, versioned, and changeable without a code deploy (AI Act §13).
 //
-// Every check writes a row to bias_assessments (always — for audit completeness).
+// Every check writes a row to bias_assessments (always — for audit completeness),
+// recording the biasMvId it ran with in methodology_version_id (migration 010)
+// so receipts and history resolve the exact version that produced each row.
 // Violations additionally write to alert_events to surface on the health dashboard.
 
 'use strict';
@@ -51,7 +53,7 @@ async function writeBiasAssessment({
     isViolation,
     severity,
     evidence,
-    biasMvId,
+    biasMvId,                  // lineage: the methodology row this run used (migration 010)
 }) {
     await dbRun(
         `INSERT INTO bias_assessments
@@ -135,7 +137,7 @@ async function checkLocationConcentration(jobId, biasMvId) {
             isViolation:    false,
             severity:       null,
             evidence:       { rows: [], total: 0 },
-                biasMvId,
+            biasMvId,
         });
         return { isViolation: false, metricValue: 0, groupValue: null };
     }
