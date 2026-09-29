@@ -1,0 +1,20 @@
+# Build context for the embeddings image (python/Dockerfile).
+# Only requirements-service.txt and embeddings_service.py are copied.
+
+# Local virtualenv (may be a symlink) and caches
+.venv
+venv
+__pycache__
+*.py[cod]
+.pytest_cache
+
+# Tests and dev tooling are not part of the service image
+tests
+requirements.txt
+start.sh
+
+# Secrets
+.env
+.env.*
+
+.DS_Store

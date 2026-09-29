@@ -1,0 +1,20 @@
+# Runtime dependencies for the embeddings service CONTAINER (python/Dockerfile).
+#
+# Deliberately separate from requirements.txt: that file also carries the dev
+# and test toolchain (pytest, black, flake8) and the unused-by-the-service DB
+# drivers, and CI installs it on Python 3.11. This file is the minimal,
+# fully pinned set the image needs on Python 3.13, pinned to the versions the
+# local python/.venv runs the pytest suite against.
+#
+# torch is NOT listed here: the Dockerfile installs the CPU-only wheel from the
+# PyTorch index first (the default PyPI wheel on x86_64 pulls ~2 GB of CUDA
+# libraries the service never uses), then this file.
+#
+# Keep sentence-transformers in step with requirements.txt.
+sentence-transformers==2.7.0
+transformers==4.57.6
+huggingface_hub==0.36.2
+tokenizers==0.22.2
+numpy==2.5.1
+fastapi==0.139.0
+uvicorn==0.50.0

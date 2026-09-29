@@ -1,0 +1,43 @@
+# Build context for the Node app image (Dockerfile at the repo root).
+# Only package*.json, src/, scripts/ and public/ are copied; everything else is
+# excluded so it never reaches the daemon (smaller context, no secrets).
+
+# Secrets and local config — never bake these into an image
+.env
+.env.*
+!.env.example
+
+# VCS, editors, agent tooling
+.git
+.github
+.claude
+.vscode
+.idea
+*.swp
+
+# Dependencies are installed inside the image from package-lock.json
+node_modules
+
+# Tests, reports and generated artefacts
+tests
+coverage
+test-results
+playwright-report
+.playwright-mcp
+*.log
+
+# Separate image with its own context (python/Dockerfile)
+python
+
+# Docs and design assets are not served by the app
+docs
+*.md
+
+# Gitignored scratch/vendor copies at the root (the real frontend is public/)
+/js
+/styles
+scrollama-main
+exported-assets
+
+# OS noise
+.DS_Store
