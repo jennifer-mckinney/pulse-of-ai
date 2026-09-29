@@ -33,7 +33,7 @@
 stateDiagram-v2
   direction LR
 
-  [*] --&gt; disabled : fresh clone, COLLECTOR_CONTACT_URL empty (D1)
+  [*] --&gt; disabled : fresh clone, COLLECTOR_CONTACT_URL empty (D1), every source except the blocked 4
 
   state "disabled" as disabled
   state "awaiting_key" as awaiting_key
@@ -47,11 +47,11 @@ stateDiagram-v2
   disabled --&gt; awaiting_key : contact URL set, closedStatus awaiting_key
   disabled --&gt; awaiting_approval : contact URL set, closedStatus awaiting_approval
   disabled --&gt; awaiting_licence : contact URL set, closedStatus awaiting_licence
-  disabled --&gt; blocked : auth kind blocked, no permission env (reported whatever else is set)
+  [*] --&gt; blocked : auth kind blocked, no permission route open (reported even without COLLECTOR_CONTACT_URL, only a kill switch overrides it to disabled)
 
   awaiting_key --&gt; collecting : free key set in env
-  awaiting_approval --&gt; collecting : approval ref and credentials set, or the operator ack for a permission-gated feed
-  awaiting_licence --&gt; collecting : licence ref and key set, or the operator ack for a permission-gated feed
+  awaiting_approval --&gt; collecting : the route's required env set (approval ref, credentials or dataset path), or the operator ack for a permission-gated feed
+  awaiting_licence --&gt; collecting : the route's required env set (licence ref and/or key or credentials), or the operator ack for a permission-gated feed
   blocked --&gt; collecting : the official permission env recorded (Tencent, Telegram, ResearchGate, Cato)
 
   collecting --&gt; disabled : env kill switch (COLLECTORS_ENABLED=false, COLLECTORS_DISABLED, SOURCE_SLUG_ENABLED=false) needs a container recreate
@@ -87,7 +87,8 @@ stateDiagram-v2
   end note
 
   note right of collecting
-    legend: every status here is done on master
+    legend: all done (every status here is on master
+    or ships in this PR)
   end note
 
   classDef done fill:#e8f5e9,stroke:#2e7d32,color:#1b3d1f

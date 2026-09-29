@@ -37,8 +37,8 @@ flowchart LR
   subgraph RECORD["Record the run · state.js, runner.js"]
     direction TB
     V1["24 · classify errors: error_kind + http_status only;<br/>error text scrubbed of every secret (redact.js)"]:::done
-    V2["25 · refused → recordRefusal(): refused_until,<br/>refusal_count + 1, one critical source_refused<br/>alert; a successful probe clears it"]:::done
-    V3["26 · saveOutcome() on source_collection_state;<br/>unchanged run → unchanged_runs + 1,<br/>else one source_runs row"]:::done
+    V2["25 · saveOutcome() on source_collection_state:<br/>cursor, HTTP validators, last success / error,<br/>consecutive_failures"]:::done
+    V3["26 · refused → recordRefusal(): refused_until,<br/>refusal_count + 1, one critical source_refused<br/>alert; a successful probe clears it;<br/>then unchanged run → unchanged_runs + 1,<br/>else one source_runs row"]:::done
     V4["27 · embed gate: relevance ≥ 1/20 (one lexicon<br/>match) → one embed job per new post"]:::done
     V5["28 · leaveCycle(): counts added, inflight_runs − 1<br/>(always, in finally) → part 3"]:::done
     V1 --> V2 --> V3 --> V4 --> V5
@@ -47,7 +47,7 @@ flowchart LR
   W1["collect stores and hands scoring<br/>to the ingest queue (new topology)"]:::wip
 
   subgraph LEGEND["Status legend"]
-    L1["done: on master"]:::done
+    L1["done: on master or ships in this PR"]:::done
     L2["wip: PR #10 Part 2, in flight"]:::wip
   end
 

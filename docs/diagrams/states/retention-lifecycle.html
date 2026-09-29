@@ -24,30 +24,31 @@
 </head>
 <body>
 <h1>State · retention lifecycle of a stored post</h1>
-<p class="summary">What becomes of a post over time: live Reddit text blanked at 48 hours or on upstream deletion, demo posts purged at the retention boundary, and real posts compacted into monthly rollups, with what is kept at each step.</p>
+<p class="summary">What becomes of a post over time: live Reddit text blanked at 48 hours or on upstream deletion, demo posts purged at the retention boundary, and real posts meant to be compacted into monthly rollups, which on master rolls back at the content-nulling step, with what is kept at each step.</p>
 <p class="source">Canonical source: <code>retention-lifecycle.mmd</code> · index: <code>docs/diagrams/README.md</code></p>
 <pre class="mermaid">
 %% Title: State · retention lifecycle of a stored post
-%% Summary: What becomes of a post over time: live Reddit text blanked at 48 hours or on upstream deletion, demo posts purged at the retention boundary, and real posts compacted into monthly rollups, with what is kept at each step.
+%% Summary: What becomes of a post over time: live Reddit text blanked at 48 hours or on upstream deletion, demo posts purged at the retention boundary, and real posts meant to be compacted into monthly rollups, which on master rolls back at the content-nulling step, with what is kept at each step.
 %% Sources: src/collectors/retention.js, src/collectors/reddit/{maintenance,recheck}.js, scripts/compact.js (purgeDemoPosts, compactMonth), src/db/migrations/001 (content NOT NULL), 005, 025. Spec: TECHNICAL_SPEC.md section 19 (three-tier model); ADR 0001 ruling 9.
 stateDiagram-v2
   direction LR
 
-  [*] --&gt; detail : stored (raw_posts, scores, audit rows, embedding)
+  [*] --&gt; detail : stored (raw_posts, scores, audit rows, embedding when relevance ≥ 1/20)
 
   state "Tier 1 · full detail&lt;br/&gt;shown on the page for its trailing hour,&lt;br/&gt;receipt available" as detail
   state "Reddit text blanked&lt;br/&gt;content = removal notice,&lt;br/&gt;text_removed_at set;&lt;br/&gt;scores, audit rows, hash,&lt;br/&gt;fingerprint and embedding kept" as blanked
   state "demo post purged&lt;br/&gt;post and every dependent row deleted&lt;br/&gt;(scores, audit, embedding, sightings)" as purged
-  state "Tier 2 · compacted month&lt;br/&gt;monthly_topic_rollups + monthly_source_rollups,&lt;br/&gt;embeddings deleted, audit rows kept" as compacted
+  state "Tier 2 · compacted month (target, not reachable on master)&lt;br/&gt;monthly_topic_rollups + monthly_source_rollups,&lt;br/&gt;embeddings deleted, audit rows kept" as compacted
   state "content nulling blocked&lt;br/&gt;raw_posts.content is NOT NULL,&lt;br/&gt;so a real month cannot finish compacting" as blocked_null
   state "scheduled compaction and&lt;br/&gt;per-source retention windows" as wip_sched
 
   detail --&gt; blanked : Reddit only, 48 h after collection (worker, every 5 min)
   detail --&gt; blanked : Reddit only, re-check finds it deleted or removed (every 6 h)
   detail --&gt; purged : demo feed only, older than RETENTION_DETAIL_DAYS (90) at npm run compact
-  detail --&gt; compacted : real post, its month older than 90 days, npm run compact
-  compacted --&gt; blocked_null : step 5, null raw_posts.content
-  blanked --&gt; compacted : its month older than 90 days
+  detail --&gt; blocked_null : real post, its month holds a post older than 90 days, npm run compact
+  blocked_null --&gt; detail : step 5 (null raw_posts.content) fails, the month's transaction rolls back rollups and embedding deletes
+  blanked --&gt; blocked_null : its month holds a post older than 90 days (same rollback)
+  blocked_null --&gt; compacted : once raw_posts.content may be NULL (not on master)
   detail --&gt; wip_sched
   purged --&gt; [*]
 
@@ -62,13 +63,16 @@ stateDiagram-v2
   end note
 
   note right of wip_sched
-    legend: green = done on master,
-    dashed amber = wip, PR #10 Part 2
+    legend: green = done, on master or ships in this PR;
+    dashed amber = wip, PR #10 Part 2;
+    dotted red = gap, not reachable on master
   end note
 
   classDef done fill:#e8f5e9,stroke:#2e7d32,color:#1b3d1f
   classDef wip fill:#fff8e1,stroke:#b7791f,color:#5c3d00,stroke-dasharray:5 3
-  class detail, blanked, purged, compacted, blocked_null done
+  class detail, blanked, purged, blocked_null done
+  classDef gap fill:#fdecea,stroke:#b3261e,color:#5c1a14,stroke-dasharray:2 3
+  class compacted gap
   class wip_sched wip
 </pre>
 <script>mermaid.initialize({ startOnLoad: true, theme: 'forest', securityLevel: 'strict', maxTextSize: 200000 });</script>

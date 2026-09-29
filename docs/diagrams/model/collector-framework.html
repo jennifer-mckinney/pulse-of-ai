@@ -108,10 +108,10 @@ classDiagram
   class HttpClient {
     &lt;&lt;http.js&gt;&gt;
     +requests number
-    +constructor(transport, env, limiter, sleep, timeoutMs 20000, robotsCache, signal)
+    +constructor(o: transport, env, limiter, sleep, timeoutMs 20000, robotsCache, signal)
     +request(url, o) response
     +json(url, o) object
-    +text(url, o) string
+    +text(url, o) response
     +fetchRobots(url)
     +checkDeadline()
   }
@@ -119,20 +119,20 @@ classDiagram
     +wait(host, minIntervalMs)
   }
   class RobotsPolicy {
-    &lt;&lt;robots.js, cached 24 h&gt;&gt;
+    &lt;&lt;robots.js, cached 24 h, unreachable 10 min&gt;&gt;
     +policyFor(origin)
     +check(url, opts) allowed
   }
   class netguard {
     &lt;&lt;module&gt;&gt;
-    +checkUrl(url, allowedHosts)
+    +checkUrl(url, o: allowedHosts) URL
     +isBlockedAddress(ip)
     +createGuardedLookup(dnsLookup)
     +hostAllowed(host, allowedHosts)
   }
   class transport {
     &lt;&lt;module&gt;&gt;
-    +createNetworkTransport(request, lookup)
+    +createNetworkTransport(o: request, lookup)
     DEFAULT_MAX_BYTES 5 MB
     ROBOTS_MAX_BYTES 500 KiB
   }
@@ -172,7 +172,7 @@ classDiagram
   }
   class DbBudget {
     &lt;&lt;reddit/budget.js, reddit_api_budget&gt;&gt;
-    +take(reserve)
+    +take(o: reserve) boolean
     +observe(headers)
   }
   ApiAdapters ..&gt; RedditApi : RedditCollector
@@ -236,7 +236,7 @@ classDiagram
   }
   class normalize {
     &lt;&lt;module normalize.js + identity.js + provenance.js&gt;&gt;
-    +toPayload(item, source, route, key)
+    +toPayload(item, source, route, o: key)
     +redactText(text)
     +isIdentityUrl(url)
     +provenanceFingerprint(key, slug, rawId, url)

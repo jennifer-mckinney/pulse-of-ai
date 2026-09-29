@@ -20,7 +20,7 @@ stateDiagram-v2
   running --> completed : single job run finished, bias checks when it stored new posts
   running --> awaiting : single job with reserved scoring retries still outstanding
   awaiting --> closing : retries done (inflight_runs 0) or hard cap reached
-  running --> failed : run threw, enqueue failed (refresh 503), or a refresh job stale after REFRESH_STALE_MINUTES
+  running --> failed : single job only — run threw (a cron cycle stays running), enqueue failed (refresh 503), or a refresh job stale after REFRESH_STALE_MINUTES
 
   completed --> [*]
   failed --> [*]
@@ -29,6 +29,11 @@ stateDiagram-v2
     one running api job at a time:
     partial unique index uq_processing_jobs_api_running
     (migration 019)
+  end note
+
+  note right of completed
+    legend: all done (every state here is on master
+    or ships in this PR)
   end note
 
   classDef done fill:#e8f5e9,stroke:#2e7d32,color:#1b3d1f

@@ -89,7 +89,7 @@ erDiagram
 
   processing_jobs {
     uuid id PK
-    text triggered_by "cron | api | standup | manual | demo"
+    text triggered_by "cron | api | standup | manual | demo | seed-demo"
     text status "running | closing | awaiting_retries | completed | failed"
     int posts_collected
     int posts_processed
@@ -102,7 +102,7 @@ erDiagram
 
   alert_events {
     uuid id PK
-    text alert_type "location_concentration | platform_sentiment_parity | negative_dominance | source_refused"
+    text alert_type "location_concentration | platform_sentiment_parity | negative_dominance | source_refused; bias_violation from the e2e fixture only"
     text severity "warning | critical"
     text source_table
     uuid source_id "not enforced"
@@ -155,7 +155,7 @@ erDiagram
 
   data_sources ||--o| source_collection_state : "has state"
   data_sources ||--o{ source_runs : "run log"
-  processing_jobs |o--o{ source_runs : "runs that stored posts"
+  processing_jobs |o--o{ source_runs : "job_id, null when no job was open"
   data_sources ||--o{ raw_posts : "source_id"
   alert_events }o..o| data_sources : "source_refused alerts"
 </pre>

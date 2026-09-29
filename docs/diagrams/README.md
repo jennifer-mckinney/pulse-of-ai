@@ -1,6 +1,6 @@
 # Pulse of AI diagrams
 
-These diagrams explain how Pulse of AI works, for reviewers and contributors. Each one describes the code on `master` (PRs #9 standup and #10 source collectors merged). Anything still being built in PR #10 Part 2 is marked **wip**.
+These diagrams explain how Pulse of AI works, for reviewers and contributors. Each one describes the code on `master` (PRs #9 standup and #10 source collectors merged), plus what this PR ships: the legal-notice UI (`public/js/config/legal.config.js`, the header about panel). Anything still being built in PR #10 Part 2 is marked **wip**.
 
 ## How the files fit together
 
@@ -17,7 +17,7 @@ After editing a `.mmd`, regenerate its HTML and PNG and verify that everything i
 ```bash
 bash docs/diagrams/render.sh docs/diagrams/flows/data-flow-live.mmd   # one diagram
 bash docs/diagrams/render.sh                                          # all of them
-bash docs/diagrams/render.sh --check   # HTML embeds the .mmd exactly; PNG exists, is under 8000 px and is newer
+bash docs/diagrams/render.sh --check   # HTML embeds the .mmd byte for byte; PNG is under 8000 px and matches a fresh re-render (same size, pixels within tolerance); no timestamps
 ```
 
 The first two lines of each `.mmd` are `%% Title:` and `%% Summary:`, and the next comment lines name the source files and the `docs/TECHNICAL_SPEC.md` sections the diagram was derived from.
@@ -26,10 +26,11 @@ The first two lines of each `.mmd` are `%% Title:` and `%% Summary:`, and the ne
 
 | Style | Meaning |
 |---|---|
-| solid green | **done**: exists on `master` |
+| solid green | **done**: exists on `master`, or ships in this PR (the legal-notice UI) |
+| dotted red | **gap**: drawn target that the code on `master` cannot reach (retention-lifecycle: the compacted month) |
 | dashed amber | **wip**: PR #10 Part 2, in flight. It covers the worker topology (collect enqueues ingest), per-source retention and scheduled compaction, `source_gate_events`, the terms-snapshot table, the publisher-location globe layer excluded from bias, a bias minimum sample, staleness alerts in `/api/health`, `relevance@1.2.0`, `env_file` in compose, and binding the dev server to 127.0.0.1 |
 
-Flowcharts and state diagrams carry the legend. The ERDs, class diagrams and sequence diagrams show only what exists on `master`, so every element in them is done and they carry no legend.
+Flowcharts, the architecture diagrams and every state diagram carry the legend; a state diagram with no wip element says "all done" in its legend note (processing-job-lifecycle, source-gate-status, story-beats). The ERDs, class diagrams and sequence diagrams show only done elements (on `master` or shipped in this PR), so they carry no legend.
 
 ## Index
 
@@ -53,7 +54,7 @@ Flowcharts and state diagrams carry the legend. The ERDs, class diagrams and seq
 | 16 | [sequences/refresh](sequences/refresh.html) | Sequence: `POST /api/refresh`, the same-origin guard, token, 409 / 429 / 503 / 202, and the worker completing the job | `src/routes/refresh.js`, `src/middleware/same-origin.js`, `src/workers/collect.worker.js` | done |
 | 17 | [states/source-gate-status](states/source-gate-status.html) | State: collecting, awaiting_key / approval / licence, blocked, disabled, blocked_by_source (refused), online | `src/config/source-registry.js`, `src/collectors/{status,refusal,state}.js`, `scripts/source-admin.js` | done |
 | 18 | [states/story-beats](states/story-beats.html) | State: the 11-beat story and explore (city detail, receipt, health drawer) | `public/js/config/story.config.js`, `public/js/{story,ui,main}.js` | done |
-| 19 | [states/retention-lifecycle](states/retention-lifecycle.html) | State: a stored post through Reddit blanking, the demo purge and compaction | `src/collectors/retention.js`, `scripts/compact.js` | done, with wip item |
+| 19 | [states/retention-lifecycle](states/retention-lifecycle.html) | State: a stored post through Reddit blanking, the demo purge and compaction | `src/collectors/retention.js`, `scripts/compact.js` | done, with wip item and a gap state |
 | 20 | [states/processing-job-lifecycle](states/processing-job-lifecycle.html) | State: `processing_jobs.status` (running, closing, awaiting_retries, completed, failed) and when bias checks run | `src/collectors/{cycle,runner}.js`, `src/routes/refresh.js` | done |
 
 `docs/diagrams/architecture.*` is the entry point and keeps its original path so existing links still work. The previous version, a dark-theme diagram of the Mapbox / globe.gl era with 6 migrations and `/api/config`, is replaced.
@@ -64,7 +65,7 @@ The wip tables `source_gate_events` and the terms-snapshot table are named in di
 
 ## Known gaps the diagrams show
 
-- **Compaction cannot finish on a real month.** `scripts/compact.js` nulls `raw_posts.content`, but migration 001 declares that column `NOT NULL`, so the UPDATE fails on any month with real posts (`tests/integration/compact.test.js` drops the constraint to test the step). The demo purge and the rollups work. Compaction also runs only by hand (`npm run compact`); scheduling it is wip.
+- **Compaction cannot finish on a real month.** `scripts/compact.js` nulls `raw_posts.content`, but migration 001 declares that column `NOT NULL`, so the UPDATE fails on any month with real posts (`tests/integration/compact.test.js` drops the constraint to test the step). The demo purge works. The rollups are written only for months without real posts: each month compacts in one transaction, so on a month with real posts the failed content-nulling step rolls back its rollups and embedding deletes too. Compaction also runs only by hand (`npm run compact`); scheduling it is wip.
 - **Correlation is reserved.** `pseudonymous_users` and `user_platform_sightings` exist and `correlate.worker.js` runs, but nothing enqueues correlation jobs: collectors store no identity signals.
 - **Two endpoints the page does not call.** `GET /api/sentiment/latest` and `GET /api/bias/latest` are mounted for API consumers. `api.config.js` also lists `/api/bias/latest` and `/api/refresh`, but no module calls them.
 
@@ -74,7 +75,7 @@ The wip tables `source_gate_events` and the terms-snapshot table are named in di
 
 | Spec section | Spec says | Code on master |
 |---|---|---|
-| §4 Architecture overview | Source box lists Reddit, Twitter/X, Mastodon, Bluesky, TechCrunch, LessWrong and others; browser is "Mapbox GL JS + D3.js v7 + Vanilla JS + Scrollama" | The 52-source registry of `src/config/source-registry.js` (§17 is current). The browser is a vanilla Canvas-2D globe with no Mapbox, D3 or Scrollama (PRD §4.3, FuN.zip prototype) |
+| §4 Architecture overview | Source box lists Reddit, Twitter/X, Mastodon, Bluesky, TechCrunch, LessWrong and others; browser is "Mapbox GL JS + D3.js v7 + Vanilla JS + Scrollama" | The 52-source registry of `src/config/source-registry.js` (§17 is current). The browser is a vanilla Canvas-2D globe with no Mapbox, D3 or Scrollama (the FuN.zip design-handoff prototype; PRD §4.3 still describes the superseded globe.gl design) |
 | §4, §5, §12 | Embeddings are served by Infinity (`infinity-embed`) | A FastAPI + sentence-transformers service, `python/embeddings_service.py` |
 | §5 Alternatives | Redis rejected for the MVP | Redis 7 backs the BullMQ queues and the worker heartbeat |
 | §6 Schema overview | 17 tables across 6 migrations | 26 migrations and 22 tables, plus `schema_migrations` (added: `source_collection_state`, `source_runs`, `reddit_subreddit_rankings`, `reddit_api_budget`, `reddit_maintenance`) |
