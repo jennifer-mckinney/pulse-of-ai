@@ -20,6 +20,13 @@
 //     job   — processing_jobs completed with the genuine posts_collected /
 //             posts_processed / sources_queried counts
 //
+// Job rows: a caller-owned job (POST /api/refresh pre-creates one) is always
+// completed. Otherwise the job row is created LAZILY, at the first NEW post:
+// a scheduled run that stores nothing (304 Not Modified, all duplicates,
+// gated) writes only its source_runs row (job_id NULL), so processing_jobs
+// stays one row per job that actually processed posts — not ~18k empty rows
+// a day from 31 sources on a 2–3 minute cadence.
+//
 // Queues and the HTTP transport are injected so the runner is testable on
 // recorded fixtures without Redis or the network.
 
@@ -64,14 +71,18 @@ async function runCollection(o = {}) {
     const slugs = o.slugs || SOURCES.map(s => s.slug);
     const queues = o.queues || defaultQueues();
 
-    let jobId = o.jobId;
-    if (!jobId) {
-        const job = await dbGet(
-            `INSERT INTO processing_jobs (triggered_by, status, sources_queried) VALUES ($1, 'running', $2) RETURNING id`,
-            [o.triggeredBy || 'cron', slugs.length],
-        );
-        jobId = job.id;
-    }
+    let jobId = o.jobId || null;
+    const ensureJob = async () => {
+        if (!jobId) {
+            const job = await dbGet(
+                `INSERT INTO processing_jobs (triggered_by, status, sources_queried) VALUES ($1, 'running', $2) RETURNING id`,
+                [o.triggeredBy || 'cron', slugs.length],
+            );
+            jobId = job.id;
+            summary.jobId = jobId;
+        }
+        return jobId;
+    };
 
     const summary = {
         jobId, sources: [], postsCollected: 0, postsProcessed: 0, scoringRetries: 0,
@@ -132,6 +143,7 @@ async function runCollection(o = {}) {
                     }
                     if (!stored.isNew) continue;
                     row.new++;
+                    await ensureJob();
                     try {
                         await scorePost(stored.postId, jobId, mv);
                         newPostIds.push(stored.postId);
@@ -175,21 +187,25 @@ async function runCollection(o = {}) {
             }
         }
 
-        await dbRun(
-            `UPDATE processing_jobs
-             SET status = 'completed', posts_collected = $2, posts_processed = $3,
-                 sources_queried = $4, error_details = $5, completed_at = NOW()
-             WHERE id = $1`,
-            [jobId, summary.postsCollected, summary.postsProcessed, queried,
-                summary.errors.length ? summary.errors.join('\n').slice(0, 4000) : null],
-        );
+        if (jobId) {
+            await dbRun(
+                `UPDATE processing_jobs
+                 SET status = 'completed', posts_collected = $2, posts_processed = $3,
+                     sources_queried = $4, error_details = $5, completed_at = NOW()
+                 WHERE id = $1`,
+                [jobId, summary.postsCollected, summary.postsProcessed, queried,
+                    summary.errors.length ? summary.errors.join('\n').slice(0, 4000) : null],
+            );
+        }
         summary.sourcesQueried = queried;
         return summary;
     } catch (err) {
-        await dbRun(
-            `UPDATE processing_jobs SET status = 'failed', error_details = $2, completed_at = NOW() WHERE id = $1`,
-            [jobId, err.message],
-        ).catch(() => {});
+        if (jobId) {
+            await dbRun(
+                `UPDATE processing_jobs SET status = 'failed', error_details = $2, completed_at = NOW() WHERE id = $1`,
+                [jobId, err.message],
+            ).catch(() => {});
+        }
         throw err;
     }
 }

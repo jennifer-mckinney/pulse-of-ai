@@ -104,8 +104,28 @@ describe('runCollection', () => {
             ['x', 'awaiting_licence', 'skipped'], ['cato', 'blocked', 'skipped'], ['npr', 'disabled', 'skipped'],
         ]);
         expect(transport.calls).toHaveLength(0);
-        const job = await dbGet('SELECT posts_processed, status FROM processing_jobs WHERE id = $1', [summary.jobId]);
-        expect(job).toEqual({ posts_processed: 0, status: 'completed' });
+        // Nothing processed → no processing_jobs row (created lazily).
+        expect(summary.jobId).toBeNull();
+        expect((await dbGet('SELECT COUNT(*)::int AS n FROM processing_jobs')).n).toBe(0);
+    });
+
+    it('a run that stores nothing new records its source run without an empty job row', async () => {
+        await collect(['hacker_news']);
+        await dbRun(`UPDATE source_collection_state SET last_attempt_at = NOW() - INTERVAL '1 day'`);
+        const again = await collect(['hacker_news']);
+        expect(again.summary.jobId).toBeNull();
+        expect((await dbGet('SELECT COUNT(*)::int AS n FROM processing_jobs')).n).toBe(1);
+        const runs = await dbAll(`SELECT job_id, outcome, posts_new FROM source_runs ORDER BY started_at`);
+        expect(runs).toHaveLength(2);
+        expect(runs[1]).toEqual({ job_id: null, outcome: 'ok', posts_new: 0 });
+    });
+
+    it('completes a caller-owned job even when nothing was processed (POST /api/refresh)', async () => {
+        const job = await dbGet(`INSERT INTO processing_jobs (triggered_by, status) VALUES ('api', 'running') RETURNING id`);
+        const s = await runCollection({ slugs: ['x'], jobId: job.id, env: TEST_ENV, transport: fixtureTransport([]), queues: queuesMock() });
+        expect(s.jobId).toBe(job.id);
+        expect(await dbGet('SELECT status, posts_processed FROM processing_jobs WHERE id = $1', [job.id]))
+            .toEqual({ status: 'completed', posts_processed: 0 });
     });
 
     it('a refusal (403) is recorded as the source\'s error, never retried', async () => {
@@ -130,8 +150,14 @@ describe('runCollection', () => {
     it('a missing methodology version fails the job loudly (never scores under a guessed version)', async () => {
         await dbRun(`DELETE FROM methodology_versions WHERE component = 'discourse' AND version = $1`, [CURRENT_VERSIONS.discourse]).catch(() => {});
         await expect(collect(['hacker_news'])).rejects.toThrow(/methodology not registered/);
-        const job = await dbGet(`SELECT status, error_details FROM processing_jobs WHERE triggered_by = 'test' ORDER BY started_at DESC LIMIT 1`);
-        expect(job.status).toBe('failed');
+        // Nothing was fetched or stored, so no job row exists to mark.
+        expect((await dbGet('SELECT COUNT(*)::int AS n FROM raw_posts')).n).toBe(0);
+        // A caller-owned job (POST /api/refresh) is marked failed with the reason.
+        const job = await dbGet(`INSERT INTO processing_jobs (triggered_by, status) VALUES ('api', 'running') RETURNING id`);
+        await expect(runCollection({ slugs: ['hacker_news'], jobId: job.id, env: TEST_ENV, transport: fixtureTransport(ROUTES), queues: queuesMock() }))
+            .rejects.toThrow(/methodology not registered/);
+        expect(await dbGet('SELECT status, error_details FROM processing_jobs WHERE id = $1', [job.id]))
+            .toEqual({ status: 'failed', error_details: expect.stringMatching(/methodology not registered/) });
     });
 
     it('a collected, pipeline-scored post replays to PASS', async () => {

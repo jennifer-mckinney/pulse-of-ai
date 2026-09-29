@@ -62,6 +62,15 @@ describe('GET /api/bias/latest', () => {
         });
     });
 
+    it('skips a newer completed job that processed no posts (nothing to assess)', async () => {
+        const jobId = await insertJob('completed');
+        await insertBiasAssessment(jobId, { isViolation: true, severity: 'warning' });
+        await insertJob('completed', { postsProcessed: 0 });   // e.g. a refresh that found nothing new
+        const res = await request(app).get('/api/bias/latest');
+        expect(res.body.job_id).toBe(jobId);
+        expect(res.body.all_assessments).toHaveLength(1);
+    });
+
     it('all_assessments includes both violations and non-violations', async () => {
         const jobId = await insertJob('completed');
         await insertBiasAssessment(jobId, { isViolation: false });

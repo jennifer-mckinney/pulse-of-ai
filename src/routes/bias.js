@@ -238,9 +238,12 @@ router.get('/bias/latest', async (req, res) => {
         // Using INNER JOIN here would exclude jobs with no assessments, incorrectly reporting
         // a stale job as "latest" when a newer job exists but produced no bias findings.
         const latestJob = await dbGet(
+            // The latest completed job that PROCESSED posts: a job that scored
+            // nothing (a refresh that found no new items) has no fairness
+            // assessment to show.
             `SELECT id
              FROM processing_jobs
-             WHERE status = 'completed'
+             WHERE status = 'completed' AND posts_processed > 0
              ORDER BY started_at DESC
              LIMIT 1`,
         );
