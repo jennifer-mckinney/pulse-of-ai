@@ -7,8 +7,13 @@
 //   - src/db/migrations/009_methodology_registration.sql inserts the
 //     bias / ingest / audit_narration rows the same way, so a database that
 //     is only MIGRATED (never re-seeded) still serves them;
+//   - src/db/migrations/011_audit_narration_demo.sql inserts
+//     audit_narration@1.2.0 (009 is released, so later versions ship as
+//     new migrations);
 //   - tests/integration/helpers.js registers the real bias/ingest rows.
-// tests/unit/pure/methodologyRegistry.test.js asserts 009 and this module
+// A component may list several versions (history is kept); the renderer's
+// current version is the LAST entry for its component.
+// tests/unit/pure/methodologyRegistry.test.js asserts 009 / 011 and this module
 // agree field for field (component, version, model_name, config,
 // justification). Any change here therefore needs a matching migration.
 //
@@ -149,6 +154,23 @@ const METHODOLOGY_VERSIONS = [
             reproduce_command: 'npm run replay -- --post {post_id}',
         },
         justification: 'The audit endpoint serves four audience representations (public, journalist, regulator, researcher) of every decision step. The wording is part of the auditable surface, so the template set is registered here and version-bumped on any change — the API reports which narration version rendered a receipt. Templates only restate stored facts (cue words, scores, thresholds, versions); they never invent per-post content. 1.1.0 makes the researcher reproduce command real: npm run replay -- --post {post_id} re-runs the deterministic pipeline scorers over the stored content, diffs against the stored outputs, and reports PASS, DIVERGENCE or NOT RE-RUNNABLE per stage.',
+    },
+    {
+        component: 'audit_narration',
+        // 1.2.0: demo branch for the ingestion step (fictional demo-feed
+        // posts are never described as collected from a public source).
+        // Registered by migration 011 — 009 is released and never edited.
+        version: '1.2.0',
+        model_name: 'pulse-narration-templates-v1',
+        config: {
+            audiences: ['public', 'plain', 'config', 'researcher'],
+            renderer:  'src/config/audit-narration.js',
+            rendering: 'read-time deterministic templates over stored decision_audit_log output + methodology config; no per-post prose is generated or persisted',
+            reproduce_command: 'npm run replay -- --post {post_id}',
+            ingest_branches: ['live_source', 'demo_feed'],
+            demo_source_type: 'demo',
+        },
+        justification: 'The audit endpoint serves four audience representations (public, journalist, regulator, researcher) of every decision step. The wording is part of the auditable surface, so the template set is registered here and version-bumped on any change — the API reports which narration version rendered a receipt. Templates only restate stored facts (cue words, scores, thresholds, versions); they never invent per-post content. 1.2.0 adds a demo branch to the ingestion step: a post whose source is a demo feed (data_sources.source_type = demo, written by the standup demo population) is described as fictional demo content generated for this installation instead of as collected from a public source, so demo data is never presented as real discourse. The wording for real sources and every inference step is unchanged from 1.1.0, including the real reproduce command npm run replay -- --post {post_id}.',
     },
 ];
 

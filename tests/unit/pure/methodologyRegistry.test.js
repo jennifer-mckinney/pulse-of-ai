@@ -31,7 +31,24 @@ function parse009() {
     }));
 }
 
-const registry = (component) => METHODOLOGY_VERSIONS.find(m => m.component === component);
+// Registry lookup by component@version: a component may list several
+// versions (history), so 009's rows are matched to the exact version.
+const registry = (component, version) => METHODOLOGY_VERSIONS.find(
+    m => m.component === component && (version === undefined || m.version === version));
+const latest = (component) => METHODOLOGY_VERSIONS.filter(m => m.component === component).pop();
+
+const SQL_011 = fs.readFileSync(
+    path.join(__dirname, '../../../src/db/migrations/011_audit_narration_demo.sql'),
+    'utf8',
+);
+// 011's shape: 009's columns plus effective_from = clock_timestamp().
+const ROW_011_RE = /INSERT INTO methodology_versions \(component, version, model_name, config, justification, effective_from\)\s*VALUES \(\s*'((?:[^']|'')*)',\s*'((?:[^']|'')*)',\s*'((?:[^']|'')*)',\s*\$cfg\$([\s\S]*?)\$cfg\$::jsonb,\s*\$just\$([\s\S]*?)\$just\$,\s*clock_timestamp\(\)\s*\)\s*ON CONFLICT \(component, version\) DO NOTHING;/g;
+function parse011() {
+    return [...SQL_011.matchAll(ROW_011_RE)].map(m => ({
+        component: m[1], version: m[2], model_name: m[3],
+        config: JSON.parse(m[4]), justification: m[5],
+    }));
+}
 
 describe('migration 009 ↔ methodology registry (seed.js source)', () => {
     const rows = parse009();
@@ -47,7 +64,7 @@ describe('migration 009 ↔ methodology registry (seed.js source)', () => {
 
     test.each(['bias', 'ingest', 'audit_narration'])('%s agrees field for field', (component) => {
         const sqlRow = rows.find(r => r.component === component);
-        const reg = registry(component);
+        const reg = registry(component, sqlRow && sqlRow.version);
         expect(sqlRow).toBeDefined();
         expect(sqlRow).toEqual({
             component: reg.component,
@@ -78,12 +95,40 @@ describe('migration 009 ↔ methodology registry (seed.js source)', () => {
         expect(bias.justification).toMatch(/read-time synonym mapping/);
     });
 
-    test('the audit_narration row matches the renderer version and the real replay command', () => {
+    test('the 009 audit_narration row is the released 1.1.0 with the real replay command', () => {
         const narr = rows.find(r => r.component === 'audit_narration');
         expect(narr.component).toBe(NARRATION_COMPONENT);
-        expect(narr.version).toBe(NARRATION_VERSION);
+        expect(narr.version).toBe('1.1.0');
         expect(narr.config.reproduce_command).toBe(REPRODUCE_COMMAND);
         expect(REPRODUCE_COMMAND).toBe('npm run replay -- --post {post_id}');
+    });
+});
+
+describe('migration 011 ↔ methodology registry (audit_narration@1.2.0)', () => {
+    const rows = parse011();
+
+    test('011 registers exactly audit_narration@1.2.0, idempotently', () => {
+        expect(rows.map(r => `${r.component}@${r.version}`)).toEqual(['audit_narration@1.2.0']);
+        expect((SQL_011.match(/INSERT INTO/g) || []).length).toBe(1);
+        expect(SQL_011).not.toMatch(/DO UPDATE|UPDATE methodology_versions|DELETE/);
+    });
+
+    test('agrees field for field with the registry entry', () => {
+        const reg = registry('audit_narration', '1.2.0');
+        expect(rows[0]).toEqual({
+            component: reg.component,
+            version: reg.version,
+            model_name: reg.model_name,
+            config: reg.config,
+            justification: reg.justification,
+        });
+    });
+
+    test('the renderer version is the newest registered audit_narration row (011)', () => {
+        expect(latest('audit_narration').version).toBe(NARRATION_VERSION);
+        expect(rows[0].version).toBe(NARRATION_VERSION);
+        expect(rows[0].config.reproduce_command).toBe(REPRODUCE_COMMAND);
+        expect(rows[0].config.ingest_branches).toEqual(['live_source', 'demo_feed']);
     });
 });
 

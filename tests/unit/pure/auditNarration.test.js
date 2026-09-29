@@ -187,6 +187,26 @@ describe('audit-narration renderIngestStep', () => {
         expect(step.audiences.researcher).toContain('SHA-256');
     });
 
+    it('describes demo-feed posts as fictional demo content, never as a public source (1.2.0)', () => {
+        const step = renderIngestStep(INGEST_MV, { demo: true });
+        expect(step).toMatchObject({ stage: 'ingestion', status: 'pass', methodology_version: '1.0.0' });
+        expect(step.audiences.public).toMatch(/fictional demo post generated for this installation/);
+        expect(step.audiences.public).not.toMatch(/came from a public source/);
+        expect(step.audiences.plain).toMatch(/^Demo content: /);
+        expect(step.audiences.plain).not.toMatch(/Collected via the source/);
+        expect(step.audiences.config).toMatchObject({ content_origin: 'demo_feed', fictional: true,
+            legal_basis: 'GDPR Article 6(1)(f) - Legitimate Interest' });
+        expect(step.audiences.researcher).toContain('SHA-256');
+        expect(step.audiences.researcher).toContain("source_type = 'demo'");
+    });
+
+    it('keeps the live-source wording unchanged when the post is not a demo', () => {
+        const live = renderIngestStep(INGEST_MV, { demo: false });
+        expect(live).toEqual(renderIngestStep(INGEST_MV));
+        expect(live.audiences.public).toMatch(/^This post came from a public source\./);
+        expect(live.audiences.config.content_origin).toBeUndefined();
+    });
+
     it('narration version constants are exported for the API to report', () => {
         expect(NARRATION_COMPONENT).toBe('audit_narration');
         expect(NARRATION_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
