@@ -388,7 +388,8 @@
         // Data origin from PulseData.loadCityData: 'live' | 'none' | 'demo' |
         // 'mixed' | 'fallback'. Drives the intro kicker and the "Demo data"
         // markers; isDemo keeps meaning "bundled fallback, never fetch".
-        dataMode: 'live',
+        // 'unknown' until the first load — never assumed live (G9-5).
+        dataMode: 'unknown',
         liveSeen: false,     // a live snapshot has been served at least once
         citiesDirty: false,  // snapshot changed since the globe last got it (#9)
         resolved: [],        // resolveChapter output per beat
@@ -923,7 +924,8 @@
                 // globe (citiesDirty stays false), so the land-heat memo and
                 // adapted rows survive quiet polls. Cards / cadence-driven
                 // consumers still refresh below.
-                const mode = dataMode || (isDemo ? 'fallback' : 'live');
+                // A missing mode is unknown, never live (G9-5).
+                const mode = dataMode || (isDemo ? 'fallback' : 'unknown');
                 const changed = state.isDemo !== isDemo
                     || state.dataMode !== mode
                     || !snapshotsEqual(state.cities, cities);

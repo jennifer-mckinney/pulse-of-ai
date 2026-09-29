@@ -1005,7 +1005,7 @@
         initialized: false,
         cities: [],
         isDemo: false,
-        dataMode: 'live',   // PulseStory data mode (see story.js state)
+        dataMode: 'unknown',   // PulseStory data mode (see story.js state); never assumed live (G9-5)
         exploring: false,
         filters: { sent: 'All', cat: 'All' },
         colorMode: 'sentiment',
@@ -1976,7 +1976,8 @@
     function onCitiesData(cities, isDemo, dataMode) {
         state.cities = Array.isArray(cities) ? cities : [];
         state.isDemo = !!isDemo;
-        state.dataMode = dataMode || (state.isDemo ? 'fallback' : 'live');
+        // A missing mode is unknown, never live (G9-5).
+        state.dataMode = dataMode || (state.isDemo ? 'fallback' : 'unknown');
         if (state.selectedId && !findCity(state.selectedId)) {
             // Selected city vanished from the snapshot: route the cleanup
             // through selectCity(null) (grumpy #7) so the globe selection /

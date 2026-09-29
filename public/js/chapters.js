@@ -361,21 +361,25 @@
     // kicker states where that data came from.
     //
     // dataMode (PulseData.loadCityData): 'live' | 'none' | 'demo' | 'mixed' |
-    // 'fallback' (bundled demo set, backend unavailable).
+    // 'fallback' (bundled demo set, backend unavailable). Anything else —
+    // missing, misspelled, from an older caller — is 'unknown' and gets the
+    // neutral text index.html ships with: never LIVE, never DEMO (G9-5).
     const INTRO_KICKERS = {
         live:     'LIVE · UPDATED EVERY 2–3 MINUTES',
-        none:     'LIVE · UPDATED EVERY 2–3 MINUTES',
+        // G9-5: an empty trailing hour is not live — nothing is moving.
+        none:     'NO POSTS IN THE LAST HOUR',
         mixed:    'LIVE + DEMO · UPDATED EVERY 2–3 MINUTES',
         demo:     'DEMO · UPDATED EVERY 2–3 MINUTES',
         fallback: 'DEMO · BUNDLED SAMPLE DATA',
+        unknown:  'UPDATED EVERY 2–3 MINUTES',
     };
     const INTRO_LEAD = 'Everyone has an opinion about artificial intelligence. ';
     const INTRO_TAIL = ', every score traceable to the model that made it.';
     const INTRO_TEMPLATES = {
         live: INTRO_LEAD + 'Right now you can watch all of them move — '
             + '{postCount} posts an hour across {sourceCount} sources and {cityCount} cities',
-        none: INTRO_LEAD + 'Right now you can watch all of them move — '
-            + '{postCount} posts an hour across {sourceCount} sources and {cityCount} cities',
+        none: INTRO_LEAD + 'No posts have arrived in the last hour, so the globe shows honest '
+            + 'zeros across its {cityCount} cities until the next update',
         mixed: INTRO_LEAD + 'Right now you can watch them move — {postCount} posts an hour, '
             + 'some of them fictional demo posts, across {sourceCount} sources and demo feeds '
             + 'and {cityCount} cities',
@@ -383,6 +387,8 @@
             + 'posts an hour across {sourceCount} demo feeds and {cityCount} cities',
         fallback: INTRO_LEAD + 'The live backend is unavailable, so this is a bundled demo view — '
             + '{postCount} fictional posts an hour across {sourceCount} sources and {cityCount} cities',
+        // Same wording as the static index.html lede (claims neither).
+        unknown: INTRO_LEAD + 'Watch them move on the globe',
     };
     const DEMO_LABEL_MODES = ['demo', 'mixed', 'fallback'];
 
@@ -407,10 +413,12 @@
 
     // resolveIntro: pure → { kicker, sub, dataMode, demoLabel, facts }.
     // dataMode comes from PulseData.loadCityData, which only ever produces
-    // the modes above; a missing value (older callers) gets the live copy.
+    // the known modes; anything else resolves to 'unknown' (G9-5 — never
+    // the live copy).
     function resolveIntro(ins, cities, dataMode) {
-        const mode = Object.prototype.hasOwnProperty.call(INTRO_KICKERS, dataMode)
-            ? dataMode : 'live';
+        const mode = typeof dataMode === 'string' && dataMode !== 'unknown'
+            && Object.prototype.hasOwnProperty.call(INTRO_KICKERS, dataMode)
+            ? dataMode : 'unknown';
         const facts = introFacts(ins, cities);
         const sub = renderTemplate(INTRO_TEMPLATES[mode], {
             postCount: fmtCount(facts.postCount),

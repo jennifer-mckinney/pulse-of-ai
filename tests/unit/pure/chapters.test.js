@@ -557,18 +557,34 @@ describe('resolveIntro — kicker by data origin, numbers interpolated (FR-19)',
         expect(resolveIntro(ins, cities, 'mixed').sub).toContain('some of them fictional demo posts');
         expect(resolveIntro(ins, cities, 'fallback')).toMatchObject({
             kicker: 'DEMO · BUNDLED SAMPLE DATA', demoLabel: true });
-        expect(resolveIntro(computeInsights([]), [], 'none').sub)
-            .toContain('0 posts an hour across 0 sources and 0 cities');
     });
 
-    test('every kicker keeps the prototype cadence phrase or names the demo', () => {
+    // G9-5: an empty trailing hour is not "LIVE" — nothing is moving.
+    test("none: its own kicker, never LIVE, and copy that says the hour is empty", () => {
+        const intro = resolveIntro(computeInsights([]), [], 'none');
+        expect(intro.kicker).toBe('NO POSTS IN THE LAST HOUR');
+        expect(intro.kicker).not.toMatch(/LIVE/);
+        expect(intro.demoLabel).toBe(false);
+        expect(intro.sub).toContain('No posts have arrived in the last hour');
+        expect(intro.sub).not.toMatch(/Right now you can watch/);
+    });
+
+    test('every kicker names what it is: LIVE only for live data', () => {
         for (const [mode, k] of Object.entries(INTRO_KICKERS)) {
             if (['demo', 'mixed', 'fallback'].includes(mode)) expect(k).toMatch(/DEMO/);
-            else expect(k).toMatch(/^LIVE/);
+            if (mode === 'live' || mode === 'mixed') expect(k).toMatch(/^LIVE/);
+            else expect(k).not.toMatch(/^LIVE/);
         }
     });
 
-    test('an unset mode gets the live copy (older callers)', () => {
-        expect(resolveIntro(ins, cities, undefined).dataMode).toBe('live');
+    // G9-5: an unknown or missing mode never falls back to the LIVE copy —
+    // it gets the neutral static text index.html ships with.
+    test.each([undefined, null, '', 'bogus', 'LIVE'])('unknown mode %p: neutral copy, never live', (mode) => {
+        const intro = resolveIntro(ins, cities, mode);
+        expect(intro.dataMode).toBe('unknown');
+        expect(intro.kicker).toBe('UPDATED EVERY 2–3 MINUTES');
+        expect(intro.kicker).not.toMatch(/LIVE|DEMO/);
+        expect(intro.sub).not.toMatch(/Right now/);
+        expect(intro.demoLabel).toBe(false);
     });
 });
