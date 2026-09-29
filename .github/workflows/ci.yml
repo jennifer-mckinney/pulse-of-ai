@@ -79,6 +79,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # F10-12: fail on a known high-severity advisory in a production dependency.
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
       - name: Run migrations on test DB
         run: npm run migrate
 
