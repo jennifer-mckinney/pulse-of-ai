@@ -46,3 +46,18 @@ describe('refusal rules', () => {
         expect(refused).toMatchObject({ status: 'blocked_by_source', online: false, refusal_count: 1 });
     });
 });
+
+test('G10-19: online requires the last success to be no older than the last error', () => {
+    const { isOnline } = require('../../../src/collectors/status');
+    const now = Date.parse('2026-09-29T12:00:00Z');
+    const t = m => new Date(now - m * 60000).toISOString();
+    expect(isOnline('collecting', t(50), now)).toBe(true);
+    expect(isOnline('collecting', t(50), now, t(10))).toBe(false);       // failed since
+    expect(isOnline('collecting', t(10), now, t(50))).toBe(true);        // recovered
+    expect(isOnline('collecting', t(5), now, t(5))).toBe(true);          // one run: partial failure
+    expect(isOnline('collecting', t(61), now)).toBe(false);              // too old
+    expect(isOnline('blocked_by_source', t(1), now)).toBe(false);        // refused
+    expect(isOnline('collecting', null, now)).toBe(false);
+    const base = { name: 'hacker_news', source_type: 'api', last_success_at: t(30), last_error_at: t(2) };
+    expect(registryFields(base, TEST_ENV, now).online).toBe(false);
+});

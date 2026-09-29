@@ -9,8 +9,10 @@
 // is in its cooldown or awaiting a probe; never online.
 //
 // "Online" = gate status 'collecting' AND a successful run within
-// ONLINE_WINDOW_MS. "Sources online N/51" counts exactly these: a source the
-// registry would collect but that has not succeeded recently is not online.
+// ONLINE_WINDOW_MS that is not older than the last error (G10-19).
+// "Sources online N/<registry size>" counts exactly these: a source the
+// registry would collect but that has not succeeded recently, or has failed
+// since, is not online.
 
 'use strict';
 
@@ -25,9 +27,16 @@ const RUNTIME_STATUSES = Object.freeze([...GATE_STATUSES, BLOCKED_BY_SOURCE]);
 
 const ONLINE_WINDOW_MS = 60 * 60 * 1000;
 
-function isOnline(status, lastSuccessAt, now = Date.now()) {
-    return status === 'collecting' && !!lastSuccessAt
-        && now - new Date(lastSuccessAt).getTime() <= ONLINE_WINDOW_MS;
+/**
+ * G10-19: online also requires that the last success is not older than the
+ * last error (a source that succeeded 50 min ago and has failed since is not
+ * online). A refused source is never 'collecting' here, so never online.
+ */
+function isOnline(status, lastSuccessAt, now = Date.now(), lastErrorAt = null) {
+    if (status !== 'collecting' || !lastSuccessAt) return false;
+    const ok = new Date(lastSuccessAt).getTime();
+    if (now - ok > ONLINE_WINDOW_MS) return false;
+    return !lastErrorAt || ok >= new Date(lastErrorAt).getTime();
 }
 
 /** Registry fields for one data_sources row (null for non-registry rows). */
@@ -61,7 +70,7 @@ function registryFields(row, env, now) {
         open_routes: st.openRoutes,
         licence_refs_on_file: st.recorded,
         kill_switch_env: killSwitchEnv(src.slug),
-        online: isOnline(status, row.last_success_at, now),
+        online: isOnline(status, row.last_success_at, now, row.last_error_at),
         access_denied_at: row.access_denied_at || null,
         refused_until: row.refused_until || null,
         refusal_count: row.refusal_count || 0,
