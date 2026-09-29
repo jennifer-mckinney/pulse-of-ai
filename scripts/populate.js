@@ -423,7 +423,7 @@ async function populateOnce(opts, seed) {
         log(`collecting: ${live.collecting} of ${SOURCES.length} registry sources are collecting — running one real collection job`);
         try {
             collected = await collectLive(opts, embed);
-            log(`job ${collected.jobId}: ${collected.sourcesQueried} sources queried, ${collected.postsCollected} items kept, `
+            log(`${collected.jobId ? `job ${collected.jobId}` : 'no job row (nothing new to score)'}: ${collected.sourcesQueried} sources queried, ${collected.postsCollected} items kept, `
                 + `${collected.postsProcessed} new posts scored (sentiment, relevance, discourse), `
                 + `bias ${collected.bias ? `${collected.bias.violationsFound} violation(s)` : 'not run'}, `
                 + `${collected.embedQueued} embed job(s) queued`);
