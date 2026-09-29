@@ -66,7 +66,7 @@ test('one keyword match passes the embed gate → an embed job is queued', async
     const one = computeRelevance('A machine learning paper.');
     scorePost.mockResolvedValue({ relevance: { score: String(one.score) } });
     const r = await processIngestJob(job());
-    expect(r).toEqual({ rawPostId: 'post-1', relevance: 0.05, embedJobId: 'embed-job-1' });
+    expect(r).toEqual({ rawPostId: 'post-1', relevance: 1 / 21, embedJobId: 'embed-job-1' });
     expect(embedQueue.add).toHaveBeenCalledWith('embed-post', { rawPostId: 'post-1' });
 });
 
@@ -77,9 +77,9 @@ test('no keyword match → no embed job', async () => {
     expect(embedQueue.add).not.toHaveBeenCalled();
 });
 
-test('the gate is reachable: 1/20, not the old 0.40', () => {
+test('the gate is reachable: one term of relevance@1.2.0\'s 21 (1/21), not the old 0.40', () => {
     expect(RELEVANCE_EMBED_THRESHOLD).toBe(EMBED_GATE_MIN_SCORE);
-    expect(RELEVANCE_EMBED_THRESHOLD).toBe(0.05);
+    expect(RELEVANCE_EMBED_THRESHOLD).toBe(1 / 21);
 });
 
 test('errors propagate so BullMQ retries; malformed jobs are rejected', async () => {

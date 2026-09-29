@@ -6,11 +6,19 @@
 //
 // Deliberately precise over broad: "AI" must be the upper-case word (so
 // "said", "Thai" or "ai" in a URL never match), product names are specific.
+//
+// P10-13: the "AI" rule is the SAME expression the relevance score uses
+// (src/config/ai-lexicon.js AI_ACRONYM_RE, relevance@1.2.0), so an item this
+// filter admits for "AI" also scores that term. How the filter's wider
+// product/topic patterns relate to the registered relevance lexicon is
+// documented in src/config/ai-lexicon.js.
 
 'use strict';
 
+const { AI_ACRONYM_RE } = require('../config/ai-lexicon');
+
 const PATTERNS = [
-    /\bA\.?I\.?(?![a-z])/,                     // AI, A.I. (upper case only)
+    AI_ACRONYM_RE,                             // AI, A.I. (upper case only; shared with relevance@1.2.0)
     /\bAGI\b/,
     /\bLLMs?\b/,
     /\bNLP\b/,

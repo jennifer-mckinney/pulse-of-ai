@@ -48,9 +48,11 @@ function seededDecision(type, content = CONTENT) {
         };
     }
     if (type === 'relevance') {
-        const r = relevance.computeRelevance(content);
+        // Scored with the rule of the version it is labelled with (P10-13:
+        // the replay re-runs each decision under its own version).
+        const r = relevance.computeRelevance(content, '1.0.0');
         return {
-            decision_type: 'relevance', model_name: relevance.MODEL_NAME,
+            decision_type: 'relevance', model_name: relevance.scorerFor('1.0.0').model,
             input_hash: sha(content), component: 'relevance', version: '1.0.0',
             config: RELEVANCE_CFG,
             output: { score: r.score, matchedKeywords: r.matchedKeywords },
@@ -265,5 +267,81 @@ describe('scripts/replay.js — CLI wrapper', () => {
         c = capture();
         expect(await main(['--post', POST_ID], { ...c.io, db: fakeDb(null, { fail: true }) })).toBe(2);
         expect(c.lines.err[0]).toMatch(/database error — connection refused/);
+    });
+});
+
+// ─── P10-13: relevance@1.2.0 and version-faithful replay ─────────────────────
+
+describe('relevance@1.2.0 — word boundaries, case-sensitive "AI", replayed per version', () => {
+    const { METHODOLOGY_VERSIONS } = require('../../src/config/methodology-registry');
+    const reg = (v) => METHODOLOGY_VERSIONS.find(m => m.component === 'relevance' && m.version === v);
+    const ROBERT = 'Robert Smith said the weather in Thailand was fine.';
+
+    function decision(content, version) {
+        const r = relevance.computeRelevance(content, version);
+        return {
+            decision_type: 'relevance', model_name: relevance.scorerFor(version).model,
+            input_hash: sha(content), component: 'relevance', version,
+            config: reg(version).config, output: { score: r.score, matchedKeywords: r.matchedKeywords },
+        };
+    }
+
+    it('"Robert" no longer matches "bert"; "said" / "Thai" never match "AI"', () => {
+        expect(relevance.computeRelevance(ROBERT, '1.1.0').matchedKeywords).toEqual(['bert']);
+        expect(relevance.computeRelevance(ROBERT, '1.2.0')).toEqual({ score: 0, matchedKeywords: [] });
+        expect(relevance.computeRelevance('the maid said ai.example.com', '1.2.0').matchedKeywords).toEqual([]);
+    });
+
+    it('matches whole-word acronyms, upper-case AI / A.I. / BERT, ChatGPT and GPT-4o, plurals and hyphens', () => {
+        const r = relevance.computeRelevance(
+            'AI and A.I. rules: fine tuning BERT, ChatGPT and GPT-4o on LLMs; neural-networks and embedding work.', '1.2.0');
+        expect(r.matchedKeywords).toEqual(['neural network', 'llm', 'fine-tuning', 'embeddings', 'gpt', 'bert', 'AI']);
+        expect(r.score).toBeCloseTo(7 / 21, 12);
+        expect(relevance.computeRelevance('Bert and Ernie; ai ethics', '1.2.0').matchedKeywords).toEqual([]);
+    });
+
+    it('a post the collection filter admitted for "AI" alone is now AI-relevant and passes the embed gate', () => {
+        const { isAiRelated } = require('../../src/collectors/ai-filter');
+        const text = 'New AI rules for schools';
+        expect(isAiRelated(text)).toBe(true);
+        expect(relevance.computeRelevance(text, '1.1.0').score).toBe(0);
+        const now = relevance.computeRelevance(text);
+        expect(now.matchedKeywords).toEqual(['AI']);
+        expect(relevance.passesEmbedGate(now.score)).toBe(true);
+    });
+
+    it('a 1.1.0 decision replays PASS with the 1.1.0 rule, a 1.2.0 decision with the 1.2.0 rule — no drift caveats', () => {
+        for (const v of ['1.1.0', '1.2.0']) {
+            const d = decision(ROBERT, v);
+            const out = replayDecision(ROBERT, d);
+            expect(out.status).toBe(STATUS.PASS);
+            expect(out.caveats).toEqual([]);
+        }
+    });
+
+    it('a 1.1.0 decision replayed with the 1.2.0 rule would diverge (the version is what makes it pass)', () => {
+        const d = decision(ROBERT, '1.1.0');
+        const out = replayDecision(ROBERT, { ...d, version: '1.2.0', config: reg('1.2.0').config, model_name: 'keyword-relevance-v2' });
+        expect(out.status).toBe(STATUS.DIVERGENCE);
+        expect(out.diffs.map(x => x.field)).toEqual(['score', 'matchedKeywords']);
+    });
+
+    it('the registered 1.2.0 row is the code: lexicon, rules, score and embed gate', () => {
+        const { RELEVANCE_TERMS_1_2_0 } = require('../../src/config/ai-lexicon');
+        const cfg = reg('1.2.0').config;
+        expect(cfg.keywords).toEqual(relevance.VERSIONS['1.2.0'].lexicon);
+        expect(cfg.keywords).toEqual(RELEVANCE_TERMS_1_2_0.map(t => t.term));
+        expect(cfg.keywords).toHaveLength(21);
+        expect(cfg.embed_gate_min_score).toBe(relevance.EMBED_GATE_MIN_SCORE);
+        expect(reg('1.2.0').model_name).toBe(relevance.MODEL_NAME);
+        expect(relevance.CURRENT_VERSION).toBe('1.2.0');
+        expect(cfg.matching.AI).toMatch(/case-sensitive/);
+    });
+
+    it('the collection filter and relevance share the one "AI" expression', () => {
+        const { PATTERNS } = require('../../src/collectors/ai-filter');
+        const { AI_ACRONYM_RE } = require('../../src/config/ai-lexicon');
+        expect(PATTERNS).toContain(AI_ACRONYM_RE);
+        expect(require('../../src/config/ai-lexicon').RELEVANCE_TERMS_1_2_0.find(t => t.term === 'AI').pattern).toBe(AI_ACRONYM_RE);
     });
 });

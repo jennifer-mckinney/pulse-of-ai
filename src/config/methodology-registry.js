@@ -25,6 +25,8 @@
 
 'use strict';
 
+const { RELEVANCE_TERMS_1_2_0, describeRule } = require('./ai-lexicon');
+
 // bias@1.1.0's config, shared by reference with later bias versions that
 // extend it (bias@1.2.0 spreads it); never mutated.
 const BIAS_1_1_0_CONFIG = Object.freeze({
@@ -457,6 +459,40 @@ const METHODOLOGY_VERSIONS = [
             + 'equalized odds and counterfactual fairness remain declared planned layers reported as not yet enforced. Open '
             + 'location-concentration alerts that this version would not raise are resolved by migration 028 with an audited '
             + 'alert_resolutions record, never deleted.',
+    },
+    // relevance@1.2.0 — P10-13: word-boundary matching, case-sensitive "AI"
+    // (the collection filter's own rule, shared through
+    // src/config/ai-lexicon.js). relevance@1.1.0 is never edited and its
+    // scorer is kept for replay (migration 029).
+    {
+        component: 'relevance',
+        version: '1.2.0',
+        model_name: 'keyword-relevance-v2',
+        config: {
+            // Must equal src/config/ai-lexicon.js RELEVANCE_TERMS_1_2_0 (order included)
+            keywords: RELEVANCE_TERMS_1_2_0.map(t => t.term),
+            matching: Object.fromEntries(RELEVANCE_TERMS_1_2_0.map(t => [t.term, describeRule(t)])),
+            shared_with: 'src/collectors/ai-filter.js uses the same case-sensitive "AI" expression (src/config/ai-lexicon.js AI_ACRONYM_RE); '
+                + 'the filter\'s wider product and topic patterns scope collection only and are not relevance terms',
+            score_rule: 'unique matched terms / number of terms (21), capped at 1.0',
+            score_per_match: 1 / RELEVANCE_TERMS_1_2_0.length,
+            max_score: 1.0,
+            is_relevant_rule: 'score > 0 (at least one term matched)',
+            // Must equal src/pipeline/relevance.js EMBED_GATE_MIN_SCORE
+            embed_gate_min_score: 1 / RELEVANCE_TERMS_1_2_0.length,
+            embed_gate_rule: 'a post is embedded when its relevance score is at least 1/21 (one term matched)',
+        },
+        justification: 'relevance@1.2.0 fixes false matches found in review (PR #10, P10-13). Version 1.1.0 matched every lexicon '
+            + 'keyword as a case-insensitive substring, so "Robert" matched "bert", and a post that the collection filter admitted '
+            + 'only because it said "AI" scored 0, since the lexicon had no "AI" term. Version 1.2.0 keeps the 20 terms of 1.1.0 '
+            + 'and adds "AI" (21 terms). Every term now matches as whole words: "AI" (or "A.I.") only in upper case, the same rule '
+            + 'the collection filter uses (one shared expression, src/config/ai-lexicon.js); "BERT" only in upper case, since Bert '
+            + 'is a name; LLM and NLP as whole words in any case; "gpt" as a whole word with ChatGPT and a version suffix such as '
+            + 'GPT-4o allowed; every other term in any case with word boundaries, a space or hyphen between words and a plural '
+            + 's allowed. Score = unique matched terms divided by 21, capped at 1.0; a post is AI-relevant when at least one term '
+            + 'matches, and it is embedded at the same point (score >= 1/21). Collection is already scoped to each source\'s AI or '
+            + 'technology feed; this score measures how explicitly a post uses AI vocabulary. Decisions scored under 1.1.0 keep '
+            + 'their version and are replayed with the 1.1.0 rule.',
     },
 ];
 

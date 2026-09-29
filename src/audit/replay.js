@@ -67,14 +67,19 @@ const STAGES = {
             return notes;
         },
     },
+    // P10-13: relevance keeps one scorer per registered version, so a
+    // decision is re-run with the rule it was scored under (1.0.0 / 1.1.0
+    // substring, 1.2.0 word boundaries); `version` is the decision's.
     relevance: {
         model: relevance.MODEL_NAME,
+        modelFor: (version) => relevance.scorerFor(version).model,
         fields: ['score', 'matchedKeywords'],
-        run: (text) => relevance.computeRelevance(text),
-        configDrift(config) {
+        run: (text, version) => relevance.computeRelevance(text, version),
+        configDrift(config, version) {
             const notes = [];
             if (!config || !Array.isArray(config.keywords)) return notes;
-            const code = new Set(relevance.KEYWORD_LIST);
+            const lexicon = relevance.scorerFor(version).lexicon;
+            const code = new Set(lexicon);
             const reg = new Set(config.keywords);
             const onlyReg = [...reg].filter(k => !code.has(k));
             const onlyCode = [...code].filter(k => !reg.has(k));
@@ -83,8 +88,8 @@ const STAGES = {
                     + `${onlyReg.length} registered-only, ${onlyCode.length} code-only`);
             }
             if (config.score_per_match !== undefined
-                && Number(config.score_per_match) !== 1 / relevance.KEYWORD_LIST.length) {
-                notes.push(`registered score_per_match ${config.score_per_match} ≠ code 1/${relevance.KEYWORD_LIST.length}`);
+                && Number(config.score_per_match) !== 1 / lexicon.length) {
+                notes.push(`registered score_per_match ${config.score_per_match} ≠ code 1/${lexicon.length}`);
             }
             return notes;
         },
@@ -198,11 +203,12 @@ function replayDecision(content, d, removal = null) {
     }
 
     // Code identity + registered-config caveats (a replay runs TODAY's code).
-    if (d.model_name && d.model_name !== spec.model) {
-        result.caveats.push(`stored model_name '${d.model_name}' ≠ code model '${spec.model}' — `
+    const codeModel = spec.modelFor ? spec.modelFor(d.version) : spec.model;
+    if (d.model_name && d.model_name !== codeModel) {
+        result.caveats.push(`stored model_name '${d.model_name}' ≠ code model '${codeModel}' — `
             + 'replayed with the current code, so agreement does not prove the same build scored it');
     }
-    for (const drift of spec.configDrift(d.config)) {
+    for (const drift of spec.configDrift(d.config, d.version)) {
         result.caveats.push(`config drift: ${drift}`);
     }
 
@@ -221,7 +227,7 @@ function replayDecision(content, d, removal = null) {
         result.caveats.push('no stored input_hash — input identity could not be verified');
     }
 
-    const replayed = spec.run(content);
+    const replayed = spec.run(content, d.version);
     for (const field of present) {
         if (!sameValue(stored[field], replayed[field])) {
             result.diffs.push({ field, stored: stored[field], replayed: replayed[field] });

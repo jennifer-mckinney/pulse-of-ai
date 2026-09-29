@@ -233,20 +233,22 @@ describe('migration 014 ↔ methodology registry (alignment)', () => {
 
     test('the code implements the CURRENT versions', () => {
         expect(CURRENT_VERSIONS).toEqual(expect.objectContaining({
-            sentiment: '1.0.0', relevance: '1.1.0', discourse: '1.1.0-DQI', ingest: '1.5.0',
+            sentiment: '1.0.0', relevance: '1.2.0', discourse: '1.1.0-DQI', ingest: '1.5.0',
         }));
     });
 
-    test('relevance@1.1.0 is the code: lexicon, score rule, model and embed gate', () => {
+    test('relevance@1.1.0 is its code (kept for replay since 1.2.0): lexicon, score rule, model and embed gate', () => {
         const reg = registry('relevance', '1.1.0');
-        expect(reg.config.keywords).toEqual(relevanceCode.KEYWORD_LIST);
-        expect(reg.config.score_per_match).toBe(1 / relevanceCode.KEYWORD_LIST.length);
-        expect(reg.config.embed_gate_min_score).toBe(relevanceCode.EMBED_GATE_MIN_SCORE);
-        expect(reg.model_name).toBe(relevanceCode.MODEL_NAME);
+        const v11 = relevanceCode.VERSIONS['1.1.0'];
+        expect(reg.config.keywords).toEqual(v11.lexicon);
+        expect(reg.config.keywords).toEqual(relevanceCode.KEYWORD_LIST_1_1_0);
+        expect(reg.config.score_per_match).toBe(1 / v11.lexicon.length);
+        expect(reg.config.embed_gate_min_score).toBe(1 / 20);
+        expect(reg.model_name).toBe(v11.model);
         // Replay reports no config drift against the aligned row.
-        expect(STAGES.relevance.configDrift(reg.config)).toEqual([]);
+        expect(STAGES.relevance.configDrift(reg.config, '1.1.0')).toEqual([]);
         // …and it did against the 1.0.0 row (the drift that motivated 014).
-        expect(STAGES.relevance.configDrift(registry('relevance', '1.0.0').config)).not.toEqual([]);
+        expect(STAGES.relevance.configDrift(registry('relevance', '1.0.0').config, '1.0.0')).not.toEqual([]);
     });
 
     test('the embed gate is reachable: one keyword match passes, none does not', () => {
@@ -254,7 +256,8 @@ describe('migration 014 ↔ methodology registry (alignment)', () => {
         expect(one.matchedKeywords).toEqual(['machine learning']);
         expect(relevanceCode.passesEmbedGate(one.score)).toBe(true);
         expect(relevanceCode.passesEmbedGate(relevanceCode.computeRelevance('Weather today.').score)).toBe(false);
-        expect(relevanceCode.passesEmbedGate('0.05')).toBe(true);   // NUMERIC string from pg
+        expect(relevanceCode.passesEmbedGate('0.05')).toBe(true);   // NUMERIC string from pg (a 1.1.0 score)
+        expect(relevanceCode.passesEmbedGate(String(1 / 21))).toBe(true);
         expect(relevanceCode.passesEmbedGate(null)).toBe(false);
     });
 
@@ -490,5 +493,23 @@ describe('migration 028 ↔ methodology registry (bias@1.3.0, P10-5)', () => {
         const reg = registry('bias', '1.3.0');
         const prev = registry('bias', '1.2.0');
         for (const k of Object.keys(prev.config)) if (k !== 'layer_notes') expect(reg.config[k]).toEqual(prev.config[k]);
+    });
+});
+
+describe('migration 029 ↔ methodology registry (relevance@1.2.0, P10-13)', () => {
+    const { generate } = require('../../../scripts/generate-methodology-migration');
+    const SQL_029 = fs.readFileSync(
+        path.join(__dirname, '../../../src/db/migrations/029_relevance_word_boundaries.sql'), 'utf8');
+
+    test('029 is exactly the generated relevance@1.2.0 row, idempotent, and edits nothing', () => {
+        expect(SQL_029.endsWith(generate(['relevance@1.2.0']))).toBe(true);
+        expect((SQL_029.match(/INSERT INTO/g) || []).length).toBe(1);
+        expect(SQL_029).not.toMatch(/DO UPDATE|UPDATE methodology_versions|DELETE|DROP/);
+    });
+
+    test('relevance@1.2.0 is current; 1.1.0 is unchanged', () => {
+        expect(latest('relevance').version).toBe('1.2.0');
+        expect(registry('relevance', '1.1.0').config.keywords).toHaveLength(20);
+        expect(registry('relevance', '1.2.0').config.keywords).toHaveLength(21);
     });
 });

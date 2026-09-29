@@ -194,3 +194,32 @@ describe('saveRelevance()', () => {
         await expect(saveRelevance(fakePostId, jobId, mvId)).rejects.toThrow();
     });
 });
+
+// ─── P10-13: saveRelevance scores under the recorded version ────────────────
+
+describe('saveRelevance() — the recorded version decides the rule (relevance@1.2.0)', () => {
+    async function mvFor(version, model) {
+        return (await dbRun(
+            `INSERT INTO methodology_versions (component, version, model_name, config, justification)
+             VALUES ('relevance', $1, $2, '{}'::jsonb, 'test') RETURNING id`, [version, model])).id;
+    }
+
+    test('a 1.2.0 decision: whole words and upper-case AI — "Robert" is not "bert"', async () => {
+        const postId = await insertPost('Robert says AI is changing schools');
+        const jobId = await insertJob();
+        const row = await saveRelevance(postId, jobId, await mvFor('1.2.0', 'keyword-relevance-v2'));
+        expect(row.matched_keywords).toEqual(['AI']);
+        const audit = await dbGet(`SELECT model_name, output FROM decision_audit_log WHERE raw_post_id = $1`, [postId]);
+        expect(audit.model_name).toBe('keyword-relevance-v2');
+        expect(audit.output.matchedKeywords).toEqual(['AI']);
+    });
+
+    test('a 1.1.0 decision keeps the substring rule it was registered with', async () => {
+        const postId = await insertPost('Robert says AI is changing schools');
+        const jobId = await insertJob();
+        const row = await saveRelevance(postId, jobId, await mvFor('1.1.0', 'keyword-relevance-v1'));
+        expect(row.matched_keywords).toEqual(['bert']);
+        const audit = await dbGet(`SELECT model_name FROM decision_audit_log WHERE raw_post_id = $1`, [postId]);
+        expect(audit.model_name).toBe('keyword-relevance-v1');
+    });
+});

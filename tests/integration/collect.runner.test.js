@@ -64,7 +64,7 @@ describe('runCollection', () => {
         expect(summary.bias.checksRun).toBe(3);
         const gated = await dbAll(`SELECT rr.raw_post_id FROM relevance_results rr
             JOIN decision_audit_log d ON d.raw_post_id = rr.raw_post_id AND d.job_id = $1 AND d.decision_type = 'relevance'
-            WHERE rr.score >= 0.05`, [summary.jobId]);
+            WHERE rr.score >= $2`, [summary.jobId, require('../../src/pipeline/relevance').EMBED_GATE_MIN_SCORE - 1e-9]);
         expect(summary.embedQueued).toBe(gated.length);
         if (gated.length) expect(queues.enqueueEmbeds).toHaveBeenCalledWith(expect.arrayContaining(gated.map(g => g.raw_post_id)));
     });
