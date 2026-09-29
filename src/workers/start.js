@@ -38,6 +38,7 @@ const { processCorrelateJob }= require('./correlate.worker');
 const { scheduleAllSources } = require('./collector.scheduler');
 const { collectWindowMs } = require('../config/source-registry');
 const { closeCycles } = require('../collectors/cycle');
+const { evaluateSourceHealth } = require('../collectors/source-health');
 const { runRedditMaintenance, MAINTENANCE_MS } = require('../collectors/reddit/maintenance');
 
 const int = (v, d) => { const n = parseInt(v || '', 10); return Number.isFinite(n) && n > 0 ? n : d; };
@@ -102,6 +103,15 @@ async function closeDueCycles() {
         }
     } catch (err) {
         logError(`[cycle] closing failed: ${err.message}`);
+    }
+    // P10-8: source_stale / source_failing / source_refused alerts, opened
+    // and resolved as each condition starts and clears.
+    try {
+        const h = await evaluateSourceHealth();
+        for (const a of h.opened) log(`[source-health] ${a.slug}: ${a.type} opened`);
+        for (const a of h.resolved) log(`[source-health] ${a.slug}: ${a.type} resolved`);
+    } catch (err) {
+        logError(`[source-health] evaluation failed: ${err.message}`);
     }
     // G10-4: re-queue posts from the last 24 h that were never scored.
     try {

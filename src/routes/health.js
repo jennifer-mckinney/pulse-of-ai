@@ -23,8 +23,10 @@
 //                  collecting AND succeeded within the last hour.
 //
 //   redis          { reachable } — an authenticated PING answered (P9-7)
-//   worker         { alive, last_heartbeat } — the worker's heartbeat
-//                  (src/workers/heartbeat.js); alive = a beat within its TTL
+//   worker         { alive, last_heartbeat, queues } — the worker's heartbeat
+//                  (src/workers/heartbeat.js); alive = a beat within its TTL;
+//                  queues = { <queue>: { waiting, active, delayed, failed } }
+//                  (P10-8), null when unreadable
 //
 // Redis probes are bounded (REDIS_PROBE_TIMEOUT_MS): a down or hanging Redis
 // reports reachable:false, never fails or stalls the endpoint.
@@ -66,6 +68,28 @@ function _setRedisClientForTests(client) {
     redisClient = client;
 }
 
+// P10-8: queue depth per BullMQ queue, next to the worker heartbeat.
+const QUEUE_NAMES = Object.freeze(['collect.rss', 'collect.api', 'collect.bulk', 'collect.refresh', 'ingest', 'embed', 'correlate', 'maintenance']);
+const COUNT_STATES = Object.freeze(['waiting', 'active', 'delayed', 'failed']);
+
+/* istanbul ignore next -- real BullMQ queues; tests inject counts */
+function defaultQueueCounts() {
+    const q = require('../queues/index');
+    const byName = {
+        'collect.rss': q.collectRssQueue, 'collect.api': q.collectApiQueue, 'collect.bulk': q.collectBulkQueue,
+        'collect.refresh': q.refreshQueue, ingest: q.ingestQueue, embed: q.embedQueue, correlate: q.correlateQueue,
+        maintenance: q.maintenanceQueue,
+    };
+    return Promise.all(QUEUE_NAMES.map(async n => [n, await byName[n].getJobCounts(...COUNT_STATES)]))
+        .then(Object.fromEntries);
+}
+let queueCounts = defaultQueueCounts;
+
+/** Test hook: inject () => Promise<{ [queue]: counts }> (null restores the default). */
+function _setQueueCountsForTests(fn) {
+    queueCounts = fn || defaultQueueCounts;
+}
+
 function withTimeout(promise, ms) {
     let timer;
     return Promise.race([
@@ -80,13 +104,24 @@ async function queueStatus() {
     try {
         await withTimeout(Promise.resolve().then(() => client.ping()), REDIS_PROBE_TIMEOUT_MS);
     } catch {
-        return { redis: { reachable: false }, worker: { alive: false, last_heartbeat: null } };
+        return { redis: { reachable: false }, worker: { alive: false, last_heartbeat: null, queues: null } };
     }
     let worker = { alive: false, last_heartbeat: null };
     try {
         worker = await withTimeout(readHeartbeat(client), REDIS_PROBE_TIMEOUT_MS);
     } catch { /* reachable, but the read failed: worker unknown */ }
-    return { redis: { reachable: true }, worker };
+    // P10-8: backlog per queue (waiting / active / delayed / failed); null
+    // when the counts could not be read in time — never a fake zero.
+    let queues = null;
+    try {
+        const raw = await withTimeout(Promise.resolve().then(() => queueCounts()), REDIS_PROBE_TIMEOUT_MS);
+        queues = {};
+        for (const n of QUEUE_NAMES) {
+            const c = (raw && raw[n]) || {};
+            queues[n] = Object.fromEntries(COUNT_STATES.map(k => [k, Number.isFinite(Number(c[k])) ? Number(c[k]) : 0]));
+        }
+    } catch { /* counts unavailable */ }
+    return { redis: { reachable: true }, worker: { ...worker, queues } };
 }
 
 router.get('/health', async (req, res) => {
@@ -179,3 +214,5 @@ router.get('/health', async (req, res) => {
 
 module.exports = router;
 module.exports._setRedisClientForTests = _setRedisClientForTests;
+module.exports._setQueueCountsForTests = _setQueueCountsForTests;
+module.exports.QUEUE_NAMES = QUEUE_NAMES;

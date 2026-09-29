@@ -1011,6 +1011,26 @@ const SOURCES = [
     },
 ];
 
+// ─── Freshness (P10-8) ───────────────────────────────────────────────────────
+// expectedNewWithinHours: a collecting source that stored no NEW post for
+// this long raises a 'source_stale' warning (src/collectors/source-health.js).
+// Set per source from how often it publishes AI or technology items: wires
+// and busy news feeds within hours, weekly research blogs within days, the
+// delivered datasets within a week. Every entry carries the field.
+const EXPECTED_NEW_WITHIN_HOURS = Object.freeze({
+    whatsapp: 168, instagram: 168, youtube: 24, facebook: 168, tiktok: 24, wechat: 72, telegram: 72, x: 6,
+    bbc_news: 24, nyt: 24, cnn: 24, guardian: 24, al_jazeera: 48, wsj: 24, ap: 12, reuters: 12, nbc_news: 48,
+    washington_post: 24, npr: 48,
+    springerlink: 48, arxiv: 24, pubmed: 48, sciencedirect: 72, google_scholar: 168, researchgate: 168, ieee_xplore: 72,
+    jstor: 720,
+    govinfo: 72, congress_gov: 72, cfr: 168, cato: 168, rand: 168, urban_institute: 336, pew: 336,
+    wikipedia: 24, mozilla: 336, khan_academy: 720, owid: 336, openstreetmap: 168, internet_archive: 72,
+    github: 12, gitlab: 24, docker_hub: 72, hugging_face: 24,
+    stack_overflow: 48, hacker_news: 6, reddit: 12,
+    tldr: 48, substack: 72, ars_technica: 48, one_useful_thing: 336, platformer: 168,
+});
+for (const s of SOURCES) s.expectedNewWithinHours = EXPECTED_NEW_WITHIN_HOURS[s.slug];
+
 // ─── Environment catalogue ───────────────────────────────────────────────────
 // Every env var the collectors read, with where to get it. .env.example and
 // docker-compose.yml must list each one (tests/unit/pure/sourceEnv.test.js).

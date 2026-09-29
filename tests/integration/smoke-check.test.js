@@ -82,6 +82,8 @@ describe('scripts/smoke-check.js', () => {
     it('reports worker liveness: WARN without a worker, FAIL when a worker is expected', async () => {
         const health = require('../../src/routes/health');
         health._setRedisClientForTests({ ping: async () => 'PONG', get: async () => null });
+        // Queue depth is injected so no real BullMQ connection is opened.
+        health._setQueueCountsForTests(async () => ({}));
         try {
             await populateDemo();
             let lines = [];
@@ -99,6 +101,7 @@ describe('scripts/smoke-check.js', () => {
             expect(lines.join('\n')).toContain(`[PASS] worker heartbeat — redis reachable, last beat ${at}`);
         } finally {
             health._setRedisClientForTests(null);
+            health._setQueueCountsForTests(null);
         }
     }, 60000);
 

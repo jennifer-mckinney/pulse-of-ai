@@ -64,6 +64,8 @@ async function saveOutcome(sourceId, { cursor, httpCache, ok, itemCount, newPost
              last_success_at = CASE WHEN $4::boolean THEN NOW() ELSE last_success_at END,
              last_item_count = CASE WHEN $4::boolean THEN $5::int ELSE last_item_count END,
              last_new_posts  = CASE WHEN $4::boolean THEN $6::int ELSE last_new_posts END,
+             -- P10-8 (migration 033): when a NEW post was last stored.
+             last_new_post_at = CASE WHEN COALESCE($6::int, 0) > 0 THEN NOW() ELSE last_new_post_at END,
              last_error      = $7::text,
              last_error_kind = $8::text,
              last_http_status = $9::int,
