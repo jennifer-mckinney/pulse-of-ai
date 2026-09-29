@@ -14,9 +14,12 @@ async function insertBiasAssessment(jobId, { isViolation = false } = {}) {
     await dbRun(
         `INSERT INTO bias_assessments
             (job_id, assessment_type, group_field, group_value,
-             metric_name, metric_value, threshold, is_violation, severity)
+             metric_name, metric_value, threshold, is_violation, severity,
+             methodology_version_id)
          VALUES ($1, 'location_concentration', 'location', 'San Francisco',
-                 'share_of_total', $2, 0.60, $3, $4)`,
+                'share_of_total', $2, 0.60, $3, $4,
+                (SELECT id FROM methodology_versions WHERE component = 'bias'
+                 ORDER BY effective_from DESC LIMIT 1))`,
         [jobId, isViolation ? 0.75 : 0.40, isViolation, isViolation ? 'warning' : null],
     );
 }

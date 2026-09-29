@@ -126,8 +126,11 @@ async function insertBiasAssessment(jobId, {
     const row = await dbRun(
         `INSERT INTO bias_assessments
             (job_id, assessment_type, group_field, group_value,
-             metric_name, metric_value, threshold, is_violation, severity, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10::timestamptz, NOW()))
+             metric_name, metric_value, threshold, is_violation, severity, created_at,
+             methodology_version_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10::timestamptz, NOW()),
+                  (SELECT id FROM methodology_versions WHERE component = 'bias'
+                   ORDER BY effective_from DESC LIMIT 1))
          RETURNING id`,
         [jobId, assessmentType, groupField, groupValue, metricName, metricValue,
          threshold, isViolation, severity,
