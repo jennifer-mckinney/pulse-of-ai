@@ -4,6 +4,37 @@
 # (without this file's directory as cwd) resolve to the same project.
 name: pulse-of-ai
 
+# Shared definition for every Node service of the full solution (migrate,
+# web, worker, populate): ONE image (./Dockerfile), role picked by `command`.
+# Container-side connection settings are fixed to the compose network; the
+# host-side .env values (POSTGRES_HOST=localhost, POSTGRES_PORT=5434, ...)
+# are for `npm run dev` on the host and are deliberately overridden here.
+x-app: &app
+  image: ${PULSE_APP_IMAGE:-pulse-of-ai/app:local}
+  # Built ONCE, by the web service (see there); the other roles reuse the tag
+  # and never try to pull it from a registry.
+  pull_policy: never
+  profiles: ["full"]
+  restart: unless-stopped
+  environment:
+    NODE_ENV: production
+    PORT: "3000"
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: "5432"
+    POSTGRES_DB: ${POSTGRES_DB:-pulse_of_ai}
+    POSTGRES_USER: ${POSTGRES_USER:-pulse_user}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    REDIS_HOST: redis
+    REDIS_PORT: "6379"
+    EMBEDDINGS_SERVICE_URL: http://embeddings:8000
+    EMBED_MODEL: ${EMBED_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+    AUDIT_HASH_KEY: ${AUDIT_HASH_KEY:-}
+    CORRELATION_SALT: ${CORRELATION_SALT:-}
+    CORRELATION_MIN_CONFIDENCE: ${CORRELATION_MIN_CONFIDENCE:-0.85}
+    RETENTION_DETAIL_DAYS: ${RETENTION_DETAIL_DAYS:-90}
+    DEMO_FEED_INTERVAL_MS: ${DEMO_FEED_INTERVAL_MS:-150000}
+    DEMO_FEED_BATCH: ${DEMO_FEED_BATCH:-14}
+
 services:
   # Primary database — PostgreSQL 16 with pgvector extension
   postgres:
@@ -54,8 +85,114 @@ services:
       timeout: 5s
       retries: 10
 
+  # ─── Full solution (profile "full") ──────────────────────────────────────
+  # Everything below is OPT-IN. The default profile (`npm run docker:up`,
+  # bare `docker compose up -d`) still starts only postgres, postgres_test and
+  # redis. `npm run standup` (scripts/standup.sh) activates "full" (and
+  # "demo" for the population feed) and waits for health.
+  #
+  # Inside the compose network the app reaches postgres:5432 and redis:6379
+  # directly; the *_PORT host-port variables above only move the published
+  # ports, so a second stack can run beside the dev one.
+
+  # One-shot: apply pending migrations, then the idempotent registry seed.
+  # web, worker and the population feed wait for it to EXIT 0.
+  migrate:
+    <<: *app
+    command: ["sh", "-c", "node scripts/migrate.js && node scripts/seed.js"]
+    restart: "no"
+    healthcheck:
+      disable: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Express API + the static frontend (public/) on one port.
+  web:
+    <<: *app
+    # The only build definition for the app image. One build target (not one
+    # per role) plus no provenance/SBOM attestations (standup also sets
+    # BUILDX_NO_DEFAULT_ATTESTATIONS=1) keeps the image ID stable across cached
+    # rebuilds, so re-running standup leaves running containers alone instead
+    # of recreating them.
+    build:
+      context: .
+      dockerfile: Dockerfile
+      provenance: false
+      sbom: false
+    pull_policy: missing
+    command: ["node", "src/server.js"]
+    ports:
+      - "${PULSE_BIND_ADDR:-127.0.0.1}:${WEB_PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # BullMQ workers (ingest / embed / correlate) — src/workers/start.js is the
+  # only worker entry point. Depends on embeddings being STARTED, not healthy:
+  # if the model download fails the rest of the stack still comes up (embed
+  # jobs retry with backoff), and standup reports embeddings as unavailable.
+  worker:
+    <<: *app
+    command: ["node", "src/workers/start.js"]
+    healthcheck:
+      disable: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      embeddings:
+        condition: service_started
+
+  # FastAPI + sentence-transformers. The model downloads on first start into
+  # the hf_cache volume and is reused by every later start / rebuild.
+  embeddings:
+    image: ${PULSE_EMBEDDINGS_IMAGE:-pulse-of-ai/embeddings:local}
+    build:
+      context: ./python
+      dockerfile: Dockerfile
+      provenance: false   # see x-app: stable image IDs across cached rebuilds
+      sbom: false
+    profiles: ["full"]
+    restart: unless-stopped
+    environment:
+      EMBED_MODEL: ${EMBED_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+      EMBED_BATCH_SIZE: ${EMBED_BATCH_SIZE:-64}
+    ports:
+      - "${PULSE_BIND_ADDR:-127.0.0.1}:${EMBEDDINGS_PORT:-8000}:8000"
+    volumes:
+      - hf_cache:/home/app/.cache/huggingface
+
+  # Data population loop (profile "demo"). Live collectors are not
+  # implemented yet, so this feeds FICTIONAL demo posts through the real
+  # pipeline every DEMO_FEED_INTERVAL_MS — see scripts/populate.js for why
+  # and how it is labelled. Started by scripts/standup.sh.
+  populate:
+    <<: *app
+    profiles: ["demo"]
+    command: ["node", "scripts/populate.js", "--loop"]
+    healthcheck:
+      disable: true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
 volumes:
   postgres_data:
     driver: local
   redis_data:
+    driver: local
+  # sentence-transformers model cache (embeddings service, profile "full")
+  hf_cache:
     driver: local
