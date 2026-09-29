@@ -4,6 +4,11 @@
 // they take effect in every process (worker and web) on the next run,
 // without recreating containers.
 //
+//   npm run source:disable -- <slug> --reason "<why>"
+//       the database kill switch (F10-10): the source stops before its next
+//       run in every process; GET /api/sources reports it 'disabled'.
+//   npm run source:enable -- <slug>
+//       clear the database kill switch (env kill switches still apply).
 //   npm run source:reset -- <slug> [--note "<why>"]
 //       clear the refused state (F10-5): the source is tried again on its
 //       next poll; its open 'source_refused' alert is resolved with the note.
@@ -16,7 +21,9 @@ require('dotenv').config();
 const { getSource } = require('../src/config/source-registry');
 
 const USAGE = [
-    'usage: npm run source:reset -- <slug> [--note "<why>"]',
+    'usage: npm run source:disable -- <slug> --reason "<why>"',
+    '       npm run source:enable -- <slug>',
+    '       npm run source:reset -- <slug> [--note "<why>"]',
 ].join('\n');
 
 function flag(args, name) {
@@ -30,11 +37,14 @@ function flag(args, name) {
 function parseArgs(argv) {
     const args = Array.isArray(argv) ? argv : [];
     const [command, slug] = args;
-    if (!['reset'].includes(command) || !slug || slug.startsWith('--')) return { error: USAGE };
+    if (!['reset', 'disable', 'enable'].includes(command) || !slug || slug.startsWith('--')) return { error: USAGE };
     if (!getSource(slug)) return { error: `unknown source '${slug}' (not a registry slug)\n${USAGE}` };
     const note = flag(args, '--note');
-    if (note === null) return { error: USAGE };
-    return { command, slug, note: note || null };
+    const reason = flag(args, '--reason');
+    if (note === null || reason === null) return { error: USAGE };
+    // A takedown is recorded with its reason.
+    if (command === 'disable' && !reason) return { error: `source:disable needs --reason "<why>"\n${USAGE}` };
+    return { command, slug, note: note || null, reason: reason || null };
 }
 
 /**
@@ -53,7 +63,13 @@ async function main(argv, io = {}) {
     try {
         const row = await db.dbGet('SELECT id FROM data_sources WHERE name = $1', [parsed.slug]);
         if (!row) { err(`source '${parsed.slug}' has no data_sources row — run npm run seed`); return 2; }
-        if (parsed.command === 'reset') {
+        if (parsed.command === 'disable') {
+            await state.setDbKillSwitch(row.id, true, { reason: parsed.reason, by: who });
+            out(`${parsed.slug}: disabled (database kill switch) — applies before its next run in every process`);
+        } else if (parsed.command === 'enable') {
+            await state.setDbKillSwitch(row.id, false);
+            out(`${parsed.slug}: database kill switch cleared (env kill switches still apply)`);
+        } else if (parsed.command === 'reset') {
             await state.clearRefusal(row.id, `manual reset by ${who}${parsed.note ? `: ${parsed.note}` : ''}`);
             out(`${parsed.slug}: refused state cleared — it is tried again on its next poll`);
         }

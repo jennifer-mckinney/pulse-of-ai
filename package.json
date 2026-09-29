@@ -12,6 +12,8 @@
     "replay": "node scripts/replay.js",
     "verify-provenance": "node scripts/verify-provenance.js",
     "source:reset": "node scripts/source-admin.js reset",
+    "source:disable": "node scripts/source-admin.js disable",
+    "source:enable": "node scripts/source-admin.js enable",
     "compact": "node scripts/compact.js",
     "db:reset": "node scripts/migrate.js --fresh && node scripts/seed.js",
     "docker:up": "docker compose up -d",

@@ -3,7 +3,8 @@
 //
 //   for each requested source (registry order):
 //     gate  — sourceStatus(): only 'collecting' sources run (kill switches,
-//             missing credentials, blocked: never fetched)
+//             missing credentials, blocked: never fetched), then the
+//             database kill switch (data_sources.collection_disabled_at, F10-10)
 //     refusal — src/collectors/refusal.js: a source that refused access
 //             (401/403/451, bot wall, robots) is skipped through its
 //             cooldown and reported 'blocked_by_source' (F10-5)
@@ -126,6 +127,14 @@ async function runCollection(o = {}) {
             const sourceId = ids.get(slug);
             if (!sourceId) { row.outcome = 'error'; row.error = 'data_sources row missing — run `npm run seed`'; continue; }
 
+            // F10-10: the database kill switch applies at once, in every
+            // process (no container recreate needed).
+            const killed = await state.dbKillSwitch(sourceId);
+            if (killed) {
+                row.status = 'disabled';
+                row.reason = `kill switch (database): disabled${killed.by ? ` by ${killed.by}` : ''}${killed.reason ? ` — ${killed.reason}` : ''}`;
+                continue;
+            }
             // F10-5: a source that refused us is not asked again until its
             // cooldown ends (then one probe) or an operator resets it.
             const refusal = await state.getRefusal(sourceId);

@@ -79,6 +79,31 @@ async function recordRun({
     );
 }
 
+/**
+ * The database kill switch of a source (F10-10, migration 020).
+ * @returns {Promise<{ disabled_at, reason, by }|null>} null when not disabled
+ */
+async function dbKillSwitch(sourceId) {
+    const row = await dbGet(
+        `SELECT collection_disabled_at AS disabled_at, collection_disabled_reason AS reason, collection_disabled_by AS by
+         FROM data_sources WHERE id = $1`,
+        [sourceId],
+    );
+    return row && row.disabled_at ? row : null;
+}
+
+/** Set (disabled=true) or clear the database kill switch. @returns {Promise<boolean>} whether a row changed */
+async function setDbKillSwitch(sourceId, disabled, { reason = null, by = null } = {}) {
+    const row = disabled
+        ? await dbGet(
+            `UPDATE data_sources SET collection_disabled_at = NOW(), collection_disabled_reason = $2, collection_disabled_by = $3
+             WHERE id = $1 RETURNING id`, [sourceId, reason, by])
+        : await dbGet(
+            `UPDATE data_sources SET collection_disabled_at = NULL, collection_disabled_reason = NULL, collection_disabled_by = NULL
+             WHERE id = $1 RETURNING id`, [sourceId]);
+    return !!row;
+}
+
 /** The refusal columns of a source (null when it has no state row yet). */
 async function getRefusal(sourceId) {
     return dbGet(
@@ -140,5 +165,6 @@ async function clearRefusal(sourceId, resolution) {
 }
 
 module.exports = {
-    sourceIdsBySlug, claim, saveOutcome, recordRun, getRefusal, recordRefusal, clearRefusal, CLAIM_SLACK_SEC,
+    sourceIdsBySlug, claim, saveOutcome, recordRun, getRefusal, recordRefusal, clearRefusal,
+    dbKillSwitch, setDbKillSwitch, CLAIM_SLACK_SEC,
 };

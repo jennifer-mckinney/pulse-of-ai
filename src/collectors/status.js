@@ -40,7 +40,12 @@ function registryFields(row, env, now) {
     // or is reset.
     const gate = refusalGate(row, src.slug, env, now);
     const refused = st.status === 'collecting' && (gate.state === 'cooldown' || gate.state === 'probe');
-    const status = refused ? BLOCKED_BY_SOURCE : st.status;
+    // F10-10: the database kill switch disables a source whatever its gate.
+    const dbKilled = !!row.collection_disabled_at;
+    const status = dbKilled ? 'disabled' : (refused ? BLOCKED_BY_SOURCE : st.status);
+    const dbReason = dbKilled
+        ? `kill switch (database): disabled${row.collection_disabled_by ? ` by ${row.collection_disabled_by}` : ''}${row.collection_disabled_reason ? ` — ${row.collection_disabled_reason}` : ''}`
+        : null;
     return {
         registry: true,
         slug: src.slug,
@@ -50,7 +55,8 @@ function registryFields(row, env, now) {
         program: src.auth.program,
         signup_url: src.auth.signup,
         status,
-        status_reason: refused ? gate.reason : st.reason,
+        status_reason: dbReason || (refused ? gate.reason : st.reason),
+        collection_disabled_at: row.collection_disabled_at || null,
         missing_env: st.missing,
         open_routes: st.openRoutes,
         licence_refs_on_file: st.recorded,
@@ -85,6 +91,7 @@ async function sourceRows({ includeInactive = false, env = process.env, now = Da
     const rows = await dbAll(
         `SELECT ds.id, ds.name, ds.display_name, ds.source_type, ds.category, ds.active,
                 ds.retired_at, ds.retired_note,
+                ds.collection_disabled_at, ds.collection_disabled_reason, ds.collection_disabled_by,
                 s.last_attempt_at, s.last_success_at, s.last_item_count, s.last_error_kind, s.last_http_status,
                 s.last_error_at, s.consecutive_failures,
                 s.access_denied_at, s.access_denied_status, s.access_denied_kind, s.refused_until, s.refusal_count
