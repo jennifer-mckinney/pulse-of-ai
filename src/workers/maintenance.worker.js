@@ -7,7 +7,10 @@
 //      platform-terms windows (Reddit 48 h, Guardian 24 h, YouTube and
 //      TikTok 30 days) and the §19 detail window (RETENTION_DETAIL_DAYS);
 //   2. compaction (scripts/compact.js runCompaction): the demo purge, then
-//      every month that ended before the detail window, into rollups.
+//      every month that ended before the detail window, into rollups;
+//   3. source_runs: raw rows older than 30 days rolled up into
+//      source_run_daily and removed (src/collectors/run-retention.js, P10-9);
+//   4. processing_jobs: empty finished jobs older than 30 days removed.
 //
 // Each step is independent: a failing step is reported in the result and
 // logged (scrubbed) and the others still run. BullMQ's job scheduler makes
@@ -18,6 +21,7 @@
 
 const { blankExpired } = require('../collectors/retention');
 const { scrub } = require('../collectors/redact');
+const { rollupSourceRuns, purgeEmptyJobs } = require('../collectors/run-retention');
 
 const DEFAULT_MAINTENANCE_EVERY_MS = 5 * 60 * 1000;
 const MAINTENANCE_SCHEDULER_ID = 'retention';
@@ -32,6 +36,9 @@ function defaultSteps({ log }) {
     return [
         ['retention', () => blankExpired({ log })],
         ['compaction', () => require('../../scripts/compact').runCompaction({ log })],
+        // P10-9: 30 days of raw source_runs, then daily rollups; empty jobs.
+        ['source_runs', () => rollupSourceRuns()],
+        ['processing_jobs', () => purgeEmptyJobs()],
     ];
 }
 
