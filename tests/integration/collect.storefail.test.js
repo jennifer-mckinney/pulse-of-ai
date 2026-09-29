@@ -84,3 +84,43 @@ it('NUL bytes are stripped from the text and the stored payload', async () => {
     expect(JSON.stringify(row.raw_payload)).not.toMatch(/\\u0000/);
     expect(row.raw_payload.extra).toEqual(['a']);
 });
+
+// Copilot 4129565586: every route cursor kind is restored on a failed store
+// — X since_id, HN created_at, the Scholar mailbox lastUid (bulk-file mtimes
+// are the test above).
+describe('cursor restore per route kind (G10-5)', () => {
+    const X1 = 'https://api.x.com/2/tweets/search/recent?query=%28%22artificial+intelligence%22+OR+AI%29+-is%3Aretweet+lang%3Aen&max_results=20&tweet.fields=created_at%2Clang';
+    const HN_URL = 'https://hn.algolia.com/api/v1/search_by_date?query=AI&tags=story&hitsPerPage=50';
+    const again = () => require('../../src/db/connection').dbRun(`UPDATE source_collection_state SET last_attempt_at = NOW() - interval '1 day'`);
+
+    it.each([
+        ['x', { X_BEARER_TOKEN: 'tok' }, [[X1, 'gated/x-recent.json']], 'recent-search', 'sinceId'],
+        ['hacker_news', {}, [[HN_URL, 'recorded/hn-algolia.json']], 'algolia-search', 'since'],
+    ])('%s: a failed store keeps the old cursor; a clean run advances it', async (slug, env, routes, routeId, key) => {
+        const failed = await runnerFailingStores(1)(opts([slug], { ...TEST_ENV, ...env }, routes));
+        expect(failed.sources[0].outcome).toBe('error');
+        expect(((await stateOf(slug)).cursor[routeId] || {})[key]).toBeUndefined();
+        await again();
+        const ok = await runCollection(opts([slug], { ...TEST_ENV, ...env }, routes));
+        expect(ok.sources[0].outcome).toBe('ok');
+        expect((await stateOf(slug)).cursor[routeId][key]).toBeDefined();
+    });
+
+    it('google_scholar: a failed store keeps lastUid, so the alert is read again', async () => {
+        const source = fs.readFileSync(path.join(FIXTURE_ROOT, 'gated/scholar-alert.eml'));
+        const imapFactory = () => ({
+            connect: async () => {}, getMailboxLock: async () => ({ release: () => {} }),
+            search: async () => [41], fetchOne: async (uid, what) => (what.size ? { size: source.length } : { source }),
+            logout: async () => {},
+        });
+        const env = { ...TEST_ENV, SCHOLAR_ALERTS_IMAP_HOST: 'imap.example', SCHOLAR_ALERTS_IMAP_USER: 'u', SCHOLAR_ALERTS_IMAP_PASSWORD: 'p' };
+        const o = { ...opts(['google_scholar'], env, []), collectorCtx: { sleep: () => Promise.resolve(), imapFactory } };
+        const failed = await runnerFailingStores(1)(o);
+        expect(failed.sources[0].outcome).toBe('error');
+        expect(((await stateOf('google_scholar')).cursor['alert-mailbox'] || {}).lastUid).toBeUndefined();
+        await again();
+        const ok = await runCollection(o);
+        expect(ok.sources[0].outcome).toBe('ok');
+        expect((await stateOf('google_scholar')).cursor['alert-mailbox'].lastUid).toBe(41);
+    });
+});
