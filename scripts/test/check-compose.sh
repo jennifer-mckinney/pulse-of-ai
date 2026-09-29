@@ -16,6 +16,8 @@
 #         populate get the base secrets (DB, Redis, AUDIT_HASH_KEY,
 #         CORRELATION_SALT) and nothing else credential-shaped
 #   F9-8  the unauthenticated embeddings API publishes no host port
+#   F9-6  every pulled image (compose services, Dockerfile bases, CI service
+#         containers) is pinned by @sha256 digest
 #   P9-7  every service rotates json-file logs; the worker has a healthcheck
 #         and a stop_grace_period of at least 150 s
 #
@@ -100,6 +102,20 @@ grace_s=$(awk -v d="$grace" 'BEGIN { s = 0; while (match(d, /^[0-9.]+(h|ms|m|s)/
     print int(s) }')
 check "worker stop_grace_period >= 150s (a retrying run can finish)" \
     "$( (( grace_s >= 150 )) || echo "worker stop_grace_period is '${grace:-unset}' (${grace_s}s)")"
+
+# ─── F9-6: pulled images are digest-pinned (compose, Dockerfiles, CI) ────────
+# Locally built images (a build: section, or pull_policy never) are exempt.
+unpinned=$(jq -r '.services | to_entries[]
+    | select(.value.build == null and (.value.pull_policy // "") != "never")
+    | select((.value.image // "") | test("@sha256:[0-9a-f]{64}$") | not)
+    | "\(.key): image \(.value.image) is not pinned by digest"' <<< "$cfg")
+check "every pulled compose image is pinned by @sha256 digest" "$unpinned"
+unpinned_df=$(cd "$ROOT" && grep -HnE '^ARG [A-Z_]+_IMAGE=' Dockerfile python/Dockerfile \
+    | grep -vE '@sha256:[0-9a-f]{64}$' || true)
+check "Dockerfile base images are pinned by @sha256 digest" "$unpinned_df"
+unpinned_ci=$(grep -nE '^[[:space:]]+image:' "$ROOT/.github/workflows/ci.yml" \
+    | grep -vE '@sha256:[0-9a-f]{64}' | sed 's/^/ci.yml:/' || true)
+check "CI service images are pinned by @sha256 digest" "$unpinned_ci"
 
 #@@CHECKS@@
 

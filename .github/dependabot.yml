@@ -1,0 +1,25 @@
+# Dependabot proposes (never merges) updates for the pinned images and the
+# hash-locked embeddings requirements (F9-6). Digest pins are bumped with
+# their tags; every bump goes through CI and review like any other change.
+version: 2
+updates:
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: "/python"
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker-compose
+    directory: "/"
+    schedule:
+      interval: weekly
+  - package-ecosystem: pip
+    directory: "/python"
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly

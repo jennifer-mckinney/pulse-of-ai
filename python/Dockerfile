@@ -7,14 +7,16 @@
 #   docker build -t pulse-of-ai/embeddings:local python
 #
 # Python 3.13, not 3.14: the pinned torch / tokenizers wheels exist for 3.13.
-# The base image is pinned to an exact patch release; bump it deliberately.
+# The base image is pinned to an exact patch release AND its image digest
+# (F9-6); bump both deliberately (Dependabot proposes digest bumps).
 #
 # Model weights are NOT baked into the image. They download on the first
 # start into HF_HOME, which docker-compose.yml mounts as the named volume
 # `hf_cache` — so the ~90 MB model downloads once per volume, not on every
 # build, and survives container rebuilds.
 
-ARG PYTHON_IMAGE=python:3.13.15-slim-bookworm
+# Tag: python:3.13.15-slim-bookworm
+ARG PYTHON_IMAGE=python:3.13.15-slim-bookworm@sha256:2325bb286ec344af3e5898cc224b5844e2707ac6e26b1632516fd3edc84a5e26
 ARG TORCH_VERSION=2.12.1
 
 # ─── Stage 1: build an isolated virtualenv ───────────────────────────────────

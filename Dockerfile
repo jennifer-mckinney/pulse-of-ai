@@ -11,10 +11,12 @@
 #
 # Build:  docker build -t pulse-of-ai/app:local .
 #
-# The base image is pinned to an exact Node release so a rebuild months from
-# now produces the same runtime; bump NODE_IMAGE deliberately.
+# The base image is pinned to an exact Node release AND its image digest
+# (F9-6): a re-pushed tag can never change what a rebuild pulls. Bump both
+# deliberately (Dependabot proposes digest bumps, .github/dependabot.yml).
+# Tag: node:22.23.3-bookworm-slim
 
-ARG NODE_IMAGE=node:22.23.3-bookworm-slim
+ARG NODE_IMAGE=node:22.23.3-bookworm-slim@sha256:43ac6c60b8f89723f746e8a92ce91abd5017e627ce1ddfe4238355d3a30b772c
 
 # ─── Stage 1: production dependencies only ───────────────────────────────────
 # `npm ci --omit=dev` installs exactly what package-lock.json pins, minus jest /
