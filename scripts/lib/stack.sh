@@ -255,8 +255,11 @@ set_env_value() {
         # ENVIRON, not -v: awk would process backslash escapes in a -v value.
         STACK_SET_KEY=$key STACK_SET_LINE="$key=\"$quoted\"" awk '
             $0 ~ "^(export[[:space:]]+)?" ENVIRON["STACK_SET_KEY"] "=" { print ENVIRON["STACK_SET_LINE"]; next }
-            { print }' "$STACK_ENV_FILE" > "$tmp" \
-            && chmod 600 "$tmp" && mv "$tmp" "$STACK_ENV_FILE" || { rm -f "$tmp"; return 1; }
+            { print }' "$STACK_ENV_FILE" > "$tmp" || { rm -f "$tmp"; return 1; }
+        if ! { chmod 600 "$tmp" && mv "$tmp" "$STACK_ENV_FILE"; }; then
+            rm -f "$tmp"
+            return 1
+        fi
     else
         [[ -z "$(tail -c 1 "$STACK_ENV_FILE")" ]] || printf '\n' >> "$STACK_ENV_FILE"
         printf '%s="%s"\n' "$key" "$quoted" >> "$STACK_ENV_FILE"
@@ -267,7 +270,10 @@ set_env_value() {
 # offer to set) the two operator decisions. Sets STACK_LIVE_COLLECTION to 1
 # when a contact URL is in effect, else 0. Prompts read stdin; a blank answer
 # keeps the value empty. Nothing is ever written without an answer.
+# Read by scripts/standup.sh, which sources this file (the summary line).
+# shellcheck disable=SC2034
 STACK_LIVE_COLLECTION=0
+# shellcheck disable=SC2034  # STACK_LIVE_COLLECTION is read by standup.sh
 collector_operator_setup() {
     local interactive=${1:-0} contact ack answer
     contact=$(effective COLLECTOR_CONTACT_URL)

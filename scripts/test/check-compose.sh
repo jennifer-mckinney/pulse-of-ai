@@ -100,10 +100,10 @@ leaks=$(jq -r --argjson base "$BASE_SECRETS" --arg re "$CRED_RE" '.services | to
     | "\($s) receives collector credential \(.key)"' <<< "$cfg_probe")
 check "collector credential values are passed to worker only" "$leaks"
 probe_json=$(printf '%s\n' "${CRED_PROBE[@]}" | jq -R . | jq -s .)
-missing=$(jq -r --argjson probe "$probe_json" '(.services.worker.environment // {}) as $w
+missing_values=$(jq -r --argjson probe "$probe_json" '(.services.worker.environment // {}) as $w
     | $probe[] | select(. as $k | ($w[$k] // "") != "probe-secret-\($k)")
     | "worker lacks the value of \(.) (x-collector-env)"' <<< "$cfg_probe")
-check "worker receives the collector credentials (x-collector-env)" "$missing"
+check "worker receives the collector credentials (x-collector-env)" "$missing_values"
 nomark=$(jq -r --argjson probe "$probe_json" '(.services.web.environment // {}) as $w
     | $probe[] | select(. as $k | ($w[$k] // "") != "set")
     | "web lacks the presence marker for \(.) (x-collector-presence)"' <<< "$cfg_probe")
