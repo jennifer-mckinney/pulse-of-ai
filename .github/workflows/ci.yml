@@ -123,6 +123,48 @@ jobs:
       - name: Run pytest
         run: python -m pytest python/tests
 
+  # Build-only check for the one-command standup (scripts/standup.sh). Images
+  # are built and sanity-checked on the runner and then discarded — nothing is
+  # pushed to any registry.
+  docker-images:
+    name: Docker images (build only)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # The default profile must stay databases + redis only (npm run docker:up);
+      # the full/demo profiles must parse. The password is a CI-only dummy.
+      - name: Validate docker-compose.yml profiles
+        env:
+          POSTGRES_PASSWORD: ci_password
+        run: |
+          docker compose config --quiet
+          docker compose --profile full --profile demo config --quiet
+          default_services="$(docker compose config --services | sort | tr '\n' ' ')"
+          echo "default profile: ${default_services}"
+          test "${default_services}" = "postgres postgres_test redis "
+
+      - name: Lint standup / teardown scripts
+        run: |
+          bash -n scripts/standup.sh
+          bash -n scripts/teardown.sh
+          shellcheck -x scripts/standup.sh scripts/teardown.sh scripts/lib/stack.sh
+
+      - name: Build app image (web / worker / migrate / populate)
+        run: docker build --tag pulse-of-ai/app:ci .
+
+      - name: Build embeddings image
+        run: docker build --tag pulse-of-ai/embeddings:ci python
+
+      - name: Image sanity (non-root users, entry points load)
+        run: |
+          test "$(docker run --rm pulse-of-ai/app:ci id -u)" != "0"
+          test "$(docker run --rm --entrypoint id pulse-of-ai/embeddings:ci -u)" != "0"
+          docker run --rm pulse-of-ai/app:ci node -e "require('./scripts/populate.js'); require('./scripts/smoke-check.js')"
+          docker run --rm --entrypoint python pulse-of-ai/embeddings:ci -c "import embeddings_service"
+          docker image ls --format '{{.Repository}}:{{.Tag}} {{.Size}}' | grep ':ci '
+
   e2e:
     name: E2E (Playwright)
     runs-on: ubuntu-latest
