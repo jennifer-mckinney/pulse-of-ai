@@ -113,7 +113,8 @@ One command builds and starts the whole solution (frontend, API, workers, embedd
 ```bash
 git clone https://github.com/jennifer-mckinney/pulse-of-ai.git
 cd pulse-of-ai
-npm run standup          # or: bash scripts/standup.sh
+bash scripts/standup.sh  # needs Bash + Docker only
+# or: npm run standup    # the same script, launched by npm (also needs Node.js/npm)
 ```
 
 When it finishes, open **http://localhost:3000**: the globe, the eleven chapters with their numbers, and a "why?" receipt on any post that opens its real audit trail.
@@ -121,10 +122,19 @@ When it finishes, open **http://localhost:3000**: the globe, the eleven chapters
 ### Prerequisites
 
 - Docker Desktop (macOS / Windows) or Docker Engine with the Compose plugin (Linux), with the daemon running. **Docker Compose 2.39.0 or newer** (`docker compose version`): `docker-compose.yml` uses `build.provenance` / `build.sbom`, which Compose added in 2.39.0, and older versions reject the file. Standup checks the version and stops with upgrade instructions if it is too old.
-- `curl` (used by the smoke check).
-- No Node.js or Python on the host. Everything runs in containers.
+- **Bash 3.2 or newer.** macOS's `/bin/bash` (3.2) and any Linux bash work. On **Windows**, run it from **WSL 2** (recommended, with Docker Desktop's WSL integration turned on) or **Git Bash**. PowerShell and `cmd.exe` cannot run the script themselves: `npm run standup` from them works only when one of those `bash` executables is on `PATH`. Under Git Bash, NTFS does not enforce the `chmod 600` standup applies to `.env`, so restrict that file with Windows permissions yourself.
+- `curl` (used by the smoke check), plus the standard tools every macOS, Linux, WSL and Git Bash install has: `awk`, `sed`, `grep`, `find`, and `openssl` (or `/dev/urandom` with `od`) for the generated secrets.
 
-The script checks these first and prints how to fix anything that is missing.
+Two ways to start it, same script:
+
+| Command | Needs on the host |
+|---|---|
+| `bash scripts/standup.sh` | Bash, Docker (Compose 2.39.0+), `curl` |
+| `npm run standup` | all of the above, plus Node.js and npm (npm only launches `bash scripts/standup.sh`; no `npm install` needed) |
+
+Neither runs Node.js or Python on the host: those run only inside the containers. The same goes for teardown (`bash scripts/teardown.sh` or `npm run teardown`). The hints the scripts print use whichever form you started them with.
+
+The script checks Docker, the Compose version, the daemon and `curl` first, and prints how to fix anything that is missing.
 
 ### What it does
 
@@ -184,6 +194,7 @@ The first start downloads the ~90 MB `all-MiniLM-L6-v2` model into the `hf_cache
 npm run teardown                    # stop and remove containers, keep the data volumes
 npm run teardown -- --purge         # also delete the volumes (database, redis, model cache); asks first
 npm run teardown -- --purge --yes   # non-interactive purge
+bash scripts/teardown.sh --purge    # the same without Node.js/npm on the host
 ```
 
 Both act on one compose project only: `COMPOSE_PROJECT_NAME` if it's set, otherwise the one in `.env`, otherwise `pulse-of-ai`. The first line of output says which one it used and where the name came from (shell env, env file or default).
@@ -200,7 +211,7 @@ Both act on one compose project only: `COMPOSE_PROJECT_NAME` if it's set, otherw
 - **New secrets.** Standup adds keys that are missing from an existing `.env` (such as `REDIS_PASSWORD`) and stops if a secret is empty or still has its `.env.example` placeholder. If you only use `npm run docker:up`, add `REDIS_PASSWORD=$(openssl rand -hex 32)` to `.env` yourself: the redis service now requires a password.
 - **A placeholder `POSTGRES_PASSWORD` on an existing volume.** Postgres reads `POSTGRES_PASSWORD` only when it first creates the database, so editing `.env` alone breaks the connection. Change it inside Postgres as well, without putting it on a command line: run `docker compose exec postgres psql -U pulse_user -d pulse_of_ai`, then `\password pulse_user`, and put the same value in `.env`. Or start over with `npm run teardown -- --purge`, which deletes the data.
 
-Flags: `npm run standup -- --help`. `--no-build` skips the image build, and `--demo` adds a fresh demo batch even when the hour is already full. Timeouts: `STANDUP_TIMEOUT` (core services, default 300 s) and `STANDUP_EMBEDDINGS_TIMEOUT` (first model download, default 900 s).
+Flags: `bash scripts/standup.sh --help` (or `npm run standup -- --help`). `--no-build` skips the image build, and `--demo` adds a fresh demo batch even when the hour is already full. Timeouts: `STANDUP_TIMEOUT` (core services, default 300 s) and `STANDUP_EMBEDDINGS_TIMEOUT` (first model download, default 900 s).
 
 ---
 

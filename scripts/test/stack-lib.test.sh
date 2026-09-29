@@ -50,8 +50,11 @@ new_case() {
 # the caller's own values (e.g. a developer who exported COMPOSE_PROJECT_NAME
 # or POSTGRES_TEST_PORT for another stack) are removed first: every case
 # sees only what it sets.
+# npm_lifecycle_event too: `npm run verify` sets it, and the scripts' hints
+# depend on it (stack_cmd).
 HERMETIC_UNSET=(COMPOSE_PROJECT_NAME WEB_PORT POSTGRES_PORT POSTGRES_TEST_PORT REDIS_PORT
-    PULSE_BIND_ADDR POSTGRES_PASSWORD REDIS_PASSWORD AUDIT_HASH_KEY CORRELATION_SALT)
+    PULSE_BIND_ADDR POSTGRES_PASSWORD REDIS_PASSWORD AUDIT_HASH_KEY CORRELATION_SALT
+    npm_lifecycle_event)
 HERMETIC_ENV_U=()
 for v in "${HERMETIC_UNSET[@]}"; do HERMETIC_ENV_U+=(-u "$v"); done
 
@@ -369,6 +372,27 @@ assert_eq "check_docker: v2.39.0-desktop.1 accepted"   "rc=0" "$(fake_docker_cas
 assert_eq "check_docker: 2.40.3 accepted"              "rc=0" "$(fake_docker_case 2.40.3 | tail -n 1)"
 assert_eq "check_docker: unparseable version refused"  "rc=1" "$(fake_docker_case weird | tail -n 1)"
 assert_eq "check_docker: unparseable → explains"       "yes"  "$(grep -q 'could not read the Docker Compose version' "$d/stderr" && echo yes || echo no)"
+
+# ─── Copilot 4129574098: hints match the entry point (Bash-only hosts) ───────
+d=$(new_case)
+assert_eq "stack_cmd: bash entry"              "bash scripts/teardown.sh"          "$(lib_run "$d" 'stack_cmd teardown')"
+assert_eq "stack_cmd: bash entry + args"       "bash scripts/teardown.sh --purge"  "$(lib_run "$d" 'stack_cmd teardown --purge')"
+assert_eq "stack_cmd: npm entry"               "npm run standup"                   "$(lib_run "$d" 'npm_lifecycle_event=standup; stack_cmd standup')"
+assert_eq "stack_cmd: npm entry + args"        "npm run teardown -- --purge"       "$(lib_run "$d" 'npm_lifecycle_event=standup; stack_cmd teardown --purge')"
+d=$(new_case); printf 'COMPOSE_PROJECT_NAME=mystack\nPOSTGRES_PASSWORD=x\nREDIS_PASSWORD=y\n' > "$d/.env"
+run_teardown "$d" --; rc=$?
+assert_eq "teardown via bash: succeeds"                   "0" "$rc"
+assert_eq "teardown via bash: never tells you to use npm" "no" "$(grep -q 'npm run' "$d/out" && echo yes || echo no)"
+d=$(new_case); printf 'COMPOSE_PROJECT_NAME=mystack\nPOSTGRES_PASSWORD=x\nREDIS_PASSWORD=y\n' > "$d/.env"
+run_teardown "$d" npm_lifecycle_event=teardown --; rc=$?
+assert_eq "teardown via npm: hint uses npm"               "yes" "$(grep -q "'npm run standup' resumes" "$d/out" && echo yes || echo no)"
+# The shell scripts never run node/npm/python on the HOST (README claim).
+SCRIPTS_DIR="$(cd "$(dirname "$LIB")/.." && pwd)"
+# Command position = line start, or after ; & | $( then do else (a "(" in
+# prose such as "(npm run docker:up ...)" inside a message is not one).
+host_calls=$(grep -nE '^[^#]*(^|[;&|]|\$\(|then|do|else)[[:space:]]*(node|npm|npx|python3?)[[:space:]]' \
+    "$SCRIPTS_DIR/standup.sh" "$SCRIPTS_DIR/teardown.sh" "$SCRIPTS_DIR/lib/stack.sh" || true)
+assert_eq "standup/teardown/stack.sh: no host node/npm/python call" "" "$host_calls"
 
 #@@CASES@@
 

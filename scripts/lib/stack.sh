@@ -29,6 +29,24 @@ ok()   { printf '    %sok%s  %s\n' "$_G" "$_N" "$*"; }
 warn() { printf '    %sWARNING%s  %s\n' "$_Y" "$_N" "$*" >&2; }
 die()  { printf '\n%sERROR%s  %s\n' "$_R" "$_N" "$*" >&2; exit 1; }
 
+# stack_cmd NAME [ARGS...]: how to re-run scripts/NAME.sh the way THIS run
+# was started — `npm run NAME -- ARGS` under npm (npm sets
+# npm_lifecycle_event), else `bash scripts/NAME.sh ARGS`. The scripts need
+# only Bash and Docker on the host (no node/npm), so a hint must not send a
+# Bash-only user to npm (Copilot 4129574098).
+stack_cmd() {
+    local name=$1 cmd
+    shift
+    if [[ -n "${npm_lifecycle_event:-}" ]]; then
+        cmd="npm run $name"
+        (( $# )) && cmd+=" -- $*"
+    else
+        cmd="bash scripts/$name.sh"
+        (( $# )) && cmd+=" $*"
+    fi
+    printf '%s' "$cmd"
+}
+
 # ─── Env file ────────────────────────────────────────────────────────────────
 
 # env_value_body RAW: the value compose would read from the text after
@@ -238,7 +256,7 @@ check_env_secrets() {
     die "these secrets in $STACK_ENV_FILE are not secret:$msg
     Set each to a fresh value (openssl rand -hex 32). For POSTGRES_PASSWORD on an
     EXISTING database volume, also change it inside postgres (README: 'Upgrading an
-    existing dev database'), or reset the stack with: npm run teardown -- --purge"
+    existing dev database'), or reset the stack with: $(stack_cmd teardown --purge)"
 }
 
 # ─── Compose project ─────────────────────────────────────────────────────────

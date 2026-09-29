@@ -6,6 +6,9 @@
 #                                         (database, redis, model cache) — asks first
 #   npm run teardown -- --purge --yes     non-interactive purge (CI / scripts)
 #
+# Without Node.js/npm on the host: bash scripts/teardown.sh [--purge] [--yes]
+# (needs only Bash and Docker).
+#
 # Scope is exactly one compose project: COMPOSE_PROJECT_NAME if set, else the
 # env file's value, else 'pulse-of-ai'. The step line says which one was
 # used. Every service of the project (the default databases/redis AND the
@@ -105,5 +108,5 @@ if (( PURGE )); then
     (( left_volumes == 0 )) || die "$left_volumes volume(s) of '$STACK_PROJECT' are still present"
     ok "all volumes of '$STACK_PROJECT' deleted"
 else
-    info "kept $left_volumes volume(s) — data survives; 'npm run standup' resumes from it"
+    info "kept $left_volumes volume(s) — data survives; '$(stack_cmd standup)' resumes from it"
 fi
