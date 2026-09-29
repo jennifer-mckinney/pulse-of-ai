@@ -512,6 +512,59 @@ describe('demoLabel — backend demo data labeled like the bundled fallback', ()
     });
 });
 
+// G9-5: the chapter-one (overview) card's kicker follows data_mode exactly
+// like the intro kicker — it used to read "LIVE · REFRESH CYCLE 2–3 MIN" for
+// demo data, the bundled fallback and an empty hour alike.
+describe('resolveChapter — overview kicker follows the data mode (G9-5)', () => {
+    const overview = STORY.find(b => b.id === 'overview');
+    const kickerFor = (opts) => resolveChapter(overview, demoInsights, demoCities, opts).kicker;
+
+    test.each([
+        ['live',     'LIVE · REFRESH CYCLE 2–3 MIN'],
+        ['demo',     'DEMO · REFRESH CYCLE 2–3 MIN'],
+        ['mixed',    'LIVE + DEMO'],
+        ['none',     'NO POSTS IN THE LAST HOUR'],
+        ['fallback', 'DEMO · BUNDLED SAMPLE DATA'],
+    ])('%s → %s', (mode, want) => {
+        expect(kickerFor({ dataMode: mode, isDemo: mode === 'fallback' })).toBe(want);
+    });
+
+    test.each([undefined, null, '', 'unknown', 'bogus', 'LIVE'])(
+        'unknown mode %p: neutral kicker, never LIVE or DEMO', (mode) => {
+            const k = kickerFor({ dataMode: mode });
+            expect(k).toBe('REFRESH CYCLE 2–3 MIN');
+            expect(k).not.toMatch(/LIVE|DEMO/);
+        });
+
+    test('no options at all: neutral, never LIVE', () => {
+        expect(resolveChapter(overview, demoInsights, demoCities).kicker).toBe('REFRESH CYCLE 2–3 MIN');
+    });
+
+    test('a bundled fallback without a mode is labeled as the fallback', () => {
+        expect(kickerFor({ isDemo: true })).toBe('DEMO · BUNDLED SAMPLE DATA');
+    });
+
+    test('the chapter card and the intro agree on LIVE for every mode', () => {
+        const { resolveIntro } = chapters;
+        for (const mode of ['live', 'demo', 'mixed', 'none', 'fallback', 'unknown', undefined]) {
+            const card = kickerFor({ dataMode: mode, isDemo: mode === 'fallback' });
+            const intro = resolveIntro(demoInsights, demoCities, mode).kicker;
+            expect(/^LIVE/.test(card)).toBe(/^LIVE/.test(intro));
+            expect(/DEMO/.test(card)).toBe(/DEMO/.test(intro));
+        }
+    });
+
+    test('beats without kickerByMode keep their chapter label in every mode', () => {
+        for (const b of STORY.filter(x => !x.kickerByMode)) {
+            for (const mode of ['live', 'demo', 'mixed', 'none', 'fallback']) {
+                const k = resolveChapter(b, demoInsights, demoCities, { dataMode: mode }).kicker;
+                expect(k).toBe(b.kicker);
+                expect(k).not.toMatch(/LIVE/);
+            }
+        }
+    });
+});
+
 describe('resolveIntro — kicker by data origin, numbers interpolated (FR-19)', () => {
     const { resolveIntro, introFacts, INTRO_KICKERS } = chapters;
 

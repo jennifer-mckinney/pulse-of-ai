@@ -284,9 +284,25 @@
     // serves demo-feed posts (data mode 'demo' / 'mixed'), so backend demo
     // data is labeled exactly like the bundled set. resolved.isDemo keeps
     // meaning "bundled fallback" (consumers skip fetches on it).
+    //
+    // opts.dataMode ('live' | 'none' | 'demo' | 'mixed' | 'fallback'):
+    // picks beat.kickerByMode[mode] when the beat has one (G9-5 — the
+    // overview card says LIVE only for live data). Missing / unknown modes
+    // get the beat's neutral `kicker`; a bundled fallback (isDemo) without
+    // a mode counts as 'fallback'.
+    function chapterKicker(beat, isDemo, dataMode) {
+        const byMode = beat.kickerByMode;
+        if (!byMode) return beat.kicker;
+        const mode = typeof dataMode === 'string' ? dataMode : (isDemo ? 'fallback' : null);
+        return mode !== null && Object.prototype.hasOwnProperty.call(byMode, mode)
+            ? byMode[mode]
+            : beat.kicker;
+    }
+
     function resolveChapter(beat, ins, cities, opts) {
         const isDemo = Boolean(opts && opts.isDemo);
         const demoLabel = isDemo || Boolean(opts && opts.demoLabel);
+        const dataMode = opts && typeof opts.dataMode === 'string' ? opts.dataMode : null;
 
         const rule = beat.highlightRule === null
             ? null
@@ -332,7 +348,7 @@
 
         return {
             id: beat.id,
-            kicker: beat.kicker,
+            kicker: chapterKicker(beat, isDemo, dataMode),
             // Visible demo marker: renderers show the suffixed title as-is,
             // and can additionally badge on the isDemo flag below.
             cardTitle: demoLabel ? beat.title + ' — Demo data' : beat.title,

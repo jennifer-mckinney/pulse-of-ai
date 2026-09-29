@@ -40,6 +40,10 @@ test('demo fallback: /api/** blocked → 30-city demo, DEMO badges, local receip
     await expect(page.locator('#health-chip')).toHaveClass(/h-yellow/);
     await expect(page.locator('#health-label')).toHaveText('model health: unavailable');
 
+    // G9-5: chapter one names the bundled sample, never LIVE.
+    await expect(page.locator('#card-col .chapter-card').nth(0).locator('.ch-kicker'))
+        .toHaveText('DEMO · BUNDLED SAMPLE DATA');
+
     // Chapter cards carry the visible demo marker (resolver-level badge).
     await scrollToBeat(page, 1);
     const card = page.locator('#card-col .chapter-card').nth(1);
