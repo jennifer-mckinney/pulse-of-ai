@@ -177,6 +177,10 @@ async function runCollection(o = {}) {
                     fail(`${c.route.id}: ${err.message}`, err);
                     continue;
                 }
+                // G10-6: problems that did not stop the route (a broken or
+                // refused feed of a multi-feed source, a skipped message) are
+                // part of the run's errors, last_error and classification.
+                for (const w of result.warnings || []) fail(`${c.route.id}: ${w.text}`, w.err);
                 row.fetched += result.fetched;
                 row.kept += result.payloads.length;
                 for (const payload of result.payloads) {

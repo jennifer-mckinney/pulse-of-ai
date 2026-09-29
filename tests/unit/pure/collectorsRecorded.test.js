@@ -67,7 +67,7 @@ describe('RSS / Atom (publisher feeds, robots-gated)', () => {
             [/\/feed$/, { status: 304 }],
         ]);
         expect(r.fetched).toBe(2);
-        expect(r.collector.warnings.join(' ')).toMatch(/not Substack — skipped/);
+        expect(r.collector.warnings.map(w => w.text).join(' ')).toMatch(/not Substack — skipped/);
     });
 
     test('GovInfo collection RSS: many feeds, AI filter keeps only AI bills', async () => {

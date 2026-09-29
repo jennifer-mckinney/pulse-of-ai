@@ -250,7 +250,6 @@ class ScholarImapCollector extends Collector {
     constructor(ctx) {
         super(ctx);
         this.imapFactory = ctx.imapFactory || ((opts) => new (require('imapflow').ImapFlow)(opts));
-        this.warnings = this.warnings || [];
     }
 
     async fetchItems() {
@@ -283,13 +282,15 @@ class ScholarImapCollector extends Collector {
                 if (size !== null && size <= MAX_ALERT_BYTES) msg = await client.fetchOne(uid, { source: true }, { uid: true });
                 const bytes = msg && msg.source ? msg.source.length : 0;
                 if (!msg || !msg.source || bytes > MAX_ALERT_BYTES) {
-                    this.warnings.push(`message uid ${uid} skipped: ${size === null ? 'size unknown' : `over ${MAX_ALERT_BYTES} bytes`}`);
+                    this.warn(`message uid ${uid} skipped: ${size === null ? 'size unknown' : `over ${MAX_ALERT_BYTES} bytes`}`,
+                        Object.assign(new Error('message too large'), { kind: 'too_large' }));
                 } else {
                     const mail = await simpleParser(msg.source);
                     if (isAuthenticScholarAlert(mail)) {
                         items.push(...parseScholarAlert(mail.html || '', mail.date, mail.messageId || String(uid)));
                     } else {
-                        this.warnings.push(`message uid ${uid} dropped: no DKIM pass for google.com`);
+                        this.warn(`message uid ${uid} dropped: no DKIM pass for google.com`,
+                            new ParseError('unauthenticated alert message'));
                     }
                 }
                 this.cursor.lastUid = Math.max(this.cursor.lastUid || 0, uid);

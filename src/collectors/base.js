@@ -76,6 +76,11 @@ class Collector {
         this.httpCache = ctx.httpCache || {};
         this.now = ctx.now || (() => Date.now());
         this.params = this.route.params || {};
+        // G10-6: per-feed / per-item problems that did not stop the route.
+        // Each is { text, err } (err classifies it); the runner surfaces
+        // them into the run's errors, last_error and status, and a refusal
+        // among them puts the source in the refused state (F10-5).
+        this.warnings = [];
         // Every required env var must be present — defense in depth behind
         // the registry gate (sourceStatus); the blocked-4 rely on this.
         const missing = (this.route.requires || []).filter(k => !nonEmpty(this.env[k]));
@@ -133,6 +138,11 @@ class Collector {
         throw new Error(`${this.constructor.name}.fetchItems is not implemented`);
     }
 
+    /** Record a problem that did not stop the route (G10-6). */
+    warn(text, err = null) {
+        this.warnings.push({ text: String(text), err });
+    }
+
     /**
      * @returns {Promise<{ payloads: object[], fetched: number, dropped: object }>}
      */
@@ -153,7 +163,7 @@ class Collector {
             seen.add(p.id);
             payloads.push(p);
         }
-        return { payloads, fetched: items.length, dropped };
+        return { payloads, fetched: items.length, dropped, warnings: this.warnings.slice() };
     }
 }
 
@@ -216,7 +226,8 @@ class RssAtomCollector extends Collector {
                 const feed = await this.parse(res.body);
                 if (this.params.requireGenerator
                     && !String(feed.generator || '').toLowerCase().includes(this.params.requireGenerator.toLowerCase())) {
-                    errors.push(`${url}: feed generator is not ${this.params.requireGenerator} — skipped`);
+                    errors.push({ text: `${url}: feed generator is not ${this.params.requireGenerator} — skipped`,
+                        err: new ParseError('unexpected feed generator') });
                     continue;
                 }
                 for (const it of feed.items || []) {
@@ -226,16 +237,23 @@ class RssAtomCollector extends Collector {
                 }
             } catch (err) {
                 // One broken feed of a multi-feed source must not hide the
-                // others; a refusal (robots, 401/403) of the only feed still
-                // surfaces as the run's error.
+                // others; the only feed's failure is the run's error.
                 if (this.feedUrls().length === 1) throw err;
-                errors.push(`${url}: ${err.message}`);
+                errors.push({ text: `${url}: ${err.message}`, err });
             }
         }
         if (errors.length && out.length === 0 && errors.length === this.feedUrls().length) {
-            throw new Error(errors.join('; '));
+            // Every feed failed: throw the MOST SIGNIFICANT error (a refusal
+            // first) with every feed's text, so the classification survives
+            // (G10-6: a joined plain Error used to classify as 'internal').
+            const { classifyError } = require('./errors');
+            const lead = errors.find(e => ['access_denied', 'robots'].includes(classifyError(e.err).error_kind)) || errors[0];
+            const cls = classifyError(lead.err);
+            throw Object.assign(new Error(errors.map(e => e.text).join('; ')), {
+                kind: cls.error_kind, status: cls.http_status, detail: lead.err && lead.err.detail,
+            });
         }
-        this.warnings = errors;
+        for (const e of errors) this.warn(e.text, e.err);
         return out;
     }
 }

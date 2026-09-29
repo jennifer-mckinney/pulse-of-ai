@@ -250,7 +250,7 @@ describe('free-key and approval APIs', () => {
             const r = await c.collect();
             expect(r.payloads).toHaveLength(2);   // only uid 4's two papers
             expect(c.cursor.lastUid).toBe(4);
-            expect(c.warnings.filter(w => /no DKIM pass/.test(w))).toHaveLength(3);
+            expect(c.warnings.filter(w => /no DKIM pass/.test(w.text))).toHaveLength(3);
         });
 
         test('a message over 2 MB is skipped before its body is downloaded', async () => {
@@ -260,7 +260,7 @@ describe('free-key and approval APIs', () => {
             expect(calls).toContain('size 5');
             expect(calls).not.toContain('source 5');
             expect(r.payloads).toHaveLength(2);
-            expect(c.warnings[0]).toMatch(/uid 5 skipped: over 2097152 bytes/);
+            expect(c.warnings[0].text).toMatch(/uid 5 skipped: over 2097152 bytes/);
         });
 
         test('an IMAP failure logs out anyway and its public message carries no server text or secret', async () => {
