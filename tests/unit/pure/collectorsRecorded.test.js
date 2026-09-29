@@ -115,7 +115,7 @@ describe('RSS / Atom (publisher feeds, robots-gated)', () => {
 
 describe('JSON APIs (recorded)', () => {
     test('arXiv export API', async () => {
-        const r = await run('arxiv', 'export-api', [[/export\.arxiv\.org\/api\/query/, 'recorded/arxiv-api.xml']]);
+        const r = await run('arxiv', 'export-api', [['https://export.arxiv.org/api/query?search_query=cat%3Acs.AI+OR+cat%3Acs.LG+OR+cat%3Acs.CL&sortBy=submittedDate&sortOrder=descending&max_results=50', 'recorded/arxiv-api.xml']]);
         expect(r.fetched).toBe(3);
         expect(r.payloads[0].url).toMatch(/arxiv\.org\/abs\//);
         expectNoIdentity(r.payloads);
@@ -123,21 +123,25 @@ describe('JSON APIs (recorded)', () => {
     });
 
     test('Hacker News Algolia: since cursor advances', async () => {
-        const r = await run('hacker_news', 'algolia-search', [[/hn\.algolia\.com/, 'recorded/hn-algolia.json']]);
+        const r = await run('hacker_news', 'algolia-search', [['https://hn.algolia.com/api/v1/search_by_date?query=AI&tags=story&hitsPerPage=50', 'recorded/hn-algolia.json']]);
         expect(r.fetched).toBe(4);
         expect(r.cursor.since).toBeGreaterThan(0);
-        const again = await run('hacker_news', 'algolia-search', [[/hn\.algolia\.com/, 'recorded/hn-algolia.json']], { cursor: { since: 5 } });
+        const again = await run('hacker_news', 'algolia-search', [['https://hn.algolia.com/api/v1/search_by_date?query=AI&tags=story&hitsPerPage=50&numericFilters=created_at_i%3E5', 'recorded/hn-algolia.json']], { cursor: { since: 5 } });
         expect(again.transport.calls[0].url).toMatch(/numericFilters=created_at_i%3E5/);
         expectNoIdentity(r.payloads);
     });
 
     test('Stack Exchange: both sites, keyless unless a key is set', async () => {
-        const routes = [[/site=stackoverflow/, 'recorded/stackexchange-so.json'], [/site=ai/, 'recorded/stackexchange-ai.json']];
-        const r = await run('stack_overflow', 'questions', routes);
+        // G10-21: the exact query each site is asked with, keyless and keyed.
+        const SE = 'https://api.stackexchange.com/2.3/questions?order=desc&sort=creation&pagesize=30&filter=withbody';
+        const SO = `${SE}&site=stackoverflow&tagged=artificial-intelligence`;
+        const AI = `${SE}&site=ai`;
+        const r = await run('stack_overflow', 'questions', [[SO, 'recorded/stackexchange-so.json'], [AI, 'recorded/stackexchange-ai.json']]);
         expect(r.fetched).toBe(4);
-        expect(r.transport.calls.every(c => !c.url.includes('key='))).toBe(true);
-        const keyed = await run('stack_overflow', 'questions', routes, { env: { ...TEST_ENV, STACKEXCHANGE_KEY: 'k' } });
-        expect(keyed.transport.calls[0].url).toMatch(/key=k/);
+        expect(r.transport.calls).toHaveLength(2);
+        const keyed = await run('stack_overflow', 'questions', [[`${SO}&key=k`, 'recorded/stackexchange-so.json'], [`${AI}&key=k`, 'recorded/stackexchange-ai.json']],
+            { env: { ...TEST_ENV, STACKEXCHANGE_KEY: 'k' } });
+        expect(keyed.transport.calls).toHaveLength(2);
     });
 
     test('Stack Exchange backoff is honoured on the next run', async () => {
@@ -148,7 +152,7 @@ describe('JSON APIs (recorded)', () => {
     });
 
     test('GitHub repo search: no owner, no user link', async () => {
-        const r = await run('github', 'repo-search', [[/api\.github\.com\/search\/repositories/, 'recorded/github-repos.json']]);
+        const r = await run('github', 'repo-search', [['https://api.github.com/search/repositories?q=topic%3Aartificial-intelligence&sort=updated&order=desc&per_page=30', 'recorded/github-repos.json']]);
         expect(r.fetched).toBe(3);
         for (const p of r.payloads) expect(p.url).toBeNull();
         const tokened = await run('github', 'repo-search', [[/./, 'recorded/github-repos.json']], { env: { ...TEST_ENV, GITHUB_TOKEN: 't' } });
@@ -156,19 +160,19 @@ describe('JSON APIs (recorded)', () => {
     });
 
     test('GitHub issue search adds a created-since window', async () => {
-        const r = await run('github', 'issue-search', [[/search\/issues/, { body: '{"items":[{"id":1,"title":"AI agent crash","body":"LLM","created_at":"2026-09-28T00:00:00Z","user":{"login":"x"}}]}' }]]);
+        const r = await run('github', 'issue-search', [['https://api.github.com/search/issues?q=AI+in%3Atitle+type%3Aissue+created%3A%3E2026-09-28T02%3A59%3A38Z&sort=created&order=desc&per_page=30', { body: '{"items":[{"id":1,"title":"AI agent crash","body":"LLM","created_at":"2026-09-28T00:00:00Z","user":{"login":"x"}}]}' }]]);
         expect(decodeURIComponent(r.transport.calls[0].url)).toMatch(/created:>2026-/);
         expectNoIdentity(r.payloads);
     });
 
     test('GitLab topic projects', async () => {
-        const r = await run('gitlab', 'topic-projects', [[/gitlab\.com\/api\/v4\/projects/, 'recorded/gitlab-projects.json']]);
+        const r = await run('gitlab', 'topic-projects', [['https://gitlab.com/api/v4/projects?topic=artificial-intelligence&order_by=last_activity_at&sort=desc&per_page=20&simple=true', 'recorded/gitlab-projects.json']]);
         expect(r.fetched).toBe(3);
         expect(r.transport.calls[0].headers['PRIVATE-TOKEN']).toBeUndefined();
     });
 
     test('Docker Hub ai namespace (documented endpoint only)', async () => {
-        const r = await run('docker_hub', 'ai-namespace', [['https://hub.docker.com/v2/namespaces/ai/repositories', 'recorded/dockerhub-ai.json']]);
+        const r = await run('docker_hub', 'ai-namespace', [['https://hub.docker.com/v2/namespaces/ai/repositories?ordering=last_updated&page_size=50', 'recorded/dockerhub-ai.json']]);
         expect(r.fetched).toBe(3);
         expect(r.transport.calls[0].url).not.toMatch(/\/v2\/search/);
         // G10-14: stable per repository (namespace/name), no timestamp.
@@ -176,7 +180,7 @@ describe('JSON APIs (recorded)', () => {
     });
 
     test('Hugging Face daily papers', async () => {
-        const r = await run('hugging_face', 'daily-papers', [[/daily_papers/, 'recorded/hf-daily-papers.json']]);
+        const r = await run('hugging_face', 'daily-papers', [['https://huggingface.co/api/daily_papers?limit=30', 'recorded/hf-daily-papers.json']]);
         expect(r.fetched).toBe(3);
         expect(r.payloads[0].url).toMatch(/huggingface\.co\/papers\//);
         expectNoIdentity(r.payloads);
@@ -199,7 +203,7 @@ describe('JSON APIs (recorded)', () => {
         const pewNow = Date.parse('2026-09-18T14:00:00Z');
         const source = getSource('pew');
         const route = source.routes.find(x => x.id === 'wp-rest-ai');
-        const transport = fixtureTransport([[/pewresearch\.org\/wp-json/, 'recorded/pew-ai.json']]);
+        const transport = fixtureTransport([['https://www.pewresearch.org/wp-json/wp/v2/posts?categories=299&per_page=50&_fields=id%2Cdate_gmt%2Clink%2Ctitle%2Cexcerpt', 'recorded/pew-ai.json']]);
         const http = new HttpClient({ transport, env: TEST_ENV, sleep: noSleep });
         const r = await new ADAPTERS[route.adapter]({ source, route, env: TEST_ENV, http, cursor: {}, httpCache: {}, now: () => pewNow }).collect();
         expect(r.fetched).toBe(3);
@@ -209,7 +213,7 @@ describe('JSON APIs (recorded)', () => {
     });
 
     test('Internet Archive advanced search (subject AI, date window)', async () => {
-        const r = await run('internet_archive', 'advanced-search', [[/archive\.org\/advancedsearch/, 'recorded/ia-search.json']]);
+        const r = await run('internet_archive', 'advanced-search', [['https://archive.org/advancedsearch.php?q=subject%3A%28%22artificial+intelligence%22%29+AND+publicdate%3A%5B2026-09-26+TO+2026-09-29%5D&rows=50&output=json&sort%5B%5D=publicdate+desc&fl%5B%5D=identifier&fl%5B%5D=title&fl%5B%5D=description&fl%5B%5D=publicdate', 'recorded/ia-search.json']]);
         expect(r.fetched).toBe(3);
         expect(decodeURIComponent(r.transport.calls[0].url)).toMatch(/publicdate:\[/);
         expect(r.payloads.every(p => p.location === '')).toBe(true);   // route overrides the SF home city
@@ -268,4 +272,15 @@ describe('buildCollectors (registry-wide)', () => {
         expect(buildCollectors(getSource('guardian'), { env, http }).map(c => c.route.id)).toEqual(['content-api']);
         expect(buildCollectors(getSource('nyt'), { env, http }).map(c => c.route.id)).toEqual(['article-search']);
     });
+});
+
+// G10-21: the fixture matcher itself pins query strings.
+test('fixtureTransport string matchers require the exact query parameters', async () => {
+    const t = fixtureTransport([['https://api.example.org/q?a=1&b=2', { body: 'ok' }]]);
+    await expect(t('https://api.example.org/q?b=2&a=1')).resolves.toMatchObject({ body: 'ok' });   // order-insensitive
+    await expect(t('https://api.example.org/q?a=1')).rejects.toThrow(/no fixture/);
+    await expect(t('https://api.example.org/q?a=1&b=2&c=3')).rejects.toThrow(/no fixture/);
+    await expect(t('https://api.example.org/q?a=1&b=3')).rejects.toThrow(/no fixture/);
+    const bare = fixtureTransport([['https://api.example.org/q', { body: 'ok' }]]);
+    await expect(bare('https://api.example.org/q?x=1')).rejects.toThrow(/no fixture/);
 });

@@ -13,7 +13,7 @@ const { fixtureTransport, RECORDED_AT, TEST_ENV, FIXTURE_ROOT } = require('../he
 const body = JSON.parse(fs.readFileSync(path.join(FIXTURE_ROOT, 'recorded/dockerhub-ai.json'), 'utf8'));
 const run = (json) => runCollection({
     slugs: ['docker_hub'], triggeredBy: 'test', env: TEST_ENV, now: () => Date.parse(RECORDED_AT),
-    transport: fixtureTransport([['https://hub.docker.com/v2/namespaces/ai/repositories', { status: 200, body: JSON.stringify(json), headers: { 'content-type': 'application/json' } }]]),
+    transport: fixtureTransport([['https://hub.docker.com/v2/namespaces/ai/repositories?ordering=last_updated&page_size=50', { status: 200, body: JSON.stringify(json), headers: { 'content-type': 'application/json' } }]]),
     queues: { enqueueEmbeds: async () => {}, enqueueIngestRetry: async () => {} },
     collectorCtx: { sleep: () => Promise.resolve() },
 });

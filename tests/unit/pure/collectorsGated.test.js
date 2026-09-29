@@ -33,14 +33,14 @@ function make(slug, routeId, routes, env = {}, extra = {}) {
 
 describe('paid APIs (active only with their key)', () => {
     test('X: bearer token, since_id cursor, handle-free links, no author', async () => {
-        const { c, transport, cursor } = make('x', 'recent-search', [[/api\.x\.com/, G('x-recent.json')]], { X_BEARER_TOKEN: 'tok' });
+        const { c, transport, cursor } = make('x', 'recent-search', [['https://api.x.com/2/tweets/search/recent?query=%28%22artificial+intelligence%22+OR+AI%29+-is%3Aretweet+lang%3Aen&max_results=20&tweet.fields=created_at%2Clang', G('x-recent.json')]], { X_BEARER_TOKEN: 'tok' });
         const r = await c.collect();
         expect(r.payloads).toHaveLength(2);
         expect(transport.calls[0].headers.Authorization).toBe('Bearer tok');
         expect(cursor.sinceId).toBe('1840000000000000002');
         expect(r.payloads[0].url).toBe('https://x.com/i/web/status/1840000000000000001');
         expect(JSON.stringify(r.payloads)).not.toMatch(/REDACTED|author/);
-        const next = make('x', 'recent-search', [[/api\.x\.com/, G('x-recent.json')]], { X_BEARER_TOKEN: 'tok' }, { cursor });
+        const next = make('x', 'recent-search', [['https://api.x.com/2/tweets/search/recent?query=%28%22artificial+intelligence%22+OR+AI%29+-is%3Aretweet+lang%3Aen&max_results=20&tweet.fields=created_at%2Clang&since_id=1840000000000000002', G('x-recent.json')]], { X_BEARER_TOKEN: 'tok' }, { cursor });
         await next.c.collect();
         expect(next.transport.calls[0].url).toMatch(/since_id=1840000000000000002/);
     });
@@ -50,7 +50,7 @@ describe('paid APIs (active only with their key)', () => {
     });
 
     test('AP Media API: x-api-key header', async () => {
-        const { c, transport } = make('ap', 'media-api', [[/api\.ap\.org/, G('ap-search.json')]], { AP_API_KEY: 'k' });
+        const { c, transport } = make('ap', 'media-api', [['https://api.ap.org/media/v/content/search?q=artificial+intelligence&page_size=50', G('ap-search.json')]], { AP_API_KEY: 'k' });
         const r = await c.collect();
         expect(transport.calls[0].headers['x-api-key']).toBe('k');
         expect(r.payloads[0]).toMatchObject({ title: 'AI tools spread in newsrooms', location: 'New York' });
@@ -83,14 +83,14 @@ describe('paid APIs (active only with their key)', () => {
     });
 
     test('NYT Article Search (paid tier): content-level city from glocations', async () => {
-        const { c } = make('nyt', 'article-search', [[/api\.nytimes\.com/, G('nyt-articlesearch.json')]], { NYT_API_KEY: 'k', NYT_LICENSE_REF: 'L' });
+        const { c } = make('nyt', 'article-search', [['https://api.nytimes.com/svc/search/v2/articlesearch.json?fq=subject%3A%28%22Artificial+Intelligence%22%29&sort=newest&api-key=k', G('nyt-articlesearch.json')]], { NYT_API_KEY: 'k', NYT_LICENSE_REF: 'L' });
         const [p] = (await c.collect()).payloads;
         expect(p).toMatchObject({ location: 'London', location_basis: 'content' });
         expect(JSON.stringify(p)).not.toMatch(/REDACTED/);
     });
 
     test('Guardian Content API (commercial key)', async () => {
-        const { c, transport } = make('guardian', 'content-api', [[/content\.guardianapis\.com/, G('guardian-content.json')]], { GUARDIAN_API_KEY: 'k' });
+        const { c, transport } = make('guardian', 'content-api', [['https://content.guardianapis.com/search?tag=technology%2Fartificialintelligenceai&show-fields=trailText&order-by=newest&page-size=30', G('guardian-content.json')]], { GUARDIAN_API_KEY: 'k' });
         const r = await c.collect();
         expect(transport.calls[0].url).toMatch(/tag=technology%2Fartificialintelligenceai/);
         expect(r.payloads[0].title).toBe('AI models and the energy grid');
@@ -98,7 +98,7 @@ describe('paid APIs (active only with their key)', () => {
 
     test('IEEE Xplore needs key AND licence', async () => {
         expect(() => make('ieee_xplore', 'metadata-api', [], { IEEE_API_KEY: 'k' })).toThrow(/IEEE_LICENSE_REF/);
-        const { c } = make('ieee_xplore', 'metadata-api', [[/ieeexploreapi/, G('ieee.json')]], { IEEE_API_KEY: 'k', IEEE_LICENSE_REF: 'L' });
+        const { c } = make('ieee_xplore', 'metadata-api', [['https://ieeexploreapi.ieee.org/api/v1/search/articles?querytext=artificial+intelligence&sort_field=publication_date&sort_order=desc&max_records=25&apikey=k', G('ieee.json')]], { IEEE_API_KEY: 'k', IEEE_LICENSE_REF: 'L' });
         const [p] = (await c.collect()).payloads;
         expect(p.published_at).toBe('2026-09-27T00:00:00.000Z');
     });
@@ -107,7 +107,8 @@ describe('paid APIs (active only with their key)', () => {
 describe('free-key and approval APIs', () => {
     test('YouTube: search.list then videos.list; publishedAfter cursor', async () => {
         const { c, transport, cursor } = make('youtube', 'data-api', [
-            [/youtube\/v3\/search/, G('youtube-search.json')], [/youtube\/v3\/videos/, G('youtube-videos.json')],
+            ['https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&order=date&q=artificial+intelligence&maxResults=25&publishedAfter=2026-09-27T12%3A00%3A00.000Z&key=k', G('youtube-search.json')],
+            ['https://www.googleapis.com/youtube/v3/videos?part=snippet&id=vid00000001%2Cvid00000002&key=k', G('youtube-videos.json')],
         ], { YOUTUBE_API_KEY: 'k' });
         const r = await c.collect();
         expect(transport.calls).toHaveLength(2);
@@ -118,14 +119,15 @@ describe('free-key and approval APIs', () => {
     });
 
     test('YouTube: no search results → no videos call', async () => {
-        const { c, transport } = make('youtube', 'data-api', [[/search/, { body: '{"items":[]}' }]], { YOUTUBE_API_KEY: 'k' });
+        const { c, transport } = make('youtube', 'data-api', [['https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&order=date&q=artificial+intelligence&maxResults=25&publishedAfter=2026-09-27T12%3A00%3A00.000Z&key=k', { body: '{"items":[]}' }]], { YOUTUBE_API_KEY: 'k' });
         expect((await c.collect()).payloads).toEqual([]);
         expect(transport.calls).toHaveLength(1);
     });
 
     test('TikTok Research: token then query; no username; no city from region', async () => {
         const { c, transport } = make('tiktok', 'research-api', [
-            [/oauth\/token/, G('tiktok-token.json')], [/research\/video\/query/, G('tiktok-query.json')],
+            ['https://open.tiktokapis.com/v2/oauth/token/', G('tiktok-token.json')],
+            ['https://open.tiktokapis.com/v2/research/video/query/?fields=id,video_description,voice_to_text,create_time,region_code', G('tiktok-query.json')],
         ], { TIKTOK_RESEARCH_CLIENT_KEY: 'k', TIKTOK_RESEARCH_CLIENT_SECRET: 's' });
         const [p] = (await c.collect()).payloads;
         expect(JSON.parse(transport.calls[1].body).start_date).toBe('20260927');
@@ -134,16 +136,16 @@ describe('free-key and approval APIs', () => {
     });
 
     test('Springer, ScienceDirect, GovInfo search and Congress.gov', async () => {
-        const spr = make('springerlink', 'meta-api', [[/springernature/, G('springer.json')]], { SPRINGER_API_KEY: 'k' });
+        const spr = make('springerlink', 'meta-api', [['https://api.springernature.com/meta/v2/json?q=keyword%3A%22artificial+intelligence%22+sort%3Adate&p=25&api_key=k', G('springer.json')]], { SPRINGER_API_KEY: 'k' });
         expect((await spr.c.collect()).payloads[0].url).toMatch(/link\.springer\.com/);
-        const els = make('sciencedirect', 'search-api', [[/api\.elsevier\.com/, G('elsevier.json')]], { ELSEVIER_API_KEY: 'k', ELSEVIER_APPROVAL_REF: 'A' });
+        const els = make('sciencedirect', 'search-api', [['https://api.elsevier.com/content/search/sciencedirect', G('elsevier.json')]], { ELSEVIER_API_KEY: 'k', ELSEVIER_APPROVAL_REF: 'A' });
         const e = await els.c.collect();
         expect(els.transport.calls[0].method).toBe('PUT');
         expect(els.transport.calls[0].headers['X-ELS-APIKey']).toBe('k');
         expect(e.payloads[0].title).toBe('Deep learning for crop yield forecasting');
-        const gov = make('govinfo', 'search-api', [[/api\.govinfo\.gov\/search/, G('govinfo-search.json')]], { GOVINFO_API_KEY: 'k' });
+        const gov = make('govinfo', 'search-api', [['https://api.govinfo.gov/search', G('govinfo-search.json')]], { GOVINFO_API_KEY: 'k' });
         expect((await gov.c.collect()).payloads[0]).toMatchObject({ location: 'Washington, D.C.' });
-        const con = make('congress_gov', 'bill-api', [[/api\.congress\.gov/, G('congress-bills.json')]], { CONGRESS_API_KEY: 'k' });
+        const con = make('congress_gov', 'bill-api', [['https://api.congress.gov/v3/bill?format=json&sort=updateDate+desc&limit=250&fromDateTime=2026-09-25T12%3A00%3A00Z', G('congress-bills.json')]], { CONGRESS_API_KEY: 'k' });
         const cr = await con.c.collect();
         expect(cr.fetched).toBe(2);
         expect(cr.payloads).toHaveLength(1);   // the broadband bill is filtered out locally
@@ -160,14 +162,16 @@ describe('free-key and approval APIs', () => {
             <AuthorList><Author><LastName>REDACTED</LastName><AffiliationInfo><Affiliation>Dept of X, Univ Y, London, UK.</Affiliation></AffiliationInfo></Author></AuthorList>
             </Article></MedlineCitation></PubmedArticle></PubmedArticleSet>`;
         const { c, transport } = make('pubmed', 'e-utilities', [
-            [/esearch/, { body: '{"esearchresult":{"idlist":["123"]}}' }], [/efetch/, { body: efetch }],
+            ['https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?tool=pulse-of-ai&email=ops%40example.org&api_key=k&db=pubmed&term=%22Artificial+Intelligence%22%5BMeSH%5D&reldate=1&datetype=edat&retmax=40&retmode=json&sort=pub_date',
+                { body: '{"esearchresult":{"idlist":["123"]}}' }],
+            ['https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?tool=pulse-of-ai&email=ops%40example.org&api_key=k&db=pubmed&id=123&retmode=xml', { body: efetch }],
         ], { NCBI_EMAIL: 'ops@example.org', NCBI_API_KEY: 'k' });
         const [p] = (await c.collect()).payloads;
         expect(transport.calls[0].url).toMatch(/tool=pulse-of-ai.*email=ops%40example\.org.*api_key=k/);
         expect(p).toMatchObject({ location: 'London', location_basis: 'content', url: 'https://pubmed.ncbi.nlm.nih.gov/123/' });
         expect(JSON.stringify(p)).not.toMatch(/REDACTED/);
         expect(affiliationCity(null)).toBeNull();
-        const empty = make('pubmed', 'e-utilities', [[/esearch/, { body: '{"esearchresult":{"idlist":[]}}' }]]);
+        const empty = make('pubmed', 'e-utilities', [['https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?tool=pulse-of-ai&db=pubmed&term=%22Artificial+Intelligence%22%5BMeSH%5D&reldate=1&datetype=edat&retmax=40&retmode=json&sort=pub_date', { body: '{"esearchresult":{"idlist":[]}}' }]]);
         expect((await empty.c.collect()).payloads).toEqual([]);
     });
 
@@ -362,7 +366,7 @@ describe('the blocked 4 — refuse unless their official permission env is set',
     });
 
     test('Telegram with permission: channel posts only, offset advances, no chat title', async () => {
-        const { c, cursor } = make('telegram', 'bot-api-with-permission', [[/api\.telegram\.org/, G('telegram-updates.json')]], BLOCKED[1][2]);
+        const { c, cursor } = make('telegram', 'bot-api-with-permission', [['https://api.telegram.org/botb/getUpdates?allowed_updates=%5B%22channel_post%22%5D&timeout=0', G('telegram-updates.json')]], BLOCKED[1][2]);
         const r = await c.collect();
         expect(r.payloads).toHaveLength(1);
         expect(cursor.offset).toBe(900003);
@@ -371,9 +375,9 @@ describe('the blocked 4 — refuse unless their official permission env is set',
         // keyed fingerprint — never the number itself.
         expect(JSON.stringify(r.payloads)).not.toMatch(/1001234567890/);
         expect(r.payloads[0].id).toMatch(/^bot-api-with-permission:fp:[0-9a-f]{64}$|^bot-api-with-permission:chat-[0-9a-f]{32}:55$/);
-        const keyed = make('telegram', 'bot-api-with-permission', [[/api\.telegram\.org/, G('telegram-updates.json')]],
+        const keyed = make('telegram', 'bot-api-with-permission', [['https://api.telegram.org/botb/getUpdates?allowed_updates=%5B%22channel_post%22%5D&timeout=0', G('telegram-updates.json')]],
             { ...BLOCKED[1][2], PROVENANCE_KEY: 'k1' });
-        const other = make('telegram', 'bot-api-with-permission', [[/api\.telegram\.org/, G('telegram-updates.json')]],
+        const other = make('telegram', 'bot-api-with-permission', [['https://api.telegram.org/botb/getUpdates?allowed_updates=%5B%22channel_post%22%5D&timeout=0', G('telegram-updates.json')]],
             { ...BLOCKED[1][2], PROVENANCE_KEY: 'k2' });
         const [a, b] = [(await keyed.c.collect()).payloads[0], (await other.c.collect()).payloads[0]];
         expect(a.id).not.toBe(b.id);   // keyed: not reversible by hashing guessed chat ids

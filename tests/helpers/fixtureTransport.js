@@ -8,10 +8,13 @@
 //   ]);
 //   t.calls  → [{ url, method, headers, body }]
 //
-// A string matcher matches origin + pathname (query ignored); a RegExp is
-// tested against the full URL; a function receives (url, init). An
-// unmatched /robots.txt answers 404 (no rules); any other unmatched URL
-// throws, so a test can never silently reach the network.
+// A string matcher matches origin + pathname AND the query parameters
+// exactly (G10-21: order-insensitive, every key and value; a matcher without
+// a query matches only a request without one), so a test pins the query an
+// adapter actually sends. A RegExp is tested against the full URL; a
+// function receives (url, init). An unmatched /robots.txt answers 404 (no
+// rules); any other unmatched URL throws, so a test can never silently
+// reach the network.
 
 'use strict';
 
@@ -26,14 +29,25 @@ function readFixture(rel) {
 
 const RECORDED_AT = JSON.parse(readFixture('recorded/manifest.json')).recordedAt;
 
+/** Sorted [key, value] pairs of a query (repeated keys kept). */
+function queryPairs(u) {
+    return [...u.searchParams.entries()].sort((a, b) => (a[0] + '\u0000' + a[1]).localeCompare(b[0] + '\u0000' + b[1]));
+}
+
+/** Same origin, path and query parameters (G10-21). */
+function sameUrl(u, matcher) {
+    const m = new URL(matcher);
+    return u.origin === m.origin && u.pathname === m.pathname
+        && JSON.stringify(queryPairs(u)) === JSON.stringify(queryPairs(m));
+}
+
 function fixtureTransport(routes) {
     const calls = [];
     const transport = async (url, init = {}) => {
         calls.push({ url, method: init.method || 'GET', headers: init.headers || {}, body: init.body });
         const u = new URL(url);
-        const bare = u.origin + u.pathname;
         for (const [matcher, response] of routes) {
-            const hit = typeof matcher === 'string' ? bare === matcher || url === matcher
+            const hit = typeof matcher === 'string' ? sameUrl(u, matcher)
                 : matcher instanceof RegExp ? matcher.test(url)
                     : matcher(url, init);
             if (!hit) continue;
@@ -55,4 +69,4 @@ const TEST_ENV = Object.freeze({
     PERMISSION_GATED_FEEDS_ACCEPTED_BY: 'Test Operator 2026-09-29',
 });
 
-module.exports = { fixtureTransport, readFixture, RECORDED_AT, TEST_ENV, FIXTURE_ROOT: ROOT };
+module.exports = { fixtureTransport, readFixture, sameUrl, RECORDED_AT, TEST_ENV, FIXTURE_ROOT: ROOT };
