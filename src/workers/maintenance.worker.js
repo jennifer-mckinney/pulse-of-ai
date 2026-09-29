@@ -10,7 +10,9 @@
 //      every month that ended before the detail window, into rollups;
 //   3. source_runs: raw rows older than 30 days rolled up into
 //      source_run_daily and removed (src/collectors/run-retention.js, P10-9);
-//   4. processing_jobs: empty finished jobs older than 30 days removed.
+//   4. processing_jobs: empty finished jobs older than 30 days removed;
+//   5. stale jobs: api / standup / demo / manual rows still 'running' after
+//      STALE_JOB_MINUTES marked failed (src/collectors/stale-jobs.js, P10-18).
 //
 // Each step is independent: a failing step is reported in the result and
 // logged (scrubbed) and the others still run. BullMQ's job scheduler makes
@@ -22,6 +24,7 @@
 const { blankExpired } = require('../collectors/retention');
 const { scrub } = require('../collectors/redact');
 const { rollupSourceRuns, purgeEmptyJobs } = require('../collectors/run-retention');
+const { sweepStaleJobs } = require('../collectors/stale-jobs');
 
 const DEFAULT_MAINTENANCE_EVERY_MS = 5 * 60 * 1000;
 const MAINTENANCE_SCHEDULER_ID = 'retention';
@@ -39,6 +42,8 @@ function defaultSteps({ log }) {
         // P10-9: 30 days of raw source_runs, then daily rollups; empty jobs.
         ['source_runs', () => rollupSourceRuns()],
         ['processing_jobs', () => purgeEmptyJobs()],
+        // P10-18: one-shot jobs left 'running' by a process that died.
+        ['stale_jobs', () => sweepStaleJobs()],
     ];
 }
 
