@@ -117,6 +117,19 @@ unpinned_ci=$(grep -nE '^[[:space:]]+image:' "$ROOT/.github/workflows/ci.yml" \
     | grep -vE '@sha256:[0-9a-f]{64}' | sed 's/^/ci.yml:/' || true)
 check "CI service images are pinned by @sha256 digest" "$unpinned_ci"
 
+# F9-6: the embeddings image installs a hash-locked requirement set.
+req="$ROOT/python/requirements-service.txt"
+unhashed=$(awk '
+    /^[A-Za-z0-9][A-Za-z0-9._-]*(\[[^]]*\])?==/ { if (name != "" && !hashed) print name " has no --hash"; name = $1; hashed = 0; next }
+    /^[A-Za-z0-9]/                              { print $1 " is not pinned with ==" }
+    /--hash=sha256:[0-9a-f]{64}/                { hashed = 1 }
+    END { if (name != "" && !hashed) print name " has no --hash"; if (name == "") print "no pinned requirements" }' "$req")
+check "python/requirements-service.txt pins every package with --hash" "$unhashed"
+check "torch is the CPU build from the lock" \
+    "$(grep -qE '^torch==[0-9.]+\+cpu' "$req" || echo 'torch is not pinned to a +cpu build')"
+check "python/Dockerfile installs with --require-hashes" \
+    "$(grep -qE 'pip install --require-hashes -r requirements-service.txt' "$ROOT/python/Dockerfile" || echo 'no --require-hashes install')"
+
 #@@CHECKS@@
 
 printf '\ncheck-compose: %d passed, %d failed\n' "$PASSED" "$FAILED"

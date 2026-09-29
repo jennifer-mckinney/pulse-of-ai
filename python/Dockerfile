@@ -7,6 +7,13 @@
 #   docker build -t pulse-of-ai/embeddings:local python
 #
 # Python 3.13, not 3.14: the pinned torch / tokenizers wheels exist for 3.13.
+#
+# Dependencies are HASH-LOCKED (F9-6): requirements-service.txt is generated
+# by pip-compile --generate-hashes from requirements-service.in (header of
+# that file has the exact command) and installed with --require-hashes, so
+# a re-published or tampered wheel on PyPI or the PyTorch index fails the
+# build instead of being installed. torch is the CPU-only build
+# (2.12.1+cpu) from the PyTorch index, hashed for x86_64 and aarch64.
 # The base image is pinned to an exact patch release AND its image digest
 # (F9-6); bump both deliberately (Dependabot proposes digest bumps).
 #
@@ -17,11 +24,9 @@
 
 # Tag: python:3.13.15-slim-bookworm
 ARG PYTHON_IMAGE=python:3.13.15-slim-bookworm@sha256:2325bb286ec344af3e5898cc224b5844e2707ac6e26b1632516fd3edc84a5e26
-ARG TORCH_VERSION=2.12.1
 
 # ─── Stage 1: build an isolated virtualenv ───────────────────────────────────
 FROM ${PYTHON_IMAGE} AS builder
-ARG TORCH_VERSION
 
 ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
@@ -29,12 +34,11 @@ ENV PIP_NO_CACHE_DIR=1 \
 RUN python -m venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH
 
-# CPU-only torch first, from the PyTorch index: the default PyPI wheel on
-# x86_64 drags in CUDA libraries (~2 GB) this CPU service never loads.
-RUN pip install --index-url https://download.pytorch.org/whl/cpu "torch==${TORCH_VERSION}"
-
+# One hash-checked install. torch==2.12.1+cpu exists only on the PyTorch CPU
+# index (the lock's --extra-index-url): the default PyPI wheel drags in CUDA
+# libraries (~2 GB) this CPU service never loads.
 COPY requirements-service.txt .
-RUN pip install -r requirements-service.txt
+RUN pip install --require-hashes -r requirements-service.txt
 
 # ─── Stage 2: runtime ────────────────────────────────────────────────────────
 FROM ${PYTHON_IMAGE} AS runtime
