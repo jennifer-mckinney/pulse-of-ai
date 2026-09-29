@@ -26,8 +26,9 @@
 //      worker container calls the embeddings container and fills
 //      post_embeddings (skipped, and said so, when embeddings is unavailable).
 //
-// Labelling (the frontend's own isDemo marker only fires for its bundled
-// fallback set, so the labels live in the data):
+// Labelling — in the data, and from there on the page (the API derives
+// data_mode from the source type, src/config/data-mode.js; the page then
+// shows the DEMO kicker, "— Demo data" markers and the demo receipt text):
 //   - posts belong to dedicated data_sources rows `demo_<category>`,
 //     source_type 'demo', display name "Demo feed — <Category> (fictional)",
 //     active = FALSE (never collected from, not counted as an active source).
