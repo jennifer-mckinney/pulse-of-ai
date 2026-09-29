@@ -367,20 +367,62 @@ published_web_url() {
 
 # ─── Prerequisites ───────────────────────────────────────────────────────────
 
+# Oldest Docker Compose that accepts docker-compose.yml: the app and
+# embeddings builds set `build.provenance` / `build.sbom`, which Compose
+# added in v2.39.0 (docker/compose#13067, compose-go v2.8.0). Compose 2.38.x
+# (compose-go v2.7.1) rejects them — its schema has
+# additionalProperties: false on `build` — so every compose call would fail.
+STACK_COMPOSE_MIN_VERSION=2.39.0
+
+# parse_compose_version VERSION → "MAJOR MINOR PATCH" on stdout, or return 1
+# when VERSION is not a version. Accepts what `docker compose version
+# --short` prints across distributions: 2.40.3, v2.39.0, v2.39.0-desktop.1,
+# 2.39.0+build.1; a missing patch counts as 0. Bash 3.2 compatible.
+parse_compose_version() {
+    local v=$1 re='^([0-9]+)\.([0-9]+)(\.([0-9]+))?$'
+    v="${v#"${v%%[![:space:]]*}"}"   # trim leading blanks
+    v="${v%"${v##*[![:space:]]}"}"   # trim trailing blanks
+    v=${v#v}
+    v=${v%%[-+]*}                    # drop -desktop.1 / +build suffixes
+    [[ "$v" =~ $re ]] || return 1
+    printf '%s %s %s' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[4]:-0}"
+}
+
+# compose_version_at_least VERSION MIN → 0 when VERSION >= MIN (numeric,
+# per component: 2.100.0 > 2.39.0), 1 when older, 2 when unparseable.
+compose_version_at_least() {
+    local have want hm hn hp wm wn wp
+    have=$(parse_compose_version "$1") || return 2
+    want=$(parse_compose_version "$2") || return 2
+    read -r hm hn hp <<< "$have"
+    read -r wm wn wp <<< "$want"
+    (( 10#$hm != 10#$wm )) && { (( 10#$hm > 10#$wm )); return; }
+    (( 10#$hn != 10#$wn )) && { (( 10#$hn > 10#$wn )); return; }
+    (( 10#$hp >= 10#$wp ))
+}
+
 check_docker() {
     command -v docker >/dev/null 2>&1 || die "docker not found.
     Install Docker Desktop (macOS/Windows): https://docs.docker.com/desktop/
     or Docker Engine (Linux):              https://docs.docker.com/engine/install/"
 
-    local compose_version major
+    local compose_version rc=0
     compose_version=$(docker compose version --short 2>/dev/null || true)
-    [[ -n "$compose_version" ]] || die "Docker Compose v2 plugin not found ('docker compose' failed).
+    [[ -n "$compose_version" ]] || die "Docker Compose plugin not found ('docker compose' failed).
     Docker Desktop ships it; on Linux install the plugin: https://docs.docker.com/compose/install/linux/
-    (the legacy 'docker-compose' v1 binary is not supported)"
-    major=${compose_version#v}
-    major=${major%%.*}
-    if ! [[ "$major" =~ ^[0-9]+$ ]] || (( major < 2 )); then
-        die "Docker Compose v2+ required, found '$compose_version'. Upgrade Docker Desktop or the compose plugin."
+    (the legacy 'docker-compose' v1 binary is not supported; Compose $STACK_COMPOSE_MIN_VERSION or newer is required)"
+    # Copilot 4129574025: v2.x alone is not enough — the MINOR version
+    # decides whether docker-compose.yml parses at all.
+    compose_version_at_least "$compose_version" "$STACK_COMPOSE_MIN_VERSION" || rc=$?
+    if (( rc == 2 )); then
+        die "could not read the Docker Compose version from 'docker compose version --short' (got '$compose_version').
+    Compose $STACK_COMPOSE_MIN_VERSION or newer is required — check with: docker compose version"
+    elif (( rc != 0 )); then
+        die "Docker Compose $STACK_COMPOSE_MIN_VERSION or newer is required, found '$compose_version'.
+    docker-compose.yml sets build.provenance / build.sbom, which older Compose rejects.
+    Upgrade: Docker Desktop (macOS/Windows: Settings > Software updates, or https://docs.docker.com/desktop/)
+             or the compose plugin (Linux: https://docs.docker.com/compose/install/linux/)
+    then check with: docker compose version"
     fi
 
     docker info >/dev/null 2>&1 || die "the Docker daemon is not running (or this user cannot reach it).

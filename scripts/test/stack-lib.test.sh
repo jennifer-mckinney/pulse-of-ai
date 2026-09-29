@@ -293,7 +293,7 @@ case "$1" in
     ps) [[ -e "$FAKE_STATE/down" ]] || echo c0ffee; exit 0 ;;
     volume) exit 0 ;;
     compose)
-        [[ "$2" == "version" ]] && { echo 2.30.0; exit 0; }
+        [[ "$2" == "version" ]] && { echo 2.40.3; exit 0; }
         for a in "$@"; do [[ "$a" == down ]] && touch "$FAKE_STATE/down"; done
         exit 0 ;;
 esac
@@ -337,6 +337,38 @@ run_teardown "$d" --; rc=$?
 assert_eq "teardown: shared dev project stops (plain)"        "0" "$rc"
 assert_eq "teardown: warns about the shared dev project"      "yes" "$(grep -q "shared dev project" "$d/out" && echo yes || echo no)"
 assert_eq "teardown: notes postgres_test on 5433"             "yes" "$(grep -q "postgres_test" "$d/out" && grep -q "5433" "$d/out" && echo yes || echo no)"
+
+# ─── Copilot 4129574025: Compose minimum version (2.39.0) ────────────────────
+d=$(new_case)
+assert_eq "compose minimum is 2.39.0" "2.39.0" "$(lib_run "$d" 'printf %s "$STACK_COMPOSE_MIN_VERSION"')"
+# VERSION|expected parse ("" = unparseable)
+for c in "2.39.0|2 39 0" "v2.39.0-desktop.1|2 39 0" "2.40.3|2 40 3" "v2.39.0|2 39 0" \
+         "2.39.0+build.7|2 39 0" "2.39|2 39 0" " 2.41.0 |2 41 0" "5.3.0|5 3 0" \
+         "2.100.1|2 100 1" "garbage|" "|" "v|" "2|" "2.x.0|"; do
+    v=${c%%|*}; want=${c#*|}
+    assert_eq "parse_compose_version '$v'" "$want" "$(lib_run "$d" "parse_compose_version '$v' || true")"
+done
+# VERSION|expected verdict against 2.39.0 (0 new enough, 1 too old, 2 unparseable)
+for c in "2.39.0|0" "v2.39.0-desktop.1|0" "2.40.3|0" "2.39.3|0" "2.100.0|0" "5.3.0|0" "3.0.0|0" \
+         "2.38.2|1" "v2.38.9-desktop.1|1" "2.9.0|1" "2.3.99|1" "1.29.2|1" "2.39|0" \
+         "garbage|2" "|2"; do
+    v=${c%%|*}; want=${c#*|}
+    assert_eq "compose_version_at_least '$v' 2.39.0 → $want" "$want" \
+        "$(lib_run "$d" "compose_version_at_least '$v' 2.39.0; echo \$?")"
+done
+# check_docker against a fake docker reporting each version.
+fake_docker_case() { # VERSION → prints rc; stderr in $d/stderr
+    lib_run "$d" "docker() { case \"\$1\" in compose) echo '$1' ;; info) return 0 ;; esac; }; check_docker; echo rc=0" || echo "rc=$?"
+}
+d=$(new_case)
+assert_eq "check_docker: 2.38.2 is refused"            "rc=1" "$(fake_docker_case 2.38.2 | tail -n 1)"
+assert_eq "check_docker: refusal names 2.39.0"         "yes"  "$(grep -q 'Compose 2.39.0 or newer is required, found .2.38.2.' "$d/stderr" && echo yes || echo no)"
+assert_eq "check_docker: refusal explains why"         "yes"  "$(grep -q 'build.provenance / build.sbom' "$d/stderr" && echo yes || echo no)"
+assert_eq "check_docker: refusal says how to upgrade"  "yes"  "$(grep -q 'compose/install/linux' "$d/stderr" && echo yes || echo no)"
+assert_eq "check_docker: v2.39.0-desktop.1 accepted"   "rc=0" "$(fake_docker_case v2.39.0-desktop.1 | tail -n 1)"
+assert_eq "check_docker: 2.40.3 accepted"              "rc=0" "$(fake_docker_case 2.40.3 | tail -n 1)"
+assert_eq "check_docker: unparseable version refused"  "rc=1" "$(fake_docker_case weird | tail -n 1)"
+assert_eq "check_docker: unparseable → explains"       "yes"  "$(grep -q 'could not read the Docker Compose version' "$d/stderr" && echo yes || echo no)"
 
 #@@CASES@@
 

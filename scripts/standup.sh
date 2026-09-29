@@ -5,7 +5,7 @@
 #   npm run standup -- --help
 #
 # What it does, in order (safe to re-run — every step is idempotent):
-#   1. checks prerequisites: docker, compose v2+, a running daemon
+#   1. checks prerequisites: docker, compose 2.39.0+, a running daemon, curl
 #   2. creates .env from .env.example if missing, generating strong random
 #      POSTGRES_PASSWORD / REDIS_PASSWORD / AUDIT_HASH_KEY / CORRELATION_SALT
 #      (never printed); an existing .env keeps every value — only missing

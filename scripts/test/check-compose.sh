@@ -7,7 +7,7 @@
 # the security / operations policy the one-command standup relies on. It
 # runs `docker compose config` only (no daemon calls, nothing started), in a
 # clean environment with dummy secrets, so the shipped defaults are checked
-# — never a developer's .env. Needs docker compose v2 and jq.
+# — never a developer's .env. Needs docker compose 2.39.0+ and jq.
 #
 # Checks:
 #   F9-1  every published port has an explicit host IP, and by default that
