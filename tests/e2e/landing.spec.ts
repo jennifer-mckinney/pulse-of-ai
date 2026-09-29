@@ -59,6 +59,10 @@ test('landing: canvas painted, intro lede, header chips, seeded health state', a
     await expect(page.locator('#intro')).toBeVisible();
     await expect(page.locator('.intro-title')).toHaveText('The Pulse of AI');
     await expect(page.locator('.intro-kicker')).toContainText('LIVE');
+    // Byline counts come from the source registry (GET /api/sources), not a
+    // hardcoded "7 source categories" / "50 sources" claim (ADR 0001).
+    await expect(page.locator('#intro-byline'))
+        .toHaveText('INTERACTIVE · 51 SOURCES · 8 CATEGORIES · EVERY SCORE AUDITABLE');
     await expect(page.locator('#intro-skip')).toBeVisible();
 
     // Header chips: time-to-insight timer + health chip.

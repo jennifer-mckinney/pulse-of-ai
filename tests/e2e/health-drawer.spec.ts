@@ -29,13 +29,26 @@ test('health drawer: yellow banner, alert history, methodology table, sources st
     await expect(banner.locator('.hb-title')).toContainText('active alert');
     await expect(banner.locator('.health-light')).toHaveClass(/yellow/);
 
-    // Registry-active sources stat, honestly labeled (G20).
-    await expect(drawer.locator('.sec-lbl', { hasText: 'SOURCES · REGISTRY-ACTIVE' }))
+    // Sources: the 51-source registry of record with live status (ADR 0001).
+    // "online" counts only sources that collected successfully in the last
+    // hour (G20: never configured flags passed off as liveness).
+    await expect(drawer.locator('.sec-lbl', { hasText: /^SOURCES · \d+ \/ 51 ONLINE$/ }))
         .toHaveCount(1);
-    const sourcesRow = drawer.locator('.kv-row', { hasText: 'sources registry-active' });
+    const sourcesRow = drawer.locator('.kv-row', { hasText: 'sources online' });
     await expect(sourcesRow).toHaveCount(1);
     await expect(sourcesRow.locator('.kv-v')).toHaveText(
-        /^\d+ \/ \d+ \(configured active, not liveness\)$/);
+        /^\d+ \/ 51 \(collected successfully in the last hour\)$/);
+    // All 51 listed under the 8 categories; the blocked 4 say so and cite terms.
+    await expect(drawer.locator('.src-list .src-row')).toHaveCount(51);
+    await expect(drawer.locator('.src-list .src-cat')).toHaveCount(8);
+    const blocked = drawer.locator('.src-row', { has: page.locator('.src-status.st-blocked') });
+    await expect(blocked).toHaveCount(4);
+    for (const name of ['WeChat / Weixin (Tencent)', 'Telegram', 'ResearchGate', 'Cato Institute']) {
+        const row = blocked.filter({ hasText: name });
+        await expect(row.locator('.src-status')).toHaveText('blocked: no compliant access');
+        await expect(row.locator('a.src-terms')).toHaveAttribute('href', /^https:\/\//);
+    }
+    await expect(drawer.locator('.src-row', { hasText: 'Hacker News (Y Combinator)' })).toHaveCount(1);
 
     // ALERT HISTORY · LAST 12H rows with severity classes.
     await expect(drawer.locator('.sec-lbl', { hasText: 'ALERT HISTORY · LAST 12H' }))

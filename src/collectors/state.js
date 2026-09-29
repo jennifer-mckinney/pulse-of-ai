@@ -65,16 +65,4 @@ async function recordRun({ sourceId, jobId, gateStatus, outcome, itemsFetched = 
     );
 }
 
-/** Latest state per registry source, keyed by slug (for /api/sources, health, smoke). */
-async function stateBySlug() {
-    const rows = await dbAll(
-        `SELECT ds.name AS slug, s.last_attempt_at, s.last_success_at, s.last_item_count,
-                s.last_new_posts, s.last_error, s.last_error_at, s.consecutive_failures
-         FROM data_sources ds
-         LEFT JOIN source_collection_state s ON s.source_id = ds.id
-         WHERE ds.source_type <> 'demo'`,
-    );
-    return new Map(rows.map(r => [r.slug, r]));
-}
-
-module.exports = { sourceIdsBySlug, claim, saveOutcome, recordRun, stateBySlug, CLAIM_SLACK_SEC };
+module.exports = { sourceIdsBySlug, claim, saveOutcome, recordRun, CLAIM_SLACK_SEC };

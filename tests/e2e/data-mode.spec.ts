@@ -151,7 +151,8 @@ test('backend demo data: DEMO kicker, computed demo intro, Demo data markers, de
     await expect(health.locator('.drawer-kicker')).toContainText('MODEL HEALTH · LIVE · DEMO DATA');
     await expect(health.locator('.kv-row', { hasText: 'demo feeds' }))
         .toContainText('1 (fictional demo population, not sources)');
-    const sourcesRow = await health.locator('.kv-row', { hasText: 'sources registry-active' }).innerText();
-    expect(sourcesRow).toMatch(/\d+ \/ 50 /);   // the registry's 50, demo feed excluded
+    const sourcesRow = await health.locator('.kv-row', { hasText: 'sources online' }).innerText();
+    expect(sourcesRow).toMatch(/\d+ \/ 51 /);   // the registry's 51, demo feed excluded
+    await expect(health.locator('.src-list .src-row')).toHaveCount(51);
     expectNoConsoleErrors(errors);
 });
