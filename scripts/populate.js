@@ -460,32 +460,72 @@ async function runOnce(opts, deps = {}) {
     return 0;
 }
 
-async function runLoop(opts) {
+/**
+ * The demo feed: one batch every intervalMs until SIGTERM / SIGINT.
+ *
+ * Copilot 4129574059: a signal that arrives WHILE a batch is running must
+ * not be followed by a full interval sleep (compose would SIGKILL the
+ * container before cleanup). The in-flight batch is finished (its job row
+ * is completed, never left 'running'), then `stopping` is re-checked before
+ * sleeping, and a signal during the sleep cancels the timer at once.
+ *
+ * @param {object} opts   parsed flags
+ * @param {object} [deps] test seams: populateOnce, intervalMs, plus the
+ *                        DEFAULT_DEPS collaborators passed to populateOnce
+ */
+async function runLoop(opts, deps = {}) {
+    const d = { ...DEFAULT_DEPS, populateOnce, intervalMs: LOOP_INTERVAL_MS, ...deps };
     let stopping = false;
+    let timer = null;
     let wake = null;
-    const stop = () => {
+    const stop = (signal) => {
+        if (stopping) return;
         stopping = true;
+        log(`${signal || 'stop'} received — finishing the current step, then exiting`);
+        if (timer) clearTimeout(timer);
+        timer = null;
         if (wake) wake();
     };
     process.on('SIGTERM', stop);
     process.on('SIGINT', stop);
 
-    log(`demo feed started: ${opts.size} fictional posts every ${Math.round(LOOP_INTERVAL_MS / 1000)}s`);
-    while (!stopping) {
-        const seed = Math.floor(Date.now() / LOOP_INTERVAL_MS);
-        try {
-            await populateOnce(opts, seed);
-        } catch (err) {
-            // One failed cycle must not kill the feed; the next cycle retries.
-            log(`cycle failed: ${err.message}`);
+    try {
+        log(`demo feed started: ${opts.size} fictional posts every ${Math.round(d.intervalMs / 1000)}s`);
+        while (!stopping) {
+            const seed = Math.floor(Date.now() / d.intervalMs);
+            try {
+                await d.populateOnce(opts, seed, d);
+            } catch (err) {
+                // One failed cycle must not kill the feed; the next cycle retries.
+                log(`cycle failed: ${err.message}`);
+            }
+            if (stopping) break;              // signalled during the cycle: no sleep
+            await new Promise((resolve) => {
+                wake = resolve;
+                timer = setTimeout(resolve, d.intervalMs);
+            });
+            wake = null;
+            timer = null;
         }
-        await new Promise((resolve) => {
-            wake = resolve;
-            setTimeout(resolve, LOOP_INTERVAL_MS);
-        });
+    } finally {
+        if (timer) clearTimeout(timer);
+        process.removeListener('SIGTERM', stop);
+        process.removeListener('SIGINT', stop);
     }
     log('demo feed stopped');
     return 0;
+}
+
+/**
+ * Close what population opened: the BullMQ queues (Redis connections) if
+ * they were loaded, then the PostgreSQL pool. Safe to call more than once.
+ */
+async function shutdown() {
+    const hadQueues = queues !== null;
+    await closeQueues();
+    queues = null;
+    await db.closePool().catch(() => {});
+    log(`connections closed (${hadQueues ? 'queues, ' : ''}database pool)`);
 }
 
 async function main(argv) {
@@ -512,8 +552,7 @@ if (require.main === module) {
             return 1;
         })
         .then(async (code) => {
-            await closeQueues();
-            await db.closePool().catch(() => {});
+            await shutdown();
             process.exit(code);
         });
 }
@@ -526,6 +565,11 @@ module.exports = {
     runDemoBatch,
     unembeddedDemoPostsInLastHour,
     runOnce,
+    runLoop,
+    shutdown,
+    // The real enqueue seam (loads the BullMQ registry); exported for the
+    // shutdown test in tests/unit/populate.loop.test.js.
+    enqueueEmbeddingsForTest: enqueueEmbeddings,
     main,
     CORPUS,
     DEMO_PREFIX,

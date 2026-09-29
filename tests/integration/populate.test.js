@@ -231,6 +231,47 @@ describe('scripts/populate.js — demo population through the real pipeline', ()
         });
     });
 
+    // Copilot 4129574059: the real process, a real SIGTERM. The interval is
+    // 10 minutes, so an exit that waited for the sleep would time the test out.
+    it('--loop exits promptly and cleanly on SIGTERM, closing its connections', async () => {
+        await insertSource('real-social', 'social');
+        await registerPipelineMethodology();
+        const { spawn } = require('child_process');
+        const path = require('path');
+        const child = spawn(process.execPath, ['scripts/populate.js', '--loop', '--no-embed', '--size', '3'], {
+            cwd: path.join(__dirname, '../..'),
+            env: { ...process.env, NODE_ENV: 'test', DEMO_FEED_INTERVAL_MS: String(10 * 60 * 1000) },
+            stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        let out = '';
+        const exited = new Promise((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })));
+        let signalledAt = 0;
+        child.stdout.on('data', (b) => {
+            out += b;
+            // "data source: DEMO" is printed at the start of the batch: the
+            // signal lands while the batch is in flight (or right after it).
+            if (!signalledAt && out.includes('data source: DEMO')) {
+                signalledAt = Date.now();
+                child.kill('SIGTERM');
+            }
+        });
+        child.stderr.on('data', (b) => { out += b; });
+
+        // Never leak the child if this test fails: KILL it after 20 s (the
+        // jest timeout is 30 s), so a regression fails here, not by hanging.
+        const guard = setTimeout(() => child.kill('SIGKILL'), 20000);
+        const { code, signal } = await exited.finally(() => clearTimeout(guard));
+        expect({ code, signal }).toEqual({ code: 0, signal: null });
+        expect(signalledAt).toBeGreaterThan(0);
+        expect(Date.now() - signalledAt).toBeLessThan(10000);
+        expect(out).toMatch(/SIGTERM received/);
+        expect(out).toMatch(/demo feed stopped/);
+        expect(out).toMatch(/connections closed \(database pool\)/);
+        // The in-flight batch was completed, never left 'running'.
+        const jobs = await db.dbAll("SELECT status FROM processing_jobs WHERE triggered_by = 'demo'");
+        expect(jobs.map(j => j.status)).toEqual(['completed']);
+    }, 30000);
+
     it('fails clearly, without creating a job, when the methodology is not registered', async () => {
         await insertSource('real-social', 'social');
         await expect(populate.runDemoBatch({ size: 2, embed: false, seed: 0 }))

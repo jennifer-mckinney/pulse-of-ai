@@ -256,6 +256,10 @@ services:
     command: ["node", "scripts/populate.js", "--loop"]
     healthcheck:
       disable: true
+    # SIGTERM lets an in-flight batch finish (its job row completes), then
+    # the feed exits without sleeping and closes Redis + the DB pool. 30 s
+    # covers a batch; the default 10 s could SIGKILL it mid-cleanup.
+    stop_grace_period: 30s
     depends_on:
       postgres:
         condition: service_healthy
