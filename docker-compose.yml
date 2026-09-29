@@ -207,8 +207,10 @@ services:
     environment:
       EMBED_MODEL: ${EMBED_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
       EMBED_BATCH_SIZE: ${EMBED_BATCH_SIZE:-64}
-    ports:
-      - "${PULSE_BIND_ADDR:-127.0.0.1}:${EMBEDDINGS_PORT:-8000}:8000"
+    # No `ports:` (F9-8): the API is unauthenticated and only the worker
+    # needs it (embeddings:8000 on the compose network). Publishing it —
+    # even behind PULSE_BIND_ADDR — would let anyone who can reach the host
+    # burn its CPU through /embeddings. standup checks it via compose exec.
     volumes:
       - hf_cache:/home/app/.cache/huggingface
 

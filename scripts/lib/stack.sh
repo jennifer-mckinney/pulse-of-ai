@@ -7,8 +7,9 @@
 #   PULSE_ENV_FILE        env file to use (default: <repo>/.env)
 #   COMPOSE_PROJECT_NAME  compose project; overrides the env file's value and
 #                         the compose file's `name: pulse-of-ai`
-#   WEB_PORT, EMBEDDINGS_PORT, POSTGRES_PORT, POSTGRES_TEST_PORT, REDIS_PORT
-#                         host ports (shell values override the env file)
+#   WEB_PORT, POSTGRES_PORT, POSTGRES_TEST_PORT, REDIS_PORT
+#                         host ports (shell values override the env file);
+#                         the embeddings service publishes none (F9-8)
 
 STACK_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 STACK_COMPOSE_FILE="$STACK_ROOT/docker-compose.yml"

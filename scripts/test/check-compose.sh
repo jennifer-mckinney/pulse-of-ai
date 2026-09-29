@@ -15,6 +15,7 @@
 #   F9-2  collector credentials are set on `worker` only; web, migrate and
 #         populate get the base secrets (DB, Redis, AUDIT_HASH_KEY,
 #         CORRELATION_SALT) and nothing else credential-shaped
+#   F9-8  the unauthenticated embeddings API publishes no host port
 #
 # CI runs it in the docker-images job (.github/workflows/ci.yml);
 # tests/integration/composeConfig.test.js runs it under jest.
@@ -74,6 +75,11 @@ missing=$(jq -r '(.services.worker.environment // {}) as $w
     | select(. as $k | $w | has($k) | not)
     | "worker lacks \(.) (x-collector-env)"' <<< "$cfg")
 check "worker receives the collector credentials (x-collector-env)" "$missing"
+
+# ─── F9-8: the embeddings API is never published ─────────────────────────────
+emb_ports=$(jq -r '(.services.embeddings.ports // [])[]
+    | "embeddings publishes \(.host_ip // "0.0.0.0"):\(.published)->\(.target)"' <<< "$cfg")
+check "embeddings publishes no host port (compose network only)" "$emb_ports"
 
 #@@CHECKS@@
 

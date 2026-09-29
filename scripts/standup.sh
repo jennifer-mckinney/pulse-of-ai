@@ -26,7 +26,7 @@
 #   -h, --help   this help
 #
 # Environment (optional): PULSE_ENV_FILE, COMPOSE_PROJECT_NAME, WEB_PORT,
-# EMBEDDINGS_PORT, POSTGRES_PORT, POSTGRES_TEST_PORT, REDIS_PORT,
+# POSTGRES_PORT, POSTGRES_TEST_PORT, REDIS_PORT, PULSE_BIND_ADDR,
 # STANDUP_TIMEOUT (core services, default 300 s),
 # STANDUP_EMBEDDINGS_TIMEOUT (model download on first start, default 900 s).
 
@@ -113,7 +113,7 @@ show_failure() {
     done
 }
 
-port_hint="If a host port is taken, override it: WEB_PORT, EMBEDDINGS_PORT, POSTGRES_PORT, POSTGRES_TEST_PORT, REDIS_PORT (shell env or $STACK_ENV_FILE)."
+port_hint="If a host port is taken, override it: WEB_PORT, POSTGRES_PORT, POSTGRES_TEST_PORT, REDIS_PORT (shell env or $STACK_ENV_FILE)."
 
 step "Starting services (profile full)"
 t_up=$(date +%s)
@@ -203,8 +203,6 @@ ok "demo feed running: a new fictional batch every $(( $(effective DEMO_FEED_INT
 # ─── 7. Smoke check ──────────────────────────────────────────────────────────
 step "Smoke check"
 WEB_URL=$(published_web_url) || die "could not resolve the published port of the web service"
-emb_hostport=$(compose_full port embeddings 8000 2>/dev/null | head -n 1 || true)
-EMB_URL="http://localhost:${emb_hostport##*:}"
 
 host_fail=0
 health_body=$(curl -fsS --max-time 10 "$WEB_URL/api/health" 2>/dev/null || true)
@@ -219,15 +217,16 @@ if [[ "$page_code" == "200" ]]; then
 else
     warn "host → $WEB_URL/ returned ${page_code:-no response}"; host_fail=1
 fi
+# The embeddings API is not published (F9-8), so it is checked from INSIDE
+# its container, on the address the worker uses.
 if (( EMBEDDINGS_OK )); then
-    emb_body=$(curl -fsS --max-time 10 "$EMB_URL/health" 2>/dev/null || true)
-    if [[ "$emb_body" == *'"model_loaded":true'* ]]; then
-        ok "host → $EMB_URL/health: model loaded"
+    if compose_full exec -T embeddings python -c "import json,sys,urllib.request; b=json.load(urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)); sys.exit(0 if b.get('model_loaded') is True else 1)" >/dev/null 2>&1; then
+        ok "embeddings (compose network only) → /health: model loaded"
     else
-        warn "host → $EMB_URL/health did not report model_loaded true"; host_fail=1
+        warn "embeddings /health did not report model_loaded true"; host_fail=1
     fi
 else
-    info "host → embeddings: SKIPPED (service not ready)"
+    info "embeddings: SKIPPED (service not ready)"
 fi
 
 smoke_args=()
@@ -258,7 +257,7 @@ ${_G}${_B}Pulse of AI is up${_N}  (project '$STACK_PROJECT', $(elapsed "$T_START
 
   Open:        $WEB_URL
   API health:  $WEB_URL/api/health
-  Embeddings:  $( (( EMBEDDINGS_OK )) && echo "$EMB_URL/health" || echo "not ready — vector search disabled (see warnings above)")
+  Embeddings:  $( (( EMBEDDINGS_OK )) && echo "model loaded (internal only: embeddings:8000 on the compose network)" || echo "not ready — vector search disabled (see warnings above)")
 
   Data is DEMO: fictional posts scored by the real pipeline, refreshed by the
   'populate' service. Live collection is not implemented yet.

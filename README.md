@@ -143,7 +143,7 @@ Re-running is safe. The images come from the build cache, running containers are
 |---|---|---|
 | `web` | `3000` (`WEB_PORT`) | Express API and the static frontend (`public/`) |
 | `worker` | none | BullMQ workers for ingest, embed and correlate (`src/workers/start.js`) |
-| `embeddings` | `8000` (`EMBEDDINGS_PORT`) | `/embeddings` and `/health`. The model downloads once into the `hf_cache` volume |
+| `embeddings` | none (compose network only: `embeddings:8000`) | `/embeddings` and `/health`, unauthenticated, so never published; standup checks it with `compose exec`. The model downloads once into the `hf_cache` volume |
 | `populate` | none | Demo feed. Adds a batch of fictional posts every 150 s (profile `demo`) |
 | `migrate` | none | One-shot job: migrations and seed |
 | `postgres` | `5434` in `.env` (`POSTGRES_PORT`) | PostgreSQL 16 + pgvector (`postgres_data` volume) |
@@ -153,7 +153,7 @@ Re-running is safe. The images come from the build cache, running containers are
 Every published port (web and the databases and redis) binds to `127.0.0.1` by default (`PULSE_BIND_ADDR`). Setting `PULSE_BIND_ADDR=0.0.0.0` exposes all of them to your network, databases included. To run a second stack beside this one, give it its own project name and ports:
 
 ```bash
-COMPOSE_PROJECT_NAME=pulse-demo WEB_PORT=3200 EMBEDDINGS_PORT=8100 \
+COMPOSE_PROJECT_NAME=pulse-demo WEB_PORT=3200 \
 POSTGRES_PORT=5534 POSTGRES_TEST_PORT=5533 REDIS_PORT=6479 npm run standup
 ```
 
@@ -272,7 +272,6 @@ Copy `.env.example` to `.env` and fill in the values below.
 | `RETENTION_DETAIL_DAYS` | No | Days before compaction (default `90`) |
 | `REDIS_PORT` | No | Redis host port (default `6379`) |
 | `WEB_PORT` | No | Standup: host port of the web service (default `3000`) |
-| `EMBEDDINGS_PORT` | No | Standup: host port of the embeddings service (default `8000`) |
 | `PULSE_BIND_ADDR` | No | Interface every published port binds to: web, postgres, postgres_test, redis (default `127.0.0.1`) |
 | `REDIS_PASSWORD` | Yes (Docker) | Redis `requirepass`; BullMQ, the worker and `/api/health` authenticate with it. Standup generates it |
 | `DEMO_FEED_INTERVAL_MS` | No | Standup demo feed: ms between fictional batches (default `150000`) |
