@@ -20,7 +20,7 @@ const { scorePost } = require('../pipeline/ingest');
 const { passesEmbedGate, EMBED_GATE_MIN_SCORE } = require('../pipeline/relevance');
 const { resolveCurrentMethodology } = require('../pipeline/methodology');
 const { embedQueue } = require('../queues/index');
-const { joinCycle, leaveCycle } = require('../collectors/cycle');
+const { retryJobFor, leaveCycle } = require('../collectors/cycle');
 const { collectWindowMs } = require('../config/source-registry');
 
 /**
@@ -33,15 +33,17 @@ async function processIngestJob(job) {
     // they score under the current cycle.
     if (!rawPostId) throw new Error('ingest job needs rawPostId');
     const mv = await resolveCurrentMethodology();
-    // G10-2: score under the post's cycle only while it is still running
-    // (then it cannot close mid-score); a retry against a closed or non-cycle
-    // job scores under the CURRENT cycle, whose bias checks will include it.
-    const cycleId = await joinCycle(jobId, collectWindowMs());
+    // G10-2: score under the post's own job while it is still running (a
+    // cron cycle is joined so it cannot close mid-score; a running refresh
+    // job keeps its posts); a retry against a closed job, or a sweep retry
+    // with no job, scores under the CURRENT cycle, whose bias checks
+    // will include it.
+    const target = await retryJobFor(jobId, collectWindowMs());
     let relevance;
     try {
-        ({ relevance } = await scorePost(rawPostId, cycleId, mv));
+        ({ relevance } = await scorePost(rawPostId, target.jobId, mv));
     } finally {
-        await leaveCycle(cycleId, {});
+        if (target.joined) await leaveCycle(target.jobId, {});
     }
     if (!passesEmbedGate(relevance.score)) {
         return { rawPostId, relevance: Number(relevance.score), embedJobId: null };

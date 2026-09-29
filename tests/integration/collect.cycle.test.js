@@ -8,7 +8,7 @@
 
 const { dbAll, dbGet, dbRun } = require('../../src/db/connection');
 const { runCollection } = require('../../src/collectors/runner');
-const { currentCycleJob, closeCycles, joinCycle, leaveCycle, hardCapMs } = require('../../src/collectors/cycle');
+const { currentCycleJob, closeCycles, joinCycle, leaveCycle, hardCapMs, retryJobFor } = require('../../src/collectors/cycle');
 const state = require('../../src/collectors/state');
 const { seedSources, seedMethodology } = require('../../scripts/seed');
 const { fixtureTransport, RECORDED_AT, TEST_ENV } = require('../helpers/fixtureTransport');
@@ -166,4 +166,16 @@ it('a failed cycle close stores scrubbed error text (no secret in error_details)
     expect(job.status).toBe('failed');
     expect(job.error_details).toMatch(/cycle close failed/);
     expect(job.error_details).not.toMatch(/guardian-secret-5c4b3a2f/);
+});
+
+it('retryJobFor: a running refresh job keeps its retry; a running cycle is joined; a finished job goes to the current cycle', async () => {
+    const refresh = await dbGet(`INSERT INTO processing_jobs (triggered_by, status) VALUES ('api', 'running') RETURNING id`);
+    expect(await retryJobFor(refresh.id, WINDOW)).toEqual({ jobId: refresh.id, joined: false });
+    const cyc = await currentCycleJob(WINDOW);
+    expect(await retryJobFor(cyc, WINDOW)).toEqual({ jobId: cyc, joined: true });
+    expect((await dbGet('SELECT inflight_runs FROM processing_jobs WHERE id = $1', [cyc])).inflight_runs).toBe(2);
+    await dbRun(`UPDATE processing_jobs SET status = 'completed' WHERE id = $1`, [refresh.id]);
+    const moved = await retryJobFor(refresh.id, WINDOW);
+    expect(moved).toEqual({ jobId: cyc, joined: true });
+    expect((await retryJobFor(null, WINDOW)).jobId).toBe(cyc);
 });

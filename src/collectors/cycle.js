@@ -15,6 +15,9 @@
 //                              increment its inflight_runs (G10-2)
 //   joinCycle(jobId, windowMs) join a given cycle if it is still running,
 //                              else the current one — scoring retries use it
+//   retryJobFor(jobId, windowMs)  a scoring retry: its own running job (a
+//                              refresh keeps its posts), else the current
+//                              cycle
 //   leaveCycle(jobId, counts)  add the run's counters and decrement
 //                              inflight_runs — always, in a finally, so a
 //                              run that throws after scoring still counts
@@ -86,6 +89,31 @@ async function joinCycle(jobId, windowMs) {
         if (joined) return joined.id;
     }
     return currentCycleJob(windowMs);
+}
+
+/**
+ * Where a scoring retry of a post belongs (G10-2):
+ *   - its own job while that job is still running — a cron cycle is joined
+ *     (inflight_runs + 1) so it cannot close mid-score; a running refresh or
+ *     standup job keeps its posts (its own bias checks cover them);
+ *   - otherwise (closed, failed, unknown, or none) the CURRENT cycle.
+ * @returns {Promise<{ jobId: string, joined: boolean }>} leave with leaveCycle when joined
+ */
+async function retryJobFor(jobId, windowMs) {
+    if (jobId) {
+        const joined = await dbGet(
+            `UPDATE processing_jobs SET inflight_runs = inflight_runs + 1
+             WHERE id = $1 AND triggered_by = 'cron' AND status = 'running' RETURNING id`,
+            [jobId],
+        );
+        if (joined) return { jobId: joined.id, joined: true };
+        const own = await dbGet(
+            `SELECT id FROM processing_jobs WHERE id = $1 AND triggered_by <> 'cron' AND status = 'running'`,
+            [jobId],
+        );
+        if (own) return { jobId: own.id, joined: false };
+    }
+    return { jobId: await currentCycleJob(windowMs), joined: true };
 }
 
 async function leaveCycle(jobId, { collected = 0, processed = 0, sources = 0 } = {}) {
@@ -171,6 +199,6 @@ async function closeCycles(windowMs) {
 }
 
 module.exports = {
-    currentCycleJob, joinCycle, leaveCycle, addToCycle, closeCycles, claimDueCycles, hardCapMs,
+    currentCycleJob, joinCycle, retryJobFor, leaveCycle, addToCycle, closeCycles, claimDueCycles, hardCapMs,
     CYCLE_GRACE_MS, CYCLE_LOCK_KEY,
 };

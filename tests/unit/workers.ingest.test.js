@@ -12,7 +12,7 @@ jest.mock('../../src/queues/index', () => ({
 jest.mock('../../src/pipeline/ingest', () => ({ scorePost: jest.fn() }));
 // G10-2: the retry joins the post's cycle while it runs, else the current one.
 jest.mock('../../src/collectors/cycle', () => ({
-    joinCycle: jest.fn(async id => id),
+    retryJobFor: jest.fn(async id => ({ jobId: id, joined: true })),
     leaveCycle: jest.fn().mockResolvedValue(),
 }));
 jest.mock('../../src/pipeline/methodology', () => ({
@@ -31,11 +31,19 @@ const cycle = require('../../src/collectors/cycle');
 
 beforeEach(() => jest.clearAllMocks());
 
+test('G10-2: a retry for a running refresh job stays with it (no cycle joined or left)', async () => {
+    cycle.retryJobFor.mockResolvedValueOnce({ jobId: 'refresh-job', joined: false });
+    scorePost.mockResolvedValueOnce({ relevance: { score: '0' } });
+    await processIngestJob(job({ jobId: 'refresh-job' }));
+    expect(scorePost).toHaveBeenCalledWith('post-1', 'refresh-job', expect.any(Object));
+    expect(cycle.leaveCycle).not.toHaveBeenCalled();
+});
+
 test('G10-2: a retry against a closed job scores under the current cycle, and always leaves it', async () => {
-    cycle.joinCycle.mockResolvedValueOnce('cycle-now');
+    cycle.retryJobFor.mockResolvedValueOnce({ jobId: 'cycle-now', joined: true });
     scorePost.mockRejectedValueOnce(new Error('db blip'));
     await expect(processIngestJob(job())).rejects.toThrow('db blip');
-    expect(cycle.joinCycle).toHaveBeenCalledWith('job-1', expect.any(Number));
+    expect(cycle.retryJobFor).toHaveBeenCalledWith('job-1', expect.any(Number));
     expect(scorePost).toHaveBeenCalledWith('post-1', 'cycle-now', expect.any(Object));
     expect(cycle.leaveCycle).toHaveBeenCalledWith('cycle-now', {});
 });
@@ -79,8 +87,8 @@ test('errors propagate so BullMQ retries; malformed jobs are rejected', async ()
     await expect(processIngestJob({ data: { jobId: 'j' } })).rejects.toThrow(/needs rawPostId/);
     // G10-4: a sweep re-queue has no job id — it scores under the current cycle.
     scorePost.mockResolvedValue({ relevance: { score: '0' } });
-    cycle.joinCycle.mockResolvedValueOnce('cycle-now');
+    cycle.retryJobFor.mockResolvedValueOnce({ jobId: 'cycle-now', joined: true });
     await processIngestJob({ data: { rawPostId: 'x', jobId: null } });
-    expect(cycle.joinCycle).toHaveBeenLastCalledWith(null, expect.any(Number));
+    expect(cycle.retryJobFor).toHaveBeenLastCalledWith(null, expect.any(Number));
     expect(scorePost).toHaveBeenLastCalledWith('x', 'cycle-now', expect.any(Object));
 });
