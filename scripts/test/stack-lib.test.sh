@@ -394,6 +394,27 @@ host_calls=$(grep -nE '^[^#]*(^|[;&|]|\$\(|then|do|else)[[:space:]]*(node|npm|np
     "$SCRIPTS_DIR/standup.sh" "$SCRIPTS_DIR/teardown.sh" "$SCRIPTS_DIR/lib/stack.sh" || true)
 assert_eq "standup/teardown/stack.sh: no host node/npm/python call" "" "$host_calls"
 
+# check-compose.sh stops with a clear message on a Compose older than 2.39.0.
+OLD_BIN="$SCRATCH/oldcompose"; mkdir -p "$OLD_BIN"
+cat > "$OLD_BIN/docker" <<'EOS'
+#!/usr/bin/env bash
+[[ "$1 $2" == "compose version" ]] && { echo 2.38.2; exit 0; }
+echo "fake docker: unexpected call: $*" >&2; exit 99
+EOS
+chmod +x "$OLD_BIN/docker"
+CHECK_COMPOSE="$SCRIPTS_DIR/test/check-compose.sh"
+if command -v jq >/dev/null 2>&1; then
+    d=$(new_case)
+    PATH="$OLD_BIN:$PATH" bash "$CHECK_COMPOSE" > "$d/out" 2>&1; rc=$?
+    assert_eq "check-compose: Compose 2.38.2 → exit 2"            "2" "$rc"
+    assert_eq "check-compose: names the minimum and found version" "yes" \
+        "$(grep -q "Compose 2.39.0 or newer is required, found '2.38.2'" "$d/out" && echo yes || echo no)"
+    assert_eq "check-compose: stops before any compose config call" "no" \
+        "$(grep -q 'unexpected call' "$d/out" && echo yes || echo no)"
+else
+    printf 'skip check-compose version cases (jq not installed)\n'
+fi
+
 #@@CASES@@
 
 

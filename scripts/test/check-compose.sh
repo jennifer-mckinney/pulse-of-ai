@@ -7,7 +7,7 @@
 # the security / operations policy the one-command standup relies on. It
 # runs `docker compose config` only (no daemon calls, nothing started), in a
 # clean environment with dummy secrets, so the shipped defaults are checked
-# — never a developer's .env. Needs docker compose 2.39.0+ and jq.
+# — never a developer's .env. Needs docker compose 2.39.0+ (checked first) and jq.
 #
 # Checks:
 #   F9-1  every published port has an explicit host IP, and by default that
@@ -30,6 +30,16 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 command -v jq >/dev/null 2>&1 || { echo "check-compose: jq is required" >&2; exit 2; }
+
+# An older Compose rejects docker-compose.yml outright (build.provenance /
+# build.sbom need 2.39.0+). Say so, instead of surfacing a schema error.
+# shellcheck source=scripts/lib/stack.sh
+source "$ROOT/scripts/lib/stack.sh"
+compose_v=$(docker compose version --short 2>/dev/null || true)
+if ! compose_version_at_least "$compose_v" "$STACK_COMPOSE_MIN_VERSION"; then
+    echo "check-compose: Docker Compose $STACK_COMPOSE_MIN_VERSION or newer is required, found '${compose_v:-none}' (CI: scripts/test/ci-install-compose.sh)" >&2
+    exit 2
+fi
 
 # Clean environment: only what the docker CLI itself needs, plus dummy
 # values for the required secrets (never real ones).
@@ -74,11 +84,11 @@ leaks=$(jq -r --argjson base "$BASE_SECRETS" --arg re "$CRED_RE" '.services | to
     | select(test($re)) | select(. as $k | $base | index($k) | not)
     | "\($s) receives collector credential \(.)"' <<< "$cfg")
 check "collector credentials are passed to worker only" "$leaks"
-missing=$(jq -r '(.services.worker.environment // {}) as $w
+missing_creds=$(jq -r '(.services.worker.environment // {}) as $w
     | ["TWITTER_BEARER_TOKEN","GITHUB_TOKEN","SEMANTIC_SCHOLAR_API_KEY"][]
     | select(. as $k | $w | has($k) | not)
     | "worker lacks \(.) (x-collector-env)"' <<< "$cfg")
-check "worker receives the collector credentials (x-collector-env)" "$missing"
+check "worker receives the collector credentials (x-collector-env)" "$missing_creds"
 
 # ─── F9-8: the embeddings API is never published ─────────────────────────────
 emb_ports=$(jq -r '(.services.embeddings.ports // [])[]
