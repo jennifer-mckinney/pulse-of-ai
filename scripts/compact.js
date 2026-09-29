@@ -20,7 +20,9 @@
 //     row that references them: the per-post score rows, their
 //     decision_audit_log rows, their embeddings, and the demo feeds'
 //     correlation sightings (plus any pseudonymous profile left with no
-//     evidence at all). Each purge batch runs in its own transaction and
+//     evidence at all). A profile that survives has its platform_count and
+//     sighting window recomputed from its remaining sightings in the same
+//     transaction. Each purge batch runs in its own transaction and
 //     writes one data_retention_log row (action 'purged_demo').
 //     Owner decision 2026-09-29: "Delete demo posts and their rows
 //     (Recommended)". The source_type = 'demo' filter is enforced in the SQL
@@ -312,6 +314,31 @@ async function purgeDemoBatch(client, { cutoff, batchSize }) {
         WHERE pu.id = ANY($1::uuid[])
           AND NOT EXISTS (SELECT 1 FROM user_platform_sightings s WHERE s.pseudo_user_id = pu.id)
           AND NOT EXISTS (SELECT 1 FROM raw_posts rp WHERE rp.pseudo_user_id = pu.id)
+    `, [profileIds])).rowCount;
+
+    // Surviving profiles that lost sightings: recompute platform_count and
+    // the sighting window from the sightings they still have, in this same
+    // transaction, so no profile keeps a count that includes purged demo
+    // evidence. correlateUser() maintains platform_count as one per sighting
+    // row (1 at creation, +1 per repeat), so the recount is COUNT(*) of the
+    // remaining rows; a profile kept alive only by a post has 0. The
+    // timestamps keep their old value when no sighting is left.
+    counts.pseudonymous_users_recounted = profileIds.length === 0 ? 0 : (await client.query(`
+        UPDATE pseudonymous_users pu
+        SET platform_count   = agg.n,
+            first_sighted_at = COALESCE(agg.first_at, pu.first_sighted_at),
+            last_sighted_at  = COALESCE(agg.last_at,  pu.last_sighted_at)
+        FROM (
+            SELECT p.id,
+                   COUNT(s.id)::INTEGER AS n,
+                   MIN(s.sighted_at)    AS first_at,
+                   MAX(s.sighted_at)    AS last_at
+            FROM pseudonymous_users p
+            LEFT JOIN user_platform_sightings s ON s.pseudo_user_id = p.id
+            WHERE p.id = ANY($1::uuid[])
+            GROUP BY p.id
+        ) agg
+        WHERE pu.id = agg.id
     `, [profileIds])).rowCount;
 
     if (counts.raw_posts === 0 && counts.user_platform_sightings === 0) return null;

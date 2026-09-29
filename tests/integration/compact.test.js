@@ -230,6 +230,78 @@ describe('scripts/compact.js — demo posts are deleted at retention (P9-3)', ()
         expect(JSON.parse(row.reason).window).toEqual({ from: OLD(5), to: OLD(5) });
     });
 
+    it('recomputes platform_count and the sighting window of surviving profiles in the same transaction', async () => {
+        // Built the way correlateUser() builds a profile: one sighting per
+        // correlation, platform_count kept equal to the sighting rows.
+        const shared = await insertProfile('shared-recount');
+        await insertSighting(shared, demoSrc, OLD(2));        // purged
+        await insertSighting(shared, liveSrc, OLD(9));
+        await insertSighting(shared, liveSrc, RECENT);
+        await dbRun(`UPDATE pseudonymous_users SET platform_count = 3,
+                         first_sighted_at = $2, last_sighted_at = $3 WHERE id = $1`,
+        [shared, OLD(2), RECENT]);
+
+        // Kept alive only by a real post: no sighting left after the purge.
+        const postOnly = await insertProfile('post-only');
+        await insertSighting(postOnly, demoSrc, OLD(4));      // purged
+        const livePost = await insertFullPost(liveSrc, job, mv, { externalId: 'live-profiled', collectedAt: OLD(4) });
+        await dbRun('UPDATE raw_posts SET pseudo_user_id = $1 WHERE id = $2', [postOnly, livePost]);
+        await dbRun('UPDATE pseudonymous_users SET platform_count = 1 WHERE id = $1', [postOnly]);
+
+        // Untouched by the purge: its count is left exactly as it was.
+        const untouched = await insertProfile('untouched');
+        await insertSighting(untouched, liveSrc, OLD(6));
+        await dbRun('UPDATE pseudonymous_users SET platform_count = 7 WHERE id = $1', [untouched]);
+
+        const result = await purgeDemoPosts({ cutoff: CUTOFF, log: quiet });
+        expect(result.counts).toMatchObject({
+            user_platform_sightings: 2, pseudonymous_users: 0, pseudonymous_users_recounted: 2,
+        });
+
+        const rows = Object.fromEntries((await dbAll(
+            `SELECT pseudo_id, platform_count, first_sighted_at, last_sighted_at
+             FROM pseudonymous_users`)).map(r => [r.pseudo_id, r]));
+        expect(rows['shared-recount'].platform_count).toBe(2);
+        expect(new Date(rows['shared-recount'].first_sighted_at).toISOString()).toBe(OLD(9));
+        expect(new Date(rows['shared-recount'].last_sighted_at).toISOString()).toBe(new Date(RECENT).toISOString());
+        expect(rows['post-only'].platform_count).toBe(0);
+        expect(rows.untouched.platform_count).toBe(7);
+
+        // Invariant for every profile the purge touched: count == sightings left.
+        const drift = await dbAll(`
+            SELECT pu.pseudo_id FROM pseudonymous_users pu
+            WHERE pu.pseudo_id IN ('shared-recount', 'post-only')
+              AND pu.platform_count <> (SELECT COUNT(*) FROM user_platform_sightings s
+                                        WHERE s.pseudo_user_id = pu.id)`);
+        expect(drift).toEqual([]);
+    });
+
+    it('a failed recount rolls the whole batch back: the sightings stay and the count is unchanged', async () => {
+        const shared = await insertProfile('rollback-recount');
+        await insertSighting(shared, demoSrc, OLD(3));
+        await insertSighting(shared, liveSrc, OLD(8));
+        await dbRun('UPDATE pseudonymous_users SET platform_count = 2 WHERE id = $1', [shared]);
+
+        // Fail the recount UPDATE only; every earlier statement ran.
+        const failing = (client) => new Proxy(client, {
+            get(target, prop) {
+                if (prop !== 'query') return Reflect.get(target, prop);
+                return (sql, params) => (/SET platform_count/.test(sql)
+                    ? Promise.reject(new Error('recount failed'))
+                    : target.query(sql, params));
+            },
+        });
+        const { purgeDemoBatch } = require('../../scripts/compact');
+        await expect(dbTransaction(c => purgeDemoBatch(failing(c), { cutoff: CUTOFF, batchSize: 10 })))
+            .rejects.toThrow('recount failed');
+
+        expect(await dbAll('SELECT id FROM user_platform_sightings WHERE pseudo_user_id = $1', [shared]))
+            .toHaveLength(2);
+        expect((await dbGet('SELECT platform_count FROM pseudonymous_users WHERE id = $1', [shared])).platform_count)
+            .toBe(2);
+        expect(await purgeLog()).toHaveLength(0);
+    });
+
     it('GUARD: never deletes a row from a non-demo source, even when the post looks like demo data', async () => {
         // A REAL source whose name, display name, post content and payload
         // all look like demo data. Only data_sources.source_type decides.
