@@ -432,6 +432,7 @@
             post: {
                 content_snippet: payload.post.content_snippet || '',
                 source_name: payload.post.source_name || null,
+                attribution: payload.post.attribution || null,
                 platform: payload.post.source_category || null,
                 location: payload.post.location || null,
                 collected_at: payload.post.collected_at || null,
@@ -563,18 +564,72 @@
     }
 
     // sourcesStat: GET /api/sources?include_inactive=true rows →
-    // {active, total, demoFeeds}. This is REGISTRY-active (configured on/off
-    // flags), not liveness — label it honestly (audit G20). Demo feeds
-    // (source_type 'demo', the standup's fictional population) are NOT
-    // sources: they are excluded from active/total and counted separately.
+    // { active, total, demoFeeds, registry, collecting, online }.
+    // registry  — the source registry of record (the workbook's 51); rows
+    //             the API flags registry: true
+    // online    — registry sources whose gate is 'collecting' AND that
+    //             collected successfully in the last hour (the API's
+    //             `online`): "Sources online N/51" counts ONLY these
+    // collecting — registry sources whose gate would collect now
+    // active / total — non-demo, non-retired rows flagged active / all
+    // Demo feeds (source_type 'demo', the standup's fictional population)
+    // and retired pre-registry rows are NEVER sources: demo feeds are a
+    // separate figure, retired rows are not counted.
     function sourcesStat(rows) {
         const list = Array.isArray(rows) ? rows : [];
-        const real = list.filter((r) => !(r && r.source_type === 'demo'));
+        const demo = list.filter((r) => r && r.source_type === 'demo');
+        const real = list.filter((r) => r && r.source_type !== 'demo' && !r.retired);
+        const reg = real.filter((r) => r.registry === true);
         return {
-            active: real.filter((r) => r && r.active === true).length,
+            active: real.filter((r) => r.active === true).length,
             total: real.length,
-            demoFeeds: list.length - real.length,
+            demoFeeds: demo.length,
+            registry: reg.length,
+            collecting: reg.filter((r) => r.status === 'collecting').length,
+            online: reg.filter((r) => r.online === true).length,
         };
+    }
+
+    // Per-source gate status → the drawer's wording. Blocked sources say
+    // exactly "blocked: no compliant access" (ADR 0001 ruling 5).
+    const SOURCE_STATUS_LABELS = {
+        collecting: 'collecting',
+        awaiting_key: 'awaiting key',
+        awaiting_approval: 'awaiting approval',
+        awaiting_licence: 'awaiting licence',
+        blocked: 'blocked: no compliant access',
+        disabled: 'disabled',
+    };
+
+    function sourceStatusLabel(row) {
+        if (!row) return 'unknown';
+        if (row.status === 'collecting' && row.online) return 'online';
+        return SOURCE_STATUS_LABELS[row.status] || String(row.status || 'unknown');
+    }
+
+    // sourceListModel: registry rows → [{ slug, label, sources: [{ name,
+    // status, statusLabel, online, termsUrl, reason }] }] in canonical
+    // category order, sources by workbook rank. A terms citation is carried
+    // for every source that is NOT collecting (blocked / awaiting / disabled)
+    // so the drawer can cite why.
+    function sourceListModel(rows) {
+        const reg = (Array.isArray(rows) ? rows : [])
+            .filter((r) => r && r.registry === true && !r.retired);
+        return designConfig.CATEGORY_SLUGS.map((slug) => ({
+            slug,
+            label: catLabel(slug),
+            sources: reg.filter((r) => r.category === slug)
+                .sort((a, b) => (a.rank || 0) - (b.rank || 0))
+                .map((r) => ({
+                    name: r.display_name || r.name,
+                    status: r.status,
+                    statusLabel: sourceStatusLabel(r),
+                    online: r.online === true,
+                    termsUrl: r.status !== 'collecting' && typeof r.terms_url === 'string'
+                        && /^https:\/\//.test(r.terms_url) ? r.terms_url : null,
+                    reason: r.status_reason || '',
+                })),
+        })).filter((g) => g.sources.length > 0);
     }
 
     // methodologyModel: GET /api/methodology rows → kv table rows
@@ -986,6 +1041,8 @@
         historyNotice,
         healthBanner,
         sourcesStat,
+        sourceStatusLabel,
+        sourceListModel,
         methodologyModel,
         normalizeSeries,
         sparklinePoints,
@@ -1328,6 +1385,8 @@
             const minutes = minutesAgoFrom(p.collected_at, Date.now());
             const metaParts = [];
             if (p.source_name) metaParts.push(String(p.source_name));
+            // Credit the source's terms require next to its content (NPR …).
+            if (p.attribution) metaParts.push('via ' + String(p.attribution));
             // Category meta: display label lowercased (prototype post-meta
             // casing — 'blogs', 'non-profit'), never the raw slug.
             if (p.platform) metaParts.push(catLabel(p.platform).toLowerCase());
@@ -1668,6 +1727,7 @@
         const minutes = minutesAgoFrom(model.post.collected_at, Date.now());
         const metaParts = [];
         if (model.post.source_name) metaParts.push(String(model.post.source_name));
+        if (model.post.attribution) metaParts.push('via ' + String(model.post.attribution));
         if (minutes !== null) metaParts.push(minutes + 'm ago');
         const hashText = fmtHashPrefix(model.inputHash);
         if (hashText) metaParts.push('input ' + hashText);
@@ -1848,18 +1908,28 @@
         bannerEl.appendChild(bannerBody);
         inner.appendChild(bannerEl);
 
-        // Sources online — REGISTRY-active flags, labeled honestly (G20).
+        // Sources — the registry of record with each source's live status
+        // (/api/sources). "Sources online N/51" counts ONLY sources that
+        // collected successfully in the last hour (G20: never configured
+        // flags passed off as liveness). Blocked and waiting sources cite
+        // their terms.
         if (sources !== null) {
             const stat = sourcesStat(sources);
             inner.appendChild(el('div', 'sec-lbl mono',
-                'SOURCES · REGISTRY-ACTIVE'));
+                'SOURCES · ' + stat.online + ' / ' + stat.registry + ' ONLINE'));
             const kv = el('div', 'kv mono');
             const row = el('div', 'kv-row');
-            row.appendChild(el('span', 'kv-k', 'sources registry-active'));
+            row.appendChild(el('span', 'kv-k', 'sources online'));
             row.appendChild(el('span', 'kv-v',
-                stat.active + ' / ' + stat.total
-                + ' (configured active, not liveness)'));
+                stat.online + ' / ' + stat.registry
+                + ' (collected successfully in the last hour)'));
             kv.appendChild(row);
+            const colRow = el('div', 'kv-row');
+            colRow.appendChild(el('span', 'kv-k', 'collecting'));
+            colRow.appendChild(el('span', 'kv-v',
+                stat.collecting + ' / ' + stat.registry
+                + ' (the rest wait for a key, approval or licence, or are blocked)'));
+            kv.appendChild(colRow);
             if (stat.demoFeeds > 0) {
                 // Separate figure: demo feeds are never counted as sources.
                 const demoRow = el('div', 'kv-row');
@@ -1869,6 +1939,29 @@
                 kv.appendChild(demoRow);
             }
             inner.appendChild(kv);
+
+            const list = el('div', 'src-list');
+            for (const group of sourceListModel(sources)) {
+                list.appendChild(el('div', 'src-cat mono', group.label.toUpperCase()));
+                for (const src of group.sources) {
+                    const line = el('div', 'src-row');
+                    line.appendChild(el('span', 'src-name', src.name));
+                    const st = el('span', 'src-status mono st-'
+                        + (src.online ? 'online' : String(src.status || 'unknown')), src.statusLabel);
+                    if (src.reason) st.title = src.reason;
+                    line.appendChild(st);
+                    if (src.termsUrl) {
+                        const a = el('a', 'src-terms mono', 'terms');
+                        a.href = src.termsUrl;
+                        a.target = '_blank';
+                        a.rel = 'noopener noreferrer';
+                        a.title = src.reason;
+                        line.appendChild(a);
+                    }
+                    list.appendChild(line);
+                }
+            }
+            inner.appendChild(list);
         }
 
         // ALERT HISTORY · LAST 12H from /api/bias/history: every flagged row

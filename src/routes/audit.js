@@ -43,6 +43,7 @@ const {
 } = require('../config/audit-narration');
 const { buildLayers } = require('../config/bias-vocabulary');
 const { DEMO_SOURCE_TYPE } = require('../config/data-mode');
+const { attributionFor } = require('../config/source-registry');
 const {
     resolveBiasLineage,
     currentBiasVersion,
@@ -222,6 +223,8 @@ router.get('/audit/:post_id', async (req, res) => {
                 location:        post.location,
                 source_category: post.source_category,
                 source_name:     post.source_name,
+                // credit the source's terms require next to its content, or null
+                attribution:     attributionFor(post.source_name),
                 // 'demo' for fictional demo-feed posts, else 'live'
                 data_origin:     post.source_type === DEMO_SOURCE_TYPE ? 'demo' : 'live',
                 collected_at:    post.collected_at,

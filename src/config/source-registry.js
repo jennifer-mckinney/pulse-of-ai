@@ -935,6 +935,16 @@ function getSource(slug) {
 
 const nonEmpty = (v) => typeof v === 'string' && v.trim() !== '';
 
+/**
+ * Attribution the source's terms require next to its content (NPR,
+ * NBCNews.com, Stack Exchange, Wikipedia, OWID, Pew), or null.
+ * @param {string} slug  data_sources.name
+ */
+function attributionFor(slug) {
+    const src = BY_SLUG.get(slug);
+    return src && src.attribution ? src.attribution : null;
+}
+
 /** Env name of the per-source kill switch: SOURCE_<SLUG>_ENABLED. */
 function killSwitchEnv(slug) {
     return `SOURCE_${slug.toUpperCase()}_ENABLED`;
@@ -1025,6 +1035,7 @@ module.exports = {
     SOURCES,
     ENV_DOCS,
     getSource,
+    attributionFor,
     killSwitchEnv,
     killReason,
     openRoutes,

@@ -434,5 +434,19 @@
         };
     }
 
-    return { STORY, FALLBACK_COPY, resolveChapter, resolveIntro, introFacts, INTRO_KICKERS };
+    // introByline: the intro's byline from the SOURCE REGISTRY served by
+    // GET /api/sources (rows flagged registry: true — the workbook's 51),
+    // never a hardcoded "50 sources" / "7 categories" claim (ADR 0001).
+    // Without registry rows it states no numbers at all.
+    const BYLINE_FALLBACK = 'INTERACTIVE · EVERY SCORE AUDITABLE';
+    function introByline(rows) {
+        const reg = (Array.isArray(rows) ? rows : [])
+            .filter((r) => r && r.registry === true && !r.retired);
+        if (reg.length === 0) return BYLINE_FALLBACK;
+        const cats = new Set(reg.map((r) => r.category));
+        return 'INTERACTIVE · ' + reg.length + ' SOURCES · ' + cats.size
+            + ' CATEGORIES · EVERY SCORE AUDITABLE';
+    }
+
+    return { STORY, FALLBACK_COPY, resolveChapter, resolveIntro, introFacts, INTRO_KICKERS, introByline, BYLINE_FALLBACK };
 }));

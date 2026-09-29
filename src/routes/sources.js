@@ -1,13 +1,28 @@
 // src/routes/sources.js
 // GET /api/sources
 //
-// Returns the data source registry for dashboard display and collector configuration.
+// Returns the source registry of record (src/config/source-registry.js, the
+// workbook's 51 sources) with each source's RUNTIME status — for the health
+// drawer's per-source list and "Sources online N/51".
 //
 // Query params:
-//   ?include_inactive=true    include inactive sources (default: active only)
+//   ?include_inactive=true    also inactive rows: demo feeds (registry: false)
+//                             and retired pre-registry rows (retired: true)
 //
-// Returns:
-//   200 [ { id, name, display_name, source_type, category, active } ]
+// Returns (registry order, then others):
+//   200 [ { id, name, display_name, source_type, category, active, retired,
+//           registry,                         // true for the 51
+//           slug, rank, region, auth_kind, program, signup_url,
+//           status,                           // collecting | awaiting_key |
+//                                             // awaiting_approval | awaiting_licence |
+//                                             // blocked | disabled
+//           status_reason, missing_env,       // env var NAMES only, never values
+//           open_routes, licence_refs_on_file, kill_switch_env,
+//           online,                           // collecting + success in the last hour
+//           last_attempt_at, last_success_at, last_item_count, last_error,
+//           consecutive_failures,
+//           terms_url, terms_note, attribution, license, blocked, ruling } ]
+//   Non-registry rows carry only the first block plus registry: false.
 //
 // GET /api/sources/timeseries
 //
@@ -39,26 +54,13 @@ const { dbAll }  = require('../db/connection');
 const clock      = require('../db/clock');
 const { CATEGORY_SLUGS } = require('../config/categories');
 const { responseCache } = require('../middleware/response-cache');
+const { sourceRows } = require('../collectors/status');
 
 const router = Router();
 
 router.get('/sources', async (req, res) => {
     try {
-        const includeInactive = req.query.include_inactive === 'true';
-
-        const rows = await dbAll(
-            `SELECT
-                id,
-                name,
-                display_name,
-                source_type,
-                category,
-                active
-             FROM data_sources
-             ${includeInactive ? '' : 'WHERE active = true'}
-             ORDER BY category ASC, name ASC`,
-        );
-
+        const rows = await sourceRows({ includeInactive: req.query.include_inactive === 'true' });
         return res.json(rows);
     /* istanbul ignore start -- Database failure; requires error injection testing infrastructure */
     } catch (err) {

@@ -35,7 +35,7 @@
         bias:        '/api/bias/latest',                  // bias monitor alerts
         biasHistory: '/api/bias/history',                 // 12h alert history (health drawer)
         methodology: '/api/methodology',                  // versioned model table
-        sources:     '/api/sources',                      // source registry (active flags)
+        sources:     '/api/sources',                      // source registry of record + per-source status
         timeseries:  '/api/sources/timeseries',           // ribbon sparklines
         themes:      '/api/themes',                       // warm/cold theme rows
         refresh:     '/api/refresh',                      // manual refresh trigger

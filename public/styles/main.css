@@ -503,3 +503,16 @@ body {
 .noscript-title {
   letter-spacing: -0.02em;
 }
+
+/* health drawer — per-source registry status (ADR 0001) */
+.src-list { margin-top: 12px; border: 1px solid var(--line); border-radius: 4px; padding: 4px 0; }
+.src-cat { font-size: 9.5px; letter-spacing: 0.14em; color: var(--ink-dim); padding: 10px 11px 4px; }
+.src-row { display: flex; align-items: baseline; gap: 10px; font-size: 11.5px; padding: 3px 11px; }
+.src-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.src-status { flex: 0 0 auto; font-size: 10px; color: var(--ink-dim); }
+.src-status.st-online { color: var(--accent); }
+.src-status.st-collecting { color: var(--ink); }
+.src-status.st-blocked { color: #F07A7A; }
+.src-status.st-disabled { opacity: 0.7; }
+.src-terms { flex: 0 0 auto; font-size: 10px; color: var(--ink-dim); text-decoration: underline; }
+.src-terms:hover, .src-terms:focus-visible { color: var(--ink); }
