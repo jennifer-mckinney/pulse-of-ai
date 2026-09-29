@@ -33,7 +33,7 @@ const { Queue } = require('bullmq');
 
 // ─── Connection ───────────────────────────────────────────────────────────────
 
-// redisConnection (REDIS_HOST / REDIS_PORT / REDIS_PASSWORD) lives in
+// redisConnection (REDIS_HOST / REDIS_PORT / REDIS_PASSWORD / REDIS_DB) lives in
 // ./connection so the web process can build a probe client without opening
 // these queues.
 const { redisConnection } = require('./connection');

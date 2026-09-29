@@ -31,10 +31,12 @@ describe('src/queues/index.js', () => {
             REDIS_HOST: process.env.REDIS_HOST,
             REDIS_PORT: process.env.REDIS_PORT,
             REDIS_PASSWORD: process.env.REDIS_PASSWORD,
+            REDIS_DB: process.env.REDIS_DB,
         };
         delete process.env.REDIS_HOST;
         delete process.env.REDIS_PORT;
         delete process.env.REDIS_PASSWORD;
+        delete process.env.REDIS_DB;
         Object.assign(process.env, env);
         try {
             const { Queue } = require('bullmq');
@@ -79,6 +81,17 @@ describe('src/queues/index.js', () => {
             const { registry } = loadRegistry();
             expect(registry.redisConnection({ REDIS_HOST: 'r', REDIS_PORT: '1', REDIS_PASSWORD: 'p' }))
                 .toEqual({ host: 'r', port: 1, password: 'p' });
+        });
+
+        it('selects a logical database only when REDIS_DB is a positive integer', () => {
+            expect(loadRegistry({ REDIS_DB: '5' }).registry.connection).toEqual({ host: '127.0.0.1', port: 6379, db: 5 });
+            expect(loadRegistry({ REDIS_DB: 'x' }).registry.connection).toEqual({ host: '127.0.0.1', port: 6379 });
+            expect(loadRegistry({ REDIS_DB: '0' }).registry.connection).toEqual({ host: '127.0.0.1', port: 6379 });
+        });
+
+        it('the heartbeat / health probe config selects the same database', () => {
+            const { redisConnection } = require('../../src/queues/connection');
+            expect(redisConnection({ REDIS_DB: '3', REDIS_PASSWORD: 'p' })).toEqual({ host: '127.0.0.1', port: 6379, password: 'p', db: 3 });
         });
     });
 
