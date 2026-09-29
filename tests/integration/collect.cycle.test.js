@@ -144,3 +144,26 @@ it('a run that throws after scoring still accounts its posts and leaves the cycl
     expect(audited).toBeGreaterThan(0);
     expect(job.posts_processed).toBe(audited);
 });
+
+it('a failed cycle close stores scrubbed error text (no secret in error_details)', async () => {
+    const id = (await cronRun('hacker_news')).jobId;
+    await dbRun(`UPDATE processing_jobs SET started_at = NOW() - INTERVAL '10 minutes' WHERE id = $1`, [id]);
+    const prior = process.env.GUARDIAN_API_KEY;
+    process.env.GUARDIAN_API_KEY = 'guardian-secret-5c4b3a2f';
+    try {
+        let isolated;
+        jest.isolateModules(() => {
+            jest.doMock('../../src/pipeline/methodology', () => ({
+                resolveCurrentMethodology: jest.fn().mockRejectedValue(new Error('connect to https://x.example/?api-key=guardian-secret-5c4b3a2f failed')),
+            }));
+            isolated = require('../../src/collectors/cycle');
+        });
+        await isolated.closeCycles(WINDOW);
+    } finally {
+        if (prior === undefined) delete process.env.GUARDIAN_API_KEY; else process.env.GUARDIAN_API_KEY = prior;
+    }
+    const job = await dbGet('SELECT status, error_details FROM processing_jobs WHERE id = $1', [id]);
+    expect(job.status).toBe('failed');
+    expect(job.error_details).toMatch(/cycle close failed/);
+    expect(job.error_details).not.toMatch(/guardian-secret-5c4b3a2f/);
+});

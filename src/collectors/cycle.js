@@ -33,6 +33,7 @@
 const { dbGet, dbRun, dbTransaction } = require('../db/connection');
 const { runBiasChecks } = require('../pipeline/bias');
 const { resolveCurrentMethodology } = require('../pipeline/methodology');
+const { scrub } = require('./redact');
 
 const CYCLE_LOCK_KEY = 7310001;          // pg advisory lock id for cycle creation
 const CYCLE_GRACE_MS = 60 * 1000;        // in-flight runs finish before a cycle closes
@@ -160,7 +161,8 @@ async function closeCycles(windowMs) {
         } catch (err) {
             await dbRun(
                 `UPDATE processing_jobs SET status = 'failed', error_details = $2, completed_at = NOW() WHERE id = $1`,
-                [jobId, `cycle close failed: ${err.message}`],
+                // F10-1: the stored text is scrubbed of every secret.
+                [jobId, scrub(`cycle close failed: ${err.message}`)],
             ).catch(() => {});
         }
         closed.push({ jobId, postsProcessed: posts, violations });

@@ -33,7 +33,6 @@ const { processCorrelateJob }= require('./correlate.worker');
 const { scheduleAllSources } = require('./collector.scheduler');
 const { collectWindowMs } = require('../config/source-registry');
 const { closeCycles } = require('../collectors/cycle');
-const { scrub } = require('../collectors/redact');
 
 const int = (v, d) => { const n = parseInt(v || '', 10); return Number.isFinite(n) && n > 0 ? n : d; };
 const COLLECT_CONCURRENCY   = int(process.env.COLLECT_CONCURRENCY, 4);
@@ -42,7 +41,8 @@ const EMBED_CONCURRENCY     = int(process.env.EMBED_CONCURRENCY, 4);
 const CORRELATE_CONCURRENCY = int(process.env.CORRELATE_CONCURRENCY, 8);
 const RESCHEDULE_MS         = int(process.env.COLLECT_RESCHEDULE_MS, 10 * 60 * 1000);
 
-const log = (m) => console.log(m);
+// Every line is scrubbed of secrets (src/workers/logging.js).
+const { log, logError } = require('./logging');
 
 const workers = [
     new Worker('collect.rss',  job => processCollectJob(job), { connection, concurrency: COLLECT_CONCURRENCY }),
@@ -67,7 +67,7 @@ workers.forEach(w => {
     });
     w.on('failed', (job, err) => {
         // F10-1: an error text can carry upstream detail — scrubbed.
-        console.error(scrub(`[${w.name}] job ${job?.id} failed: ${err.message}`));
+        logError(`[${w.name}] job ${job?.id} failed: ${err.message}`);
     });
 });
 
@@ -75,7 +75,7 @@ async function schedule() {
     try {
         await scheduleAllSources({ log });
     } catch (err) {
-        console.error(`[scheduler] scheduling failed: ${err.message}`);
+        logError(`[scheduler] scheduling failed: ${err.message}`);
     }
 }
 
@@ -88,7 +88,7 @@ async function closeDueCycles() {
                 + `${c.violations === null ? 'no bias checks (no posts)' : `${c.violations} bias violation(s)`}`);
         }
     } catch (err) {
-        console.error(`[cycle] closing failed: ${err.message}`);
+        logError(`[cycle] closing failed: ${err.message}`);
     }
     // G10-4: re-queue posts from the last 24 h that were never scored.
     try {
@@ -97,7 +97,7 @@ async function closeDueCycles() {
         });
         if (s.found) log(`[sweep] ${s.found} unscored post(s): ${s.queued} re-queued, ${s.failed} failed`);
     } catch (err) {
-        console.error(`[sweep] failed: ${err.message}`);
+        logError(`[sweep] failed: ${err.message}`);
     }
 }
 
@@ -105,7 +105,7 @@ schedule();
 const timer = setInterval(schedule, RESCHEDULE_MS);
 const cycleTimer = setInterval(closeDueCycles, 30 * 1000);
 
-console.log(
+log(
     `Workers started — collect:${COLLECT_CONCURRENCY}/type ingest:${INGEST_CONCURRENCY} `
     + `embed:${EMBED_CONCURRENCY} correlate:${CORRELATE_CONCURRENCY}; rescheduling every ${Math.round(RESCHEDULE_MS / 1000)}s`,
 );
@@ -118,7 +118,7 @@ heartbeatRedis.on('error', () => {});
 let lastBeatError = '';
 const stopHeartbeat = startHeartbeat(heartbeatRedis, {
     onError: (err) => {
-        if (err.message !== lastBeatError) console.error(`[heartbeat] ${err.message}`);
+        if (err.message !== lastBeatError) logError(`[heartbeat] ${err.message}`);
         lastBeatError = err.message;
     },
 });
@@ -127,7 +127,7 @@ const stopHeartbeat = startHeartbeat(heartbeatRedis, {
 // waits for in-flight jobs, so compose gives this process a long
 // stop_grace_period (docker-compose.yml, worker).
 async function shutdown() {
-    console.log('Shutting down workers...');
+    log('Shutting down workers...');
     stopHeartbeat();
     clearInterval(timer);
     clearInterval(cycleTimer);

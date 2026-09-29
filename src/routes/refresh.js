@@ -32,6 +32,7 @@ const { Router } = require('express');
 const { dbGet, dbRun }  = require('../db/connection');
 const { SOURCES } = require('../config/source-registry');
 const { requireSameOrigin } = require('../middleware/same-origin');
+const { scrub } = require('../collectors/redact');
 
 const router = Router();
 
@@ -157,7 +158,7 @@ router.post('/refresh', requireSameOrigin, async (req, res) => {
         try {
             await enqueue(job.id);
         } catch (err) {
-            console.error(`[refresh] enqueue failed for job ${job.id}: ${err.message}`);
+            console.error(scrub(`[refresh] enqueue failed for job ${job.id}: ${err.message}`));
             await dbRun(
                 `UPDATE processing_jobs SET status = 'failed', error_details = 'collection queue unavailable', completed_at = NOW() WHERE id = $1`,
                 [job.id],
@@ -173,7 +174,7 @@ router.post('/refresh', requireSameOrigin, async (req, res) => {
         });
     /* istanbul ignore start -- Database failure; requires error injection testing infrastructure */
     } catch (err) {
-        console.error('[refresh] Error:', err.message);
+        console.error(scrub(`[refresh] Error: ${err.message}`));
         return res.status(500).json({ error: 'Internal server error' });
     }
     /* istanbul ignore end */
