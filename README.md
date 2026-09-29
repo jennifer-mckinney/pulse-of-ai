@@ -120,7 +120,7 @@ When it finishes, open **http://localhost:3000**: the globe, the eleven chapters
 
 ### Prerequisites
 
-- Docker Desktop (macOS / Windows) or Docker Engine with the Compose v2 plugin (Linux), with the daemon running.
+- Docker Desktop (macOS / Windows) or Docker Engine with the Compose plugin (Linux), with the daemon running. **Docker Compose 2.39.0 or newer** (`docker compose version`): `docker-compose.yml` uses `build.provenance` / `build.sbom`, which Compose added in 2.39.0, and older versions reject the file. Standup checks the version and stops with upgrade instructions if it is too old.
 - `curl` (used by the smoke check).
 - No Node.js or Python on the host. Everything runs in containers.
 
