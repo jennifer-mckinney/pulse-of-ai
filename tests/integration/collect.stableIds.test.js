@@ -35,3 +35,33 @@ it('a repository pushed again (new last_updated) dedups to its stored post', asy
     expect(second.sources[0]).toMatchObject({ outcome: 'ok', new: 0 });
     expect(await count()).toBe(n);
 });
+
+it('G10-12: a run that fetches nothing writes no source_runs row; it is counted on the state row', async () => {
+    const etag = { status: 200, body: JSON.stringify(body), headers: { 'content-type': 'application/json', etag: '"v1"' } };
+    const url = 'https://hub.docker.com/v2/namespaces/ai/repositories?ordering=last_updated&page_size=50';
+    const go = res => runCollection({
+        slugs: ['docker_hub'], triggeredBy: 'test', env: TEST_ENV, now: () => Date.parse(RECORDED_AT),
+        transport: fixtureTransport([[url, res],
+            // Docker's other two routes answer with nothing new.
+            ['https://www.docker.com/feed/', { status: 200, body: '<rss version="2.0"><channel><title>Docker</title></channel></rss>' }],
+            ['https://forums.docker.com/latest.json', { status: 200, body: '{"topic_list":{"topics":[]}}', headers: { 'content-type': 'application/json' } }]]),
+        queues: { enqueueEmbeds: async () => {}, enqueueIngestRetry: async () => {} },
+        collectorCtx: { sleep: () => Promise.resolve() },
+    });
+    const runs = async () => (await dbGet(`SELECT COUNT(*)::int AS n FROM source_runs r JOIN data_sources ds ON ds.id = r.source_id WHERE ds.name = 'docker_hub'`)).n;
+    await dbRun(`UPDATE source_collection_state SET last_attempt_at = NOW() - interval '1 day'`);
+    const base = await runs();
+    await go(etag);
+    expect(await runs()).toBe(base + 1);
+    await dbRun(`UPDATE source_collection_state SET last_attempt_at = NOW() - interval '1 day'`);
+    const s = await go({ status: 200, body: '{"results":[]}', headers: { 'content-type': 'application/json' } });
+    expect(s.sources[0]).toMatchObject({ outcome: 'ok', fetched: 0, new: 0, error: null });
+    expect(await runs()).toBe(base + 1);
+    const st = await dbGet(`SELECT unchanged_runs, last_unchanged_at, last_success_at FROM source_collection_state s JOIN data_sources ds ON ds.id = s.source_id WHERE ds.name = 'docker_hub'`);
+    expect(Number(st.unchanged_runs)).toBeGreaterThanOrEqual(1);
+    expect(st.last_unchanged_at).not.toBeNull();
+    // A failing run is still recorded.
+    await dbRun(`UPDATE source_collection_state SET last_attempt_at = NOW() - interval '1 day'`);
+    await go({ status: 500, body: 'x' });
+    expect(await runs()).toBe(base + 2);
+});

@@ -273,7 +273,11 @@ async function runCollection(o = {}) {
             } else if (ok && refusal && refusal.access_denied_at && gate.state === 'probe') {
                 await state.clearRefusal(sourceId, 'a probe run after the cooldown succeeded');
             }
-            await state.recordRun({
+            // G10-12: a run that changed nothing (304 / nothing fetched, no
+            // error) is counted on the state row, not inserted.
+            const unchanged = row.outcome === 'ok' && !row.error && row.fetched === 0 && row.new === 0;
+            if (unchanged) await state.countUnchangedRun(sourceId);
+            else await state.recordRun({
                 sourceId, jobId, gateStatus: st.status, outcome: row.outcome, itemsFetched: row.fetched,
                 postsNew: row.new, requests: http.requests - before, error: row.error,
                 errorKind: row.errorKind, httpStatus: row.httpStatus, startedAt,

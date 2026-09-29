@@ -76,6 +76,16 @@ async function saveOutcome(sourceId, { cursor, httpCache, ok, itemCount, newPost
     );
 }
 
+/** G10-12: count a run that changed nothing instead of inserting a row. */
+async function countUnchangedRun(sourceId) {
+    await dbRun(
+        `UPDATE source_collection_state
+         SET unchanged_runs = unchanged_runs + 1, last_unchanged_at = NOW()
+         WHERE source_id = $1`,
+        [sourceId],
+    );
+}
+
 async function recordRun({
     sourceId, jobId, gateStatus, outcome, itemsFetched = 0, postsNew = 0, requests = 0,
     error = null, errorKind = null, httpStatus = null, startedAt,
@@ -176,6 +186,6 @@ async function clearRefusal(sourceId, resolution) {
 }
 
 module.exports = {
-    sourceIdsBySlug, claim, saveOutcome, recordRun, getRefusal, recordRefusal, clearRefusal,
+    sourceIdsBySlug, claim, saveOutcome, recordRun, countUnchangedRun, getRefusal, recordRefusal, clearRefusal,
     dbKillSwitch, setDbKillSwitch, CLAIM_SLACK_SEC, CLAIM_SLACK_FRACTION, claimSlackSec,
 };
