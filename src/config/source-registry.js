@@ -1016,6 +1016,14 @@ function pollIntervalSec(src, env = process.env) {
     return src.pollIntervalSec || DEFAULT_POLL_SEC;
 }
 
+// Collection window (the 2–3 minute cycle) with a guarded default: a
+// missing, non-numeric or non-positive COLLECT_WINDOW_MS falls back to 150 s.
+const DEFAULT_COLLECT_WINDOW_MS = DEFAULT_POLL_SEC * 1000;
+function collectWindowMs(env = process.env) {
+    const n = parseInt(env.COLLECT_WINDOW_MS || '', 10);
+    return Number.isFinite(n) && n > 0 ? n : DEFAULT_COLLECT_WINDOW_MS;
+}
+
 /** Every env var referenced by the registry, with its docs entry. */
 function registryEnvVars() {
     const names = new Set(['COLLECTOR_CONTACT_URL', 'COLLECTORS_ENABLED', 'COLLECTORS_DISABLED', 'COLLECT_WINDOW_MS']);
@@ -1067,5 +1075,7 @@ module.exports = {
     openRoutes,
     sourceStatus,
     pollIntervalSec,
+    collectWindowMs,
+    DEFAULT_COLLECT_WINDOW_MS,
     registryEnvVars,
 };

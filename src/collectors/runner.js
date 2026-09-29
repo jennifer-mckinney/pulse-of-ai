@@ -41,6 +41,7 @@ const { storeRawPost, scorePost } = require('../pipeline/ingest');
 const { resolveCurrentMethodology } = require('../pipeline/methodology');
 const { runBiasChecks } = require('../pipeline/bias');
 const { EMBED_GATE_MIN_SCORE } = require('../pipeline/relevance');
+const cycle = require('./cycle');
 
 /** Default queue hooks: lazily bind BullMQ (opening Redis only when needed). */
 function defaultQueues() {
@@ -63,6 +64,9 @@ function defaultQueues() {
  * @param {Function} [o.now]
  * @param {Function} [o.log]
  * @param {object}   [o.collectorCtx] extra collector context (imapFactory, sleep)
+ * @param {{ windowMs: number }} [o.cycle]  scheduled per-source run: score
+ *                    under the shared collection-cycle job (src/collectors/
+ *                    cycle.js), which runs the bias checks when it closes
  * @returns {Promise<object>} summary
  */
 async function runCollection(o = {}) {
@@ -73,7 +77,10 @@ async function runCollection(o = {}) {
 
     let jobId = o.jobId || null;
     const ensureJob = async () => {
-        if (!jobId) {
+        if (!jobId && o.cycle) {
+            jobId = await cycle.currentCycleJob(o.cycle.windowMs);
+            summary.jobId = jobId;
+        } else if (!jobId) {
             const job = await dbGet(
                 `INSERT INTO processing_jobs (triggered_by, status, sources_queried) VALUES ($1, 'running', $2) RETURNING id`,
                 [o.triggeredBy || 'cron', slugs.length],
@@ -169,9 +176,11 @@ async function runCollection(o = {}) {
         }
 
         summary.postsProcessed = newPostIds.length;
-        if (newPostIds.length > 0) {
+        if (newPostIds.length > 0 && !o.cycle) {
             const bias = await runBiasChecks(jobId, mv.biasMvId);
             summary.bias = { checksRun: bias.checksRun, violationsFound: bias.violationsFound };
+        }
+        if (newPostIds.length > 0) {
             const gated = await dbAll(
                 `SELECT raw_post_id FROM relevance_results
                  WHERE raw_post_id = ANY($1::uuid[]) AND score >= $2`,
@@ -187,7 +196,10 @@ async function runCollection(o = {}) {
             }
         }
 
-        if (jobId) {
+        if (jobId && o.cycle) {
+            // The cycle job stays open; closeCycles() runs its bias checks.
+            await cycle.addToCycle(jobId, { collected: summary.postsCollected, processed: summary.postsProcessed, sources: queried });
+        } else if (jobId) {
             await dbRun(
                 `UPDATE processing_jobs
                  SET status = 'completed', posts_collected = $2, posts_processed = $3,
@@ -200,7 +212,7 @@ async function runCollection(o = {}) {
         summary.sourcesQueried = queried;
         return summary;
     } catch (err) {
-        if (jobId) {
+        if (jobId && !o.cycle) {
             await dbRun(
                 `UPDATE processing_jobs SET status = 'failed', error_details = $2, completed_at = NOW() WHERE id = $1`,
                 [jobId, err.message],

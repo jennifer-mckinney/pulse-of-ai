@@ -18,15 +18,11 @@
 
 const { dbAll } = require('../db/connection');
 const { COLLECT_QUEUES } = require('../queues/index');
-const { getSource, sourceStatus, pollIntervalSec } = require('../config/source-registry');
+const {
+    getSource, sourceStatus, pollIntervalSec, collectWindowMs, DEFAULT_COLLECT_WINDOW_MS,
+} = require('../config/source-registry');
 
-// Collection window with a guarded default: a missing, non-numeric, or
-// non-positive COLLECT_WINDOW_MS falls back to 150 s (the 2–3 minute cycle).
-const DEFAULT_COLLECT_WINDOW_MS = 150000;
-function collectWindowMs(env = process.env) {
-    const n = parseInt(env.COLLECT_WINDOW_MS || '', 10);
-    return Number.isFinite(n) && n > 0 ? n : DEFAULT_COLLECT_WINDOW_MS;
-}
+// Collection window: src/config/source-registry.js collectWindowMs (150 s default).
 const COLLECT_WINDOW_MS = collectWindowMs();
 
 /** Map source_type → queue. */

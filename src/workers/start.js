@@ -29,6 +29,8 @@ const { processIngestJob }   = require('./ingest.worker');
 const { processEmbedJob }    = require('./embed.worker');
 const { processCorrelateJob }= require('./correlate.worker');
 const { scheduleAllSources } = require('./collector.scheduler');
+const { collectWindowMs } = require('../config/source-registry');
+const { closeCycles } = require('../collectors/cycle');
 
 const int = (v, d) => { const n = parseInt(v || '', 10); return Number.isFinite(n) && n > 0 ? n : d; };
 const COLLECT_CONCURRENCY   = int(process.env.COLLECT_CONCURRENCY, 4);
@@ -71,8 +73,22 @@ async function schedule() {
     }
 }
 
+// Close collection cycles past their window: bias checks once over every
+// source's posts in the cycle (src/collectors/cycle.js).
+async function closeDueCycles() {
+    try {
+        for (const c of await closeCycles(collectWindowMs())) {
+            log(`[cycle] job ${c.jobId} closed: ${c.postsProcessed} posts, `
+                + `${c.violations === null ? 'no bias checks (no posts)' : `${c.violations} bias violation(s)`}`);
+        }
+    } catch (err) {
+        console.error(`[cycle] closing failed: ${err.message}`);
+    }
+}
+
 schedule();
 const timer = setInterval(schedule, RESCHEDULE_MS);
+const cycleTimer = setInterval(closeDueCycles, 30 * 1000);
 
 console.log(
     `Workers started — collect:${COLLECT_CONCURRENCY}/type ingest:${INGEST_CONCURRENCY} `
@@ -99,6 +115,7 @@ async function shutdown() {
     console.log('Shutting down workers...');
     stopHeartbeat();
     clearInterval(timer);
+    clearInterval(cycleTimer);
     await Promise.all(workers.map(w => w.close()));
     await heartbeatRedis.quit().catch(() => {});
     process.exit(0);

@@ -148,14 +148,23 @@ describe('runCollection', () => {
     });
 
     it('a missing methodology version fails the job loudly (never scores under a guessed version)', async () => {
-        await dbRun(`DELETE FROM methodology_versions WHERE component = 'discourse' AND version = $1`, [CURRENT_VERSIONS.discourse]).catch(() => {});
-        await expect(collect(['hacker_news'])).rejects.toThrow(/methodology not registered/);
+        // A runner whose methodology lookup fails. No methodology row is
+        // touched: the failure is injected with an isolated module mock.
+        let isolated;
+        jest.isolateModules(() => {
+            jest.doMock('../../src/pipeline/methodology', () => ({
+                resolveCurrentMethodology: jest.fn().mockRejectedValue(new Error('methodology not registered for discourse@1.1.0-DQI')),
+            }));
+            isolated = require('../../src/collectors/runner');
+        });
+        const opts = { slugs: ['hacker_news'], env: TEST_ENV, transport: fixtureTransport(ROUTES), queues: queuesMock() };
+        await expect(isolated.runCollection({ ...opts, triggeredBy: 'test' })).rejects.toThrow(/methodology not registered/);
         // Nothing was fetched or stored, so no job row exists to mark.
         expect((await dbGet('SELECT COUNT(*)::int AS n FROM raw_posts')).n).toBe(0);
+        expect((await dbGet('SELECT COUNT(*)::int AS n FROM processing_jobs')).n).toBe(0);
         // A caller-owned job (POST /api/refresh) is marked failed with the reason.
         const job = await dbGet(`INSERT INTO processing_jobs (triggered_by, status) VALUES ('api', 'running') RETURNING id`);
-        await expect(runCollection({ slugs: ['hacker_news'], jobId: job.id, env: TEST_ENV, transport: fixtureTransport(ROUTES), queues: queuesMock() }))
-            .rejects.toThrow(/methodology not registered/);
+        await expect(isolated.runCollection({ ...opts, jobId: job.id })).rejects.toThrow(/methodology not registered/);
         expect(await dbGet('SELECT status, error_details FROM processing_jobs WHERE id = $1', [job.id]))
             .toEqual({ status: 'failed', error_details: expect.stringMatching(/methodology not registered/) });
     });
