@@ -89,4 +89,27 @@ describe('GET /api/health', () => {
         expect(new Date(a0.created_at).getTime())
             .toBeGreaterThanOrEqual(new Date(a1.created_at).getTime());
     });
+
+    // FR-24 contract (PR #8 review): the payload /api/health serves must
+    // drive the frontend's shared traffic-light mapping to RED when any
+    // unresolved alert is critical, and to yellow for warnings only.
+    it('serves alert severities that map critical → red, warning → yellow (FR-24)', async () => {
+        const { healthState } = require('../../public/js/utils');
+
+        await insertAlert({ alertType: 'location_concentration', severity: 'warning' });
+        let res = await request(app).get('/api/health');
+        expect(healthState(res.body).state).toBe('yellow');
+
+        await insertAlert({ alertType: 'bias_violation', severity: 'critical' });
+        res = await request(app).get('/api/health');
+        expect(res.body.active_alerts.map(a => a.severity).sort())
+            .toEqual(['critical', 'warning']);
+        expect(healthState(res.body)).toMatchObject({ state: 'red', critical: 1, alerts: 2 });
+    });
+
+    it('maps a clean healthy payload to green (FR-24)', async () => {
+        const { healthState } = require('../../public/js/utils');
+        const res = await request(app).get('/api/health');
+        expect(healthState(res.body).state).toBe('green');
+    });
 });

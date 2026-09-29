@@ -459,7 +459,12 @@
 
     // healthBanner: GET /api/health payload → banner model. null payload =
     // unreachable backend (surface attention, never a fake "nominal").
+    // The colour comes from the shared utils.healthState mapping (FR-24:
+    // critical → red, other alerts / degraded → yellow, else green).
+    const HEALTH_SUB = 'Fairness checks run on every processing job — not on '
+        + 'request. When a threshold trips, it alerts and logs here.';
     function healthBanner(health) {
+        const hs = utils.healthState(health);
         if (!health || typeof health !== 'object') {
             return {
                 state: 'yellow',
@@ -468,31 +473,34 @@
                     + 'outage rather than a fake nominal.',
             };
         }
-        const alerts = Array.isArray(health.active_alerts)
-            ? health.active_alerts : [];
-        const critical = alerts.some(a => a.severity === 'critical')
-            || health.status === 'degraded';
-        if (critical) {
+        const plural = hs.alerts === 1 ? '' : 's';
+        if (hs.state === 'red') {
             return {
                 state: 'red',
-                title: 'Red — critical health alert',
-                sub: 'A critical fairness or system-health condition requires attention.',
+                title: 'Red — ' + hs.alerts + ' active alert' + plural
+                    + ', ' + hs.critical + ' critical',
+                sub: HEALTH_SUB,
             };
         }
-        if (alerts.length > 0) {
+        if (hs.alerts > 0) {
             return {
                 state: 'yellow',
-                title: 'Yellow — ' + alerts.length + ' active alert'
-                    + (alerts.length === 1 ? '' : 's'),
-                sub: 'Fairness checks run on every processing job — not on '
-                    + 'request. When a threshold trips, it alerts and logs here.',
+                title: 'Yellow — ' + hs.alerts + ' active alert' + plural,
+                sub: HEALTH_SUB,
+            };
+        }
+        if (hs.state === 'yellow') {
+            return {
+                state: 'yellow',
+                title: 'Yellow — backend degraded',
+                sub: 'The health endpoint reports a degraded backend '
+                    + '(database unreachable) — fairness checks may be stale.',
             };
         }
         return {
             state: 'green',
             title: 'Green — no active alerts',
-            sub: 'Fairness checks run on every processing job — not on '
-                + 'request. When a threshold trips, it alerts and logs here.',
+            sub: HEALTH_SUB,
         };
     }
 
@@ -1731,24 +1739,10 @@
     function updateHealthChip(health) {
         if (!els.healthChip) return;
         const label = document.getElementById('health-label');
-        const banner = healthBanner(health);
+        const hs = utils.healthState(health);
         els.healthChip.classList.remove('h-green', 'h-yellow', 'h-red');
-        els.healthChip.classList.add(
-            banner.state === 'red' ? 'h-red'
-                : banner.state === 'green' ? 'h-green' : 'h-yellow');
-        if (label) {
-            if (!health) label.textContent = 'model health: unavailable';
-            else {
-                const alerts = Array.isArray(health.active_alerts)
-                    ? health.active_alerts : [];
-                const critical = alerts.some(a => a.severity === 'critical')
-                    || health.status === 'degraded';
-                label.textContent = critical ? 'critical health alert'
-                    : alerts.length === 0 ? 'model health: nominal'
-                    : alerts.length === 1 ? '1 active alert'
-                    : alerts.length + ' active alerts';
-            }
-        }
+        els.healthChip.classList.add('h-' + hs.state);
+        if (label) label.textContent = hs.label;
     }
 
     function renderHealthLoading() {
@@ -1774,7 +1768,7 @@
         const banner = healthBanner(health);
         const bannerEl = el('div', 'health-banner');
         const light = el('span', 'health-light'
-            + (banner.state === 'yellow' ? ' yellow' : ''));
+            + (banner.state === 'green' ? '' : ' ' + banner.state));
         bannerEl.appendChild(light);
         const bannerBody = el('div');
         bannerBody.appendChild(el('div', 'hb-title', banner.title));

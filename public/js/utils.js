@@ -114,8 +114,43 @@
         return (net >= 0 ? '+' : '−') + Math.abs(net).toFixed(2);
     }
 
+    // healthState: GET /api/health payload → FR-24 traffic light.
+    // Shared by the header chip (main.js) and the health drawer's chip +
+    // banner (ui.js) so every chip-rendering path agrees. Severity drives
+    // the colour: any unresolved 'critical' alert → red; any other alert, a
+    // degraded backend, or an unreachable endpoint (null) → yellow (never a
+    // fake "nominal"); otherwise green. alert_events.severity is
+    // 'info' | 'warning' | 'critical' (migration 003).
+    function healthState(health) {
+        if (!health || typeof health !== 'object') {
+            return { state: 'yellow', label: 'model health: unavailable', alerts: 0, critical: 0 };
+        }
+        const list = Array.isArray(health.active_alerts) ? health.active_alerts : [];
+        const alerts = list.length;
+        const critical = list.filter((a) => a
+            && String(a.severity || '').toLowerCase() === 'critical').length;
+        if (critical > 0) {
+            const label = alerts === 1 ? '1 critical alert'
+                : alerts + ' active alerts · ' + critical + ' critical';
+            return { state: 'red', label, alerts, critical };
+        }
+        if (alerts > 0) {
+            return {
+                state: 'yellow',
+                label: alerts === 1 ? '1 active alert' : alerts + ' active alerts',
+                alerts,
+                critical,
+            };
+        }
+        if (health.status === 'degraded') {
+            return { state: 'yellow', label: 'model health: degraded', alerts, critical };
+        }
+        return { state: 'green', label: 'model health: nominal', alerts, critical };
+    }
+
     return {
         esc,
+        healthState,
         SENTIMENT_COLORS,
         SOURCE_PALETTE,
         catLabel,

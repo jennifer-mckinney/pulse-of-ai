@@ -9,8 +9,9 @@
 //      so ui.js (C4) can freeze it at the first opened receipt (US-1).
 //   3. Wire the header health chip to GET /api/health (light + label only;
 //      the full health drawer is C4), re-polled on the api.config REFRESH_MS
-//      cadence so alerts raised after load turn the chip yellow without a
-//      page reload (FR-24).
+//      cadence so alerts raised after load turn the chip yellow (or red for a
+//      critical alert) without a page reload (FR-24). The colour mapping is
+//      PulseUtils.healthState — shared with ui.js so every chip path agrees.
 //   4. Wire the intro "Skip to the globe →" link and the skip-story pill to
 //      jump to the explore beat, so the page is navigable before story.js.
 //   5. Initialize globe.js / story.js / ui.js when present — and tolerate
@@ -25,6 +26,7 @@
     const designConfig = window.PulseDesignConfig;
     const apiConfig = window.PulseApiConfig;
     const storyConfig = window.PulseStoryConfig;
+    const utils = window.PulseUtils;
 
     const loadedAt = Date.now();
     let frozenSeconds = null;   // set once by freezeInsightTimer()
@@ -76,9 +78,20 @@
         const labelEl = document.getElementById('health-label');
         if (!chip || !labelEl) return;
         chip.classList.remove('h-green', 'h-yellow', 'h-red');
-        chip.classList.add(state === 'red' ? 'h-red'
-            : state === 'yellow' ? 'h-yellow' : 'h-green');
+        chip.classList.add('h-' + state);
         labelEl.textContent = label;
+    }
+
+    // Apply the shared FR-24 mapping (critical → red, other alerts /
+    // degraded / unreachable → yellow, else green). null = unreachable.
+    function applyHealth(data) {
+        if (!utils || typeof utils.healthState !== 'function') {
+            // utils.js failed to load — surface attention, never fake nominal.
+            setHealthChip('yellow', 'model health: unavailable');
+            return;
+        }
+        const hs = utils.healthState(data);
+        setHealthChip(hs.state, hs.label);
     }
 
     function pollHealth() {
@@ -88,25 +101,9 @@
                 if (!res.ok) throw new Error('health ' + res.status);
                 return res.json();
             })
-            .then((data) => {
-                const alerts = Array.isArray(data.active_alerts)
-                    ? data.active_alerts : [];
-                const critical = alerts.some(a => a.severity === 'critical')
-                    || data.status === 'degraded';
-                if (critical) {
-                    setHealthChip('red', 'critical health alert');
-                } else if (alerts.length > 0) {
-                    setHealthChip('yellow', alerts.length === 1
-                        ? '1 active alert'
-                        : alerts.length + ' active alerts');
-                } else {
-                    setHealthChip('green', 'model health: nominal');
-                }
-            })
-            .catch(() => {
-                // Unreachable backend: surface attention, never fake "nominal".
-                setHealthChip('yellow', 'model health: unavailable');
-            });
+            .then(applyHealth)
+            // Unreachable backend: surface attention, never fake "nominal".
+            .catch(() => applyHealth(null));
     }
 
     // ── 4. Skip-to-explore navigation (story.js refines this in C3) ─────────

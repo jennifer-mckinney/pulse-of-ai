@@ -387,6 +387,16 @@ describe('healthBanner / sourcesStat / methodologyModel', () => {
         expect(b.state).toBe('yellow');
         expect(b.title).toBe('Yellow — 2 active alerts');
     });
+    test('a critical alert → red banner (FR-24 red state, PR #8 review)', () => {
+        const b = P.healthBanner({ active_alerts: [{ severity: 'warning' }, { severity: 'critical' }] });
+        expect(b.state).toBe('red');
+        expect(b.title).toBe('Red — 2 active alerts, 1 critical');
+    });
+    test('degraded backend with no alerts → yellow, never green', () => {
+        const b = P.healthBanner({ status: 'degraded', active_alerts: [] });
+        expect(b.state).toBe('yellow');
+        expect(b.title).toBe('Yellow — backend degraded');
+    });
     test('unreachable health → yellow outage banner, never fake nominal', () => {
         const b = P.healthBanner(null);
         expect(b.state).toBe('yellow');

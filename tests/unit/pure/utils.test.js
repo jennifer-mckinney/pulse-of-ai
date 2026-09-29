@@ -241,8 +241,59 @@ describe('module export shape', () => {
             'fmtCount',
             'fmtNet',
             'fmtPct',
+            'healthState',
             'netSentiment',
             'sentimentBucket',
         ]);
+    });
+});
+
+// ── healthState — FR-24 traffic light (green / yellow / red) ────────────────
+// PR #8 review: every non-empty alert set used to render yellow, so the red
+// state FR-24 requires was unreachable. The mapping is shared by the header
+// chip (main.js), the drawer's chip refresh and banner (ui.js).
+describe('healthState() — FR-24 traffic light', () => {
+    test('no alerts on a healthy backend → green, nominal', () => {
+        expect(utils.healthState({ status: 'healthy', active_alerts: [] }))
+            .toEqual({ state: 'green', label: 'model health: nominal', alerts: 0, critical: 0 });
+    });
+
+    test('warning-only alerts → yellow with the count', () => {
+        const s = utils.healthState({ status: 'healthy', active_alerts: [
+            { severity: 'warning' }, { severity: 'info' },
+        ] });
+        expect(s.state).toBe('yellow');
+        expect(s.label).toBe('2 active alerts');
+        expect(s.critical).toBe(0);
+    });
+
+    test('a single critical alert → red', () => {
+        const s = utils.healthState({ status: 'healthy', active_alerts: [{ severity: 'critical' }] });
+        expect(s.state).toBe('red');
+        expect(s.label).toBe('1 critical alert');
+        expect(s.critical).toBe(1);
+    });
+
+    test('critical mixed with warnings → red, label names both counts', () => {
+        const s = utils.healthState({ status: 'healthy', active_alerts: [
+            { severity: 'warning' }, { severity: 'critical' }, { severity: 'warning' },
+        ] });
+        expect(s.state).toBe('red');
+        expect(s.label).toBe('3 active alerts · 1 critical');
+    });
+
+    test('severity comparison is case-insensitive', () => {
+        expect(utils.healthState({ active_alerts: [{ severity: 'CRITICAL' }] }).state).toBe('red');
+    });
+
+    test('degraded backend with no alerts → yellow, never nominal', () => {
+        const s = utils.healthState({ status: 'degraded', db_connected: false, active_alerts: [] });
+        expect(s.state).toBe('yellow');
+        expect(s.label).toBe('model health: degraded');
+    });
+
+    test('unreachable health (null) → yellow outage, never a fake nominal', () => {
+        expect(utils.healthState(null))
+            .toEqual({ state: 'yellow', label: 'model health: unavailable', alerts: 0, critical: 0 });
     });
 });
