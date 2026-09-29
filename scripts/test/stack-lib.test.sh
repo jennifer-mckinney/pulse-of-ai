@@ -157,7 +157,55 @@ lib_run "$d" "$ENV_SETUP; ensure_env_file && secure_env_file" >/dev/null; rc=$?
 assert_eq "merge: complete group-writable file is accepted" "0" "$rc"
 assert_eq "merge: complete file tightened to 600"           "600" "$(file_mode "$d/.env")"
 
+# ─── G9-3: run_with_timeout kills the whole process group ────────────────────
+alive() { kill -0 "$1" 2>/dev/null && echo alive || echo dead; }
+
+d=$(new_case)
+t0=$(date +%s)
+out=$(lib_run "$d" "echo before; run_with_timeout 2 bash -c 'sleep 60 & echo \$! > \"$d/grandchild.pid\"; echo \$\$ > \"$d/child.pid\"; sleep 60'; echo \"rc=\$?\"")
+t1=$(date +%s)
+assert_eq "run_with_timeout: reports 124 on timeout"   "rc=124" "$(printf '%s\n' "$out" | tail -n 1)"
+assert_eq "run_with_timeout: returns promptly"         "yes" "$( (( t1 - t0 <= 15 )) && echo yes || echo "no ($((t1 - t0))s)")"
+sleep 1
+assert_eq "run_with_timeout: direct child killed"      "dead" "$(alive "$(cat "$d/child.pid")")"
+assert_eq "run_with_timeout: grandchild killed"        "dead" "$(alive "$(cat "$d/grandchild.pid")")"
+assert_eq "run_with_timeout: no job-control noise"     "" "$(grep -E 'Terminated|Killed|Done|no job control' "$d/stderr" || true)"
+
+# A shell FUNCTION (standup passes compose_full) is covered the same way.
+d=$(new_case)
+out=$(lib_run "$d" "slow() { sleep 60 & echo \$! > \"$d/grandchild.pid\"; wait; }; run_with_timeout 2 slow; echo \"rc=\$?\"")
+assert_eq "run_with_timeout: function times out (124)" "rc=124" "$(printf '%s\n' "$out" | tail -n 1)"
+sleep 1
+assert_eq "run_with_timeout: function's child killed"  "dead" "$(alive "$(cat "$d/grandchild.pid")")"
+
+# SIGTERM to the script while it waits: the watched group is stopped too.
+d=$(new_case)
+lib_run "$d" "sh -c 'echo \$PPID' > \"$d/main.pid\"; run_with_timeout 60 bash -c 'sleep 60 & echo \$! > \"$d/grandchild.pid\"; sleep 60'" >/dev/null &
+case_pid=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do [[ -s "$d/grandchild.pid" ]] && break; sleep 0.5; done
+kill -TERM "$(cat "$d/main.pid")"
+wait "$case_pid"; rc=$?
+assert_eq "run_with_timeout: SIGTERM exits 143"          "143" "$rc"
+sleep 1
+assert_eq "run_with_timeout: SIGTERM stops the group"    "dead" "$(alive "$(cat "$d/grandchild.pid")")"
+
+d=$(new_case)
+assert_eq "run_with_timeout: passes exit status through" "rc=7" "$(lib_run "$d" "run_with_timeout 5 bash -c 'exit 7'; echo \"rc=\$?\"")"
+assert_eq "run_with_timeout: success is 0"               "rc=0" "$(lib_run "$d" "run_with_timeout 5 true; echo \"rc=\$?\"")"
+assert_eq "run_with_timeout: command output passes"      "hello" "$(lib_run "$d" "run_with_timeout 5 echo hello")"
+assert_eq "run_with_timeout: job control restored (off)" "off" "$(lib_run "$d" "run_with_timeout 5 true; [[ \$- == *m* ]] && echo on || echo off")"
+
+# ─── G9-4: an unresolvable web port reaches `die` under set -e/pipefail ─────
+d=$(new_case)
+lib_run "$d" "set -euo pipefail; STACK_PROJECT=t; docker() { return 1; }; url=\$(published_web_url) || die 'could not resolve the published port of the web service'; echo \"url=\$url\"" >/dev/null; rc=$?
+assert_eq "published_web_url: failing compose → die fires" "1" "$rc"
+assert_eq "published_web_url: failing compose → message"   "yes" "$(grep -q 'could not resolve the published port' "$d/stderr" && echo yes || echo no)"
+d=$(new_case)
+assert_eq "published_web_url: host port → localhost URL" "url=http://localhost:3500" \
+    "$(lib_run "$d" "set -euo pipefail; STACK_PROJECT=t; docker() { echo '127.0.0.1:3500'; }; url=\$(published_web_url) || die x; echo \"url=\$url\"")"
+
 #@@CASES@@
+
 
 
 # ─── Summary ─────────────────────────────────────────────────────────────────

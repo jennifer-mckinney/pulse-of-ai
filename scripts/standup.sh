@@ -92,22 +92,8 @@ fi
 
 # ─── 4. Start the full profile ───────────────────────────────────────────────
 # `up -d` blocks while it waits for postgres health and the migrate job, so it
-# runs under a watchdog: a hung start becomes a reported timeout, not a hang.
-run_with_timeout() {
-    local secs=$1; shift
-    "$@" &
-    local pid=$! waited=0
-    while kill -0 "$pid" 2>/dev/null; do
-        if (( waited >= secs )); then
-            kill "$pid" 2>/dev/null || true
-            wait "$pid" 2>/dev/null || true
-            return 124
-        fi
-        sleep 1
-        waited=$((waited + 1))
-    done
-    wait "$pid"
-}
+# runs under a watchdog (run_with_timeout, scripts/lib/stack.sh): a hung
+# start becomes a reported timeout, not a hang.
 
 # "state|health|exitcode" for a service's container (empty when none).
 svc_status() {
@@ -214,9 +200,7 @@ ok "demo feed running: a new fictional batch every $(( $(effective DEMO_FEED_INT
 
 # ─── 7. Smoke check ──────────────────────────────────────────────────────────
 step "Smoke check"
-web_hostport=$(compose_full port web 3000 2>/dev/null | head -n 1)
-[[ -n "$web_hostport" ]] || die "could not resolve the published port of the web service"
-WEB_URL="http://localhost:${web_hostport##*:}"
+WEB_URL=$(published_web_url) || die "could not resolve the published port of the web service"
 emb_hostport=$(compose_full port embeddings 8000 2>/dev/null | head -n 1 || true)
 EMB_URL="http://localhost:${emb_hostport##*:}"
 

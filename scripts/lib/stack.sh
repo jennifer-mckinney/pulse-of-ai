@@ -255,6 +255,75 @@ compose_all() {
         ${env_args[@]+"${env_args[@]}"} -p "$STACK_PROJECT" --profile full --profile demo "$@"
 }
 
+# ─── Watchdog ───────────────────────────────────────────────────────────────
+
+# PID (= process-group id) of the command run_with_timeout is watching;
+# read by its INT/TERM trap.
+_RWT_PGID=''
+
+# _rwt_kill_group PGID: TERM the whole process group, give it up to 10 s,
+# then KILL whatever is left.
+_rwt_kill_group() {
+    local pgid=$1 grace=0
+    kill -TERM -- "-$pgid" 2>/dev/null || return 0
+    while kill -0 -- "-$pgid" 2>/dev/null && (( grace < 10 )); do
+        sleep 1
+        grace=$((grace + 1))
+    done
+    kill -KILL -- "-$pgid" 2>/dev/null || true
+}
+
+# run_with_timeout SECS CMD [ARGS...] — CMD may be a shell function.
+# Returns CMD's exit status, or 124 when it ran longer than SECS.
+#
+# G9-3: CMD runs in its OWN process group (`set -m` while it is spawned), so
+# a timeout — or Ctrl-C / SIGTERM on this script — stops CMD and everything
+# it started (docker compose and its plugin processes), not only the
+# subshell. Killing only $! would leave the real work running, still
+# attached to our output. `timeout(1)` is not used: macOS has none by
+# default. Bash 3.2 compatible (scripts/test/stack-lib.test.sh).
+run_with_timeout() {
+    local secs=$1 pid waited=0 rc=0 had_m=0
+    shift
+    [[ $- == *m* ]] && had_m=1
+    set -m
+    "$@" &
+    pid=$!
+    (( had_m )) || set +m
+    _RWT_PGID=$pid
+    # With CMD in its own group, a terminal Ctrl-C no longer reaches it —
+    # forward INT/TERM to the group, then exit as the signal would.
+    trap '_rwt_kill_group "$_RWT_PGID"; exit 130' INT
+    trap '_rwt_kill_group "$_RWT_PGID"; exit 143' TERM
+    while kill -0 "$pid" 2>/dev/null; do
+        if (( waited >= secs )); then
+            _rwt_kill_group "$pid"
+            wait "$pid" 2>/dev/null || true
+            trap - INT TERM
+            _RWT_PGID=''
+            return 124
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    wait "$pid" || rc=$?
+    trap - INT TERM
+    _RWT_PGID=''
+    return "$rc"
+}
+
+
+
+# URL of the web service's published port on this host. Returns 1 (instead
+# of killing a `set -e -o pipefail` caller before its `|| die` can report
+# anything — G9-4) when compose cannot resolve the port.
+published_web_url() {
+    local hostport
+    hostport=$(compose_full port web 3000 2>/dev/null | head -n 1 || true)
+    [[ -n "$hostport" ]] || return 1
+    printf 'http://localhost:%s' "${hostport##*:}"
+}
+
 # ─── Prerequisites ───────────────────────────────────────────────────────────
 
 check_docker() {
