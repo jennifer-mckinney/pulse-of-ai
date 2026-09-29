@@ -51,6 +51,8 @@
 
 'use strict';
 
+const { logRouteError } = require('../middleware/log-error');
+
 const { Router }       = require('express');
 const { dbGet, dbAll } = require('../db/connection');
 const clock            = require('../db/clock');
@@ -226,7 +228,7 @@ router.get('/bias/history', async (req, res) => {
         });
     /* istanbul ignore start -- Database failure; requires error injection testing infrastructure */
     } catch (err) {
-        console.error('[bias] History error:', err.message);
+        logRouteError('bias history', err);
         return res.status(500).json({ error: 'Internal server error' });
     }
     /* istanbul ignore end */
@@ -279,7 +281,7 @@ router.get('/bias/latest', async (req, res) => {
         });
     /* istanbul ignore start -- Database failure; requires error injection testing infrastructure */
     } catch (err) {
-        console.error('[bias] Error:', err.message);
+        logRouteError('bias', err);
         return res.status(500).json({ error: 'Internal server error' });
     }
     /* istanbul ignore end */

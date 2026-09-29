@@ -352,6 +352,10 @@ services:
       # F10-8: POST /api/refresh requires REFRESH_TOKEN (X-Refresh-Token)
       # when the published address is beyond loopback.
       PULSE_BIND_ADDR: ${PULSE_BIND_ADDR:-127.0.0.1}
+      # The process listens on every container interface behind Docker's
+      # port publish; the published address decides exposure (src/server.js).
+      HOST: 0.0.0.0
+      PULSE_CONTAINER_PUBLISHED_ADDR: ${PULSE_BIND_ADDR:-127.0.0.1}
       REFRESH_TOKEN: ${REFRESH_TOKEN:-}
       REFRESH_STALE_MINUTES: ${REFRESH_STALE_MINUTES:-30}
     ports:

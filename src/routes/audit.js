@@ -37,6 +37,8 @@
 
 'use strict';
 
+const { logRouteError } = require('../middleware/log-error');
+
 const crypto           = require('crypto');
 const { Router }       = require('express');
 const { dbGet, dbAll } = require('../db/connection');
@@ -307,7 +309,7 @@ router.get('/audit/:post_id', async (req, res) => {
         });
     /* istanbul ignore start -- Database failure; requires error injection testing infrastructure */
     } catch (err) {
-        console.error('[audit] Error:', err.message);
+        logRouteError('audit', err);
         return res.status(500).json({ error: 'Internal server error' });
     }
     /* istanbul ignore end */

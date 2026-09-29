@@ -24,6 +24,8 @@
 
 'use strict';
 
+const { logRouteError } = require('../middleware/log-error');
+
 const { Router }   = require('express');
 const { dbAll }    = require('../db/connection');
 // Layering note: server code requiring a public/-served file is deliberate —
@@ -211,7 +213,7 @@ router.get('/posts/aggregated-by-location', responseCache(10000), async (req, re
         return res.json(cities);
     /* istanbul ignore start -- Database failure; requires error injection testing infrastructure */
     } catch (err) {
-        console.error('[posts] Error:', err.message);
+        logRouteError('posts', err);
         return res.status(500).json({ error: 'Internal server error' });
     }
     /* istanbul ignore end */

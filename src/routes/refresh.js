@@ -27,6 +27,8 @@
 
 'use strict';
 
+const { logRouteError } = require('../middleware/log-error');
+
 const crypto = require('crypto');
 const { Router } = require('express');
 const { dbGet, dbRun }  = require('../db/connection');
@@ -68,12 +70,26 @@ function _setEnqueue(fn) {
 // ─── Shared secret ───────────────────────────────────────────────────────────
 const LOOPBACK_RE = /^(127(?:\.\d{1,3}){3}|::1|\[::1\]|localhost)$/i;
 
-/** Whether the site is reachable beyond this machine. */
-function boundBeyondLoopback(env = process.env) {
+const LOOPBACK_BOUND_RE = /^(127(?:\.\d{1,3}){3}|::1|::ffff:127(?:\.\d{1,3}){3})$/i;
+
+/**
+ * Whether the site is reachable beyond this machine.
+ *   1. In the compose web container: PULSE_CONTAINER_PUBLISHED_ADDR is the
+ *      address Docker publishes the port on — authoritative.
+ *   2. HOST or PULSE_BIND_ADDR naming a non-loopback address.
+ *   3. The ACTUAL address the server bound (app.locals.boundAddress, set by
+ *      src/server.js start()): 0.0.0.0 / :: or any non-loopback address is
+ *      beyond loopback (the dev bind gap: bare `npm run dev` used to listen
+ *      everywhere while being treated as loopback).
+ */
+function boundBeyondLoopback(env = process.env, boundAddress = null) {
+    const published = typeof env.PULSE_CONTAINER_PUBLISHED_ADDR === 'string' ? env.PULSE_CONTAINER_PUBLISHED_ADDR.trim() : '';
+    if (published) return !LOOPBACK_RE.test(published);
     for (const k of ['PULSE_BIND_ADDR', 'HOST']) {
         const v = typeof env[k] === 'string' ? env[k].trim() : '';
         if (v && !LOOPBACK_RE.test(v)) return true;
     }
+    if (typeof boundAddress === 'string' && boundAddress) return !LOOPBACK_BOUND_RE.test(boundAddress);
     return false;
 }
 
@@ -86,8 +102,9 @@ function sameSecret(a, b) {
 /** @returns {null | { status: number, error: string }} */
 function refreshTokenCheck(req, env = process.env) {
     const token = typeof env.REFRESH_TOKEN === 'string' ? env.REFRESH_TOKEN.trim() : '';
+    const bound = req && req.app && req.app.locals ? req.app.locals.boundAddress : null;
     if (!token) {
-        return boundBeyondLoopback(env)
+        return boundBeyondLoopback(env, bound)
             ? { status: 403, error: 'Refresh is disabled: the site is bound beyond loopback and no REFRESH_TOKEN is set' }
             : null;
     }
@@ -174,7 +191,7 @@ router.post('/refresh', requireSameOrigin, async (req, res) => {
         });
     /* istanbul ignore start -- Database failure; requires error injection testing infrastructure */
     } catch (err) {
-        console.error(scrub(`[refresh] Error: ${err.message}`));
+        logRouteError('refresh', err);
         return res.status(500).json({ error: 'Internal server error' });
     }
     /* istanbul ignore end */

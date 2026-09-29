@@ -10,6 +10,8 @@
 
 'use strict';
 
+const { logRouteError } = require('../middleware/log-error');
+
 const { Router } = require('express');
 const { dbAll }  = require('../db/connection');
 
@@ -40,7 +42,7 @@ router.get('/methodology', async (req, res) => {
         return res.json(rows);
     /* istanbul ignore start -- Database failure; requires error injection testing infrastructure */
     } catch (err) {
-        console.error('[methodology] Error:', err.message);
+        logRouteError('methodology', err);
         return res.status(500).json({ error: 'Internal server error' });
     }
     /* istanbul ignore end */

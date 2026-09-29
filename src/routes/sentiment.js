@@ -15,6 +15,8 @@
 
 'use strict';
 
+const { logRouteError } = require('../middleware/log-error');
+
 const { Router } = require('express');
 const { dbGet, dbAll } = require('../db/connection');
 
@@ -84,7 +86,7 @@ router.get('/sentiment/latest', async (req, res) => {
         });
     /* istanbul ignore start -- Database failure; requires error injection testing infrastructure */
     } catch (err) {
-        console.error('[sentiment] Error:', err.message);
+        logRouteError('sentiment', err);
         return res.status(500).json({ error: 'Internal server error' });
     }
     /* istanbul ignore end */

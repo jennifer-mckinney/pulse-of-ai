@@ -36,6 +36,8 @@
 
 'use strict';
 
+const { logRouteError } = require('../middleware/log-error');
+
 const { Router }     = require('express');
 const { isConnected, dbGet, dbAll } = require('../db/connection');
 const { DEMO_SOURCE_TYPE, deriveDataMode } = require('../config/data-mode');
@@ -206,7 +208,7 @@ router.get('/health', async (req, res) => {
         });
     /* istanbul ignore start -- Database failure; requires error injection testing infrastructure */
     } catch (err) {
-        console.error('[health] Error:', err.message);
+        logRouteError('health', err);
         return res.status(500).json({ error: 'Internal server error' });
     }
     /* istanbul ignore end */
