@@ -143,3 +143,49 @@ describe('methodology registry shape', () => {
         }
     });
 });
+
+// P9-5: the embedding model is pinned to a Hugging Face commit and
+// registered as methodology row embedding@1.0.0 (migration 012), so every
+// stored vector names the exact weights that produced it.
+const SQL_012 = fs.readFileSync(
+    path.join(__dirname, '../../../src/db/migrations/012_embedding_methodology.sql'),
+    'utf8',
+);
+function parse012() {
+    return [...SQL_012.matchAll(ROW_011_RE)].map(m => ({
+        component: m[1], version: m[2], model_name: m[3],
+        config: JSON.parse(m[4]), justification: m[5],
+    }));
+}
+
+describe('migration 012 ↔ methodology registry (embedding@1.0.0, P9-5)', () => {
+    const rows = parse012();
+    const read = (rel) => fs.readFileSync(path.join(__dirname, '../../../', rel), 'utf8');
+
+    test('012 registers exactly embedding@1.0.0, idempotently, and adds the per-vector column', () => {
+        expect(rows.map(r => `${r.component}@${r.version}`)).toEqual(['embedding@1.0.0']);
+        expect((SQL_012.match(/INSERT INTO/g) || []).length).toBe(1);
+        expect(SQL_012).not.toMatch(/DO UPDATE|UPDATE methodology_versions/);
+        expect(SQL_012).toMatch(/ALTER TABLE post_embeddings\s+ADD COLUMN IF NOT EXISTS methodology_version TEXT/);
+    });
+
+    test('agrees field for field with the registry entry', () => {
+        const reg = registry('embedding', '1.0.0');
+        expect(rows[0]).toEqual({
+            component: reg.component, version: reg.version, model_name: reg.model_name,
+            config: reg.config, justification: reg.justification,
+        });
+    });
+
+    test('the pinned revision is a full commit SHA, identical everywhere it is set', () => {
+        const rev = latest('embedding').config.revision;
+        expect(rev).toMatch(/^[0-9a-f]{40}$/);
+        expect(latest('embedding').model_name).toBe('sentence-transformers/all-MiniLM-L6-v2');
+        // Service default, image default, compose default (embeddings + app roles).
+        expect(read('python/embeddings_service.py')).toContain(`"EMBED_MODEL_REVISION", "${rev}"`);
+        expect(read('python/Dockerfile')).toContain(`EMBED_MODEL_REVISION=${rev}`);
+        const compose = read('docker-compose.yml');
+        expect(compose.split(`EMBED_MODEL_REVISION: \${EMBED_MODEL_REVISION:-${rev}}`).length - 1).toBe(2);
+        expect(read('src/pipeline/embeddings.js')).toMatch(/require\('\.\.\/config\/methodology-registry'\)/);
+    });
+});

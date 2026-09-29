@@ -130,7 +130,7 @@ The script checks these first and prints how to fix anything that is missing.
 
 1. Creates `.env` from `.env.example` if you don't have one, generating strong random `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `AUDIT_HASH_KEY` and `CORRELATION_SALT` values. It never prints them. An existing `.env` keeps its values: only keys that are missing get added (standup refuses to add secrets to a group- or world-writable file), and the file is set to mode 600. If a secret is empty or still has its `.env.example` placeholder, standup stops and names it.
 2. Builds two images: `pulse-of-ai/app` (Node 22; one image for web, worker, migrate and populate) and `pulse-of-ai/embeddings` (Python 3.13, FastAPI and sentence-transformers, CPU only). Both run as non-root users.
-3. Starts the compose `full` profile. A one-shot `migrate` job applies migrations 001–011 and the seed, and web and the worker start only after it exits successfully.
+3. Starts the compose `full` profile. A one-shot `migrate` job applies migrations 001–012 and the seed, and web and the worker start only after it exits successfully.
 4. Waits for health, with timeouts. If a service fails, its logs are printed.
 5. Populates data (see below) and starts the `populate` feed.
 6. Runs a smoke check. It looks at the API, the page, and the page's own data calls (globe, themes, bias, ribbon, drill-down). It counts posts, audit decisions, bias assessments and embeddings, opens one receipt and checks its four audience views and bias lineage, and runs `npm run replay` on that post, which must PASS. It ends with a population summary.

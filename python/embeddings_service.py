@@ -34,6 +34,12 @@ from sentence_transformers import SentenceTransformer
 # ─── Configuration ────────────────────────────────────────────────────────────
 
 MODEL_NAME = os.getenv("EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+# P9-5: load the model at a pinned Hugging Face COMMIT, never the moving main
+# branch, so every vector traces to exact weights. Registered as
+# methodology_versions embedding@1.0.0 (src/config/methodology-registry.js,
+# migration 012); tests/unit/pure/methodologyRegistry.test.js keeps this
+# default, python/Dockerfile and docker-compose.yml on the same SHA.
+MODEL_REVISION = os.getenv("EMBED_MODEL_REVISION", "1110a243fdf4706b3f48f1d95db1a4f5529b4d41")
 BATCH_SIZE = int(os.getenv("EMBED_BATCH_SIZE", "64"))
 
 # Module-level model instance — loaded once at startup, shared across requests
@@ -49,7 +55,7 @@ def get_model() -> SentenceTransformer:
     global _model, _model_load_time
     if _model is None:
         load_start = time.time()
-        _model = SentenceTransformer(MODEL_NAME)
+        _model = SentenceTransformer(MODEL_NAME, revision=MODEL_REVISION)
         _model_load_time = time.time() - load_start
     return _model
 
@@ -110,6 +116,7 @@ async def health():
         {
             "status": "healthy",
             "model": MODEL_NAME,
+            "revision": MODEL_REVISION,
             "model_loaded": model_loaded,
             "load_time_s": round(_model_load_time, 2) if _model_load_time else None,
             "embedding_dims": 384,

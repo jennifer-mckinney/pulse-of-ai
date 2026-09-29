@@ -23,6 +23,9 @@ x-app-env: &app-env
   REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required (npm run standup generates it)}
   EMBEDDINGS_SERVICE_URL: http://embeddings:8000
   EMBED_MODEL: ${EMBED_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+  # Pinned model commit (P9-5); the worker records embedding@<ver> only when
+  # model + revision are the registered ones.
+  EMBED_MODEL_REVISION: ${EMBED_MODEL_REVISION:-1110a243fdf4706b3f48f1d95db1a4f5529b4d41}
   AUDIT_HASH_KEY: ${AUDIT_HASH_KEY:-}
   CORRELATION_SALT: ${CORRELATION_SALT:-}
   CORRELATION_MIN_CONFIDENCE: ${CORRELATION_MIN_CONFIDENCE:-0.85}
@@ -206,6 +209,7 @@ services:
     restart: unless-stopped
     environment:
       EMBED_MODEL: ${EMBED_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+      EMBED_MODEL_REVISION: ${EMBED_MODEL_REVISION:-1110a243fdf4706b3f48f1d95db1a4f5529b4d41}
       EMBED_BATCH_SIZE: ${EMBED_BATCH_SIZE:-64}
     # No `ports:` (F9-8): the API is unauthenticated and only the worker
     # needs it (embeddings:8000 on the compose network). Publishing it —

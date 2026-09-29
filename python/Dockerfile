@@ -41,7 +41,8 @@ ENV PATH=/opt/venv/bin:$PATH \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     HF_HOME=/home/app/.cache/huggingface \
-    EMBED_MODEL=sentence-transformers/all-MiniLM-L6-v2
+    EMBED_MODEL=sentence-transformers/all-MiniLM-L6-v2 \
+    EMBED_MODEL_REVISION=1110a243fdf4706b3f48f1d95db1a4f5529b4d41
 
 # Non-root runtime user. The HF cache directory is created here and owned by
 # `app` so a fresh named volume mounted over it inherits that ownership.

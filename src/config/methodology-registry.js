@@ -10,6 +10,8 @@
 //   - src/db/migrations/011_audit_narration_demo.sql inserts
 //     audit_narration@1.2.0 (009 is released, so later versions ship as
 //     new migrations);
+//   - src/db/migrations/012_embedding_methodology.sql inserts embedding@1.0.0
+//     (the pinned embedding model revision, P9-5);
 //   - tests/integration/helpers.js registers the real bias/ingest rows.
 // A component may list several versions (history is kept); the renderer's
 // current version is the LAST entry for its component.
@@ -171,6 +173,25 @@ const METHODOLOGY_VERSIONS = [
             demo_source_type: 'demo',
         },
         justification: 'The audit endpoint serves four audience representations (public, journalist, regulator, researcher) of every decision step. The wording is part of the auditable surface, so the template set is registered here and version-bumped on any change — the API reports which narration version rendered a receipt. Templates only restate stored facts (cue words, scores, thresholds, versions); they never invent per-post content. 1.2.0 adds a demo branch to the ingestion step: a post whose source is a demo feed (data_sources.source_type = demo, written by the standup demo population) is described as fictional demo content generated for this installation instead of as collected from a public source, so demo data is never presented as real discourse. The wording for real sources and every inference step is unchanged from 1.1.0, including the real reproduce command npm run replay -- --post {post_id}.',
+    },
+    {
+        component: 'embedding',
+        // P9-5: the model is pinned to a Hugging Face COMMIT, not a moving
+        // branch, so every stored vector is reproducible from exact weights.
+        // Registered by migration 012; post_embeddings.methodology_version
+        // records this version on each vector (src/pipeline/embeddings.js).
+        // A new model or revision ships as a NEW version row.
+        version: '1.0.0',
+        model_name: 'sentence-transformers/all-MiniLM-L6-v2',
+        config: {
+            revision: '1110a243fdf4706b3f48f1d95db1a4f5529b4d41',
+            dimensions: 384,
+            normalize_embeddings: true,
+            library: 'sentence-transformers==2.7.0',
+            service: 'python/embeddings_service.py',
+            revision_env: 'EMBED_MODEL_REVISION',
+        },
+        justification: 'Sentence embeddings for semantic search and discourse novelty come from all-MiniLM-L6-v2 (Reimers & Gurevych 2019; 384 dimensions, L2-normalised so cosine similarity is a dot product), served by python/embeddings_service.py. The model is loaded at a fixed Hugging Face commit (revision), not the moving main branch, so a vector can always be traced to, and regenerated from, the exact weights that produced it; each stored vector records this methodology version. Changing the model or its revision changes the vectors, so it ships as a new version row.',
     },
 ];
 
