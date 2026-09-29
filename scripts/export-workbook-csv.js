@@ -6,8 +6,8 @@
 //   node scripts/export-workbook-csv.js            write the CSV
 //   node scripts/export-workbook-csv.js --check    exit 1 when the committed CSV is stale
 //
-// Input:  docs/requirements/Top_50_Global_Online_Sources.xlsx (Rev. 3)
-// Output: docs/requirements/Top_51_Global_Online_Sources.rev3.csv
+// Input:  docs/requirements/Top_50_Global_Online_Sources.xlsx (Rev. 4)
+// Output: docs/requirements/Top_52_Global_Online_Sources.rev4.csv
 // tests/unit/pure/sourceRegistry.test.js asserts the workbook, this CSV and
 // src/config/source-registry.js agree row for row.
 
@@ -19,7 +19,7 @@ const { readWorkbookSources, toCsv } = require('../src/config/workbook');
 
 const ROOT = path.join(__dirname, '..');
 const XLSX = path.join(ROOT, 'docs/requirements/Top_50_Global_Online_Sources.xlsx');
-const CSV = path.join(ROOT, 'docs/requirements/Top_51_Global_Online_Sources.rev3.csv');
+const CSV = path.join(ROOT, 'docs/requirements/Top_52_Global_Online_Sources.rev4.csv');
 
 function main(argv) {
     const csv = toCsv(readWorkbookSources(XLSX));

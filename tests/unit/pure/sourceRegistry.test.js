@@ -1,8 +1,12 @@
 // tests/unit/pure/sourceRegistry.test.js
 // The code registry (src/config/source-registry.js) against the REGISTRY OF
 // RECORD — the workbook itself (docs/requirements/Top_50_Global_Online_
-// Sources.xlsx, Rev. 3) and its committed CSV export. Jennifer's ruling:
-// "use the 51 sources exactly. no exceptions." (ADR 0001).
+// Sources.xlsx, Rev. 4) and its committed CSV export. Jennifer's rulings
+// (ADR 0001): "use the 51 sources exactly. no exceptions.", superseded on
+// 2026-09-29 by "can we add reddit to the source lis. Update the excel file
+// to capture as well" — the registry is exactly the workbook's 52 rows.
+// Every count below comes from the workbook or SOURCES.length, never a
+// literal source count.
 
 'use strict';
 
@@ -17,21 +21,36 @@ const { findCity } = require('../../../public/js/config/cities.config.js');
 
 const ROOT = path.join(__dirname, '../../..');
 const XLSX = path.join(ROOT, 'docs/requirements/Top_50_Global_Online_Sources.xlsx');
-const CSV = path.join(ROOT, 'docs/requirements/Top_51_Global_Online_Sources.rev3.csv');
+const CSV = path.join(ROOT, 'docs/requirements/Top_52_Global_Online_Sources.rev4.csv');
 
 const { SOURCES } = registry;
 const workbook = readWorkbookSources(XLSX);
 const ENV = { COLLECTOR_CONTACT_URL: 'https://example.org/contact' };
 
 describe('workbook (registry of record)', () => {
-    test('has exactly 51 source rows, ranked 1..51', () => {
-        expect(workbook).toHaveLength(51);
-        expect(workbook.map(r => r.rank)).toEqual(Array.from({ length: 51 }, (_, i) => i + 1));
+    test('Rev. 4 has exactly 52 source rows, ranked 1..52 (each rank once)', () => {
+        expect(workbook).toHaveLength(52);
+        expect(workbook.map(r => r.rank).sort((a, b) => a - b)).toEqual(Array.from({ length: 52 }, (_, i) => i + 1));
     });
 
-    test('Rev. 3: Hacker News and Stack Overflow sit in Forums', () => {
+    test('Rev. 4: Reddit is #52, the last row of Forums; no other row was renumbered', () => {
+        const reddit = workbook.find(r => r.source === 'Reddit');
+        expect(reddit).toEqual(expect.objectContaining({
+            rank: 52, category: 'forums', metric_type: 'Daily active uniques (DAUq)', value: '130.3M',
+            value_numeric: '130300000', as_of: 'Q2 2026 (quarter avg., ended 30 Jun 2026)',
+            figure_type: 'Company-reported', confidence: 'High',
+        }));
+        expect(reddit.credibility_basis).toMatch(/unaudited company KPI/);
+        // Sheet order: ranks 1..46 and 47..51 are unchanged; Reddit sits
+        // between Hacker News (46) and the Blogs block (47).
+        expect(workbook.map(r => r.rank)).toEqual([
+            ...Array.from({ length: 46 }, (_, i) => i + 1), 52, 47, 48, 49, 50, 51,
+        ]);
+    });
+
+    test('Rev. 3: Hacker News and Stack Overflow sit in Forums (Reddit joins them in Rev. 4)', () => {
         const forums = workbook.filter(r => r.category === 'forums').map(r => r.source);
-        expect(forums).toEqual(['Stack Overflow', 'Hacker News (Y Combinator)']);
+        expect(forums).toEqual(['Stack Overflow', 'Hacker News (Y Combinator)', 'Reddit']);
         expect(workbook.filter(r => r.category === 'developer').map(r => r.source))
             .toEqual(['GitHub', 'GitLab', 'Docker Hub', 'Hugging Face']);
     });
@@ -40,7 +59,7 @@ describe('workbook (registry of record)', () => {
         const counts = {};
         for (const r of workbook) counts[r.category] = (counts[r.category] || 0) + 1;
         expect(counts).toEqual({
-            social: 8, news: 11, academic: 8, policy: 7, nonprofit: 6, developer: 4, forums: 2, blog: 5,
+            social: 8, news: 11, academic: 8, policy: 7, nonprofit: 6, developer: 4, forums: 3, blog: 5,
         });
         expect(Object.keys(counts).sort()).toEqual([...CATEGORY_SLUGS].sort());
     });
@@ -49,15 +68,16 @@ describe('workbook (registry of record)', () => {
         const text = fs.readFileSync(CSV, 'utf8');
         expect(text).toBe(toCsv(workbook));
         const rows = fromCsv(text);
-        expect(rows).toHaveLength(51);
+        expect(rows).toHaveLength(workbook.length);
         expect(rows.map(r => [r.rank, r.source, r.category]))
             .toEqual(workbook.map(r => [r.rank, r.source, r.category]));
     });
 });
 
 describe('source registry ↔ workbook: 1:1', () => {
-    test('exactly 51 entries — no additions, substitutes or drops', () => {
-        expect(SOURCES).toHaveLength(51);
+    test('exactly the workbook\'s 52 entries — no additions, substitutes or drops', () => {
+        expect(SOURCES).toHaveLength(workbook.length);
+        expect(SOURCES).toHaveLength(52);
     });
 
     test('rank, name and category match the workbook exactly', () => {
@@ -67,7 +87,7 @@ describe('source registry ↔ workbook: 1:1', () => {
 
     test('slugs are unique, lower snake case', () => {
         const slugs = SOURCES.map(s => s.slug);
-        expect(new Set(slugs).size).toBe(51);
+        expect(new Set(slugs).size).toBe(SOURCES.length);
         for (const s of slugs) expect(s).toMatch(/^[a-z][a-z0-9_]*$/);
     });
 });

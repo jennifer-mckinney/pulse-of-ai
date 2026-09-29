@@ -1,6 +1,6 @@
 // src/config/workbook.js
 // Reader for the source workbook — the REGISTRY OF RECORD
-// (docs/requirements/Top_50_Global_Online_Sources.xlsx, Rev. 3; ADR 0001).
+// (docs/requirements/Top_50_Global_Online_Sources.xlsx, Rev. 4; ADR 0001).
 //
 // The workbook is read directly (no spreadsheet dependency): an .xlsx file is
 // a zip archive, and this workbook stores every cell as an inline string or a
@@ -11,7 +11,7 @@
 //     and category, and that the committed CSV export matches the workbook;
 //   - scripts/export-workbook-csv.js — regenerates that CSV export.
 //
-// Section headers ("7. FORUMS (2)") carry the category; a row whose first
+// Section headers ("7. FORUMS (3)") carry the category; a row whose first
 // cell is an integer is a source row. Section → canonical category slug is
 // SECTION_CATEGORIES below (the 8-category canon, ADR 0001 ruling 7).
 
