@@ -193,6 +193,78 @@ const METHODOLOGY_VERSIONS = [
         },
         justification: 'Sentence embeddings for semantic search and discourse novelty come from all-MiniLM-L6-v2 (Reimers & Gurevych 2019; 384 dimensions, L2-normalised so cosine similarity is a dot product), served by python/embeddings_service.py. The model is loaded at a fixed Hugging Face commit (revision), not the moving main branch, so a vector can always be traced to, and regenerated from, the exact weights that produced it; each stored vector records this methodology version. Changing the model or its revision changes the vectors, so it ships as a new version row.',
     },
+
+    // ── 2026-09-29 alignment (ADR 0001; migration 013) ────────────────────
+    // `npm run replay` reported config drift: the registered relevance row
+    // listed 18 keywords and a 0.1-per-match rule, the code scores 20
+    // keywords at 1/20 each; the registered DQI dimensions were not the
+    // five the code computes. Released rows are never edited — these NEW
+    // rows state exactly what src/pipeline does, and the pipeline records
+    // them (CURRENT_VERSIONS below: the code declares the version it
+    // implements instead of trusting "latest effective_from").
+    {
+        component: 'relevance',
+        version: '1.1.0',
+        model_name: 'keyword-relevance-v1',
+        config: {
+            // Must equal src/pipeline/relevance.js KEYWORD_LIST (order included)
+            keywords: ['artificial intelligence', 'machine learning', 'deep learning', 'neural network', 'large language model', 'llm', 'natural language processing', 'nlp', 'transformer', 'reinforcement learning', 'generative ai', 'computer vision', 'foundation model', 'fine-tuning', 'embeddings', 'gpt', 'bert', 'diffusion model', 'autonomous agent', 'ai safety'],
+            matching: 'case-insensitive substring match; each keyword counted once',
+            score_rule: 'unique matched keywords / number of keywords, capped at 1.0',
+            score_per_match: 0.05,
+            max_score: 1.0,
+            is_relevant_rule: 'score > 0 (at least one keyword matched)',
+            // Must equal src/pipeline/relevance.js EMBED_GATE_MIN_SCORE
+            embed_gate_min_score: 0.05,
+            embed_gate_rule: 'a post is embedded when its relevance score is at least 1/20 (one lexicon match); replaces the unreachable 0.40 gate, which needed 8 of the 20 keywords',
+        },
+        justification: 'Registers the relevance scorer exactly as the code runs it, after the replay tool found the 1.0.0 row out of step with the code (18 registered keywords and a 0.1-per-match rule, against a 20-keyword lexicon scored as the matched fraction). Score = unique lexicon keywords found in the post (case-insensitive substring) divided by 20, capped at 1.0; a post is AI-relevant when at least one keyword matches. The embedding gate moves from 0.40, which required 8 of 20 keywords and was never reached, to one keyword match (score >= 0.05), so relevant posts are embedded for semantic search. Collection is already scoped to each source\'s AI or technology feed; this score measures how explicitly a post uses AI vocabulary.',
+    },
+    {
+        component: 'discourse',
+        version: '1.1.0-DQI',
+        model_name: 'dqi-heuristic-v1',
+        config: {
+            // Keys must equal src/pipeline/discourse.js DQI_DIMENSIONS
+            dimensions: {
+                participation:    { weight: 0.2, rule: '1.0 at 50+ words, 0.5 at 15-49 words, else 0' },
+                justification:    { weight: 0.2, rule: '1.0 for 2+ reasoning connectors, 0.5 for 1, else 0' },
+                respectfulness:   { weight: 0.2, rule: '1.0 minus 0.25 per hostile marker, floor 0' },
+                constructiveness: { weight: 0.2, rule: '1.0 for 3+ solution markers, 0.5 for 1-2, else 0' },
+                evidence:         { weight: 0.2, rule: '1.0 for 2+ evidence markers, 0.5 for 1, else 0' },
+            },
+            total_rule: 'unweighted mean of the five dimension scores, in [0, 1]',
+            source_category_weighting: 'none in this version',
+        },
+        justification: 'Registers the Deliberative Quality Index scorer exactly as the code runs it (Steenbergen et al. 2003, adapted as keyword heuristics), after the replay tool found the 1.0.0-DQI row describing six weighted dimensions and source-category weights the code does not apply. The code scores five dimensions (participation, justification, respectfulness, constructiveness, evidence), each 0, 0.5 or 1 from marker counts (respectfulness deducts 0.25 per hostile marker), and the total is their unweighted mean. No source-category weighting, semantic deduplication or echo-chamber signal is applied in this version.',
+    },
+    {
+        component: 'ingest',
+        version: '1.1.0',
+        model_name: 'pulse-ingest-v1',
+        config: {
+            // Must match src/pipeline/ingest.js PII_FIELDS
+            pii_fields_removed:   ['author', 'author_fullname', 'author_id', 'authors', 'username', 'user', 'user_id', 'screen_name', 'creator', 'uploader', 'owner', 'email'],
+            collector_payload:    'collectors build the stored payload from an allowlist of content fields; identity fields are never requested',
+            location_granularity: 'city',
+            location_basis:       ['content', 'publisher'],
+            dedup_strategy:       'unique (source, external id); sha256-content-hash join key',
+            legal_basis:          'GDPR Article 6(1)(f) - Legitimate Interest',
+        },
+        justification: 'Real collection (ADR 0001): each collector builds the stored payload from an allowlist of content fields (title, text, link, timestamp, licence) and never requests author, username or profile-location fields; the ingest step still removes any identity field that arrives. Location is kept at city level only and comes from a content-level field (for example a geotag rounded to the nearest registry city) or, for editorial sources publishing their own articles, the publisher\'s home city, with the basis recorded on the post; a person\'s location is never inferred. Content is SHA-256 hashed as the immutable join key; duplicates are dropped per source and external id. Processing rests on legitimate interest (GDPR Art. 6(1)(f)) - aggregate discourse measurement over public posts with no profiling of identifiable individuals.',
+    },
 ];
 
-module.exports = { METHODOLOGY_VERSIONS };
+/**
+ * The version of each component that the CODE implements: the last registry
+ * entry per component. The pipeline records these rows on every decision
+ * (src/pipeline/methodology.js), so a replay always compares the code with
+ * the configuration it was registered under.
+ * @type {Readonly<Record<string, string>>}
+ */
+const CURRENT_VERSIONS = Object.freeze(METHODOLOGY_VERSIONS.reduce((acc, m) => {
+    acc[m.component] = m.version;
+    return acc;
+}, {}));
+
+module.exports = { METHODOLOGY_VERSIONS, CURRENT_VERSIONS };

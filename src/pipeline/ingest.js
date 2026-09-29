@@ -3,8 +3,15 @@
 //
 // Entry points:
 //   normalisePost(rawPayload, sourceType)          — pure: strips PII, hashes content
-//   ingestPost(rawPayload, sourceId, jobId, mvIds) — orchestrates full pipeline for one post
+//   storeRawPost(rawPayload, sourceId)             — normalise → dedup → insert (no scoring)
+//   scorePost(postId, jobId, mvIds)                — sentiment + relevance + DQI (idempotent)
+//   ingestPost(rawPayload, sourceId, jobId, mvIds) — storeRawPost + scorePost for one post
 //   ingestBatch(payloads, sourceId, jobId, mvIds)  — ingestPost over an array; returns counts
+//
+// Collector payloads (src/collectors/normalize.js) arrive as
+//   { id, text, title?, url?, published_at?, location?, location_basis?, language?, ... }
+// built from an allowlist of content fields; `location` is kept only when it
+// resolves to a city-registry entry (city granularity, never finer).
 //
 // Pipeline per post:
 //   1. normalisePost — strip author/PII, build content string, compute content_hash
@@ -25,9 +32,26 @@ const { dbGet, dbRun } = require('../db/connection');
 const { saveSentiment } = require('./sentiment');
 const { saveRelevance  } = require('./relevance');
 const { saveDQI        } = require('./discourse');
+const { findCity       } = require('../../public/js/config/cities.config.js');
 
 // ─── PII fields stripped from raw_payload before storage ─────────────────────
-const PII_FIELDS = ['author', 'author_fullname', 'username', 'user', 'email'];
+// Registered as ingest@1.1.0 pii_fields_removed (methodology-registry.js).
+// Collectors never request these; this is the backstop.
+const PII_FIELDS = [
+    'author', 'author_fullname', 'author_id', 'authors', 'username', 'user',
+    'user_id', 'screen_name', 'creator', 'uploader', 'owner', 'email',
+];
+
+/**
+ * City-level location of a payload: the registry's canonical city name when
+ * the payload's location resolves to a registry city, else ''.
+ * @param {unknown} location
+ * @returns {string}
+ */
+function cityLocation(location) {
+    const entry = typeof location === 'string' ? findCity(location) : null;
+    return entry ? entry.name : '';
+}
 
 // ─── Normalisation ────────────────────────────────────────────────────────────
 
@@ -87,6 +111,88 @@ function normalisePost(rawPayload, sourceType) {
     };
 }
 
+// ─── Store / score ────────────────────────────────────────────────────────────
+
+/**
+ * Normalise → dedup → insert one raw post. No scoring.
+ * Idempotent: an existing (source_id, external_id) returns the stored row.
+ *
+ * @param {object} rawPayload  Raw collector payload
+ * @param {string} sourceId    UUID of data_sources row
+ * @returns {Promise<{ postId: string, isNew: boolean }>}
+ */
+async function storeRawPost(rawPayload, sourceId) {
+    // Fetch source_type to drive normalisation logic
+    const source = await dbGet(
+        'SELECT source_type FROM data_sources WHERE id = $1',
+        [sourceId],
+    );
+    const sourceType = source?.source_type || 'reddit';
+
+    // Step 1: Normalise (pure — no DB)
+    const normalised = normalisePost(rawPayload, sourceType);
+    if (!normalised.externalId || !normalised.content) {
+        throw new Error('storeRawPost: payload has no external id or no text');
+    }
+
+    // Step 2: Dedup — try to insert; return existing if already present
+    const existing = await dbGet(
+        'SELECT id FROM raw_posts WHERE source_id = $1 AND external_id = $2',
+        [sourceId, normalised.externalId],
+    );
+    if (existing) {
+        return { postId: existing.id, isNew: false };
+    }
+
+    // Step 3: Insert raw_posts row (immutable after insert). ON CONFLICT
+    // covers a concurrent insert of the same post by another process.
+    const language = typeof rawPayload.language === 'string'
+        && /^[a-z]{2}$/.test(rawPayload.language) ? rawPayload.language : 'en';
+    const post = await dbRun(
+        `INSERT INTO raw_posts
+            (source_id, external_id, content, content_hash, raw_payload, location, language)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (source_id, external_id) DO NOTHING
+         RETURNING id`,
+        [
+            sourceId,
+            normalised.externalId,
+            normalised.content,
+            normalised.contentHash,
+            JSON.stringify(normalised.rawPayload),
+            cityLocation(rawPayload.location),
+            language,
+        ],
+    );
+    if (!post) {
+        const raced = await dbGet(
+            'SELECT id FROM raw_posts WHERE source_id = $1 AND external_id = $2',
+            [sourceId, normalised.externalId],
+        );
+        return { postId: raced.id, isNew: false };
+    }
+    return { postId: post.id, isNew: true };
+}
+
+/**
+ * Run the three per-post scorers (each writes its decision_audit_log row).
+ * Idempotent: each save* is a no-op when its result already exists, so a
+ * retry after a partial failure completes the missing stages only.
+ *
+ * @param {string} postId
+ * @param {string} jobId
+ * @param {{ sentimentMvId, relevanceMvId, discourseMvId }} mvIds
+ * @returns {Promise<{ sentiment: object, relevance: object, discourse: object }>}
+ */
+async function scorePost(postId, jobId, mvIds) {
+    const [sentiment, relevance, discourse] = await Promise.all([
+        saveSentiment(postId, jobId, mvIds.sentimentMvId),
+        saveRelevance(postId, jobId, mvIds.relevanceMvId),
+        saveDQI(postId, jobId, mvIds.discourseMvId),
+    ]);
+    return { sentiment, relevance, discourse };
+}
+
 // ─── Single post ingestion ────────────────────────────────────────────────────
 
 /**
@@ -105,49 +211,10 @@ function normalisePost(rawPayload, sourceType) {
  * @returns {Promise<{ postId: string, isNew: boolean }>}
  */
 async function ingestPost(rawPayload, sourceId, jobId, mvIds) {
-    // Fetch source_type to drive normalisation logic
-    const source = await dbGet(
-        'SELECT source_type FROM data_sources WHERE id = $1',
-        [sourceId],
-    );
-    const sourceType = source?.source_type || 'reddit';
-
-    // Step 1: Normalise (pure — no DB)
-    const normalised = normalisePost(rawPayload, sourceType);
-
-    // Step 2: Dedup — try to insert; return existing if already present
-    const existing = await dbGet(
-        'SELECT id FROM raw_posts WHERE source_id = $1 AND external_id = $2',
-        [sourceId, normalised.externalId],
-    );
-    if (existing) {
-        return { postId: existing.id, isNew: false };
-    }
-
-    // Step 3: Insert raw_posts row (immutable after insert)
-    const post = await dbRun(
-        `INSERT INTO raw_posts
-            (source_id, external_id, content, content_hash, raw_payload)
-         VALUES ($1, $2, $3, $4, $5)
-         RETURNING id`,
-        [
-            sourceId,
-            normalised.externalId,
-            normalised.content,
-            normalised.contentHash,
-            JSON.stringify(normalised.rawPayload),
-        ],
-    );
-    const postId = post.id;
-
-    // Steps 4–6: Score in parallel — all three pipeline components are independent
-    await Promise.all([
-        saveSentiment(postId, jobId, mvIds.sentimentMvId),
-        saveRelevance(postId, jobId, mvIds.relevanceMvId),
-        saveDQI(postId, jobId, mvIds.discourseMvId),
-    ]);
-
-    return { postId, isNew: true };
+    const stored = await storeRawPost(rawPayload, sourceId);
+    if (!stored.isNew) return stored;
+    await scorePost(stored.postId, jobId, mvIds);
+    return stored;
 }
 
 // ─── Batch ingestion ──────────────────────────────────────────────────────────
@@ -178,4 +245,12 @@ async function ingestBatch(payloads, sourceId, jobId, mvIds) {
     return { total: payloads.length, newPosts, skipped };
 }
 
-module.exports = { normalisePost, ingestPost, ingestBatch };
+module.exports = {
+    normalisePost,
+    storeRawPost,
+    scorePost,
+    ingestPost,
+    ingestBatch,
+    cityLocation,
+    PII_FIELDS,
+};

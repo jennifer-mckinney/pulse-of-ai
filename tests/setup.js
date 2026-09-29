@@ -23,6 +23,8 @@ const TABLES = [
     'decision_audit_log',
     'alert_events',
     'bias_assessments',
+    'source_runs',
+    'source_collection_state',
     'raw_posts',
     'processing_jobs',
     'methodology_versions',
