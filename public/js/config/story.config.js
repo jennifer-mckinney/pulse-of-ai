@@ -38,6 +38,11 @@
 //   themePartition 'warm' | 'cold' | null — which half of /api/themes the
 //                 theme beats display (see PulseInsights.partitionThemes).
 //   explore       true only on the final free-exploration beat.
+//   kickerByMode  optional {live, demo, mixed, none, fallback} → kicker
+//                 text for that data origin (PulseData data_mode). The
+//                 resolver uses it when the mode is known; `kicker` is the
+//                 neutral text for an unknown mode and must never claim
+//                 LIVE or DEMO (G9-5).
 //   nextSteps     explore beat only — verbatim prototype checklist.
 //
 // Dual export guard: CommonJS (module.exports) for jest,
@@ -66,7 +71,18 @@
     const STORY = [
         {
             id: 'overview',
-            kicker: 'LIVE · REFRESH CYCLE 2–3 MIN',
+            // G9-5: this card states where its data came from, like the
+            // intro kicker. The prototype's fixed "LIVE · …" label was
+            // wrong for demo, fallback and empty hours. Unknown mode gets
+            // the neutral text below — never LIVE.
+            kicker: 'REFRESH CYCLE 2–3 MIN',
+            kickerByMode: {
+                live:     'LIVE · REFRESH CYCLE 2–3 MIN',
+                demo:     'DEMO · REFRESH CYCLE 2–3 MIN',
+                mixed:    'LIVE + DEMO',
+                none:     'NO POSTS IN THE LAST HOUR',
+                fallback: 'DEMO · BUNDLED SAMPLE DATA',
+            },
             title: 'Right now, the world is talking about AI.',
             templateId: 'overview',
             camera: null,            // global view (prototype focus: null)

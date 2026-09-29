@@ -50,7 +50,12 @@
 //
 // Idempotent: --once skips when the trailing hour already holds at least
 // --size demo posts (a re-run of standup does not pile on another batch)
-// unless --force is given. Exit code 0 on success, 1 on failure.
+// unless --force is given. Either way, when embeddings are enabled and the
+// service is ready, --once BACKFILLS every trailing-hour demo post that has
+// no embedding yet (e.g. from a first run while the model could not be
+// downloaded) and waits up to --wait-embeddings seconds for them, so the
+// standup's `smoke-check --expect-embeddings` does not race the demo feed.
+// Exit code 0 on success, 1 on failure.
 
 'use strict';
 
@@ -271,6 +276,27 @@ async function demoPostsInLastHour() {
     return row.n;
 }
 
+/**
+ * Trailing-hour demo posts that have no post_embeddings row yet, oldest
+ * first. Copilot 4129574047: the idempotent --once path must still embed
+ * what an earlier offline run left unembedded.
+ * @returns {Promise<string[]>} raw_posts ids
+ */
+async function unembeddedDemoPostsInLastHour() {
+    const rows = await db.dbAll(
+        `SELECT rp.id
+         FROM raw_posts rp
+         JOIN data_sources ds ON ds.id = rp.source_id
+         LEFT JOIN post_embeddings pe ON pe.raw_post_id = rp.id
+         WHERE ds.source_type = $1
+           AND rp.collected_at >= NOW() - INTERVAL '1 hour'
+           AND pe.raw_post_id IS NULL
+         ORDER BY rp.collected_at, rp.id`,
+        [DEMO_SOURCE_TYPE],
+    );
+    return rows.map(r => r.id);
+}
+
 /** GET <embeddings>/health → true only when the model is loaded. */
 async function embeddingsReady() {
     try {
@@ -321,10 +347,11 @@ async function waitForEmbeddings(postIds, timeoutSec) {
 // ─── One demo batch through the real pipeline ────────────────────────────────
 
 /**
- * @param {{ size: number, embed: boolean, seed: number }} opts
+ * @param {{ size: number, embed: boolean, seed: number, enqueue?: Function }} opts
+ *   `enqueue` (default enqueueEmbeddings) queues the embed jobs; injectable for tests.
  * @returns {Promise<{ jobId, postIds, violations, embedQueued }>}
  */
-async function runDemoBatch({ size, embed, seed }) {
+async function runDemoBatch({ size, embed, seed, enqueue = enqueueEmbeddings }) {
     const mv = await currentMethodology();
     const sources = await ensureDemoSources();
     const cities = launchCities();
@@ -396,7 +423,7 @@ async function runDemoBatch({ size, embed, seed }) {
 
         let embedQueued = 0;
         if (embed && postIds.length > 0) {
-            await enqueueEmbeddings(postIds);
+            await enqueue(postIds);
             embedQueued = postIds.length;
         }
         return { jobId: job.id, postIds, violations: bias.violationsFound, embedQueued };
@@ -409,6 +436,14 @@ async function runDemoBatch({ size, embed, seed }) {
         throw err;
     }
 }
+
+// The side-effecting collaborators of runOnce / runLoop. Tests replace them
+// (embeddings service, BullMQ, the loop interval) through the `deps` argument.
+const DEFAULT_DEPS = Object.freeze({
+    embeddingsReady: () => embeddingsReady(),
+    enqueueEmbeddings: ids => enqueueEmbeddings(ids),
+    waitForEmbeddings: (ids, secs) => waitForEmbeddings(ids, secs),
+});
 
 /**
  * One real collection job (the runner), with the embed queue only when
@@ -429,9 +464,9 @@ async function collectLive(opts, embed) {
 }
 
 /** Demo batch with the standard progress line. */
-async function demoPass(opts, seed, embed, why) {
+async function demoPass(opts, seed, embed, why, deps = DEFAULT_DEPS) {
     log(`data source: DEMO — ${why}`);
-    const r = await runDemoBatch({ size: opts.size, embed, seed });
+    const r = await runDemoBatch({ size: opts.size, embed, seed, enqueue: deps.enqueueEmbeddings });
     log(`job ${r.jobId}: ${r.postIds.length} fictional posts scored by the real pipeline `
         + `(sentiment, relevance, discourse), bias checks run (${r.violations} violation(s)), `
         + `${r.embedQueued} embed job(s) queued`);
@@ -440,11 +475,11 @@ async function demoPass(opts, seed, embed, why) {
 
 /**
  * --once: collect first; demo only when the trailing hour has no live posts.
- * @returns {Promise<{ mode: 'live'|'demo', ... }>}
+ * @returns {Promise<{ mode: 'live'|'demo', embed: boolean, postIds: string[], ... }>}
  */
-async function populateOnce(opts, seed) {
+async function populateOnce(opts, seed, deps = DEFAULT_DEPS) {
     let embed = opts.embed;
-    if (embed && !(await embeddingsReady())) {
+    if (embed && !(await deps.embeddingsReady())) {
         log(`embeddings service not ready at ${EMBEDDINGS_URL} — scoring without embeddings this pass`);
         embed = false;
     }
@@ -455,7 +490,7 @@ async function populateOnce(opts, seed) {
         log(`collecting: ${live.collecting} of ${SOURCES.length} registry sources are collecting — running one real collection job`);
         try {
             collected = await collectLive(opts, embed);
-            log(`${collected.jobId ? `job ${collected.jobId}` : 'no job row (nothing new to score)'}: ${collected.sourcesQueried} sources queried, ${collected.postsCollected} items kept, `
+            log(`${collected.jobId ? `job ${collected.jobId}` : 'no job row (nothing new to score)'}: ${collected.sourcesQueried} sources queried, ${collected.postsCollected} items collected, `
                 + `${collected.postsProcessed} new posts scored (sentiment, relevance, discourse), `
                 + `bias ${collected.bias ? `${collected.bias.violationsFound} violation(s)` : 'not run'}, `
                 + `${collected.embedQueued} embed job(s) queued`);
@@ -474,28 +509,55 @@ async function populateOnce(opts, seed) {
     const why = livePosts > 0 ? '--force: a fictional batch added beside the live posts'
         : live.available ? 'collection yielded no posts in the trailing hour — falling back to fictional demo posts'
             : `live collection unavailable (${live.reason})`;
-    return { ...(await demoPass(opts, seed, embed, why)), collected };
+    return { ...(await demoPass(opts, seed, embed, why, deps)), collected };
 }
 
 // ─── Entry points ────────────────────────────────────────────────────────────
 
-async function runOnce(opts) {
+async function runOnce(opts, deps = {}) {
+    const d = { ...DEFAULT_DEPS, ...deps };
+    let batch = null;
+    let skip = false;
     if (!opts.force) {
         const existing = await demoPostsInLastHour();
         const livePosts = await livePostsInLastHour();
         if (existing >= opts.size && livePosts === 0 && !liveCollectionStatus(opts.env || process.env).available) {
             log(`trailing hour already holds ${existing} demo posts (>= ${opts.size}) and collection is unavailable — `
                 + 'skipping the initial batch (use --force to add another)');
-            await printSummary();
-            return 0;
+            skip = true;
         }
     }
-    const seed = Math.floor(Date.now() / LOOP_INTERVAL_MS);
-    const r = await populateOnce(opts, seed);
-    if (r.mode === 'demo' && r.embed && r.postIds.length > 0 && opts.waitEmbeddings > 0) {
-        log(`waiting up to ${opts.waitEmbeddings}s for the worker to embed ${r.postIds.length} posts...`);
-        const done = await waitForEmbeddings(r.postIds, opts.waitEmbeddings);
-        log(`embeddings stored: ${done}/${r.postIds.length}`);
+    if (!skip) {
+        const seed = Math.floor(Date.now() / LOOP_INTERVAL_MS);
+        batch = await populateOnce(opts, seed, d);
+    }
+
+    // Copilot 4129574047 (#9): embeddings are decided per run, not per
+    // batch. A skipped batch (idempotent re-run) still backfills the
+    // trailing hour's demo posts that have no embedding.
+    let embed;
+    if (batch) {
+        embed = batch.embed;
+    } else if (!opts.embed) {
+        embed = false;
+    } else {
+        embed = await d.embeddingsReady();
+        if (!embed) log(`embeddings service not ready at ${EMBEDDINGS_URL} — no embedding backfill this run`);
+    }
+    if (embed) {
+        const queued = new Set(batch && batch.mode === 'demo' ? batch.postIds : []);
+        const backfill = (await unembeddedDemoPostsInLastHour()).filter(id => !queued.has(id));
+        if (backfill.length > 0) {
+            await d.enqueueEmbeddings(backfill);
+            log(`backfill: ${backfill.length} trailing-hour demo post(s) had no embedding — embed job(s) queued`);
+        }
+        const all = [...queued, ...backfill];
+        if (all.length > 0 && opts.waitEmbeddings > 0) {
+            log(`waiting up to ${opts.waitEmbeddings}s for the worker to embed ${all.length} posts...`);
+            const done = await d.waitForEmbeddings(all, opts.waitEmbeddings);
+            log(`embeddings stored: ${done}/${all.length}`
+                + (done < all.length ? ' (timed out — the worker keeps embedding the rest)' : ''));
+        }
     }
     await printSummary();
     return 0;
@@ -512,39 +574,88 @@ async function printSummary() {
     return { mode, live, demo, rows };
 }
 
-async function runLoop(opts) {
+/**
+ * One cycle of the demo fallback: a fictional batch ONLY while the trailing
+ * hour holds no live posts (the worker collects live data).
+ */
+async function loopCycle(opts, seed, deps = DEFAULT_DEPS) {
+    const livePosts = await livePostsInLastHour();
+    if (livePosts > 0) {
+        log(`data source: LIVE — ${livePosts} real posts in the trailing hour; demo feed idle`);
+        return { mode: 'live', livePosts, postIds: [] };
+    }
+    const embed = opts.embed && await deps.embeddingsReady();
+    return demoPass(opts, seed, embed, 'no live posts in the trailing hour', deps);
+}
+
+/**
+ * The demo fallback: one cycle every intervalMs until SIGTERM / SIGINT.
+ *
+ * Copilot 4129574059 (#9): a signal that arrives WHILE a cycle is running
+ * must not be followed by a full interval sleep (compose would SIGKILL the
+ * container before cleanup). The in-flight cycle is finished (its job row
+ * is completed, never left 'running'), then `stopping` is re-checked before
+ * sleeping, and a signal during the sleep cancels the timer at once.
+ *
+ * @param {object} opts   parsed flags
+ * @param {object} [deps] test seams: populateOnce (the per-cycle step,
+ *                        default loopCycle), intervalMs, plus the
+ *                        DEFAULT_DEPS collaborators
+ */
+async function runLoop(opts, deps = {}) {
+    const d = { ...DEFAULT_DEPS, populateOnce: loopCycle, intervalMs: LOOP_INTERVAL_MS, ...deps };
     let stopping = false;
+    let timer = null;
     let wake = null;
-    const stop = () => {
+    const stop = (signal) => {
+        if (stopping) return;
         stopping = true;
+        log(`${signal || 'stop'} received — finishing the current step, then exiting`);
+        if (timer) clearTimeout(timer);
+        timer = null;
         if (wake) wake();
     };
     process.on('SIGTERM', stop);
     process.on('SIGINT', stop);
 
-    log(`demo fallback started: every ${Math.round(LOOP_INTERVAL_MS / 1000)}s, ${opts.size} fictional posts `
-        + 'ONLY while the trailing hour holds no live posts (the worker collects live data)');
-    while (!stopping) {
-        const seed = Math.floor(Date.now() / LOOP_INTERVAL_MS);
-        try {
-            const livePosts = await livePostsInLastHour();
-            if (livePosts > 0) {
-                log(`data source: LIVE — ${livePosts} real posts in the trailing hour; demo feed idle`);
-            } else {
-                const embed = opts.embed && await embeddingsReady();
-                await demoPass(opts, seed, embed, 'no live posts in the trailing hour');
+    try {
+        log(`demo fallback started: every ${Math.round(d.intervalMs / 1000)}s, ${opts.size} fictional posts `
+            + 'ONLY while the trailing hour holds no live posts (the worker collects live data)');
+        while (!stopping) {
+            const seed = Math.floor(Date.now() / d.intervalMs);
+            try {
+                await d.populateOnce(opts, seed, d);
+            } catch (err) {
+                // One failed cycle must not kill the feed; the next cycle retries.
+                log(`cycle failed: ${err.message}`);
             }
-        } catch (err) {
-            // One failed cycle must not kill the feed; the next cycle retries.
-            log(`cycle failed: ${err.message}`);
+            if (stopping) break;              // signalled during the cycle: no sleep
+            await new Promise((resolve) => {
+                wake = resolve;
+                timer = setTimeout(resolve, d.intervalMs);
+            });
+            wake = null;
+            timer = null;
         }
-        await new Promise((resolve) => {
-            wake = resolve;
-            setTimeout(resolve, LOOP_INTERVAL_MS);
-        });
+    } finally {
+        if (timer) clearTimeout(timer);
+        process.removeListener('SIGTERM', stop);
+        process.removeListener('SIGINT', stop);
     }
     log('demo feed stopped');
     return 0;
+}
+
+/**
+ * Close what population opened: the BullMQ queues (Redis connections) if
+ * they were loaded, then the PostgreSQL pool. Safe to call more than once.
+ */
+async function shutdown() {
+    const hadQueues = queues !== null;
+    await closeQueues();
+    queues = null;
+    await db.closePool().catch(() => {});
+    log(`connections closed (${hadQueues ? 'queues, ' : ''}database pool)`);
 }
 
 async function main(argv) {
@@ -571,8 +682,7 @@ if (require.main === module) {
             return 1;
         })
         .then(async (code) => {
-            await closeQueues();
-            await db.closePool().catch(() => {});
+            await shutdown();
             process.exit(code);
         });
 }
@@ -585,12 +695,19 @@ module.exports = {
     liveCollectionStatus,
     currentMethodology,
     populateOnce,
+    loopCycle,
     livePostsInLastHour,
     populationByCategory,
     printSummary,
     ensureDemoSources,
     runDemoBatch,
+    unembeddedDemoPostsInLastHour,
     runOnce,
+    runLoop,
+    shutdown,
+    // The real enqueue seam (loads the BullMQ registry); exported for the
+    // shutdown test in tests/unit/populate.loop.test.js.
+    enqueueEmbeddingsForTest: enqueueEmbeddings,
     main,
     CORPUS,
     DEMO_PREFIX,

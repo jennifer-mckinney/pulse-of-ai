@@ -20,9 +20,10 @@ test('story: 11 beats — cards match resolver, rail advances, CH05 legend flips
         const w = window as any;
         const cities = w.PulseStory.getCities();
         const insights = w.PulseInsights.computeInsights(cities);
-        const isDemo = w.PulseStory.getState().isDemo;
+        // dataMode too: the overview kicker follows the data origin (G9-5).
+        const { isDemo, dataMode } = w.PulseStory.getState();
         return w.PulseChapters.STORY.map((beat: any) => {
-            const r = w.PulseChapters.resolveChapter(beat, insights, cities, { isDemo });
+            const r = w.PulseChapters.resolveChapter(beat, insights, cities, { isDemo, dataMode });
             return { kicker: r.kicker, title: r.cardTitle };
         });
     });

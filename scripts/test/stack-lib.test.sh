@@ -50,9 +50,11 @@ new_case() {
 # the caller's own values (e.g. a developer who exported COMPOSE_PROJECT_NAME
 # or POSTGRES_TEST_PORT for another stack) are removed first: every case
 # sees only what it sets.
+# npm_lifecycle_event too: `npm run verify` sets it, and the scripts' hints
+# depend on it (stack_cmd).
 HERMETIC_UNSET=(COMPOSE_PROJECT_NAME WEB_PORT POSTGRES_PORT POSTGRES_TEST_PORT REDIS_PORT
     PULSE_BIND_ADDR POSTGRES_PASSWORD REDIS_PASSWORD AUDIT_HASH_KEY CORRELATION_SALT
-    COLLECTOR_CONTACT_URL PERMISSION_GATED_FEEDS_ACCEPTED_BY)
+    COLLECTOR_CONTACT_URL PERMISSION_GATED_FEEDS_ACCEPTED_BY npm_lifecycle_event)
 HERMETIC_ENV_U=()
 for v in "${HERMETIC_UNSET[@]}"; do HERMETIC_ENV_U+=(-u "$v"); done
 
@@ -175,6 +177,26 @@ lib_run "$d" "$ENV_SETUP; ensure_env_file && secure_env_file" >/dev/null; rc=$?
 assert_eq "merge: complete group-writable file is accepted" "0" "$rc"
 assert_eq "merge: complete file tightened to 600"           "600" "$(file_mode "$d/.env")"
 
+# Copilot 4129574000: ensure_env_file ALONE hardens an existing file, and
+# only then prints its success line.
+d=$(new_case); write_example "$d"
+printf 'POSTGRES_PASSWORD=a\nAUDIT_HASH_KEY=b\nCORRELATION_SALT=c\nWEB_PORT=1\n' > "$d/.env"; chmod 644 "$d/.env"
+out=$(lib_run "$d" "$ENV_SETUP; ensure_env_file"); rc=$?
+assert_eq "existing complete 0644 file: ensure_env_file succeeds" "0" "$rc"
+assert_eq "existing complete 0644 file: mode 600 after ensure_env_file" "600" "$(file_mode "$d/.env")"
+assert_eq "existing complete 0644 file: success line says mode 600" "yes" "$(grep -q 'kept existing.*mode 600' <<< "$out" && echo yes || echo no)"
+d=$(new_case); write_example "$d"
+printf 'POSTGRES_PASSWORD=abc\n' > "$d/.env"; chmod 644 "$d/.env"
+lib_run "$d" "$ENV_SETUP; ensure_env_file" >/dev/null; rc=$?
+assert_eq "existing 0644 file + appended keys: mode 600 after ensure_env_file" "600" "$(file_mode "$d/.env")"
+# chmod failing (e.g. a file owned by someone else) → die, and NO success line.
+d=$(new_case); write_example "$d"
+printf 'POSTGRES_PASSWORD=a\nAUDIT_HASH_KEY=b\nCORRELATION_SALT=c\nWEB_PORT=1\n' > "$d/.env"; chmod 644 "$d/.env"
+out=$(lib_run "$d" "$ENV_SETUP; chmod() { return 1; }; ensure_env_file"); rc=$?
+assert_eq "chmod failure: ensure_env_file exits non-zero" "1" "$rc"
+assert_eq "chmod failure: no success line printed" "" "$(grep 'kept existing' <<< "$out" || true)"
+assert_eq "chmod failure: error names chmod 600" "yes" "$(grep -q 'could not chmod 600' "$d/stderr" && echo yes || echo no)"
+
 # ─── G9-3: run_with_timeout kills the whole process group ────────────────────
 alive() { kill -0 "$1" 2>/dev/null && echo alive || echo dead; }
 
@@ -274,7 +296,7 @@ case "$1" in
     ps) [[ -e "$FAKE_STATE/down" ]] || echo c0ffee; exit 0 ;;
     volume) exit 0 ;;
     compose)
-        [[ "$2" == "version" ]] && { echo 2.30.0; exit 0; }
+        [[ "$2" == "version" ]] && { echo 2.40.3; exit 0; }
         for a in "$@"; do [[ "$a" == down ]] && touch "$FAKE_STATE/down"; done
         exit 0 ;;
 esac
@@ -387,6 +409,80 @@ d=$(new_case); : > "$d/.env"
 lib_run "$d" 'set_env_value PERMISSION_GATED_FEEDS_ACCEPTED_BY "A \"B\" \\ #c 2026-09-29"' >/dev/null
 assert_eq "D1 set_env_value round-trips quotes, backslash, #" 'A "B" \ #c 2026-09-29' \
     "$(lib_run "$d" 'env_file_value PERMISSION_GATED_FEEDS_ACCEPTED_BY')"
+
+# ─── Copilot 4129574025: Compose minimum version (2.39.0) ────────────────────
+d=$(new_case)
+assert_eq "compose minimum is 2.39.0" "2.39.0" "$(lib_run "$d" 'printf %s "$STACK_COMPOSE_MIN_VERSION"')"
+# VERSION|expected parse ("" = unparseable)
+for c in "2.39.0|2 39 0" "v2.39.0-desktop.1|2 39 0" "2.40.3|2 40 3" "v2.39.0|2 39 0" \
+         "2.39.0+build.7|2 39 0" "2.39|2 39 0" " 2.41.0 |2 41 0" "5.3.0|5 3 0" \
+         "2.100.1|2 100 1" "garbage|" "|" "v|" "2|" "2.x.0|"; do
+    v=${c%%|*}; want=${c#*|}
+    assert_eq "parse_compose_version '$v'" "$want" "$(lib_run "$d" "parse_compose_version '$v' || true")"
+done
+# VERSION|expected verdict against 2.39.0 (0 new enough, 1 too old, 2 unparseable)
+for c in "2.39.0|0" "v2.39.0-desktop.1|0" "2.40.3|0" "2.39.3|0" "2.100.0|0" "5.3.0|0" "3.0.0|0" \
+         "2.38.2|1" "v2.38.9-desktop.1|1" "2.9.0|1" "2.3.99|1" "1.29.2|1" "2.39|0" \
+         "garbage|2" "|2"; do
+    v=${c%%|*}; want=${c#*|}
+    assert_eq "compose_version_at_least '$v' 2.39.0 → $want" "$want" \
+        "$(lib_run "$d" "compose_version_at_least '$v' 2.39.0; echo \$?")"
+done
+# check_docker against a fake docker reporting each version.
+fake_docker_case() { # VERSION → prints rc; stderr in $d/stderr
+    lib_run "$d" "docker() { case \"\$1\" in compose) echo '$1' ;; info) return 0 ;; esac; }; check_docker; echo rc=0" || echo "rc=$?"
+}
+d=$(new_case)
+assert_eq "check_docker: 2.38.2 is refused"            "rc=1" "$(fake_docker_case 2.38.2 | tail -n 1)"
+assert_eq "check_docker: refusal names 2.39.0"         "yes"  "$(grep -q 'Compose 2.39.0 or newer is required, found .2.38.2.' "$d/stderr" && echo yes || echo no)"
+assert_eq "check_docker: refusal explains why"         "yes"  "$(grep -q 'build.provenance / build.sbom' "$d/stderr" && echo yes || echo no)"
+assert_eq "check_docker: refusal says how to upgrade"  "yes"  "$(grep -q 'compose/install/linux' "$d/stderr" && echo yes || echo no)"
+assert_eq "check_docker: v2.39.0-desktop.1 accepted"   "rc=0" "$(fake_docker_case v2.39.0-desktop.1 | tail -n 1)"
+assert_eq "check_docker: 2.40.3 accepted"              "rc=0" "$(fake_docker_case 2.40.3 | tail -n 1)"
+assert_eq "check_docker: unparseable version refused"  "rc=1" "$(fake_docker_case weird | tail -n 1)"
+assert_eq "check_docker: unparseable → explains"       "yes"  "$(grep -q 'could not read the Docker Compose version' "$d/stderr" && echo yes || echo no)"
+
+# ─── Copilot 4129574098: hints match the entry point (Bash-only hosts) ───────
+d=$(new_case)
+assert_eq "stack_cmd: bash entry"              "bash scripts/teardown.sh"          "$(lib_run "$d" 'stack_cmd teardown')"
+assert_eq "stack_cmd: bash entry + args"       "bash scripts/teardown.sh --purge"  "$(lib_run "$d" 'stack_cmd teardown --purge')"
+assert_eq "stack_cmd: npm entry"               "npm run standup"                   "$(lib_run "$d" 'npm_lifecycle_event=standup; stack_cmd standup')"
+assert_eq "stack_cmd: npm entry + args"        "npm run teardown -- --purge"       "$(lib_run "$d" 'npm_lifecycle_event=standup; stack_cmd teardown --purge')"
+d=$(new_case); printf 'COMPOSE_PROJECT_NAME=mystack\nPOSTGRES_PASSWORD=x\nREDIS_PASSWORD=y\n' > "$d/.env"
+run_teardown "$d" --; rc=$?
+assert_eq "teardown via bash: succeeds"                   "0" "$rc"
+assert_eq "teardown via bash: never tells you to use npm" "no" "$(grep -q 'npm run' "$d/out" && echo yes || echo no)"
+d=$(new_case); printf 'COMPOSE_PROJECT_NAME=mystack\nPOSTGRES_PASSWORD=x\nREDIS_PASSWORD=y\n' > "$d/.env"
+run_teardown "$d" npm_lifecycle_event=teardown --; rc=$?
+assert_eq "teardown via npm: hint uses npm"               "yes" "$(grep -q "'npm run standup' resumes" "$d/out" && echo yes || echo no)"
+# The shell scripts never run node/npm/python on the HOST (README claim).
+SCRIPTS_DIR="$(cd "$(dirname "$LIB")/.." && pwd)"
+# Command position = line start, or after ; & | $( then do else (a "(" in
+# prose such as "(npm run docker:up ...)" inside a message is not one).
+host_calls=$(grep -nE '^[^#]*(^|[;&|]|\$\(|then|do|else)[[:space:]]*(node|npm|npx|python3?)[[:space:]]' \
+    "$SCRIPTS_DIR/standup.sh" "$SCRIPTS_DIR/teardown.sh" "$SCRIPTS_DIR/lib/stack.sh" || true)
+assert_eq "standup/teardown/stack.sh: no host node/npm/python call" "" "$host_calls"
+
+# check-compose.sh stops with a clear message on a Compose older than 2.39.0.
+OLD_BIN="$SCRATCH/oldcompose"; mkdir -p "$OLD_BIN"
+cat > "$OLD_BIN/docker" <<'EOS'
+#!/usr/bin/env bash
+[[ "$1 $2" == "compose version" ]] && { echo 2.38.2; exit 0; }
+echo "fake docker: unexpected call: $*" >&2; exit 99
+EOS
+chmod +x "$OLD_BIN/docker"
+CHECK_COMPOSE="$SCRIPTS_DIR/test/check-compose.sh"
+if command -v jq >/dev/null 2>&1; then
+    d=$(new_case)
+    PATH="$OLD_BIN:$PATH" bash "$CHECK_COMPOSE" > "$d/out" 2>&1; rc=$?
+    assert_eq "check-compose: Compose 2.38.2 → exit 2"            "2" "$rc"
+    assert_eq "check-compose: names the minimum and found version" "yes" \
+        "$(grep -q "Compose 2.39.0 or newer is required, found '2.38.2'" "$d/out" && echo yes || echo no)"
+    assert_eq "check-compose: stops before any compose config call" "no" \
+        "$(grep -q 'unexpected call' "$d/out" && echo yes || echo no)"
+else
+    printf 'skip check-compose version cases (jq not installed)\n'
+fi
 
 #@@CASES@@
 

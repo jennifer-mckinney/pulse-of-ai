@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # scripts/standup.sh — stand up the whole Pulse of AI solution with one command.
 #
-#   npm run standup              (or: bash scripts/standup.sh)
-#   npm run standup -- --help
+#   bash scripts/standup.sh      host needs: Bash 3.2+, Docker (Compose 2.39.0+), curl
+#   npm run standup              same script via npm (also needs Node.js/npm on the host)
+#   npm run standup -- --help    (or: bash scripts/standup.sh --help)
+#
+# Nothing else runs on the host: node and python run only inside the
+# containers. On Windows, run it from WSL 2 or Git Bash.
 #
 # What it does, in order (safe to re-run — every step is idempotent):
-#   1. checks prerequisites: docker, compose v2+, a running daemon
+#   1. checks prerequisites: docker, compose 2.39.0+, a running daemon, curl
 #   2. creates .env from .env.example if missing, generating strong random
 #      POSTGRES_PASSWORD / REDIS_PASSWORD / AUDIT_HASH_KEY / CORRELATION_SALT
 #      (never printed); an existing .env keeps every value — only missing
@@ -208,7 +212,7 @@ else
     warn "the embeddings service is NOT ready (state ${e_state:-unknown}, health ${e_health:-unknown}, restarts ${restarts:-0}) after $(elapsed "$t_emb")s."
     warn "Most likely the sentence-transformers model could not be downloaded (offline, proxy, or Hugging Face unreachable)."
     warn "Continuing WITHOUT embeddings: posts are scored and audited, but vector search stays empty."
-    warn "Fix the network, then re-run 'npm run standup' (the model is cached in the hf_cache volume once downloaded)."
+    warn "Fix the network, then re-run '$(stack_cmd standup)' (the model is cached in the hf_cache volume once downloaded; the re-run embeds the posts this run could not)."
     compose_full logs --no-color --tail 25 embeddings >&2 || true
 fi
 
@@ -282,10 +286,14 @@ fi
 DC="docker compose -p $STACK_PROJECT"
 [[ "$STACK_ENV_FILE" == "$STACK_ROOT/.env" ]] || DC+=" --env-file $STACK_ENV_FILE"
 # teardown must target the same project/env file this run used.
-TD="npm run teardown"
-[[ "$STACK_ENV_FILE" == "$STACK_ROOT/.env" ]] || TD="PULSE_ENV_FILE=$STACK_ENV_FILE $TD"
+TD=$(stack_cmd teardown)
+TD_PURGE=$(stack_cmd teardown --purge)
+if [[ "$STACK_ENV_FILE" != "$STACK_ROOT/.env" ]]; then
+    TD="PULSE_ENV_FILE=$STACK_ENV_FILE $TD"
+    TD_PURGE="PULSE_ENV_FILE=$STACK_ENV_FILE $TD_PURGE"
+fi
 [[ "$STACK_PROJECT" == "$(env_file_value COMPOSE_PROJECT_NAME)" || ( "$STACK_PROJECT" == "pulse-of-ai" && -z "$(env_file_value COMPOSE_PROJECT_NAME)" ) ]] \
-    || TD="COMPOSE_PROJECT_NAME=$STACK_PROJECT $TD"
+    || { TD="COMPOSE_PROJECT_NAME=$STACK_PROJECT $TD"; TD_PURGE="COMPOSE_PROJECT_NAME=$STACK_PROJECT $TD_PURGE"; }
 
 cat <<EOF
 
@@ -305,6 +313,6 @@ Next steps
   Status:      $DC --profile full --profile demo ps
   Logs:        $DC --profile full --profile demo logs -f web worker populate
   Replay:      $DC --profile full exec web npm run replay -- --post <post_id>
-  Stop:        $TD             (keeps data volumes)
-  Reset:       $TD -- --purge  (deletes data volumes, asks first)
+  Stop:        $TD  (keeps data volumes)
+  Reset:       $TD_PURGE  (deletes data volumes, asks first)
 EOF

@@ -959,10 +959,13 @@
                 // bundled fallback via demoLabel.
                 const intro = resolveIntro(insights, state.cities, mode);
                 renderIntro(intro);
+                // dataMode: the overview card's kicker follows the data
+                // origin exactly like the intro kicker (G9-5).
                 state.resolved = STORY.map(
                     (beat) => resolveChapter(beat, insights, state.cities,
-                        { isDemo, demoLabel: intro.demoLabel }));
+                        { isDemo, demoLabel: intro.demoLabel, dataMode: intro.dataMode }));
                 rebuildCards();
+                updateRailLabels();
                 state.legendMode = null;   // category list may have changed
                 state.activeIndex = -1;    // force globe re-apply on new data
                 if (state.exploring && globe && state.citiesDirty) {
@@ -989,6 +992,19 @@
     }
 
     // ── Init ────────────────────────────────────────────────────────────────
+
+    // Rail dots are labeled with each beat's kicker. Before data arrives
+    // that is the config's neutral text; once the beats are resolved, the
+    // mode-aware kicker (G9-5 — never a stale LIVE on a demo/empty hour).
+    function updateRailLabels() {
+        if (!Array.isArray(els.railDots)) return;
+        els.railDots.forEach((dot, i) => {
+            const r = state.resolved[i];
+            const kicker = r && r.kicker ? r.kicker : STORY[i].kicker;
+            dot.title = kicker;
+            dot.setAttribute('aria-label', 'Jump to ' + kicker);
+        });
+    }
 
     function buildRail() {
         els.railDots = [];

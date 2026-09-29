@@ -1910,7 +1910,9 @@
         const inner = els.healthInner;
         if (!inner) return;
         clear(inner);
-        inner.appendChild(buildDrawerHead('MODEL HEALTH · LIVE',
+        // Nothing is known yet: neither LIVE nor DEMO until /api/health
+        // answers (G9-5 — renderHealthDrawer derives the label).
+        inner.appendChild(buildDrawerHead('MODEL HEALTH',
             'The watchdog watches itself.', closeHealth));
         inner.appendChild(el('div', 'empty mono', 'checking the watchdog…'));
     }
