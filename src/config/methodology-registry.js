@@ -322,6 +322,38 @@ const METHODOLOGY_VERSIONS = [
         },
         justification: 'The audit endpoint serves four audience representations (public, journalist, regulator, researcher) of every decision step. The wording is part of the auditable surface, so the template set is registered here and version-bumped on any change — the API reports which narration version rendered a receipt. Templates only restate stored facts; they never invent per-post content. 1.3.0 implements decision D2 in the ingestion step for real sources: instead of saying that anything that could identify the writer was removed, it restates the privacy claim registered by the ingest version (identity fields are never stored; e-mail addresses, handles, phone numbers, sign-offs and profile links in text are redacted; free text may still contain names mentioned in content), and it shows the post\'s provenance - the source, its published time, the permalink when it does not identify a person, the stored external id and the provenance fingerprint - with the words "verifiable: provide the original URL or id to reproduce the fingerprint" and the command npm run verify-provenance that does so. Demo-feed wording and every inference step are unchanged from 1.2.0.',
     },
+    {
+        component: 'ingest',
+        // 1.4.0: single-character @handles are redacted too (Copilot
+        // 4129565702; migration 024). Otherwise identical to 1.3.0.
+        version: '1.4.0',
+        model_name: 'pulse-ingest-v1',
+        config: {
+            // Must match src/pipeline/ingest.js PII_FIELDS
+            pii_fields_removed:   ['author', 'author_fullname', 'author_id', 'authors', 'username', 'user', 'user_id', 'screen_name', 'creator', 'uploader', 'owner', 'email'],
+            collector_payload:    'collectors build the stored payload from an allowlist of content fields; identity fields are never requested',
+            // Must match src/collectors/identity.js redactText
+            text_redaction:       {
+                email_addresses:       '[email]',
+                at_handles:            '@[user]',
+                at_handle_min_length:  1,
+                phone_numbers:         '[phone] (E.164 and NANP)',
+                identity_links:        '[profile link]',
+                cc_names:              'cc [name]',
+                trailing_signoffs:     'removed',
+                wikipedia_unsigned:    'removed',
+            },
+            identity_links:       'links that point at a person (/user/, /u/, /profile/, /@name, github.com/<user>, gitlab.com/<user>, x.com and twitter.com handles, linkedin.com/in/, medium.com/<name>, a <name>.substack.com root, facebook, instagram, t.me, YouTube channels, Wikipedia User pages) are not stored and are replaced in text',
+            privacy_claim:        'identity fields are never stored; e-mail addresses, handles, phone numbers, sign-offs and profile links in text are redacted; free text may still contain names mentioned in content',
+            external_ids:         'the upstream id is stored only when it is not identity-bearing (numeric, arXiv, PMID, DOI, HN item ids, clean slugs); otherwise its keyed fingerprint is stored; the Telegram chat id is fingerprinted',
+            provenance:           'HMAC-SHA256(PROVENANCE_KEY or AUDIT_HASH_KEY, source_slug + ":" + raw upstream id + ":" + canonical source URL), stored per post; reproduced by npm run verify-provenance -- --post <id> --url <original>',
+            location_granularity: 'city',
+            location_basis:       ['content', 'publisher'],
+            dedup_strategy:       'unique (source, external id); sha256-content-hash join key',
+            legal_basis:          'GDPR Article 6(1)(f) - Legitimate Interest',
+        },
+        justification: 'ingest@1.4.0 redacts single-character @handles too (1.3.0 required at least two characters after the @, so "@a" was stored). Decision D2 (2026-09-29): "both yet we need an identifier to be able to prove the audit traceability back to the source." Precise claim: identity fields are never stored; e-mail addresses, handles, phone numbers, sign-offs and profile links in text are redacted; free text may still contain names mentioned in content. Collectors build the stored payload from an allowlist of content fields and the ingest step removes any identity field that arrives. Before a post is stored, e-mail addresses become [email], @handles of one or more characters become @[user], phone numbers (E.164 and North American formats) become [phone], links to a person\'s profile become [profile link], "cc <Name>" becomes "cc [name]", and a trailing sign-off or a Wikipedia unsigned-comment note is removed. Each post carries a provenance fingerprint, a keyed HMAC of the source, the upstream id and the source URL, so anyone holding the original link can prove which item a post came from without the post storing anything that identifies a person; an upstream id that could identify someone is stored only as its fingerprint. Location stays at city level from a content-level field or, for editorial sources, the publisher\'s home city, with the basis recorded. Content is SHA-256 hashed as the immutable join key; duplicates are dropped per source and external id. Processing rests on legitimate interest (GDPR Art. 6(1)(f)) - aggregate discourse measurement over public posts with no profiling of identifiable individuals.',
+    },
 ];
 
 /**

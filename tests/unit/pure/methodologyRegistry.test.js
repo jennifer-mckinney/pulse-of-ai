@@ -233,7 +233,7 @@ describe('migration 014 ↔ methodology registry (alignment)', () => {
 
     test('the code implements the CURRENT versions', () => {
         expect(CURRENT_VERSIONS).toEqual(expect.objectContaining({
-            sentiment: '1.0.0', relevance: '1.1.0', discourse: '1.1.0-DQI', ingest: '1.3.0',
+            sentiment: '1.0.0', relevance: '1.1.0', discourse: '1.1.0-DQI', ingest: '1.4.0',
         }));
     });
 
@@ -312,13 +312,13 @@ describe('migration 017 ↔ methodology registry (ingest@1.3.0, decision D2)', (
         expect(SQL_017).not.toMatch(/DO UPDATE|UPDATE methodology_versions|DELETE|DROP/);
     });
 
-    test('ingest@1.3.0 is what the code does and is the current ingest version', () => {
+    test('ingest@1.3.0 stays registered with the D2 claim (superseded by 1.4.0, never edited)', () => {
         const reg = registry('ingest', '1.3.0');
-        expect(latest('ingest').version).toBe('1.3.0');
         expect(reg.config.pii_fields_removed).toEqual(PII_FIELDS);
         const t = reg.config.text_redaction;
         expect(redactIdentities('a@b.co @x1')).toBe(`${t.email_addresses} ${t.at_handles}`);
         expect(redactIdentities('call (415) 555-2671')).toBe('call [phone]');
+        expect(reg.config.privacy_claim).toBeDefined();
         expect(redactIdentities('see https://github.com/alice')).toBe(`see ${t.identity_links}`);
         expect(redactIdentities('ok cc Jane Doe')).toBe(`ok ${t.cc_names}`);
         // The precise claim (D2 b), verbatim in config and justification.
@@ -388,5 +388,27 @@ describe('scripts/seed.js header ↔ methodology registry (grumpy NIT a)', () =>
 
     test('no blanket "all v1.0.0" claim survives', () => {
         expect(methodologyHeader()).not.toMatch(/\ball v?\d+\.\d+\.\d+/i);
+    });
+});
+
+describe('migration 024 ↔ methodology registry (ingest@1.4.0, Copilot 4129565702)', () => {
+    const { generate } = require('../../../scripts/generate-methodology-migration');
+    const { redactIdentities } = require('../../../src/collectors/normalize');
+    const SQL_024 = fs.readFileSync(
+        path.join(__dirname, '../../../src/db/migrations/024_ingest_single_char_handles.sql'), 'utf8');
+
+    test('024 is exactly the generated ingest@1.4.0 row, idempotent, and edits nothing', () => {
+        expect(SQL_024.endsWith(generate(['ingest@1.4.0']))).toBe(true);
+        expect((SQL_024.match(/INSERT INTO/g) || []).length).toBe(1);
+        expect(SQL_024).not.toMatch(/DO UPDATE|UPDATE methodology_versions|DELETE|DROP/);
+    });
+
+    test('ingest@1.4.0 is current, keeps the D2 claim and redacts single-character handles', () => {
+        const reg = registry('ingest', '1.4.0');
+        const prev = registry('ingest', '1.3.0');
+        expect(latest('ingest').version).toBe('1.4.0');
+        expect(reg.config.privacy_claim).toBe(prev.config.privacy_claim);
+        expect(reg.config.text_redaction.at_handle_min_length).toBe(1);
+        expect(redactIdentities('ping @a and @b_ and a@b.co')).toBe('ping @[user] and @[user] and [email]');
     });
 });

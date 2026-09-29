@@ -85,8 +85,8 @@ describe('redactText (ingest@1.3.0)', () => {
     test('linear on hostile 1 MB inputs (F10-3), load-robust', () => {
         const { scaling } = require('../../helpers/scaling');
         for (const u of ['a', '<', '1', '+', '—', ' ', '@', 'h', 'https://x.com/', 'cc Ab ', '— Ab ', '(415) ']) {
-            const r = scaling(redactText, n => u.repeat(Math.max(1, Math.round(n / u.length))), 1 << 20, 3);
-            expect({ unit: u, linear: r.linear }).toEqual({ unit: u, linear: true });
+            const r = scaling(redactText, n => u.repeat(Math.max(1, Math.round(n / u.length))), 1 << 20, 5);
+            expect({ unit: u, linear: r.linear, small: r.small, large: r.large }).toEqual({ unit: u, linear: true, small: r.small, large: r.large });
         }
     });
 });
@@ -171,5 +171,15 @@ describe('toPayload carries the provenance fingerprint', () => {
     test('text is redacted with the 1.3.0 rules before storage', () => {
         const p = toPayload({ id: '1', text: 'AI is here, call (415) 555-2671 cc John Smith — Jane Doe' }, source, route, { key: KEY });
         expect(p.text).toBe('AI is here, call [phone] cc [name]');
+    });
+});
+
+describe('single-character handles (ingest@1.4.0, Copilot 4129565702)', () => {
+    test('"@a" is redacted; emails are redacted once, never as handles', () => {
+        expect(redactText('thanks @a!')).toBe('thanks @[user]!');
+        expect(redactText('@z')).toBe('@[user]');
+        expect(redactText('mail x@y.io, cc @q')).toBe('mail [email], cc [name]');
+        expect(redactText('a@b.co')).toBe('[email]');
+        expect(redactText('price @ 5 pm')).toBe('price @ 5 pm');
     });
 });

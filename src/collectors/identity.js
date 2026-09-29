@@ -68,7 +68,11 @@ function isIdentityUrl(url) {
 }
 
 const EMAIL_RE = /(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,8}\.[A-Za-z]{2,24}(?![A-Za-z])/g;
-const HANDLE_RE = /(^|[^A-Za-z0-9_.])@[A-Za-z0-9_][A-Za-z0-9_.-]{1,38}/g;
+// ingest@1.4.0 (Copilot 4129565702): a single-character handle ("@a") is a
+// handle too — the tail is {0,38}, not {1,38}. Still bounded and linear; an
+// e-mail address never reaches it (EMAIL_RE replaced it with [email], and a
+// local part's '@' is preceded by a word character).
+const HANDLE_RE = /(^|[^A-Za-z0-9_.])@[A-Za-z0-9_][A-Za-z0-9_.-]{0,38}/g;
 const URL_RE = /\bhttps?:\/\/[^\s<>"'`]{1,2048}/gi;
 // E.164 (+ and 7–15 digits, optional single separators) and NANP
 // ((NXX) NXX-XXXX with optional +1). Digits on either side block a match.
