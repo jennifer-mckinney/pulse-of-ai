@@ -5,10 +5,15 @@
 //   200 { status, db_connected, last_job, active_alerts,
 //         data_mode, data_window, active_sources, demo_feeds }
 //
-//   data_mode      'demo' | 'live' | 'mixed' | 'none' — where the posts in the
-//                  trailing hour (the window the dashboard shows) came from,
-//                  classified by source (src/config/data-mode.js)
-//   data_window    { hours: 1, posts, demo_posts }
+//   data_mode      'demo' | 'live' | 'mixed' | 'none' — where the posts the
+//                  GLOBE shows for the trailing hour came from, classified by
+//                  source (src/config/data-mode.js). Same rule as the globe
+//                  (G9-2): posts WITH a sentiment result AT a city the
+//                  registry resolves (public/js/config/cities.config.js) —
+//                  exactly the rows /api/posts/aggregated-by-location places
+//                  and public/js/data.js dataModeOf counts.
+//   data_window    { hours: 1, posts, demo_posts,          ← the globe's rule
+//                    stored_posts, stored_demo_posts }     ← every stored post
 //   active_sources registry sources flagged active, EXCLUDING demo feeds
 //   demo_feeds     number of demo feed sources (never counted as sources)
 //
@@ -20,6 +25,9 @@
 const { Router }     = require('express');
 const { isConnected, dbGet, dbAll } = require('../db/connection');
 const { DEMO_SOURCE_TYPE, deriveDataMode } = require('../config/data-mode');
+// Same registry the globe resolves cities with (see routes/posts.js for why
+// server code reads this public/ file).
+const { findCity } = require('../../public/js/config/cities.config.js');
 
 const router = Router();
 
@@ -44,8 +52,29 @@ router.get('/health', async (req, res) => {
         );
 
         // Data mode over the trailing hour — the same window the frontend
-        // renders (public/js/data.js TRAILING_WINDOW_MS).
-        const windowCounts = await dbGet(
+        // renders (public/js/data.js TRAILING_WINDOW_MS) — by the globe's
+        // rule: the aggregated query's joins (sentiment_results, a location)
+        // per city, then only cities the registry resolves.
+        const cityCounts = await dbAll(
+            `SELECT rp.location                                            AS city,
+                    COUNT(*)::int                                           AS posts,
+                    COUNT(*) FILTER (WHERE ds.source_type = $1)::int        AS demo_posts
+             FROM raw_posts rp
+             JOIN sentiment_results sr ON sr.raw_post_id = rp.id
+             JOIN data_sources ds      ON ds.id = rp.source_id
+             WHERE rp.collected_at >= NOW() - INTERVAL '1 hour'
+               AND rp.location IS NOT NULL AND rp.location <> ''
+             GROUP BY rp.location`,
+            [DEMO_SOURCE_TYPE],
+        );
+        const shown = { posts: 0, demo_posts: 0 };
+        for (const row of cityCounts) {
+            if (!findCity(row.city)) continue;   // the globe drops unplaced rows
+            shown.posts += row.posts;
+            shown.demo_posts += row.demo_posts;
+        }
+        // Everything stored in the hour, reported alongside (never classified).
+        const stored = await dbGet(
             `SELECT COUNT(*)::int                                           AS posts,
                     COUNT(*) FILTER (WHERE ds.source_type = $1)::int        AS demo_posts
              FROM raw_posts rp
@@ -67,11 +96,13 @@ router.get('/health', async (req, res) => {
             db_connected:  dbConnected,
             last_job:      lastJob,
             active_alerts: activeAlerts,
-            data_mode:     deriveDataMode(windowCounts.demo_posts, windowCounts.posts),
+            data_mode:     deriveDataMode(shown.demo_posts, shown.posts),
             data_window:   {
-                hours:      1,
-                posts:      windowCounts.posts,
-                demo_posts: windowCounts.demo_posts,
+                hours:             1,
+                posts:             shown.posts,
+                demo_posts:        shown.demo_posts,
+                stored_posts:      stored.posts,
+                stored_demo_posts: stored.demo_posts,
             },
             active_sources: sourceCounts.active_sources,
             demo_feeds:     sourceCounts.demo_feeds,

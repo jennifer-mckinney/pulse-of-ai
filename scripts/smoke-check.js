@@ -8,8 +8,11 @@
 //   node scripts/smoke-check.js [--base-url URL] [--expect-embeddings]
 //
 // Checks (PASS / FAIL / WARN per line):
-//   - GET /api/health → 200, db_connected true; data_mode matches the
-//     demo-feed share of the trailing hour (demo / live / mixed / none)
+//   - GET /api/health → 200, db_connected true; its data_mode matches the
+//     mode of what the GLOBE renders — the placed rows of
+//     /api/posts/aggregated-by-location for the trailing hour (demo_posts /
+//     total), not a re-run of health's own SQL — tolerating a demo batch
+//     landing between the reads (G9-2)
 //   - GET / serves the story page (index.html + its main.js bundle)
 //   - the page's own API calls return DATA, not just 200: aggregated cities
 //     in the trailing hour (with coordinates), themes, latest bias job,
@@ -35,6 +38,7 @@ require('dotenv').config();
 
 const { execFileSync } = require('child_process');
 const db = require('../src/db/connection');
+const { deriveDataMode } = require('../src/config/data-mode');
 
 const AUDIENCES = ['public', 'plain', 'config', 'researcher'];
 const LINEAGES = new Set(['recorded', 'inferred', 'current']);
@@ -84,6 +88,49 @@ async function check(r, name, fn) {
     }
 }
 
+/**
+ * Data mode of the rows the globe renders: rows WITH coordinates (the
+ * frontend drops the rest), demo_posts summed against total.
+ * @param {object[]} rows  /api/posts/aggregated-by-location body
+ * @returns {{ posts: number, demo: number, mode: string }}
+ */
+function modeOfAggregatedRows(rows) {
+    let posts = 0;
+    let demo = 0;
+    for (const row of Array.isArray(rows) ? rows : []) {
+        if (!row || row.lat === null || row.lat === undefined) continue;
+        const t = Number(row.total) || 0;
+        posts += t;
+        demo += Math.min(Number(row.demo_posts) || 0, t);
+    }
+    return { posts, demo, mode: deriveDataMode(demo, posts) };
+}
+
+/**
+ * Compare /api/health data_mode with the globe's rows, race-tolerantly: the
+ * demo feed may land a batch (or posts may age out of the hour) between two
+ * reads, so each attempt reads globe → health → globe and passes when
+ * health matches EITHER globe snapshot. A disagreement that survives every
+ * attempt is a real mismatch.
+ * @param {{ readAggregated: () => Promise<{posts, demo, mode}>,
+ *           readHealthMode: () => Promise<string>,
+ *           attempts?: number, delayMs?: number }} io
+ * @returns {Promise<{ ok: boolean, health: string, expected: string, globe: object }>}
+ */
+async function checkDataMode({ readAggregated, readHealthMode, attempts = 3, delayMs = 2000 }) {
+    let last = null;
+    for (let i = 0; i < attempts; i++) {
+        if (i > 0 && delayMs > 0) await new Promise(r => setTimeout(r, delayMs));
+        const before = await readAggregated();
+        const health = await readHealthMode();
+        const after = await readAggregated();
+        if (health === before.mode) return { ok: true, health, expected: before.mode, globe: before };
+        if (health === after.mode) return { ok: true, health, expected: after.mode, globe: after };
+        last = { ok: false, health, expected: after.mode, globe: after };
+    }
+    return last;
+}
+
 async function counts() {
     const one = async (sql) => (await db.dbGet(sql)).n;
     return {
@@ -119,21 +166,31 @@ async function run(opts, out) {
     });
 
     // The API must SAY where the data came from (the page's DEMO kicker and
-    // "Demo data" markers read this): cross-check /api/health data_mode
-    // against the demo-feed share of the trailing hour in the database.
+    // "Demo data" markers read this): /api/health data_mode must match the
+    // mode of what the globe renders (G9-2).
     await check(r, 'data mode reported', async () => {
-        const { body } = await getJson(base, '/api/health');
-        const w = await db.dbGet(
-            `SELECT COUNT(*)::int AS posts,
-                    COUNT(*) FILTER (WHERE ds.source_type = 'demo')::int AS demo
-             FROM raw_posts rp JOIN data_sources ds ON ds.id = rp.source_id
-             WHERE rp.collected_at >= NOW() - INTERVAL '1 hour'`);
-        const expected = w.posts === 0 ? 'none'
-            : w.demo === w.posts ? 'demo' : w.demo === 0 ? 'live' : 'mixed';
-        const got = body && body.data_mode;
-        (got === expected ? r.pass : r.fail)('data mode reported',
-            `/api/health data_mode '${got}' (${w.demo} of ${w.posts} trailing-hour posts from demo feeds), `
-            + `${body && body.active_sources} real active sources, ${body && body.demo_feeds} demo feeds`);
+        let health = null;
+        const result = await checkDataMode({
+            readAggregated: async () => {
+                // A fresh `from` per read: a new query string, so the
+                // route's 10 s response cache never serves a stale snapshot.
+                const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+                const res = await getJson(base,
+                    `/api/posts/aggregated-by-location?from=${encodeURIComponent(since)}`);
+                if (res.status !== 200) throw new Error(`aggregated-by-location status ${res.status}`);
+                return modeOfAggregatedRows(res.body);
+            },
+            readHealthMode: async () => {
+                health = (await getJson(base, '/api/health')).body;
+                return health && health.data_mode;
+            },
+            attempts: opts.dataModeAttempts || 3,
+        });
+        (result.ok ? r.pass : r.fail)('data mode reported',
+            `/api/health data_mode '${result.health}'${result.ok ? ' matches' : ` but`} the globe's rows `
+            + `('${result.expected}': ${result.globe.demo} of ${result.globe.posts} placed trailing-hour posts `
+            + `from demo feeds), ${health && health.active_sources} real active sources, `
+            + `${health && health.demo_feeds} demo feeds`);
     });
 
     await check(r, 'GET / serves the story page', async () => {
@@ -300,4 +357,4 @@ if (require.main === module) {
         });
 }
 
-module.exports = { parseArgs, run };
+module.exports = { parseArgs, run, modeOfAggregatedRows, checkDataMode };

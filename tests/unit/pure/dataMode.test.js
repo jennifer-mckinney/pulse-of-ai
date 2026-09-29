@@ -32,7 +32,7 @@ describe('deriveDataMode (backend)', () => {
 });
 
 describe('dataModeOf (frontend, over aggregated rows)', () => {
-    const rowsFor = (demo, total) => [{ city: 'A', total, demo_posts: demo }];
+    const rowsFor = (demo, total) => [{ city: 'London', total, demo_posts: demo }];
 
     test.each(TABLE.filter(([d, t]) => typeof d === 'number' && typeof t === 'number'))(
         'demo %p of %p → %p (same answer as the backend)', (demo, total, mode) => {
@@ -41,15 +41,28 @@ describe('dataModeOf (frontend, over aggregated rows)', () => {
 
     test('sums across cities: all-demo cities → demo, any live post → mixed', () => {
         expect(data.dataModeOf([
-            { total: 4, demo_posts: 4 }, { total: 6, demo_posts: 6 },
+            { city: 'London', total: 4, demo_posts: 4 }, { city: 'Tokyo', total: 6, demo_posts: 6 },
         ])).toBe('demo');
         expect(data.dataModeOf([
-            { total: 4, demo_posts: 4 }, { total: 6, demo_posts: 0 },
+            { city: 'London', total: 4, demo_posts: 4 }, { city: 'Tokyo', total: 6, demo_posts: 0 },
         ])).toBe('mixed');
     });
 
     test('rows without demo_posts (an older API) count as live, never as demo', () => {
-        expect(data.dataModeOf([{ total: 3 }])).toBe('live');
+        expect(data.dataModeOf([{ city: 'London', total: 3 }])).toBe('live');
+    });
+
+    // G9-2: the globe renders registry cities only, so rows it drops never
+    // classify the view (the backend's /api/health applies the same rule).
+    test('rows at locations outside the city registry are not counted', () => {
+        expect(data.dataModeOf([
+            { city: 'London', total: 4, demo_posts: 0 }, { city: 'Atlantis', total: 6, demo_posts: 6 },
+        ])).toBe('live');
+        expect(data.dataModeOf([{ city: 'Atlantis', total: 6, demo_posts: 6 }])).toBe('none');
+        expect(data.dataModeOf([{ city: 'nyc', total: 2, demo_posts: 2 }])).toBe('demo');   // alias
+        // A non-registry row the globe CAN place (usable coordinates) counts.
+        expect(data.dataModeOf([{ city: 'Testville', lat: 10, lng: 20, total: 2, demo_posts: 2 }])).toBe('demo');
+        expect(data.dataModeOf([{ city: 'Atlantis', lat: null, lng: null, total: 2, demo_posts: 2 }])).toBe('none');
     });
 
     test('non-array input is "none"', () => {

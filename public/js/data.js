@@ -427,12 +427,20 @@
     // deriveDataMode (pinned by tests/unit/pure/dataMode.test.js). A row
     // without demo_posts (an older API) counts as live: absence of a demo
     // signal is never read as demo.
+    // G9-2: only rows the globe PLACES count — a registry city, or a row
+    // with usable coordinates (mergeWithBaseline + normalizeCities keep
+    // exactly those). The API serves coordinates only for registry cities,
+    // so for served data this is the registry rule GET /api/health applies:
+    // the kicker, the markers and the health drawer classify the same posts.
     function dataModeOf(rows) {
         if (!Array.isArray(rows)) return 'none';
         let total = 0;
         let demo = 0;
         for (const row of rows) {
             if (!row || typeof row !== 'object') continue;
+            const placed = findCity(row.city)
+                || (toCoord(row.lat, 90) !== null && toCoord(row.lng, 180) !== null);
+            if (!placed) continue;
             const t = toCount(row.total);
             total += t;
             demo += Math.min(toCount(row.demo_posts), t);

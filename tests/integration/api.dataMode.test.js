@@ -14,7 +14,7 @@ const { dbRun } = require('../../src/db/connection');
 const { NARRATION_VERSION } = require('../../src/config/audit-narration');
 const {
     insertSource, insertJob, insertMethodologyVersions, insertIngestMethodology,
-    insertPostWithFullPipeline,
+    insertPostWithFullPipeline, insertPostWithRelevanceOnly,
 } = require('./helpers');
 
 async function insertDemoSource(name = 'demo_news', category = 'news') {
@@ -53,7 +53,7 @@ describe('GET /api/health — data_mode', () => {
         expect(res.status).toBe(200);
         expect(res.body).toMatchObject({
             data_mode: 'none',
-            data_window: { hours: 1, posts: 0, demo_posts: 0 },
+            data_window: { hours: 1, posts: 0, demo_posts: 0, stored_posts: 0, stored_demo_posts: 0 },
             active_sources: 1,        // the demo feed is never a source
             demo_feeds: 1,
         });
@@ -63,7 +63,7 @@ describe('GET /api/health — data_mode', () => {
         await scenario({ demo: 3 });
         const res = await request(app).get('/api/health');
         expect(res.body.data_mode).toBe('demo');
-        expect(res.body.data_window).toEqual({ hours: 1, posts: 3, demo_posts: 3 });
+        expect(res.body.data_window).toMatchObject({ hours: 1, posts: 3, demo_posts: 3 });
     });
 
     it("reports 'live' for real-source posts and 'mixed' when both are present", async () => {
@@ -79,7 +79,37 @@ describe('GET /api/health — data_mode', () => {
         await scenario({ live: 2, demo: 2, liveHoursAgo: 3 });
         const res = await request(app).get('/api/health');
         expect(res.body.data_mode).toBe('demo');
-        expect(res.body.data_window).toEqual({ hours: 1, posts: 2, demo_posts: 2 });
+        expect(res.body.data_window).toMatchObject({ hours: 1, posts: 2, demo_posts: 2 });
+    });
+
+    // G9-2: data_mode uses the GLOBE's rule — scored posts (sentiment result)
+    // at a registry city — so the kicker and the globe can never disagree.
+    // Posts the globe does not show are reported separately, never classified.
+    it('classifies only what the globe shows: unscored or unplaced demo posts do not make live data "mixed"', async () => {
+        const ids = await scenario({ live: 2 });
+        const demoSrc = (await dbRun(`SELECT id FROM data_sources WHERE source_type = 'demo'`)).id;
+        const mv = await insertMethodologyVersions();
+        const job = await insertJob();
+        // Demo post at a location the city registry does not know (globe drops it)…
+        await insertPostWithFullPipeline(demoSrc, job, mv, { externalId: 'demo-atlantis', location: 'Atlantis' });
+        // …and a demo post at a registry city that has no sentiment result yet.
+        await insertPostWithRelevanceOnly(demoSrc, job, mv, { externalId: 'demo-unscored', location: 'London' });
+
+        const health = (await request(app).get('/api/health')).body;
+        expect(health.data_mode).toBe('live');
+        expect(health.data_window).toEqual({
+            hours: 1, posts: 2, demo_posts: 0,          // what the globe shows
+            stored_posts: 4, stored_demo_posts: 2,      // everything stored in the hour
+        });
+        expect(ids.live).toHaveLength(2);
+
+        // Same answer as the aggregated rows the globe renders (placed rows only).
+        const from = new Date(Date.now() - 3600e3).toISOString();
+        const rows = (await request(app).get(`/api/posts/aggregated-by-location?from=${encodeURIComponent(from)}`)).body;
+        const placed = rows.filter(r => r.lat !== null);
+        const total = placed.reduce((n, r) => n + r.total, 0);
+        const demo = placed.reduce((n, r) => n + r.demo_posts, 0);
+        expect({ total, demo }).toEqual({ total: 2, demo: 0 });
     });
 });
 
