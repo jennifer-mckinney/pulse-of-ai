@@ -83,6 +83,12 @@ test('every per-source kill switch reaches the containers', () => {
     expect(example).toMatch(/SOURCE_BBC_NEWS_ENABLED=false/);
 });
 
-test('the stale Twitter / Reddit / Semantic Scholar settings are gone', () => {
-    expect(example).not.toMatch(/^(TWITTER_BEARER_TOKEN|REDDIT_USER_AGENT|SEMANTIC_SCHOLAR_API_KEY)=/m);
+test('the stale Twitter / Semantic Scholar settings are gone (Reddit returns only through the approved Data API)', () => {
+    expect(example).not.toMatch(/^(TWITTER_BEARER_TOKEN|SEMANTIC_SCHOLAR_API_KEY)=/m);
+    // The old Reddit block shipped a fake User-Agent; the approval-gated one
+    // (source #52) ships every Reddit credential EMPTY.
+    for (const k of ['REDDIT_CLIENT_ID', 'REDDIT_CLIENT_SECRET', 'REDDIT_USER_AGENT', 'REDDIT_API_APPROVAL_REF']) {
+        expect([k, exampleValue(k)]).toEqual([k, '']);
+    }
+    expect(exampleValue('REDDIT_MIN_AI_POSTS_7D')).toBe('20');
 });

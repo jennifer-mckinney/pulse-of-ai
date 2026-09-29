@@ -32,6 +32,18 @@ const PATTERNS = [
     /\brobot(?:s|ics|axis?)?\b/i,
 ];
 
+// The same scope as search terms, for APIs that search server-side (the
+// Reddit subreddit discovery, src/collectors/reddit/discovery.js). Every
+// term must itself pass isAiRelated (tests/unit/pure/collectorReddit.test.js),
+// and every result is still filtered locally with PATTERNS.
+const SEARCH_TERMS = Object.freeze([
+    '"artificial intelligence"', 'AI', 'AGI', 'LLM', 'GPT', 'ChatGPT', 'OpenAI', 'Anthropic', 'DeepMind',
+    '"machine learning"', '"deep learning"', '"neural network"', '"language model"', '"generative AI"', 'NLP',
+    '"natural language processing"', '"computer vision"', 'chatbot', 'Copilot', 'Midjourney', '"Hugging Face"',
+    '"Stable Diffusion"', '"Mistral AI"', 'deepfake', '"facial recognition"', 'algorithmic',
+    '"autonomous vehicles"', 'robotics',
+]);
+
 /**
  * @param {string} text  title + summary
  * @returns {boolean}
@@ -41,4 +53,4 @@ function isAiRelated(text) {
     return PATTERNS.some(re => re.test(text));
 }
 
-module.exports = { isAiRelated, PATTERNS };
+module.exports = { isAiRelated, PATTERNS, SEARCH_TERMS };

@@ -14,6 +14,7 @@ const policy = require('./adapters/policy');
 const nonprofit = require('./adapters/nonprofit');
 const developer = require('./adapters/developer');
 const forums = require('./adapters/forums');
+const { RedditCollector } = require('./adapters/reddit');
 const blocked = require('./adapters/blocked');
 const { openRoutes } = require('../config/source-registry');
 
@@ -54,6 +55,7 @@ const ADAPTERS = Object.freeze({
     // forums
     stackexchange: forums.StackExchangeCollector,
     'hn-algolia': forums.HnAlgoliaCollector,
+    reddit: RedditCollector,
     // blocked 4
     'blocked-wechat': blocked.WeChatAuthorizedFeedCollector,
     'blocked-telegram': blocked.TelegramBotApiCollector,

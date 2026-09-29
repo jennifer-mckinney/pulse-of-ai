@@ -3,7 +3,7 @@
 // registry seed, against a REAL PostgreSQL:
 //   - 013 retires every old seed row with a note, keeps its posts, never
 //     touches demo feeds or registry rows, and is idempotent;
-//   - scripts/seed.js upserts exactly the 51 registry rows, all active;
+//   - scripts/seed.js upserts exactly the registry rows (SOURCES.length), all active;
 //   - 014 orders every 1.0.0 row before its 1.1.0 successor even in one
 //     transaction, is idempotent, and leaves released rows untouched;
 //   - resolveCurrentMethodology() returns the versions the code implements.
@@ -51,7 +51,7 @@ describe('migration 013_source_collection.sql', () => {
         expect(demoRow).toEqual({ active: true, retired_at: null });
 
         const live = await dbAll(`SELECT name FROM data_sources WHERE active AND source_type <> 'demo'`);
-        expect(live).toHaveLength(51);
+        expect(live).toHaveLength(SOURCES.length);
     });
 
     it('creates the per-source state and run-outcome tables', async () => {
@@ -68,12 +68,12 @@ describe('migration 013_source_collection.sql', () => {
 });
 
 describe('scripts/seed.js registry upsert', () => {
-    it('upserts exactly the 51 registry rows with non-secret config, idempotently', async () => {
+    it('upserts exactly the registry rows (52: SOURCES.length) with non-secret config, idempotently', async () => {
         await seedSources();
         await dbRun(`UPDATE data_sources SET display_name = 'stale', active = FALSE WHERE name = 'npr'`);
         await seedSources();
         const rows = await dbAll('SELECT name, display_name, source_type, category, active, config FROM data_sources ORDER BY name');
-        expect(rows).toHaveLength(51);
+        expect(rows).toHaveLength(SOURCES.length);
         const npr = rows.find(r => r.name === 'npr');
         expect(npr).toMatchObject({ display_name: 'NPR', source_type: 'rss', category: 'news', active: true });
         expect(npr.config).toEqual(JSON.parse(JSON.stringify(sourceConfig(SOURCES.find(s => s.slug === 'npr')))));
@@ -106,7 +106,7 @@ describe('migration 014_methodology_alignment.sql', () => {
         const mv = await resolveCurrentMethodology();
         const row = await dbGet('SELECT component, version FROM methodology_versions WHERE id = $1', [mv.relevanceMvId]);
         expect(row).toEqual({ component: 'relevance', version: '1.1.0' });
-        expect(mv.versions).toEqual(expect.objectContaining({ discourse: '1.1.0-DQI', ingest: '1.4.0' }));
+        expect(mv.versions).toEqual(expect.objectContaining({ discourse: '1.1.0-DQI', ingest: '1.5.0' }));
     });
 
     it('resolveCurrentMethodology fails loudly when a version is not registered', async () => {

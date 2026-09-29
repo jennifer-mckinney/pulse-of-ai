@@ -68,7 +68,7 @@ function defaultQueues() {
 
 /**
  * @param {object} o
- * @param {string[]} [o.slugs]        registry slugs (default: all 51)
+ * @param {string[]} [o.slugs]        registry slugs (default: every registry source)
  * @param {string}   [o.triggeredBy]  processing_jobs.triggered_by
  * @param {string}   [o.jobId]        an existing processing_jobs row to complete
  * @param {object}   [o.env]

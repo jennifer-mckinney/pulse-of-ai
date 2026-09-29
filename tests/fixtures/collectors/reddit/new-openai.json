@@ -1,0 +1,55 @@
+{
+  "kind": "Listing",
+  "data": {
+    "after": null,
+    "children": [
+      {"kind": "t3", "data": {
+        "name": "t3_1aaa01", "id": "1aaa01", "subreddit": "OpenAI", "subreddit_id": "t5_3b9u5", "subreddit_type": "public",
+        "title": "New GPT model evaluation thread",
+        "selftext": "Thanks u/fixture_mod for the AI benchmark notes. Mail me at someone@example.org. /u/Another_User agrees.",
+        "created_utc": 1790679600, "permalink": "/r/OpenAI/comments/1aaa01/new_gpt_model_evaluation_thread/",
+        "is_self": true, "domain": "self.OpenAI", "url": "https://www.reddit.com/r/OpenAI/comments/1aaa01/new_gpt_model_evaluation_thread/",
+        "over_18": false, "link_flair_text": "Discussion", "num_comments": 12, "score": 40, "upvote_ratio": 0.93,
+        "removed_by_category": null, "edited": false, "locked": false,
+        "author": "FixtureAuthorOne", "author_fullname": "t2_fixture1", "author_flair_text": "FixtureFlair",
+        "author_premium": false, "author_patreon_flair": false, "author_new_future_field": "FixtureAuthorLeak",
+        "all_awardings": [{"name": "FixtureAward"}], "approved_by": "FixtureModerator",
+        "media": {"oembed": {"author_name": "FixtureVideoAuthor", "author_url": "https://www.youtube.com/@fixturechannel"}}
+      }},
+      {"kind": "t3", "data": {
+        "name": "t3_1aaa02", "id": "1aaa02", "subreddit": "OpenAI", "subreddit_type": "public",
+        "title": "Machine learning paper on robotics safety", "selftext": "",
+        "created_utc": 1790677800, "permalink": "/r/OpenAI/comments/1aaa02/machine_learning_paper/",
+        "is_self": false, "domain": "arxiv.org", "url": "https://arxiv.org/abs/2609.00001", "over_18": false,
+        "author": "FixtureAuthorTwo", "author_fullname": "t2_fixture2",
+        "crosspost_parent_list": [{"author": "FixtureCrosspostAuthor", "title": "x"}]
+      }},
+      {"kind": "t3", "data": {
+        "name": "t3_1aaa03", "id": "1aaa03", "subreddit": "OpenAI", "subreddit_type": "public",
+        "title": "AI art (NSFW)", "selftext": "x", "created_utc": 1790677800, "over_18": true,
+        "permalink": "/r/OpenAI/comments/1aaa03/ai_art/", "author": "FixtureAuthorThree"
+      }},
+      {"kind": "t3", "data": {
+        "name": "t3_1aaa04", "id": "1aaa04", "subreddit": "OpenAI", "subreddit_type": "public",
+        "title": "Removed AI post", "selftext": "[removed]", "created_utc": 1790677800,
+        "removed_by_category": "moderator", "permalink": "/r/OpenAI/comments/1aaa04/removed/", "author": "[deleted]"
+      }},
+      {"kind": "t3", "data": {
+        "name": "t3_1aaa05", "id": "1aaa05", "subreddit": "u_FixtureProfileUser", "subreddit_type": "user",
+        "title": "My AI thoughts", "selftext": "LLM stuff", "created_utc": 1790677800,
+        "permalink": "/r/u_FixtureProfileUser/comments/1aaa05/my_ai_thoughts/", "author": "FixtureProfileUser"
+      }},
+      {"kind": "t3", "data": {
+        "name": "t3_1aaa06", "id": "1aaa06", "subreddit": "OpenAI", "subreddit_type": "public",
+        "title": "Weekly photo thread", "selftext": "Post your cat pictures", "created_utc": 1790677800,
+        "permalink": "/r/OpenAI/comments/1aaa06/weekly_photo_thread/", "author": "FixtureAuthorSix"
+      }},
+      {"kind": "t3", "data": {
+        "name": "t3_1aaa07", "id": "1aaa07", "subreddit": "OpenAI", "subreddit_type": "public",
+        "title": "Old ChatGPT news", "selftext": "", "created_utc": 1790416800,
+        "permalink": "/r/OpenAI/comments/1aaa07/old_chatgpt_news/", "author": "FixtureAuthorSeven"
+      }},
+      {"kind": "t1", "data": {"name": "t1_ccc01", "body": "AI comment", "author": "FixtureCommenter"}}
+    ]
+  }
+}

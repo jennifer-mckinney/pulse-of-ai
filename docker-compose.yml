@@ -46,7 +46,7 @@ x-app-env: &app-env
 
 # Collector SETTINGS (F9-2, src/config/source-registry.js envClass):
 # non-secret configuration, the permission / licence REFERENCES (names and
-# dates, never credentials) and the 51 per-source kill switches. Every role
+# dates, never credentials) and the 52 per-source kill switches. Every role
 # that evaluates or runs collection gets them (web, worker, populate).
 # Empty means "not set".
 x-collector-settings: &collector-settings
@@ -68,6 +68,8 @@ x-collector-settings: &collector-settings
   WAPO_LICENSE_REF: ${WAPO_LICENSE_REF:-}
   NCBI_TOOL: ${NCBI_TOOL:-pulse-of-ai}
   ELSEVIER_APPROVAL_REF: ${ELSEVIER_APPROVAL_REF:-}
+  REDDIT_API_APPROVAL_REF: ${REDDIT_API_APPROVAL_REF:-}
+  REDDIT_MIN_AI_POSTS_7D: ${REDDIT_MIN_AI_POSTS_7D:-}
   SCHOLAR_ALERTS_IMAP_PORT: ${SCHOLAR_ALERTS_IMAP_PORT:-993}
   SCHOLAR_ALERTS_MAILBOX: ${SCHOLAR_ALERTS_MAILBOX:-INBOX}
   RESEARCHGATE_DATA_ACCESS_REF: ${RESEARCHGATE_DATA_ACCESS_REF:-}
@@ -75,7 +77,7 @@ x-collector-settings: &collector-settings
   CFR_FEED_PERMISSION_REF: ${CFR_FEED_PERMISSION_REF:-}
   CATO_ALLOWLIST_REF: ${CATO_ALLOWLIST_REF:-}
   ARSTECHNICA_LICENSE_REF: ${ARSTECHNICA_LICENSE_REF:-}
-  # Per-source kill switches (SOURCE_<SLUG>_ENABLED) for all 51 slugs.
+  # Per-source kill switches (SOURCE_<SLUG>_ENABLED) for all 52 slugs.
   SOURCE_WHATSAPP_ENABLED: ${SOURCE_WHATSAPP_ENABLED:-}
   SOURCE_INSTAGRAM_ENABLED: ${SOURCE_INSTAGRAM_ENABLED:-}
   SOURCE_YOUTUBE_ENABLED: ${SOURCE_YOUTUBE_ENABLED:-}
@@ -122,6 +124,7 @@ x-collector-settings: &collector-settings
   SOURCE_HUGGING_FACE_ENABLED: ${SOURCE_HUGGING_FACE_ENABLED:-}
   SOURCE_STACK_OVERFLOW_ENABLED: ${SOURCE_STACK_OVERFLOW_ENABLED:-}
   SOURCE_HACKER_NEWS_ENABLED: ${SOURCE_HACKER_NEWS_ENABLED:-}
+  SOURCE_REDDIT_ENABLED: ${SOURCE_REDDIT_ENABLED:-}
   SOURCE_TLDR_ENABLED: ${SOURCE_TLDR_ENABLED:-}
   SOURCE_SUBSTACK_ENABLED: ${SOURCE_SUBSTACK_ENABLED:-}
   SOURCE_ARS_TECHNICA_ENABLED: ${SOURCE_ARS_TECHNICA_ENABLED:-}
@@ -138,6 +141,9 @@ x-collector-env: &collector-env
   YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
   TIKTOK_RESEARCH_CLIENT_KEY: ${TIKTOK_RESEARCH_CLIENT_KEY:-}
   TIKTOK_RESEARCH_CLIENT_SECRET: ${TIKTOK_RESEARCH_CLIENT_SECRET:-}
+  REDDIT_CLIENT_ID: ${REDDIT_CLIENT_ID:-}
+  REDDIT_CLIENT_SECRET: ${REDDIT_CLIENT_SECRET:-}
+  REDDIT_USER_AGENT: ${REDDIT_USER_AGENT:-}
   WECHAT_AUTHORIZED_FEED_URL: ${WECHAT_AUTHORIZED_FEED_URL:-}
   WECHAT_AUTHORIZED_FEED_HOST: ${WECHAT_AUTHORIZED_FEED_HOST:-}
   TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
@@ -178,6 +184,9 @@ x-collector-presence: &collector-presence
   YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:+set}
   TIKTOK_RESEARCH_CLIENT_KEY: ${TIKTOK_RESEARCH_CLIENT_KEY:+set}
   TIKTOK_RESEARCH_CLIENT_SECRET: ${TIKTOK_RESEARCH_CLIENT_SECRET:+set}
+  REDDIT_CLIENT_ID: ${REDDIT_CLIENT_ID:+set}
+  REDDIT_CLIENT_SECRET: ${REDDIT_CLIENT_SECRET:+set}
+  REDDIT_USER_AGENT: ${REDDIT_USER_AGENT:+set}
   WECHAT_AUTHORIZED_FEED_URL: ${WECHAT_AUTHORIZED_FEED_URL:+set}
   WECHAT_AUTHORIZED_FEED_HOST: ${WECHAT_AUTHORIZED_FEED_HOST:+set}
   TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:+set}
@@ -413,7 +422,7 @@ services:
       - hf_cache:/home/app/.cache/huggingface
 
   # Demo FALLBACK loop (profile "demo"). The worker collects live data from
-  # the 51-source registry; this loop writes a FICTIONAL demo batch through
+  # the 52-source registry; this loop writes a FICTIONAL demo batch through
   # the real pipeline every DEMO_FEED_INTERVAL_MS ONLY while the trailing
   # hour holds no live posts — see scripts/populate.js. Started by
   # scripts/standup.sh.

@@ -2,8 +2,8 @@
 // GET /api/sources
 //
 // Returns the source registry of record (src/config/source-registry.js, the
-// workbook's 51 sources) with each source's RUNTIME status — for the health
-// drawer's per-source list and "Sources online N/51".
+// workbook's 52 sources) with each source's RUNTIME status — for the health
+// drawer's per-source list and "Sources online N/<registry size>".
 //
 // Query params:
 //   ?include_inactive=true    also inactive rows: demo feeds (registry: false)
@@ -11,7 +11,7 @@
 //
 // Returns (registry order, then others):
 //   200 [ { id, name, display_name, source_type, category, active, retired,
-//           registry,                         // true for the 51
+//           registry,                         // true for the 52
 //           slug, rank, region, auth_kind, program, signup_url,
 //           status,                           // collecting | awaiting_key |
 //                                             // awaiting_approval | awaiting_licence |
@@ -24,7 +24,14 @@
 //                                             // classification only (F10-1):
 //                                             // never an error text
 //           consecutive_failures,
-//           terms_url, terms_note, attribution, license, blocked, ruling } ]
+//           terms_url, terms_note, attribution, license, blocked, ruling,
+//           retention,                        // { max_age_hours, recheck_hours,
+//                                             //   notice } or null (Reddit)
+//           selection } ]                     // Reddit only: the subreddit
+//                                             // selection rule, the current
+//                                             // list (basis 'provisional' |
+//                                             // 'ranking') and the latest
+//                                             // ranking snapshot
 //   Non-registry rows carry only the first block plus registry: false.
 //
 // GET /api/sources/timeseries

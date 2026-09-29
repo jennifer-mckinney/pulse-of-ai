@@ -1,12 +1,15 @@
 // src/config/source-registry.js
 // THE source registry of record, in code (ADR 0001).
 //
-// Exactly the 51 sources of the workbook
-// (docs/requirements/Top_50_Global_Online_Sources.xlsx, Rev. 3 — Jennifer's
-// ruling: "use the 51 sources exactly. no exceptions."). No additions, no
-// substitutes, no silent drops: tests/unit/pure/sourceRegistry.test.js
-// parses the workbook itself and asserts a 1:1 match on rank, name and
-// category (Hacker News and Stack Overflow in Forums per Rev. 3).
+// Exactly the 52 sources of the workbook
+// (docs/requirements/Top_50_Global_Online_Sources.xlsx, Rev. 4). Jennifer's
+// ruling "use the 51 sources exactly. no exceptions." was superseded on
+// 2026-09-29 by "can we add reddit to the source lis. Update the excel file
+// to capture as well": Reddit is #52 in Forums (ADR 0001, ruling 8). No other
+// additions, no substitutes, no silent drops:
+// tests/unit/pure/sourceRegistry.test.js parses the workbook itself and
+// asserts a 1:1 match on rank, name and category (Hacker News, Stack Overflow
+// and Reddit in Forums). Counts are SOURCES.length, never a literal.
 //
 // Consumers:
 //   - scripts/seed.js upserts one data_sources row per entry (name = slug,
@@ -50,6 +53,11 @@
 //                 2–3 minute default, longer where a documented limit needs it)
 //   blocked       for the 4 BLOCKED sources: why, the evidence, the remedy
 //   ruling        set when Jennifer's 2026-09-29 ruling decides the gate
+//   retention     platform-terms retention (Reddit): { maxAgeHours,
+//                 recheckHours, legalBasis, notice } — the post TEXT is
+//                 blanked when the window ends or the post is removed
+//                 upstream; scores and audit rows are kept (ADR 0001 ruling
+//                 9; src/collectors/retention.js), and receipts say so
 
 'use strict';
 
@@ -78,6 +86,13 @@ const LEGAL_RISK_RULING = 'Enabled by Jennifer\'s 2026-09-29 ruling ("Build all,
 const PERMISSION_GATED_ACK_ENV = 'PERMISSION_GATED_FEEDS_ACCEPTED_BY';
 
 const AI_QUERY = 'artificial intelligence';
+
+// ADR 0001 ruling 8 (Jennifer, 2026-09-29) on how Reddit posts are shown.
+const REDDIT_RULING = 'Added by Jennifer\'s 2026-09-29 ruling ("can we add reddit to the source lis"), through the approved '
+    + 'Reddit Data API only. Display: "need to stay consistent along with all the other sources. dashboard needs to show '
+    + 'text." Reddit posts show redacted text like every other source; Jennifer explicitly accepted the risk against the '
+    + 'Data API Terms\' content-modification clause (ADR 0001 ruling 8). Retention: "Blank text, keep audit rows" (ruling 9). '
+    + 'SOURCE_REDDIT_ENABLED=false turns it off.';
 
 const SOURCES = [
     // ── 1. Social (8) ─────────────────────────────────────────────────────────
@@ -764,7 +779,7 @@ const SOURCES = [
         pollIntervalSec: DEFAULT_POLL_SEC,
     },
 
-    // ── 7. Forums (2) — moved from Developer in Rev. 3 ──────────────────────
+    // ── 7. Forums (3) — SO and HN moved from Developer in Rev. 3; Reddit #52 in Rev. 4
     {
         rank: 45, slug: 'stack_overflow', name: 'Stack Overflow', category: 'forums', region: 'global', homeCity: null,
         sourceType: 'api',
@@ -791,6 +806,55 @@ const SOURCES = [
         termsUrl: 'https://github.com/HackerNews/API',
         termsNote: 'No documented rate limit on the Firebase API; Algolia about 10,000 requests/hour per IP.',
         rateLimit: { minIntervalMs: 1000, note: 'polite spacing' },
+        pollIntervalSec: DEFAULT_POLL_SEC,
+    },
+    // Rev. 4 (2026-09-29): Reddit is #52 but sits in the Forums block, so the
+    // registry keeps the workbook's sheet order (…, 46, 52, 47, …).
+    // Research: docs/research/2026-09-29-reddit-access.md. Rulings (ADR 0001
+    // rulings 8 and 9): curated AI subreddits; the approved OAuth Data API
+    // only (robots.txt governs crawling, and reddit.com pages are never
+    // fetched); the top 7 subreddits mentioning AI, ranked by subscribers
+    // (src/collectors/reddit/selection.js); redacted text shown like every
+    // other source; built now, closed until Reddit approves; text blanked
+    // at 48 h or on upstream deletion, audit rows kept.
+    {
+        rank: 52, slug: 'reddit', name: 'Reddit', category: 'forums', region: 'global', homeCity: null,
+        sourceType: 'api',
+        auth: {
+            kind: 'approval',
+            program: 'Reddit Data API, non-commercial developer access (approval required by the Responsible Builder Policy)',
+            signup: 'https://support.reddithelp.com/hc/en-us/requests/new?ticket_form_id=14868593862164',
+        },
+        closedStatus: 'awaiting_approval', ruling: REDDIT_RULING,
+        routes: [{
+            id: 'data-api', adapter: 'reddit',
+            requires: ['REDDIT_CLIENT_ID', 'REDDIT_CLIENT_SECRET', 'REDDIT_USER_AGENT', 'REDDIT_API_APPROVAL_REF'],
+            optional: ['REDDIT_MIN_AI_POSTS_7D'],
+            // Submissions only; the 48 h retention window is also the age cap.
+            params: { limit: 100, maxPagesPerSubreddit: 3, maxAgeDays: 2 }, scope: 'filter',
+            note: 'Application-only OAuth (client_credentials) at www.reddit.com/api/v1/access_token, then '
+                + '/r/{sub}/new on oauth.reddit.com for the 7 selected subreddits; the AI filter every site-wide feed uses',
+        }],
+        termsUrl: 'https://redditinc.com/policies/data-api-terms',
+        termsNote: 'Reddit Data API Terms and Developer Terms, Responsible Builder Policy: explicit approval before any API access; '
+            + 'non-commercial, ad-free use; no model training; no inference of sensitive user traits; delete content removed '
+            + 'from Reddit (Reddit recommends within 48 hours). robots.txt disallows all crawling, so reddit.com pages are never fetched.',
+        attribution: 'Reddit',
+        // ADR 0001 ruling 9 (Jennifer, 2026-09-29: "Blank text, keep audit
+        // rows"): at 48 h, or when the 6-hourly re-check sees a post deleted
+        // or removed upstream, its TEXT is replaced by the removal notice; the
+        // row, scores and audit trail are kept (src/collectors/retention.js).
+        retention: {
+            maxAgeHours: 48,
+            recheckHours: 6,
+            legalBasis: 'Reddit Data API Terms and Developer Terms §3.3: user content deleted from Reddit must be deleted, '
+                + 'and Reddit strongly recommends deleting stored user data and content within 48 hours '
+                + '(Reddit Data API Wiki, Rules). Text removed; the score and audit rows are retained by owner decision '
+                + '(ADR 0001 ruling 9, "Blank text, keep audit rows"), an accepted risk against the terms.',
+            notice: 'Reddit post text is removed 48 hours after collection, or sooner when the post is deleted or removed '
+                + 'on Reddit, because of the Reddit Data API Terms; its scores and audit rows are retained by owner decision.',
+        },
+        rateLimit: { minIntervalMs: 700, note: '100 queries per minute per OAuth client id, averaged over 10 minutes (shared budget: src/collectors/reddit/budget.js)' },
         pollIntervalSec: DEFAULT_POLL_SEC,
     },
 
@@ -898,6 +962,11 @@ const ENV_DOCS = {
     META_CONTENT_LIBRARY_APPROVAL_REF: { group: 'approval', signup: 'https://transparency.meta.com/researchtools/meta-content-library', description: 'Meta Content Library approval reference (WhatsApp, Instagram, Facebook)' },
     META_CONTENT_LIBRARY_EXPORT_DIR: { group: 'approval', signup: 'https://transparency.meta.com/researchtools/meta-content-library', description: 'Directory holding approved MCL exports (JSON lines per product)' },
     TIKTOK_RESEARCH_CLIENT_KEY: { group: 'approval', signup: 'https://developers.tiktok.com/products/research-api/', description: 'TikTok Research API client key' },
+    REDDIT_CLIENT_ID: { group: 'approval', signup: 'https://support.reddithelp.com/hc/en-us/requests/new?ticket_form_id=14868593862164', description: 'Reddit Data API OAuth client id of the APPROVED app (register it at https://developers.reddit.com/app-registration once Reddit approves the request)' },
+    REDDIT_CLIENT_SECRET: { group: 'approval', signup: 'https://developers.reddit.com/app-registration', description: 'Reddit OAuth client secret (secret; never logged or stored)' },
+    REDDIT_USER_AGENT: { group: 'approval', signup: 'https://support.reddithelp.com/hc/en-us/articles/16160319875092-Reddit-Data-API-Wiki', description: 'Reddit\'s required User-Agent, "<platform>:<app id>:<version> (by /u/<reddit username>)", e.g. server:pulse-of-ai:v1.0.0 (by /u/yourname); unique and truthful' },
+    REDDIT_API_APPROVAL_REF: { group: 'approval', signup: 'https://support.reddithelp.com/hc/en-us/articles/42728983564564-Responsible-Builder-Policy', description: 'Reddit\'s approval reference for the Data API request (the ticket or approval id)' },
+    REDDIT_MIN_AI_POSTS_7D: { group: 'approval', signup: null, description: 'Subreddit selection: minimum AI-mentioning posts in the rolling 7 days for a subreddit to qualify (default 20)' },
     TIKTOK_RESEARCH_CLIENT_SECRET: { group: 'approval', signup: 'https://developers.tiktok.com/products/research-api/', description: 'TikTok Research API client secret' },
     ELSEVIER_API_KEY: { group: 'approval', signup: 'https://dev.elsevier.com', description: 'Elsevier API key' },
     ELSEVIER_APPROVAL_REF: { group: 'approval', signup: 'https://dev.elsevier.com/policy.html', description: 'Elsevier use-case approval reference' },
@@ -1096,6 +1165,9 @@ const ADAPTER_HOSTS = Object.freeze({
     discourse: [],
     stackexchange: ['api.stackexchange.com'],
     'hn-algolia': ['hn.algolia.com'],
+    // API calls go to oauth.reddit.com only; www.reddit.com is allowed for the
+    // token endpoint alone (the collector narrows each call to its one host).
+    reddit: ['oauth.reddit.com', 'www.reddit.com'],
     rss: [],
     'blocked-wechat': [],
     'blocked-telegram': ['api.telegram.org'],
@@ -1163,6 +1235,7 @@ const SETTING_ENV = Object.freeze([
     'COLLECTOR_CONTACT_URL', 'COLLECTORS_ENABLED', 'COLLECTORS_DISABLED', 'COLLECT_WINDOW_MS',
     'PERMISSION_GATED_FEEDS_ACCEPTED_BY',
     'NCBI_TOOL', 'SCHOLAR_ALERTS_IMAP_PORT', 'SCHOLAR_ALERTS_MAILBOX',
+    'REDDIT_MIN_AI_POSTS_7D',
 ]);
 
 /** @returns {'setting'|'credential'} */

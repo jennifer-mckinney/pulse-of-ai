@@ -10,6 +10,7 @@
 
 'use strict';
 
+const { SOURCES } = require('../../src/config/source-registry');
 const app = require('../../src/server');
 const populate = require('../../scripts/populate');
 const { run } = require('../../scripts/smoke-check');
@@ -36,7 +37,7 @@ beforeEach(() => {
 afterEach(() => stdoutSpy.mockRestore());
 
 async function populateDemo() {
-    await seedSources();        // the 51-source registry of record
+    await seedSources();        // the 52-source registry of record (SOURCES.length)
     await seedMethodology();
     await populate.runDemoBatch({ size: 60, embed: false, seed: 0 });
 }
@@ -56,7 +57,7 @@ describe('scripts/smoke-check.js', () => {
         expect(text).toContain("[PASS] data mode reported — /api/health data_mode 'demo' matches the globe's rows ('demo': 60 of 60 placed trailing-hour posts from demo feeds)");
         expect(text).toContain('[WARN] embeddings stored');
         expect(text).toContain('data:               DEMO — fictional posts scored by the real pipeline');
-        expect(text).toMatch(/\[PASS\] source registry — 51\/51 registry sources served/);
+        expect(text).toContain(`[PASS] source registry — ${SOURCES.length}/${SOURCES.length} registry sources served`);
         expect(text).toMatch(/ 6\. wechat {13}social {4}blocked — blocked: no compliant access/);
         expect(text).toContain('SMOKE: PASS');
     }, 60000);
@@ -71,7 +72,7 @@ describe('scripts/smoke-check.js', () => {
         expect(text).toContain('[FAIL] globe data (trailing hour)');
         expect(text).toContain('[FAIL] posts stored');
         expect(text).toContain('NO DEMO FEED DATA');
-        expect(text).toContain('[FAIL] source registry — 0/51');
+        expect(text).toContain(`[FAIL] source registry — 0/${SOURCES.length}`);
         expect(text).toContain('SMOKE: FAIL');
     }, 30000);
 

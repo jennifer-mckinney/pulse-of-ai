@@ -10,6 +10,9 @@ const { dbRun } = require('../src/db/connection');
 // Tables in dependency order (children before parents) to respect FK constraints.
 // All listed in a single TRUNCATE so PostgreSQL handles cross-table deps atomically.
 const TABLES = [
+    'reddit_subreddit_rankings',
+    'reddit_api_budget',
+    'reddit_maintenance',
     'user_platform_sightings',
     'pseudonymous_users',
     'compaction_log',

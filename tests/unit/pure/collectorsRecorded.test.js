@@ -262,7 +262,9 @@ describe('buildCollectors (registry-wide)', () => {
             if (/COLLECTORS_ENABLED|COLLECTORS_DISABLED/.test(k)) continue;
             // Endpoint URLs must be https on a public host (F10-11); WeChat's
             // feed must sit on its authorized host (G10-17).
-            env[k] = k.endsWith('_URL') && k !== 'COLLECTOR_CONTACT_URL' ? 'https://feed.example.org/x'
+            // Reddit's User-Agent must follow Reddit's own format.
+            env[k] = k === 'REDDIT_USER_AGENT' ? 'server:pulse-of-ai:v1.0.0 (by /u/example_user)'
+                : k.endsWith('_URL') && k !== 'COLLECTOR_CONTACT_URL' ? 'https://feed.example.org/x'
                 : k.endsWith('_HOST') ? 'feed.example.org' : '/tmp';
         }
         for (const s of SOURCES) {

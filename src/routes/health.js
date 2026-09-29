@@ -16,7 +16,7 @@
 //                    stored_posts, stored_demo_posts }     ← every stored post
 //   active_sources registry sources flagged active, EXCLUDING demo feeds
 //   demo_feeds     number of demo feed sources (never counted as sources)
-//   sources        { registry: 51, seeded, collecting, online, by_status }
+//   sources        { registry: SOURCES.length (52), seeded, collecting, online, by_status }
 //                  from the source registry of record and each source's
 //                  runtime gate status + last successful run
 //                  (src/collectors/status.js). "Sources online" = online:

@@ -451,7 +451,7 @@
     }
 
     // introByline: the intro's byline from the SOURCE REGISTRY served by
-    // GET /api/sources (rows flagged registry: true — the workbook's 51),
+    // GET /api/sources (rows flagged registry: true — the workbook's 52),
     // never a hardcoded "50 sources" / "7 categories" claim (ADR 0001).
     // Without registry rows it states no numbers at all.
     const BYLINE_FALLBACK = 'INTERACTIVE · EVERY SCORE AUDITABLE';

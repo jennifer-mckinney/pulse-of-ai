@@ -206,6 +206,46 @@ describe('gate status (Jennifer\'s rulings, ADR 0001)', () => {
             .toBe('collecting');
     });
 
+    // ADR 0001 rulings 8 and 9: Reddit is built now, off until approved.
+    const REDDIT_ENV = {
+        ...ENV,
+        REDDIT_CLIENT_ID: 'id', REDDIT_CLIENT_SECRET: 's',
+        REDDIT_USER_AGENT: 'server:pulse-of-ai:v1.0.0 (by /u/example_user)', REDDIT_API_APPROVAL_REF: 'RBP-1',
+    };
+
+    test('Reddit is "awaiting approval" until ALL FOUR variables are set, and cites its terms', () => {
+        const st = status('reddit');
+        expect(st.status).toBe('awaiting_approval');
+        expect(st.missing).toEqual(['REDDIT_CLIENT_ID', 'REDDIT_CLIENT_SECRET', 'REDDIT_USER_AGENT', 'REDDIT_API_APPROVAL_REF']);
+        expect(st.reason).toMatch(/Responsible Builder Policy/);
+        for (const k of st.missing) {
+            const partial = { ...REDDIT_ENV, [k]: '' };
+            expect([k, status('reddit', partial).status]).toEqual([k, 'awaiting_approval']);
+        }
+        expect(status('reddit', REDDIT_ENV).status).toBe('collecting');
+        const src = registry.getSource('reddit');
+        expect(src.termsUrl).toBe('https://redditinc.com/policies/data-api-terms');
+        expect(src.auth.kind).toBe('approval');
+        expect(src.attribution).toBe('Reddit');
+        expect(src.ruling).toMatch(/Blank text, keep audit rows/);
+        expect(src.retention).toEqual(expect.objectContaining({ maxAgeHours: 48, recheckHours: 6 }));
+    });
+
+    test('Reddit\'s kill switch closes it even with every credential', () => {
+        expect(registry.killSwitchEnv('reddit')).toBe('SOURCE_REDDIT_ENABLED');
+        expect(status('reddit', { ...REDDIT_ENV, SOURCE_REDDIT_ENABLED: 'false' }).status).toBe('disabled');
+        expect(status('reddit', { ...REDDIT_ENV, COLLECTORS_DISABLED: 'reddit' }).status).toBe('disabled');
+    });
+
+    test('Reddit may reach only oauth.reddit.com and the www.reddit.com token host; the secret is worker-only', () => {
+        expect(registry.allowedHosts(registry.getSource('reddit'), REDDIT_ENV)).toEqual(['oauth.reddit.com', 'www.reddit.com']);
+        expect(registry.envClass('REDDIT_CLIENT_SECRET')).toBe('credential');
+        expect(registry.envClass('REDDIT_CLIENT_ID')).toBe('credential');
+        expect(registry.envClass('REDDIT_USER_AGENT')).toBe('credential');
+        expect(registry.envClass('REDDIT_API_APPROVAL_REF')).toBe('setting');
+        expect(registry.envClass('REDDIT_MIN_AI_POSTS_7D')).toBe('setting');
+    });
+
     test('ScienceDirect, IEEE Xplore and JSTOR wait for key/permission', () => {
         expect(status('sciencedirect').status).toBe('awaiting_approval');
         expect(status('ieee_xplore').status).toBe('awaiting_licence');
@@ -254,18 +294,19 @@ describe('gate status (Jennifer\'s rulings, ADR 0001)', () => {
 
     test('status counts with no keys set: contact URL only (gated feeds closed)', () => {
         expect(countStatuses(ENV)).toEqual({
-            collecting: 23, awaiting_key: 4, awaiting_approval: 10, awaiting_licence: 10, blocked: 4,
+            collecting: 23, awaiting_key: 4, awaiting_approval: 11, awaiting_licence: 10, blocked: 4,
         });
     });
 
     test('status counts with the contact URL and the acknowledgement', () => {
         expect(countStatuses(ACK)).toEqual({
-            collecting: 31, awaiting_key: 4, awaiting_approval: 7, awaiting_licence: 5, blocked: 4,
+            collecting: 31, awaiting_key: 4, awaiting_approval: 8, awaiting_licence: 5, blocked: 4,
         });
     });
 
     test('a fresh clone (no contact URL) collects nothing: every non-blocked source is disabled', () => {
-        expect(countStatuses({})).toEqual({ disabled: 47, blocked: 4 });
+        expect(countStatuses({})).toEqual({ disabled: SOURCES.length - 4, blocked: 4 });
+        expect(SOURCES.length - 4).toBe(48);
     });
 
     test('attribution is recorded where the terms require it', () => {

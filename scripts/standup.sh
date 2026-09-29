@@ -25,7 +25,7 @@
 #   4. starts compose profile "full": postgres, postgres_test, redis, the
 #      one-shot migrate job (migrations + seed), web, worker, embeddings
 #   5. waits for health (timeouts; the failing service's logs on timeout)
-#   6. populates data: one REAL collection job over the 51-source registry
+#   6. populates data: one REAL collection job over the 52-source registry
 #      (the worker keeps collecting on its schedule); fictional DEMO posts go
 #      through the real pipeline only when collection yields nothing, and the
 #      demo fallback loop stays idle while live posts exist (scripts/populate.js)
@@ -304,7 +304,7 @@ ${_G}${_B}Pulse of AI is up${_N}  (project '$STACK_PROJECT', $(elapsed "$T_START
   Embeddings:  $( (( EMBEDDINGS_OK )) && echo "model loaded (internal only: embeddings:8000 on the compose network)" || echo "not ready — vector search disabled (see warnings above)")
 
   Data is ${DATA_MODE:-UNKNOWN} (trailing hour): LIVE = collected from the
-  51-source registry by the worker (per-source status in the health drawer
+  52-source registry by the worker (per-source status in the health drawer
   and GET /api/sources); DEMO / MIXED = the fictional fallback is (or was
   recently) filling the hour.
   Live collection: $( (( STACK_LIVE_COLLECTION )) && echo "ON (COLLECTOR_CONTACT_URL set)" || echo "OFF — no COLLECTOR_CONTACT_URL, so DEMO data only. Set it in $STACK_ENV_FILE and re-run (ADR 0001 D1).")

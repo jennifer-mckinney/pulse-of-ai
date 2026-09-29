@@ -20,6 +20,7 @@ const { dbAll } = require('../db/connection');
 const { SOURCES, getSource, sourceStatus, killSwitchEnv, GATE_STATUSES } = require('../config/source-registry');
 const { DEMO_SOURCE_TYPE } = require('../config/data-mode');
 const { refusalGate, resetEnv, BLOCKED_BY_SOURCE } = require('./refusal');
+const { selectionStatus } = require('./reddit/selection');
 
 // Runtime statuses: the registry gate statuses plus 'blocked_by_source' (a
 // collecting source that refused us — F10-5; never online).
@@ -89,6 +90,10 @@ function registryFields(row, env, now) {
         license: src.license || null,
         blocked: src.blocked || null,
         ruling: src.ruling || null,
+        // Platform-terms retention (Reddit, ADR 0001 ruling 9), or null.
+        retention: src.retention
+            ? { max_age_hours: src.retention.maxAgeHours, recheck_hours: src.retention.recheckHours, notice: src.retention.notice }
+            : null,
     };
 }
 
@@ -118,6 +123,9 @@ async function sourceRows({ includeInactive = false, env = process.env, now = Da
         const reg = registryFields(r, env, now);
         return reg ? { ...base, ...reg } : { ...base, registry: false };
     });
+    // Reddit's subreddit selection (rule, current list, latest snapshot).
+    const reddit = out.find(r => r.registry && r.slug === 'reddit');
+    if (reddit) reddit.selection = await selectionStatus();
     return out.sort((a, b) => (a.rank || 999) - (b.rank || 999));
 }
 
