@@ -9,12 +9,16 @@
 //
 // Returns:
 //   200 { results: [...], total: number, query: { platform, location, from, to, limit } }
+//     total = the number of rows MATCHING the filters (COUNT(*) OVER() in
+//     the query), not the page size — results.length can be smaller when
+//     limit truncates. Callers page honestly against total.
 //   400 on validation errors (limit > 100, invalid dates, non-string location)
 
 'use strict';
 
 const { Router } = require('express');
 const { dbAll }  = require('../db/connection');
+const { CATEGORY_SLUGS, isCanonicalCategory } = require('../config/categories');
 
 const router = Router();
 
@@ -42,13 +46,31 @@ router.post('/query', async (req, res) => {
             return res.status(400).json({ error: 'location must be a non-empty string' });
         }
 
-        const parsedLimit = parseInt(limit, 10);
-        if (isNaN(parsedLimit) || parsedLimit < 1) {
+        // platform filters on data_sources.category — validate against the
+        // canonical taxonomy (src/config/categories): a non-canon value is a
+        // caller error, not an empty result set. null/undefined = no filter.
+        if (platform !== null && platform !== undefined
+            && !isCanonicalCategory(platform)) {
+            return res.status(400).json({
+                error: 'platform must be a canonical source category: '
+                    + CATEGORY_SLUGS.join(', '),
+            });
+        }
+
+        // F4: strict integer check BEFORE the range checks — the same pattern
+        // as bias.js/sources.js hours validation. parseInt silently accepted
+        // 1.5 (as 1) and '20abc' (as 20); a non-integer limit is a caller
+        // error, not something to round.
+        if (!Number.isInteger(limit)) {
             return res.status(400).json({ error: 'limit must be a positive integer' });
         }
-        if (parsedLimit > 100) {
+        if (limit < 1) {
+            return res.status(400).json({ error: 'limit must be a positive integer' });
+        }
+        if (limit > 100) {
             return res.status(400).json({ error: 'limit must be <= 100' });
         }
+        const parsedLimit = limit;
 
         let fromDate = null;
         if (from !== null && from !== undefined) {
@@ -100,28 +122,47 @@ router.post('/query', async (req, res) => {
         params.push(parsedLimit);
         const limitClause = `LIMIT $${params.length}`;
 
-        const results = await dbAll(
+        // comparative is CLAMPED to [-1, 1] at the API boundary: the raw
+        // sentiment-lib value is score/token_count and is unbounded for very
+        // short posts, but every frontend consumer renders it on a −1…+1 scale.
+        // relevance comes from relevance_results via LEFT JOIN (one row per
+        // post — saveRelevance is idempotent) and is null for posts that were
+        // never relevance-scored. positive_words / negative_words are the
+        // stored sentiment cue words (city drill-down cue phrases, gap G21).
+        // full_count: COUNT(*) OVER() = total rows matching the filters,
+        // window-computed on every returned row (stripped before serving) —
+        // so `total` is the true match count, not the truncated page size.
+        const rows = await dbAll(
             `SELECT
+                COUNT(*) OVER()::int    AS full_count,
                 rp.id,
                 LEFT(rp.content, 120)   AS content_snippet,
                 sr.indicator,
                 sr.score,
-                sr.comparative,
+                GREATEST(-1, LEAST(1, sr.comparative))::real AS comparative,
+                sr.positive_words,
+                sr.negative_words,
+                rr.score                AS relevance,
                 rp.location,
+                ds.name                 AS source_name,
                 ds.category             AS platform,
                 rp.collected_at
              FROM sentiment_results sr
              JOIN raw_posts rp    ON rp.id = sr.raw_post_id
              JOIN data_sources ds ON ds.id = rp.source_id
+             LEFT JOIN relevance_results rr ON rr.raw_post_id = rp.id
              ${whereClause}
              ORDER BY rp.collected_at DESC
              ${limitClause}`,
             params,
         );
 
+        const total = rows.length > 0 ? rows[0].full_count : 0;
+        const results = rows.map(({ full_count, ...row }) => row);
+
         return res.json({
             results,
-            total: results.length,
+            total,
             query: {
                 platform: platform ?? null,
                 location: location ?? null,

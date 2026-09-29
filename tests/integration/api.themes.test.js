@@ -57,6 +57,7 @@ describe('GET /api/themes', () => {
                 neutral:      1,
                 negative:     1,
                 top_category: 'news',
+                words:        ['regulation', 'ethics'],   // 'ethics' co-matched on th-r3
             },
             {
                 keyword:      'jobs',
@@ -65,6 +66,7 @@ describe('GET /api/themes', () => {
                 neutral:      0,
                 negative:     3,
                 top_category: 'social',
+                words:        ['jobs', 'ethics'],         // 'ethics' co-matched on th-j3
             },
         ]);
     });
@@ -125,6 +127,7 @@ describe('GET /api/themes', () => {
                 neutral:      0,
                 negative:     1,
                 top_category: 'news',
+                words:        ['divide'],   // nothing co-matched on scored posts
             },
         ]);
     });
@@ -151,6 +154,7 @@ describe('GET /api/themes', () => {
                 neutral:      0,
                 negative:     0,
                 top_category: 'social',
+                words:        ['dup'],   // duplicate entries collapse — no co-keyword
             },
         ]);
     });
@@ -233,5 +237,52 @@ describe('GET /api/themes', () => {
         // Both have volume 3, so "alpha" should come first (alphabetically)
         expect(res.body[0].keyword).toBe('alpha');
         expect(res.body[1].keyword).toBe('beta');
+    });
+
+    // ─── Cue-word lists (frontend theme rows `words[]`) ───────────────────────
+
+    describe('theme cue words', () => {
+        it('each theme carries words[] = keyword + up to 2 co-matched keywords', async () => {
+            const src   = await insertSource('themes-words-src');
+            const jobId = await insertJob();
+            const mvIds = await insertMethodologyVersions();
+
+            // "agents" co-occurs with "automation" (3×) and "shipping" (2×);
+            // a fourth co-keyword "misc" appears once and must NOT make the cut
+            for (let i = 0; i < 3; i++) {
+                await insertPostWithFullPipeline(src, jobId, mvIds, {
+                    externalId: `tw-a${i}`, keywords: ['agents', 'automation'],
+                });
+            }
+            for (let i = 0; i < 2; i++) {
+                await insertPostWithFullPipeline(src, jobId, mvIds, {
+                    externalId: `tw-b${i}`, keywords: ['agents', 'shipping'],
+                });
+            }
+            await insertPostWithFullPipeline(src, jobId, mvIds, {
+                externalId: 'tw-c0', keywords: ['agents', 'misc'],
+            });
+
+            const res = await request(app).get('/api/themes');
+            const agents = res.body.find(t => t.keyword === 'agents');
+            expect(agents).toBeDefined();
+            // keyword first, then co-matched keywords by count DESC
+            expect(agents.words).toEqual(['agents', 'automation', 'shipping']);
+        });
+
+        it('words[] is just [keyword] when nothing co-occurs', async () => {
+            const src   = await insertSource('themes-words-solo');
+            const jobId = await insertJob();
+            const mvIds = await insertMethodologyVersions();
+
+            for (let i = 0; i < 3; i++) {
+                await insertPostWithFullPipeline(src, jobId, mvIds, {
+                    externalId: `tws-${i}`, keywords: ['solo'],
+                });
+            }
+
+            const res = await request(app).get('/api/themes');
+            expect(res.body[0].words).toEqual(['solo']);
+        });
     });
 });

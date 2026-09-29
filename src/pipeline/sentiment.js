@@ -157,4 +157,12 @@ async function saveSentiment(postId, jobId, mvId) {
     });
 }
 
-module.exports = { computeSentiment, saveSentiment };
+// MODEL_NAME + thresholds exported so scripts/replay.js can state exactly
+// which code identity/parameters a replay ran (and flag config drift).
+module.exports = {
+    computeSentiment,
+    saveSentiment,
+    MODEL_NAME,
+    POSITIVE_THRESHOLD,
+    NEGATIVE_THRESHOLD,
+};

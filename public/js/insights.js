@@ -7,20 +7,27 @@
 // (never innerHTML), so the interpolated strings are XSS-safe by construction.
 // Do NOT "helpfully" switch the consumers to HTML rendering.
 //
-// Dual export guard with dependency injection: CommonJS requires utils for
-// jest; browser script tags read the window global (load utils.js BEFORE
-// this file). Same pattern as public/js/chapters.js.
+// Dual export guard with dependency injection: CommonJS requires utils and
+// the design config for jest; browser script tags read the window globals
+// (load config/design.config.js and utils.js BEFORE this file — the
+// index.html script order is a contract). Same pattern as chapters.js.
 (function (root, factory) {
     if (typeof module === 'object' && module.exports) {
-        module.exports = factory(require('./utils'));   // Node / jest
+        module.exports = factory(                       // Node / jest
+            require('./utils'),
+            require('./config/design.config'));
     } else {
         /* istanbul ignore next -- Browser UMD global; unreachable in Node tests */
-        root.PulseInsights = factory(root.PulseUtils);  // browser global
+        root.PulseInsights = factory(root.PulseUtils, root.PulseDesignConfig);
     }
-}(typeof self !== 'undefined' ? self : this, function (utils) {
+}(typeof self !== 'undefined' ? self : this, function (utils, designConfig) {
     'use strict';
 
     const { netSentiment } = utils;
+    // Canonical taxonomy slugs in registry order (the design.config
+    // CATEGORIES registry is {slug,label,color} rows — enumeration here
+    // needs the slugs only).
+    const CATEGORY_SLUGS = designConfig.CATEGORY_SLUGS;
 
     // Cities with fewer than MIN_TOTAL posts are excluded from SHARE-based
     // superlatives (a 4-post city being "100% positive" is noise, not signal).
@@ -168,7 +175,10 @@
             : null;
 
         return {
-            cityCount: list.length,
+            // Cities REPORTING, not cities rendered: the live globe shows a
+            // zero-count baseline row for every launch city (registry
+            // merge), and a city with no posts this hour is not "reporting".
+            cityCount: list.filter((c) => c.total > 0).length,
             globalTotals,
             globalShares,
             highestVolumeCity,
@@ -306,8 +316,44 @@
                 topSource,
             };
         });
-        rows.sort((a, b) => (b.share - a.share)
-            || (a.category < b.category ? -1 : a.category > b.category ? 1 : 0));
+        rows.sort(compareRibbonRows);
+        return rows;
+    }
+
+    // Shared ribbon ordering: share descending, ties alphabetical — zero
+    // rows therefore always trail the data rows, alphabetically.
+    function compareRibbonRows(a, b) {
+        return (b.share - a.share)
+            || (a.category < b.category ? -1 : a.category > b.category ? 1 : 0);
+    }
+
+    // allCategoryRows: ribbonRows padded to the CANONICAL taxonomy
+    // (design.config CATEGORIES — spec §17). Categories with no posts in
+    // the snapshot get an explicit zero row, so every enumeration surface
+    // (ribbon segments, explore chips, CH05 legend, "categories tracked"
+    // copy) always renders the full taxonomy — the prototype marimekko's
+    // "all categories, always" contract — instead of silently dropping
+    // quiet categories. Non-canonical categories present in the data are
+    // kept (never hidden); membership is compared case-insensitively so a
+    // display-cased spelling is not duplicated. Share/net ranking surfaces
+    // (drivers/messengers cards, tooltip top-4) stay on ribbonRows /
+    // catBreakdown — a zero row must never be named a "leader".
+    function allCategoryRows(cities) {
+        const rows = ribbonRows(cities);
+        const present = new Set(
+            rows.map(r => String(r.category).toLowerCase()));
+        for (const slug of CATEGORY_SLUGS) {
+            if (present.has(slug)) continue;
+            rows.push({
+                category: slug,
+                share: 0,
+                volume: 0,
+                net: 0,
+                split: { pos: 0, neu: 0, neg: 0 },
+                topSource: null,
+            });
+        }
+        rows.sort(compareRibbonRows);
         return rows;
     }
 
@@ -316,37 +362,41 @@
     // same 0.1 magnitude as design.config SENTIMENT_BUCKETS.positiveMin.
     const THEME_WARM_MIN = 0.1;
 
-    // partitionThemes: split /api/themes rows into the warm or cold half.
-    //   'warm' → net ≥ 0.1, sorted warmest first
-    //   'cold' → net < 0.1, sorted coldest first
-    // Together the two modes PARTITION the list (no overlap, no loss).
-    // Accepts rows carrying `net`, falling back to the prototype's `sent`
+    // themeNet: a theme row's net sentiment. THE single derivation ladder
+    // for theme rows (grumpy #4 — story.js consumes this export, never a
+    // copy): `net` when present, falling back to the prototype's `sent`
     // field so the bundled demo themes work unchanged, then to the actual
     // /api/themes response shape ({keyword, volume, positive, neutral,
     // negative, top_category}) by deriving net = (positive − negative) /
     // volume — without this, live API rows would all silently score 0 and
-    // land in the cold half. Throws on an unknown mode — a typo must fail
-    // tests loudly, not silently render nothing.
+    // land in the cold half. Unusable rows score 0.
+    function themeNet(t) {
+        if (t && Number.isFinite(t.net)) return t.net;
+        if (t && Number.isFinite(t.sent)) return t.sent; // prototype shape
+        if (t && Number.isFinite(t.positive) && Number.isFinite(t.negative)
+            && Number.isFinite(t.volume) && t.volume > 0) {
+            return (t.positive - t.negative) / t.volume;  // /api/themes shape
+        }
+        return 0;
+    }
+
+    // partitionThemes: split /api/themes rows into the warm or cold half.
+    //   'warm' → net ≥ 0.1, sorted warmest first
+    //   'cold' → net < 0.1, sorted coldest first
+    // Together the two modes PARTITION the list (no overlap, no loss); the
+    // net derivation is themeNet above. Throws on an unknown mode — a typo
+    // must fail tests loudly, not silently render nothing.
     function partitionThemes(themes, mode) {
         if (mode !== 'warm' && mode !== 'cold') {
             throw new Error(`partitionThemes: unknown mode "${mode}"`);
         }
         const list = Array.isArray(themes) ? themes : [];
-        const netOf = (t) => {
-            if (t && Number.isFinite(t.net)) return t.net;
-            if (t && Number.isFinite(t.sent)) return t.sent; // prototype shape
-            if (t && Number.isFinite(t.positive) && Number.isFinite(t.negative)
-                && Number.isFinite(t.volume) && t.volume > 0) {
-                return (t.positive - t.negative) / t.volume;  // /api/themes shape
-            }
-            return 0;
-        };
         const picked = list.filter(t => mode === 'warm'
-            ? netOf(t) >= THEME_WARM_MIN
-            : netOf(t) < THEME_WARM_MIN);
+            ? themeNet(t) >= THEME_WARM_MIN
+            : themeNet(t) < THEME_WARM_MIN);
         picked.sort((a, b) => mode === 'warm'
-            ? netOf(b) - netOf(a)   // warmest first
-            : netOf(a) - netOf(b)); // coldest first
+            ? themeNet(b) - themeNet(a)   // warmest first
+            : themeNet(a) - themeNet(b)); // coldest first
         return picked;
     }
 
@@ -456,6 +506,8 @@
         catBreakdown,
         widestCategoryDivide,
         ribbonRows,
+        allCategoryRows,
+        themeNet,
         partitionThemes,
     };
 }));

@@ -1,3 +1,9 @@
+# Stable compose project name — keeps containers/volumes owned by ONE project
+# regardless of which worktree or checkout directory runs `docker compose up`.
+# Mirrored by COMPOSE_PROJECT_NAME in .env so bare `docker compose` CLI calls
+# (without this file's directory as cwd) resolve to the same project.
+name: pulse-of-ai
+
 services:
   # Primary database — PostgreSQL 16 with pgvector extension
   postgres:

@@ -7,6 +7,12 @@
 //   - The input fingerprint (keyed — see below; never raw content)
 //   - The full scored output
 //   - The plain-English justification from methodology_versions
+//   - FOUR audience representations per step (public / plain / config /
+//     researcher), rendered at read time by the versioned templates in
+//     src/config/audit-narration.js — no per-post prose is stored or invented
+//   - The bias fairness layers for the post's processing job (value, τ,
+//     citation, pass/fail/n-a) from bias_assessments + the versioned 'bias'
+//     methodology config
 //
 // input_hash exposure: decision_audit_log.input_hash stores an UNSALTED
 // SHA-256 of post content — internal immutable join key, never modified.
@@ -14,7 +20,10 @@
 // key is unset the field is OMITTED entirely (never raw).
 //
 // Returns:
-//   200 { post: {...}, decisions: [...] }
+//   200 { post: {...}, narration: {...}, ingest: {...}|null,
+//         decisions: [...],
+//         bias: { job_id, assessed_at, model_name, version,
+//                 lineage, lineage_fallback, layers } }
 //   400 if post_id is not a valid UUID
 //   404 if the post does not exist
 //   500 on DB error (no stack trace returned to client)
@@ -24,6 +33,20 @@
 const crypto           = require('crypto');
 const { Router }       = require('express');
 const { dbGet, dbAll } = require('../db/connection');
+const {
+    NARRATION_COMPONENT,
+    NARRATION_VERSION,
+    renderAudiences,
+    deriveScore,
+    deriveStatus,
+    renderIngestStep,
+} = require('../config/audit-narration');
+const { buildLayers } = require('../config/bias-vocabulary');
+const {
+    resolveBiasLineage,
+    currentBiasVersion,
+    loadBiasVersions,
+} = require('../config/bias-lineage');
 
 const router = Router();
 
@@ -74,6 +97,7 @@ router.get('/audit/:post_id', async (req, res) => {
             `SELECT
                 dal.decision_type,
                 dal.model_name,
+                dal.job_id,
                 mv.version   AS methodology_version,
                 mv.config,
                 mv.justification,
@@ -97,16 +121,97 @@ router.get('/audit/:post_id', async (req, res) => {
         // (and rotations) see the current environment.
         const auditKey = process.env.AUDIT_HASH_KEY;
         const exposed = decisions.map((d) => {
-            const { input_hash, ...rest } = d;
-            if (!auditKey) return rest;  // no key → omit, NEVER fall back to raw
-            return {
+            const { input_hash, job_id, ...rest } = d;
+            // Four audience representations + headline score/status, rendered
+            // read-time from the STORED output/config (versioned templates —
+            // see src/config/audit-narration.js). job_id stays internal (used
+            // for the bias layers below, not part of the decision payload).
+            const enriched = {
                 ...rest,
+                status:    deriveStatus(d),
+                score:     deriveScore(d),
+                audiences: renderAudiences(d, post.id),
+            };
+            if (!auditKey) return enriched;  // no key → omit, NEVER fall back to raw
+            return {
+                ...enriched,
                 input_hash: crypto
                     .createHmac('sha256', auditKey)
                     .update(input_hash)
                     .digest('hex'),
             };
         });
+
+        // ── Bias fairness layers for this post's processing job (gap G18) ────
+        // The job that produced the post's decisions also ran the bias checks;
+        // surface those job-level assessments as per-step fairness layers.
+        // Citations / display names / planned layers come from the versioned
+        // 'bias' methodology config — layers degrade gracefully when either
+        // the assessments or the config are absent.
+        const latestJobId = decisions.length > 0
+            ? decisions[decisions.length - 1].job_id
+            : null;
+
+        // Methodology lineage (PR #8 review): the receipt names the bias
+        // version that PRODUCED these assessments, not the newest one.
+        // Rows record it in methodology_version_id (migration 010); older
+        // rows with a NULL column are resolved at read time from
+        // effective_from and labeled lineage 'inferred'
+        // (src/config/bias-lineage.js). model_name + version ride along so
+        // the drawer's bias step shows the same model@version pill as every
+        // other pipeline step.
+        let biasAssessments = [];
+        if (latestJobId) {
+            biasAssessments = await dbAll(
+                `SELECT assessment_type, group_field, group_value, metric_name,
+                        metric_value, threshold, is_violation, severity, created_at,
+                        methodology_version_id
+                 FROM bias_assessments
+                 WHERE job_id = $1
+                 ORDER BY created_at ASC`,
+                [latestJobId],
+            );
+        }
+        const biasVersions = await loadBiasVersions(dbAll);
+        const latestBias = biasAssessments[biasAssessments.length - 1] || null;
+        // One job = one pipeline run = one biasMvId, so the latest row's
+        // lineage speaks for the job. With no assessments, nothing produced
+        // anything: the CURRENT version supplies the planned-layer coverage,
+        // and lineage 'current' says exactly that.
+        const resolved = latestBias
+            ? resolveBiasLineage(latestBias, biasVersions)
+            : (() => {
+                const current = currentBiasVersion(biasVersions);
+                return { mv: current, lineage: current ? 'current' : null, fallback: false };
+            })();
+        const biasMv = resolved.mv;
+        const biasConfig = biasMv ? biasMv.config : null;
+
+        const biasBlock = {
+            job_id:      latestJobId,
+            assessed_at: latestBias ? latestBias.created_at : null,
+            // Versioned bias-monitor identity (e.g. pulse-bias-monitor-v1 @
+            // 1.1.0); null when no 'bias' methodology is registered — the
+            // frontend omits the pill rather than inventing one.
+            model_name:  biasMv ? biasMv.model_name : null,
+            version:     biasMv ? biasMv.version    : null,
+            // 'recorded' | 'inferred' | 'current' | null; lineage_fallback
+            // is true only when an inferred row predates every version.
+            lineage:          resolved.lineage,
+            lineage_fallback: resolved.fallback,
+            layers:      buildLayers(biasAssessments, biasConfig),
+        };
+
+        // ── Synthetic ingestion step (versioned 'ingest' methodology) ─────────
+        // Ingestion is not an inference so it has no decision_audit_log rows;
+        // its regulator-relevant facts (PII fields stripped, city granularity,
+        // legal basis) live in the registered methodology config.
+        const ingestMv = await dbGet(
+            `SELECT model_name, version, config FROM methodology_versions
+             WHERE component = 'ingest' AND deprecated_at IS NULL
+             ORDER BY effective_from DESC
+             LIMIT 1`,
+        );
 
         return res.json({
             post: {
@@ -117,7 +222,10 @@ router.get('/audit/:post_id', async (req, res) => {
                 source_name:     post.source_name,
                 collected_at:    post.collected_at,
             },
+            narration: { component: NARRATION_COMPONENT, version: NARRATION_VERSION },
+            ingest:    renderIngestStep(ingestMv),
             decisions: exposed,
+            bias:      biasBlock,
         });
     /* istanbul ignore start -- Database failure; requires error injection testing infrastructure */
     } catch (err) {

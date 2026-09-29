@@ -37,6 +37,25 @@
     const SENTIMENT_COLORS = designConfig.SENTIMENT_PALETTE;
     const SOURCE_PALETTE = Object.values(designConfig.CAT_COLORS);
 
+    // ── Category display labels (canonical registry lookup) ────────────────────
+    // catLabel: API category slug → the prototype's EXACT display string via
+    // the design.config registry ('blog' → 'Blogs', 'nonprofit' →
+    // 'Non-profit', 'forums' → 'Forums'). NEVER a naive capitalizer for
+    // canonical slugs — capitalize(slug) would render "Blog"/"Nonprofit",
+    // which the prototype (master contract) does not say. The
+    // first-letter-uppercase fallback exists ONLY for non-canonical strings
+    // arriving from data (unknown categories must still render something,
+    // not crash or vanish). Empty/null input → ''.
+    const CAT_LABELS = designConfig.CAT_LABELS || {};
+    function catLabel(slug) {
+        const s = String(slug === null || slug === undefined ? '' : slug);
+        if (s === '') return '';
+        if (Object.prototype.hasOwnProperty.call(CAT_LABELS, s)) {
+            return CAT_LABELS[s];
+        }
+        return s.charAt(0).toUpperCase() + s.slice(1);
+    }
+
     // ── Sentiment bridge helpers ────────────────────────────────────────────────
     // The design prototype carried a per-city "sentiment" in −1..1; the real
     // normalized cities carry counts. NET sentiment is the bridge:
@@ -95,10 +114,46 @@
         return (net >= 0 ? '+' : '−') + Math.abs(net).toFixed(2);
     }
 
+    // healthState: GET /api/health payload → FR-24 traffic light.
+    // Shared by the header chip (main.js) and the health drawer's chip +
+    // banner (ui.js) so every chip-rendering path agrees. Severity drives
+    // the colour: any unresolved 'critical' alert → red; any other alert, a
+    // degraded backend, or an unreachable endpoint (null) → yellow (never a
+    // fake "nominal"); otherwise green. alert_events.severity is
+    // 'info' | 'warning' | 'critical' (migration 003).
+    function healthState(health) {
+        if (!health || typeof health !== 'object') {
+            return { state: 'yellow', label: 'model health: unavailable', alerts: 0, critical: 0 };
+        }
+        const list = Array.isArray(health.active_alerts) ? health.active_alerts : [];
+        const alerts = list.length;
+        const critical = list.filter((a) => a
+            && String(a.severity || '').toLowerCase() === 'critical').length;
+        if (critical > 0) {
+            const label = alerts === 1 ? '1 critical alert'
+                : alerts + ' active alerts · ' + critical + ' critical';
+            return { state: 'red', label, alerts, critical };
+        }
+        if (alerts > 0) {
+            return {
+                state: 'yellow',
+                label: alerts === 1 ? '1 active alert' : alerts + ' active alerts',
+                alerts,
+                critical,
+            };
+        }
+        if (health.status === 'degraded') {
+            return { state: 'yellow', label: 'model health: degraded', alerts, critical };
+        }
+        return { state: 'green', label: 'model health: nominal', alerts, critical };
+    }
+
     return {
         esc,
+        healthState,
         SENTIMENT_COLORS,
         SOURCE_PALETTE,
+        catLabel,
         netSentiment,
         sentimentBucket,
         fmtPct,

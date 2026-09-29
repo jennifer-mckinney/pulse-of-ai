@@ -11,6 +11,7 @@
 //   POST /api/refresh
 //   GET  /api/audit/:post_id
 //   GET  /api/bias/latest
+//   GET  /api/bias/history
 //   GET  /api/methodology
 //   GET  /api/sources
 //   GET  /api/sources/timeseries
@@ -26,7 +27,6 @@ const path    = require('path');
 const cors    = require('cors');
 
 const healthRouter      = require('./routes/health');
-const configRouter      = require('./routes/config');
 const postsRouter       = require('./routes/posts');
 const sentimentRouter   = require('./routes/sentiment');
 const refreshRouter     = require('./routes/refresh');
@@ -41,22 +41,56 @@ const app  = express();
 const PORT = process.env.PORT || 3000;
 
 // ─── Global middleware ────────────────────────────────────────────────────────
-app.use(cors());
+
+// Security headers — set on EVERY response (static assets included), so this
+// runs before express.static. The CSP is deliberately strict: the frontend is
+// fully self-hosted (FR-25 — vendored fonts/world-atlas, no CDN, no inline
+// scripts or style attributes), so no 'unsafe-inline' anywhere.
+const CSP = [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "frame-ancestors 'none'",
+].join('; ');
+
+app.use((req, res, next) => {
+    res.set({
+        'Content-Security-Policy': CSP,
+        'X-Content-Type-Options':  'nosniff',
+        'X-Frame-Options':         'DENY',
+        'Referrer-Policy':         'no-referrer',
+    });
+    next();
+});
+
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../public')));
 
 // ─── API routes ───────────────────────────────────────────────────────────────
-app.use('/api', healthRouter);
-app.use('/api', configRouter);
-app.use('/api', postsRouter);
-app.use('/api', sentimentRouter);
+// F2: CORS is scoped to the READ-ONLY surface only. POST /api/refresh mutates
+// state (creates a processing job), so it is mounted FIRST and without cors().
+// Withholding CORS headers only hides the response — a simple cross-site POST
+// is still sent — so the route itself rejects cross-site POSTs with 403
+// (src/middleware/same-origin.js), and its OPTIONS preflight is answered
+// inside refreshRouter with a 403 (no CORS headers) so it never falls through
+// to readOnlyApi's cors(). Everything below serves read-only data (POST
+// /api/query is a read-only search) and stays world-readable.
 app.use('/api', refreshRouter);
-app.use('/api', auditRouter);
-app.use('/api', biasRouter);
-app.use('/api', methodologyRouter);
-app.use('/api', sourcesRouter);
-app.use('/api', queryRouter);
-app.use('/api', themesRouter);
+
+const readOnlyApi = express.Router();
+readOnlyApi.use(cors());
+readOnlyApi.use(healthRouter);
+readOnlyApi.use(postsRouter);
+readOnlyApi.use(sentimentRouter);
+readOnlyApi.use(auditRouter);
+readOnlyApi.use(biasRouter);
+readOnlyApi.use(methodologyRouter);
+readOnlyApi.use(sourcesRouter);
+readOnlyApi.use(queryRouter);
+readOnlyApi.use(themesRouter);
+app.use('/api', readOnlyApi);
 
 // ─── Frontend fallback ────────────────────────────────────────────────────────
 app.get('/', (req, res) => {

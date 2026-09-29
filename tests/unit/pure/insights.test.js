@@ -15,10 +15,12 @@
 
 const insights = require('../../../public/js/insights');
 const data = require('../../../public/js/data');
+const design = require('../../../public/js/config/design.config');
 
 const {
     computeInsights, regionOf, renderTemplate, TEMPLATES, MIN_TOTAL,
-    catBreakdown, widestCategoryDivide, ribbonRows, partitionThemes,
+    catBreakdown, widestCategoryDivide, ribbonRows, allCategoryRows,
+    partitionThemes,
 } = insights;
 
 // ── Hand-computed 4-city fixture ─────────────────────────────────────────────
@@ -78,6 +80,16 @@ describe('computeInsights() — global totals', () => {
         expect(out.globalTotals).toEqual({
             positive: 204, neutral: 110, negative: 90, total: 404,
         });
+    });
+
+    test('cityCount counts cities REPORTING (total > 0), not zero-baseline rows', () => {
+        // The live globe renders a zero-count baseline row for every launch
+        // city (registry merge in data.js) — those are not "reporting".
+        const rows = rawFixture();
+        rows.push({ city: 'Quiet City', lat: 5, lng: 5,
+            positive: 0, neutral: 0, negative: 0, total: 0, sources: [] });
+        const out = computeInsights(data.normalizeCities(rows));
+        expect(out.cityCount).toBe(4);
     });
 
     test('computes global shares from the totals', () => {
@@ -583,6 +595,79 @@ describe('ribbonRows(cities)', () => {
     });
 });
 
+describe('allCategoryRows(cities) — canonical taxonomy enumeration', () => {
+    test('pads ribbonRows with zero rows so every canonical category is present', () => {
+        // rawFixture covers social/news/policy/academic only — the other
+        // three canonical categories must appear as explicit zero rows
+        // (Jennifer: "categories are missing from social, non-profit,
+        // academic... add them back" — quiet categories must not vanish).
+        const rows = allCategoryRows(data.normalizeCities(rawFixture()));
+        expect(rows.map(r => r.category).sort())
+            .toEqual([...design.CATEGORY_SLUGS].sort());
+        const zero = rows.find(r => r.category === 'nonprofit');
+        expect(zero).toEqual({
+            category: 'nonprofit', share: 0, volume: 0, net: 0,
+            split: { pos: 0, neu: 0, neg: 0 }, topSource: null,
+        });
+        // Forums-zero honesty: forums is first-class canon with NO seeded
+        // sources — it must enumerate as an explicit zero row (never
+        // invented volume, never dropped).
+        expect(rows.find(r => r.category === 'forums')).toEqual({
+            category: 'forums', share: 0, volume: 0, net: 0,
+            split: { pos: 0, neu: 0, neg: 0 }, topSource: null,
+        });
+    });
+
+    test('data rows keep their ribbonRows values and ordering (share desc, zero rows last alphabetical)', () => {
+        const cities = data.normalizeCities(rawFixture());
+        const dataRows = ribbonRows(cities);
+        const rows = allCategoryRows(cities);
+        expect(rows.slice(0, dataRows.length)).toEqual(dataRows);
+        expect(rows.slice(dataRows.length).map(r => r.category))
+            .toEqual(['blog', 'developer', 'forums', 'nonprofit']); // share-0 ties → alphabetical
+        expect(rows.reduce((a, r) => a + r.share, 0)).toBeCloseTo(1, 10);
+    });
+
+    test('a category present under a display-cased spelling is not duplicated', () => {
+        const rows = allCategoryRows(data.normalizeCities([
+            { city: 'A', lat: 0, lng: 0, positive: 5, neutral: 0, negative: 0, total: 5,
+              sources: [
+                  { source_name: 'reddit', source_category: 'Social',
+                    positive: 5, neutral: 0, negative: 0, total: 5 },
+              ] },
+        ]));
+        const socialish = rows.filter(
+            r => String(r.category).toLowerCase() === 'social');
+        expect(socialish).toHaveLength(1);
+        expect(socialish[0].volume).toBe(5);
+    });
+
+    test('empty/invalid input still enumerates the full canonical set (all zero rows)', () => {
+        for (const input of [[], null, undefined]) {
+            const rows = allCategoryRows(input);
+            expect(rows.map(r => r.category))
+                .toEqual([...design.CATEGORY_SLUGS].sort());
+            for (const r of rows) {
+                expect(r.volume).toBe(0);
+                expect(r.share).toBe(0);
+            }
+        }
+    });
+
+    test('non-canonical categories present in the data are kept (never hidden)', () => {
+        const rows = allCategoryRows(data.normalizeCities([
+            { city: 'A', lat: 0, lng: 0, positive: 5, neutral: 0, negative: 0, total: 5,
+              sources: [
+                  { source_name: 'boards', source_category: 'tech',
+                    positive: 5, neutral: 0, negative: 0, total: 5 },
+              ] },
+        ]));
+        expect(rows.map(r => r.category).sort())
+            .toEqual([...design.CATEGORY_SLUGS, 'tech'].sort());
+        expect(rows[0].category).toBe('tech'); // only category with volume
+    });
+});
+
 describe('partitionThemes(themes, mode)', () => {
     // Prototype semantics: warm = net ≥ 0.1 sorted warmest-first,
     // cold = net < 0.1 sorted coldest-first.
@@ -738,12 +823,14 @@ describe('module export shape', () => {
         expect(Object.keys(insights).sort()).toEqual([
             'MIN_TOTAL',
             'TEMPLATES',
+            'allCategoryRows',
             'catBreakdown',
             'computeInsights',
             'partitionThemes',
             'regionOf',
             'renderTemplate',
             'ribbonRows',
+            'themeNet',
             'widestCategoryDivide',
         ]);
     });

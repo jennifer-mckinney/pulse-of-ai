@@ -7,6 +7,7 @@
 
 const crypto = require('crypto');
 const { dbRun } = require('../../src/db/connection');
+const { METHODOLOGY_VERSIONS } = require('../../src/config/methodology-registry');
 
 // ─── Source ───────────────────────────────────────────────────────────────────
 
@@ -61,6 +62,86 @@ async function insertMethodologyVersions() {
                RETURNING id`),
     ]);
     return { sentimentMvId: rows[0].id, relevanceMvId: rows[1].id, discourseMvId: rows[2].id };
+}
+
+/**
+ * Register a methodology row exactly as the shared registry defines it
+ * (src/config/methodology-registry.js — the source seed.js and migration 009
+ * both use), so integration tests exercise the REAL registered config
+ * instead of a hand-mirrored copy that can drift.
+ * @returns {Promise<string>}  methodology_versions.id
+ */
+async function insertRegisteredMethodology(component) {
+    const m = METHODOLOGY_VERSIONS.find(r => r.component === component);
+    const row = await dbRun(
+        `INSERT INTO methodology_versions (component, version, model_name, config, justification)
+         VALUES ($1, $2, $3, $4::jsonb, $5)
+         ON CONFLICT (component, version) DO UPDATE SET config = EXCLUDED.config
+         RETURNING id`,
+        [m.component, m.version, m.model_name, JSON.stringify(m.config), m.justification],
+    );
+    return row.id;
+}
+
+/**
+ * Register the versioned 'bias' methodology row (thresholds, layer names,
+ * layer notes, citations, planned layers, layer order) that the audit
+ * fairness layers and the bias history endpoint read.
+ * @returns {Promise<string>}  methodology_versions.id
+ */
+async function insertBiasMethodology() {
+    return insertRegisteredMethodology('bias');
+}
+
+/**
+ * Register the versioned 'ingest' methodology row (PII fields, granularity,
+ * legal basis) that the audit route renders as the synthetic Ingestion step.
+ * @returns {Promise<string>}  methodology_versions.id
+ */
+async function insertIngestMethodology() {
+    return insertRegisteredMethodology('ingest');
+}
+
+// ─── Bias assessment ──────────────────────────────────────────────────────────
+
+/**
+ * Insert a bias_assessments row directly (bypasses the pipeline).
+ * @param {string} jobId
+ * @param {{ assessmentType?, groupValue?, metricName?, metricValue?, threshold?,
+ *           isViolation?, severity?, createdAt?, methodologyVersionId? }} opts
+ *        severity: stored severity ('warning'|'critical') — only meaningful
+ *        when isViolation is true. createdAt: Date/ISO for history-window tests.
+ *        methodologyVersionId: the recorded bias methodology lineage
+ *        (migration 010). Defaults to NULL, a pre-lineage row that the
+ *        routes resolve as lineage 'inferred'. Tests that need recorded
+ *        lineage pass a specific methodology_versions.id, so the recorded
+ *        path is never assumed by accident.
+ */
+async function insertBiasAssessment(jobId, {
+    assessmentType = 'location_concentration',
+    groupField     = 'location',
+    groupValue     = 'San Francisco',
+    metricName     = 'share_of_total',
+    metricValue    = 0.40,
+    threshold      = 0.35,
+    isViolation    = false,
+    severity       = null,
+    createdAt      = null,
+    methodologyVersionId = null,
+} = {}) {
+    const row = await dbRun(
+        `INSERT INTO bias_assessments
+            (job_id, assessment_type, group_field, group_value,
+             metric_name, metric_value, threshold, is_violation, severity, created_at,
+             methodology_version_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10::timestamptz, NOW()), $11)
+         RETURNING id`,
+        [jobId, assessmentType, groupField, groupValue, metricName, metricValue,
+         threshold, isViolation, severity,
+         createdAt instanceof Date ? createdAt.toISOString() : createdAt,
+         methodologyVersionId],
+    );
+    return row.id;
 }
 
 // ─── Full post + all three pipeline results ───────────────────────────────────
@@ -213,6 +294,10 @@ module.exports = {
     insertSource,
     insertJob,
     insertMethodologyVersions,
+    insertRegisteredMethodology,
+    insertBiasMethodology,
+    insertIngestMethodology,
+    insertBiasAssessment,
     insertPostWithFullPipeline,
     insertPostWithRelevanceOnly,
     insertAlert,

@@ -181,7 +181,9 @@ describe('story.config — STORY beat sequence', () => {
         expect(byId['drivers'].title).toBe('Who’s driving the conversation?');
         expect(byId['themes-warm'].title).toBe('What the world is excited about.');
         expect(byId['themes-cold'].title).toBe('What the world is worried about.');
-        expect(byId['messengers'].title).toBe('Don’t shoot the messenger — score them.');
+        // ZIP-revision title (audit G15): the handoff's later pass shortened
+        // the original "— score them." suffix.
+        expect(byId['messengers'].title).toBe('Don’t shoot the messenger.');
         expect(byId['summary'].title).toBe('The hour, on one card.');
         expect(byId['explore'].title).toBe('Now you drive.');
     });
@@ -319,23 +321,66 @@ describe('design.config — themes and palettes', () => {
         });
     });
 
-    test('CAT_COLORS keys are the REAL API category slugs (plus demo "tech")', () => {
+    test('CAT_COLORS keys are exactly the canonical API slugs (no legacy "tech")', () => {
         expect(Object.keys(design.CAT_COLORS).sort()).toEqual([
-            'academic', 'blog', 'developer', 'news',
-            'nonprofit', 'policy', 'social', 'tech',
+            'academic', 'blog', 'developer', 'forums',
+            'news', 'nonprofit', 'policy', 'social',
         ]);
         for (const cat of Object.keys(design.CAT_COLORS)) {
             expect(design.CAT_COLORS[cat]).toMatch(HEX_RE);
         }
     });
 
-    test('CAT_COLORS handoff hues map onto their API slugs verbatim', () => {
+    test('CAT_COLORS prototype hues map onto their API slugs verbatim', () => {
         expect(design.CAT_COLORS.social).toBe('#FF9F5A');
         expect(design.CAT_COLORS.news).toBe('#5AA9FF');
         expect(design.CAT_COLORS.academic).toBe('#C08BFF');
         expect(design.CAT_COLORS.policy).toBe('#FF6E9C');
         expect(design.CAT_COLORS.developer).toBe('#3BDCB2');
+        expect(design.CAT_COLORS.forums).toBe('#F5D95A');   // prototype "Forums" yellow
         expect(design.CAT_COLORS.blog).toBe('#7EE0FF');
+        // Non-profit has no prototype hue — the one documented addition
+        // (palette-consistent lime; see design.config.js comment).
+        expect(design.CAT_COLORS.nonprofit).toBe('#A9F55A');
+    });
+
+    test('CATEGORIES is the canonical 8-entry registry (prototype ∪ BRD §17) in order', () => {
+        // Enumeration surfaces (explore chips, CH05 legend, source ribbon,
+        // /api/sources/timeseries, "categories tracked" copy) render from
+        // THIS registry — categories with zero posts in the window must
+        // never vanish from the UI. Labels are the prototype's EXACT
+        // display strings ('Blogs', 'Non-profit' — never naive
+        // capitalizations of the slug).
+        expect(design.CATEGORIES.map(c => ({ slug: c.slug, label: c.label }))).toEqual([
+            { slug: 'social',    label: 'Social' },
+            { slug: 'news',      label: 'News' },
+            { slug: 'academic',  label: 'Academic' },
+            { slug: 'policy',    label: 'Policy' },
+            { slug: 'nonprofit', label: 'Non-profit' },
+            { slug: 'developer', label: 'Developer' },
+            { slug: 'forums',    label: 'Forums' },
+            { slug: 'blog',      label: 'Blogs' },
+        ]);
+        // Registry rows carry their color inline; derived tables agree.
+        for (const c of design.CATEGORIES) {
+            expect(c.color).toMatch(HEX_RE);
+            expect(design.CAT_COLORS[c.slug]).toBe(c.color);
+            expect(design.CAT_LABELS[c.slug]).toBe(c.label);
+        }
+    });
+
+    test('CATEGORY_SLUGS is the registry slug list in registry order', () => {
+        expect(design.CATEGORY_SLUGS).toEqual([
+            'social', 'news', 'academic', 'policy',
+            'nonprofit', 'developer', 'forums', 'blog',
+        ]);
+        expect(design.CATEGORY_SLUGS).toEqual(design.CATEGORIES.map(c => c.slug));
+    });
+
+    test('every canonical category has a CAT_COLORS swatch', () => {
+        for (const slug of design.CATEGORY_SLUGS) {
+            expect(design.CAT_COLORS[slug]).toMatch(HEX_RE);
+        }
     });
 
     test('every category color is unique (categories must be tellable apart)', () => {
@@ -369,6 +414,12 @@ describe('design.config — themes and palettes', () => {
             idleResumeMs: 3000,
             labelVolumeMin: 230,
             pacingVhPerChapter: 1.15,
+            // User-zoom constants (handoff ZIP revision; audit gap G7)
+            userZoomMin: 0.5,
+            userZoomMax: 3.5,
+            wheelZoomCtrlFactor: 0.01,
+            wheelZoomPlainFactor: 0.002,
+            keyZoomStep: 1.15,
         });
         for (const v of Object.values(design.GLOBE)) {
             expect(v).toBeGreaterThan(0);
@@ -390,7 +441,9 @@ describe('api.config — endpoints and polling constants', () => {
             audit: '/api/audit/',
             health: '/api/health',
             bias: '/api/bias/latest',
+            biasHistory: '/api/bias/history',
             methodology: '/api/methodology',
+            sources: '/api/sources',
             timeseries: '/api/sources/timeseries',
             themes: '/api/themes',
             refresh: '/api/refresh',

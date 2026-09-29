@@ -215,7 +215,10 @@
         {
             id: 'messengers',
             kicker: 'CHAPTER 08 · THE MESSENGERS',
-            title: 'Don’t shoot the messenger — score them.',
+            // G15 (audit): ZIP-revision title — the handoff's later pass
+            // shortened the original "— score them." suffix in both its
+            // computed and fallback paths.
+            title: 'Don’t shoot the messenger.',
             templateId: 'messengers',
             camera: null,            // global view (prototype focus: null)
             altitude: 2.34,          // zoom 1.1
@@ -267,12 +270,17 @@
             themePartition: null,
             explore: true,
             statsSpec: [],
+            // G15 (audit): ZIP-revision checklist — adds the user-zoom bullet
+            // (pairs with the G7 zoom feature in globe.js) and DROPS the
+            // "Open Tweaks" bullet: the tweaks panel is prototype-only
+            // ("do not ship" per the handoff README/INTEGRATION.md), so in
+            // production that bullet would point at nothing.
             nextSteps: [
                 'Drag the globe — it resumes spinning when you let go',
+                'Zoom with + / − keys, pinch, or scroll on the globe — 0 resets',
                 'Click any city for its posts and sentiment split',
                 'Hit “why?” on a post to pull its audit receipt',
                 'Hover the ribbon below to spotlight a source on the map',
-                'Open Tweaks to change theme, palette, and spin',
             ],
         },
     ];

@@ -62,6 +62,10 @@ describe('POST /api/query', () => {
 
         const res = await request(app).post('/api/query').send({ limit: 2 });
         expect(res.body.results).toHaveLength(2);
+        // total is the TRUE match count (COUNT(*) OVER()), not the page size.
+        expect(res.body.total).toBe(5);
+        // The window-count helper column never leaks into the response rows.
+        expect(res.body.results[0]).not.toHaveProperty('full_count');
     });
 
     it('returns 400 when limit exceeds 100', async () => {
@@ -207,10 +211,43 @@ describe('POST /api/query', () => {
         expect(res.body).toEqual({ error: 'limit must be a positive integer' });
     });
 
+    it('returns 400 for a non-canonical platform value', async () => {
+        // platform validates against the canonical taxonomy
+        // (src/config/categories): 'tech' is retired and free-text values
+        // are caller errors, not empty result sets.
+        for (const bad of ['tech', 'zines']) {
+            const res = await request(app).post('/api/query').send({ platform: bad });
+            expect(res.status).toBe(400);
+            expect(res.body.error).toContain('canonical source category');
+        }
+    });
+
+    it('accepts every canonical platform value (forums included — 200, honest empty)', async () => {
+        const { CATEGORY_SLUGS } = require('../../src/config/categories');
+        for (const slug of CATEGORY_SLUGS) {
+            const res = await request(app).post('/api/query').send({ platform: slug });
+            expect(res.status).toBe(200);
+            expect(Array.isArray(res.body.results)).toBe(true);
+        }
+    });
+
     it('returns 400 when limit is not numeric', async () => {
         const res = await request(app).post('/api/query').send({ limit: 'not-a-number' });
         expect(res.status).toBe(400);
         expect(res.body).toEqual({ error: 'limit must be a positive integer' });
+    });
+
+    it('returns 400 when limit is a non-integer number or a numeric string (F4)', async () => {
+        // parseInt used to silently truncate 1.5 → 1 and coerce '20' → 20;
+        // Number.isInteger runs BEFORE the range checks now, so both are
+        // caller errors (same strict-integer pattern as the hours params).
+        const fractional = await request(app).post('/api/query').send({ limit: 1.5 });
+        expect(fractional.status).toBe(400);
+        expect(fractional.body).toEqual({ error: 'limit must be a positive integer' });
+
+        const stringy = await request(app).post('/api/query').send({ limit: '20' });
+        expect(stringy.status).toBe(400);
+        expect(stringy.body).toEqual({ error: 'limit must be a positive integer' });
     });
 
     it('filters by from date only', async () => {
@@ -262,10 +299,96 @@ describe('POST /api/query', () => {
         const to = now.toISOString();
 
         const res = await request(app).post('/api/query').send({ from, to });
-        
+
         expect(res.status).toBe(200);
         expect(res.body.query.from).toBe(from);
         expect(res.body.query.to).toBe(to);
         expect(res.body.results).toBeDefined();
+    });
+
+    // ─── City drill-down fields (gap G21) ─────────────────────────────────────
+
+    describe('city drill-down post fields', () => {
+        it('each result carries source_name, relevance score, and sentiment cue words', async () => {
+            const srcId = await insertSource('query-detail-src', 'developer');
+            const jobId = await insertJob();
+            const mvIds = await insertMethodologyVersions();
+            await insertPostWithFullPipeline(srcId, jobId, mvIds, {
+                externalId: 'qd-1', location: 'Berlin',
+            });
+
+            const res = await request(app).post('/api/query').send({ location: 'Berlin' });
+
+            expect(res.body.total).toBe(1);
+            expect(res.body.results[0]).toMatchObject({
+                source_name:    'query-detail-src',
+                platform:       'developer',
+                relevance:      0.6,                    // from relevance_results
+                positive_words: expect.any(Array),      // sentiment cue words
+                negative_words: expect.any(Array),
+            });
+        });
+
+        it('relevance is null for posts never relevance-scored (LEFT JOIN semantics)', async () => {
+            const { dbRun } = require('../../src/db/connection');
+            const srcId = await insertSource('query-norel-src');
+            const jobId = await insertJob();
+            const mvIds = await insertMethodologyVersions();
+
+            // Sentiment-only post: raw post + sentiment result, no relevance row
+            const crypto2  = require('crypto');
+            const content  = 'Sentiment-only post';
+            const hash     = crypto2.createHash('sha256').update(content).digest('hex');
+            const post = await dbRun(
+                `INSERT INTO raw_posts (source_id, external_id, content, content_hash, location)
+                 VALUES ($1, 'qnr-1', $2, $3, 'Oslo') RETURNING id`,
+                [srcId, content, hash],
+            );
+            const audit = await dbRun(
+                `INSERT INTO decision_audit_log
+                    (raw_post_id, job_id, methodology_version_id, decision_type, model_name, input_hash, output)
+                 VALUES ($1, $2, $3, 'sentiment', 'afinn-sentiment-v5', $4, '{}'::jsonb)
+                 RETURNING id`,
+                [post.id, jobId, mvIds.sentimentMvId, hash],
+            );
+            await dbRun(
+                `INSERT INTO sentiment_results
+                    (raw_post_id, audit_id, score, comparative, indicator, positive_words, negative_words, token_count)
+                 VALUES ($1, $2, 1, 0.1, 'positive', '{}', '{}', 5)`,
+                [post.id, audit.id],
+            );
+
+            const res = await request(app).post('/api/query').send({ location: 'Oslo' });
+            expect(res.body.total).toBe(1);
+            expect(res.body.results[0].relevance).toBeNull();
+        });
+
+        it('comparative is clamped to [-1, 1] at the API boundary', async () => {
+            const srcId = await insertSource('query-clamp-src');
+            const jobId = await insertJob();
+            const mvIds = await insertMethodologyVersions();
+            await insertPostWithFullPipeline(srcId, jobId, mvIds, {
+                externalId: 'qc-hi', location: 'Clampville', comparative: 5,
+            });
+            await insertPostWithFullPipeline(srcId, jobId, mvIds, {
+                externalId: 'qc-lo', location: 'Clampville', comparative: -5,
+            });
+
+            const res = await request(app).post('/api/query').send({ location: 'Clampville' });
+            const comparatives = res.body.results.map(r => r.comparative).sort((a, b) => a - b);
+            expect(comparatives).toEqual([-1, 1]);
+        });
+
+        it('in-range comparatives pass through unchanged', async () => {
+            const srcId = await insertSource('query-clamp-ok');
+            const jobId = await insertJob();
+            const mvIds = await insertMethodologyVersions();
+            await insertPostWithFullPipeline(srcId, jobId, mvIds, {
+                externalId: 'qc-ok', location: 'Midville', comparative: 0.5,
+            });
+
+            const res = await request(app).post('/api/query').send({ location: 'Midville' });
+            expect(res.body.results[0].comparative).toBe(0.5);
+        });
     });
 });

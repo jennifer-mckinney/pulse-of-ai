@@ -99,6 +99,28 @@ describe('GET /api/posts/aggregated-by-location', () => {
         expect(cities).not.toContain('Sydney');
     });
 
+    it('returns 400 for a non-canonical platform value', async () => {
+        // platform validates against the canonical taxonomy
+        // (src/config/categories) — including the retired 'tech' slug
+        // (residual data is remapped to developer by migration 007).
+        for (const bad of ['tech', 'zines']) {
+            const res = await request(app)
+                .get('/api/posts/aggregated-by-location?platform=' + bad);
+            expect(res.status).toBe(400);
+            expect(res.body.error).toContain('canonical source category');
+        }
+    });
+
+    it('accepts every canonical platform value (forums included — 200, honest empty)', async () => {
+        const { CATEGORY_SLUGS } = require('../../src/config/categories');
+        for (const slug of CATEGORY_SLUGS) {
+            const res = await request(app)
+                .get('/api/posts/aggregated-by-location?platform=' + slug);
+            expect(res.status).toBe(200);
+            expect(Array.isArray(res.body)).toBe(true);
+        }
+    });
+
     it('excludes posts with empty or null location', async () => {
         const srcId = await insertSource('loc-posts-src-4');
         const jobId = await insertJob();
@@ -125,7 +147,7 @@ describe('GET /api/posts/aggregated-by-location', () => {
         expect(res.body).toEqual({ error: 'Invalid to date' });
     });
 
-    it('attaches lat/lng from CITY_COORDS lookup for known cities', async () => {
+    it('attaches lat/lng from the city registry for known cities', async () => {
         const srcId = await insertSource('loc-posts-coords');
         const jobId = await insertJob();
         const mvIds = await insertMethodologyVersions();
@@ -142,7 +164,7 @@ describe('GET /api/posts/aggregated-by-location', () => {
         expect(sf.lng).toBe(-122.4194);
     });
 
-    it('omits lat/lng (null) for unknown cities not in CITY_COORDS', async () => {
+    it('omits lat/lng (null) for unknown cities not in the registry', async () => {
         const srcId = await insertSource('loc-posts-unknown');
         const jobId = await insertJob();
         const mvIds = await insertMethodologyVersions();
@@ -180,6 +202,117 @@ describe('GET /api/posts/aggregated-by-location', () => {
             negative:        expect.any(Number),
             total:           expect.any(Number),
         });
+    });
+
+    // ─── City registry completeness + country codes (gaps G26 / G22) ──────────
+
+    describe('city registry', () => {
+        // The canonical registry the route consumes (full completeness/parity
+        // invariants live in tests/unit/pure/cityRegistry.test.js).
+        const { findCity } = require('../../public/js/config/cities.config.js');
+
+        // The 30 prototype launch cities — every one MUST resolve to
+        // coordinates + a country code, or the globe silently loses it.
+        const PROTOTYPE_LAUNCH_CITIES = [
+            'San Francisco', 'New York', 'Austin', 'Toronto', 'Mexico City',
+            'São Paulo', 'Buenos Aires', 'London', 'Paris', 'Berlin',
+            'Brussels', 'Amsterdam', 'Stockholm', 'Zurich', 'Warsaw',
+            'Lagos', 'Nairobi', 'Cape Town', 'Tel Aviv', 'Dubai',
+            'Bangalore', 'Mumbai', 'Singapore', 'Jakarta', 'Tokyo',
+            'Seoul', 'Beijing', 'Shanghai', 'Sydney', 'Melbourne',
+        ];
+
+        it('every prototype launch city resolves to coordinates and a country code', () => {
+            for (const city of PROTOTYPE_LAUNCH_CITIES) {
+                const entry = findCity(city);
+                expect(entry).not.toBeNull();
+                expect(typeof entry.lat).toBe('number');
+                expect(typeof entry.lng).toBe('number');
+                expect(entry.country).toMatch(/^[A-Z]{2}$/);
+            }
+        });
+
+        it('serves the ISO country code for known cities', async () => {
+            const srcId = await insertSource('loc-posts-country');
+            const jobId = await insertJob();
+            const mvIds = await insertMethodologyVersions();
+
+            await insertPostWithFullPipeline(srcId, jobId, mvIds, {
+                location: 'Brussels', externalId: 'lp-bru',
+            });
+
+            const res = await request(app).get('/api/posts/aggregated-by-location');
+            const bru = res.body.find(c => c.city === 'Brussels');
+            expect(bru).toMatchObject({
+                lat:     50.8503,
+                lng:     4.3517,
+                country: 'BE',
+            });
+        });
+
+        it('serves country: null for unknown cities and logs the registry hole loudly', async () => {
+            const srcId = await insertSource('loc-posts-unknown');
+            const jobId = await insertJob();
+            const mvIds = await insertMethodologyVersions();
+
+            // Unique name so the once-per-process warn dedupe cannot swallow it
+            const unknownCity = `Atlantis-${Date.now()}`;
+            await insertPostWithFullPipeline(srcId, jobId, mvIds, {
+                location: unknownCity, externalId: 'lp-unk-loud',
+            });
+
+            const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+            try {
+                const res = await request(app).get('/api/posts/aggregated-by-location');
+                const row = res.body.find(c => c.city === unknownCity);
+                expect(row).toMatchObject({ lat: null, lng: null, country: null });
+
+                const warned = warnSpy.mock.calls.some(args =>
+                    String(args[0]).includes('No coordinates registered')
+                    && String(args[0]).includes(unknownCity));
+                expect(warned).toBe(true);
+
+                // Second request: already warned — no repeat for the same city
+                warnSpy.mockClear();
+                await request(app).get('/api/posts/aggregated-by-location');
+                const repeated = warnSpy.mock.calls.some(args =>
+                    String(args[0]).includes(unknownCity));
+                expect(repeated).toBe(false);
+            } finally {
+                warnSpy.mockRestore();
+            }
+        });
+    });
+
+    // ─── Trailing-hour window (gap G16: vol/hr labels must be truthful) ───────
+
+    it('from= excludes posts collected before the trailing window', async () => {
+        const srcId = await insertSource('loc-posts-window');
+        const jobId = await insertJob();
+        const mvIds = await insertMethodologyVersions();
+
+        // One post 2 hours old, one fresh — both in the same city
+        await insertPostWithFullPipeline(srcId, jobId, mvIds, {
+            location: 'London', externalId: 'lpw-old',
+            collectedAt: new Date(Date.now() - 2 * 3600 * 1000),
+        });
+        await insertPostWithFullPipeline(srcId, jobId, mvIds, {
+            location: 'London', externalId: 'lpw-new',
+        });
+
+        // Unwindowed: both posts count
+        const all = await request(app).get('/api/posts/aggregated-by-location');
+        expect(all.body.find(c => c.city === 'London').total).toBe(2);
+
+        // Trailing hour: only the fresh post counts — this is what makes the
+        // frontend's "posts/hr" and "vol/hr" labels honest
+        const from = new Date(Date.now() - 3600 * 1000).toISOString();
+        const windowed = await request(app).get(
+            `/api/posts/aggregated-by-location?from=${encodeURIComponent(from)}`,
+        );
+        const london = windowed.body.find(c => c.city === 'London');
+        expect(london.total).toBe(1);
+        expect(london.sources.reduce((a, s) => a + s.total, 0)).toBe(1);
     });
 
     it('filters by both platform and date range', async () => {

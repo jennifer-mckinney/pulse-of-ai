@@ -136,4 +136,5 @@ async function saveRelevance(postId, jobId, mvId) {
     });
 }
 
-module.exports = { computeRelevance, saveRelevance, KEYWORD_LIST };
+// MODEL_NAME exported for scripts/replay.js (code identity of a replay).
+module.exports = { computeRelevance, saveRelevance, KEYWORD_LIST, MODEL_NAME };

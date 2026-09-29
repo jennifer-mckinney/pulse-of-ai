@@ -1,3 +1,13 @@
+> **SUPERSEDED (2026-09-28).** This globe.gl / Scrollama / 7-chapter plan is
+> historical. The shipped frontend follows the FuN.zip design-handoff
+> prototype, per Jennifer's direction-of-authority ruling ("what is in the
+> FuN.zip front end prototype needs to be supported in the backend",
+> 2026-09-28): a vanilla Canvas-2D dot globe (`public/js/globe.js`) with an
+> 11-beat scroll story (`public/js/story.js`, `public/js/config/story.config.js`),
+> no globe.gl, no Scrollama, no Mapbox, no `/api/config`. Superseded by:
+> PRD §4.3 (FR-18 revised to 11 beats, FR-25 canvas fallback) and the
+> frontend module list in `CLAUDE.md`.
+
 > Approved design (2026-07-05) — source: ~/.claude/plans/more-modern-professional-ethereal-hopcroft.md
 
 # Globe.gl Storytelling Migration — Pulse of AI Frontend

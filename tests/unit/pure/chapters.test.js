@@ -10,9 +10,9 @@
 //      highlightCities, isDemo}.
 //   - No unresolved {tokens} on DEMO_DATA (body OR stats); empty insights →
 //     FALLBACK_COPY + valid camera; camera follows the FIRST highlighted
-//     city; isDemo suffixes the card title; attacker-influenceable strings
-//     are esc()-escaped at token entry (defense in depth — consumers still
-//     render via textContent, never innerHTML).
+//     city; isDemo suffixes the card title; token values are RAW strings
+//     (textContent is the one XSS boundary — pre-escaping would
+//     double-encode; see the chapters.js header rule).
 
 'use strict';
 
@@ -21,10 +21,11 @@ const insightsMod = require('../../../public/js/insights');
 const storyConfig = require('../../../public/js/config/story.config');
 const utils = require('../../../public/js/utils');
 const data = require('../../../public/js/data');
+const design = require('../../../public/js/config/design.config');
 
 const { STORY, resolveChapter, FALLBACK_COPY } = chapters;
 const { computeInsights, MIN_TOTAL } = insightsMod;
-const { netSentiment, fmtNet, fmtCount } = utils;
+const { catLabel, netSentiment, fmtNet, fmtCount } = utils;
 
 const demoCities = data.normalizeCities(data.DEMO_DATA);
 const demoInsights = computeInsights(demoCities);
@@ -111,19 +112,19 @@ describe('resolveChapter() over DEMO_DATA', () => {
     test('volumeTop3: the three highest-volume demo cities in order', () => {
         const r = resolveChapter(beat('volume'), demoInsights, demoCities);
         expect(r.highlightCities.map(c => c.city))
-            .toEqual(['New York', 'Beijing', 'Tokyo']); // 400, 330, 292
+            .toEqual(['New York', 'Singapore', 'Amsterdam']); // 409, 370, 364
     });
 
     test('negativeTop3: the three coolest eligible cities, coolest first', () => {
         const r = resolveChapter(beat('negativity'), demoInsights, demoCities);
         expect(r.highlightCities.map(c => c.city))
-            .toEqual(['Berlin', 'London', 'São Paulo']); // −0.20, +0.08, +0.09
+            .toEqual(['Dubai', 'Beijing', 'London']); // −0.43, −0.39, −0.34
     });
 
     test('positiveTop3: the three warmest eligible cities, warmest first', () => {
         const r = resolveChapter(beat('positivity'), demoInsights, demoCities);
         expect(r.highlightCities.map(c => c.city))
-            .toEqual(['Bangalore', 'Tokyo', 'Seoul']); // +0.57, +0.57, +0.54
+            .toEqual(['Paris', 'Tel Aviv', 'Warsaw']); // +0.47, +0.45, +0.43
         // independent check against netSentiment itself
         const ranked = demoCities.filter(c => c.total >= MIN_TOTAL)
             .sort((a, b) => netSentiment(b) - netSentiment(a));
@@ -139,7 +140,7 @@ describe('resolveChapter() over DEMO_DATA', () => {
     test('summaryTrio: warmest + coolest + volume leader, deduplicated', () => {
         const r = resolveChapter(beat('summary'), demoInsights, demoCities);
         expect(r.highlightCities.map(c => c.city))
-            .toEqual(['Bangalore', 'Berlin', 'New York']);
+            .toEqual(['Paris', 'Dubai', 'New York']);
         expect(new Set(r.highlightCities).size).toBe(r.highlightCities.length);
     });
 
@@ -171,47 +172,58 @@ describe('resolveChapter() over DEMO_DATA', () => {
 
     test('overview stats resolve to the hand-computed demo values', () => {
         const r = resolveChapter(beat('overview'), demoInsights, demoCities);
-        // DEMO_DATA sums: total 3,062; net (1539 − 566) / 3062 ≈ +0.32
+        // Generated DEMO_DATA sums (deterministic — seeded by registry city
+        // ids): total 7,816; net (2953 − 2148) / 7816 ≈ +0.10
         expect(r.stats).toEqual([
-            ['posts / hour', '3,062'],
-            ['global sentiment', '+0.32'],
-            ['cities reporting', '12'],
+            ['posts / hour', '7,816'],
+            ['global sentiment', '+0.10'],
+            ['cities reporting', '30'],
         ]);
-        expect(fmtCount(demoInsights.globalTotals.total)).toBe('3,062');
-        expect(fmtNet(netSentiment(demoInsights.globalTotals))).toBe('+0.32');
+        expect(fmtCount(demoInsights.globalTotals.total)).toBe('7,816');
+        expect(fmtNet(netSentiment(demoInsights.globalTotals))).toBe('+0.10');
     });
 
     test('volume stats are the top-three city/volume pairs', () => {
         const r = resolveChapter(beat('volume'), demoInsights, demoCities);
         expect(r.stats).toEqual([
-            ['New York', '400/hr'],
-            ['Beijing', '330/hr'],
-            ['Tokyo', '292/hr'],
+            ['New York', '409/hr'],
+            ['Singapore', '370/hr'],
+            ['Amsterdam', '364/hr'],
         ]);
     });
 
     test('divide card interpolates the widest-divide derivation', () => {
         const d = insightsMod.widestCategoryDivide(demoCities);
         const r = resolveChapter(beat('divide'), demoInsights, demoCities);
-        expect(r.cardBody).toContain(`In ${d.city.city}, ${d.hi.category} sources run at ${fmtNet(d.hi.net)}`);
+        // Category tokens interpolate the registry DISPLAY label
+        // ('Developer', 'Blogs', 'Non-profit'), never the raw slug.
+        expect(r.cardBody).toContain(`In ${d.city.city}, ${catLabel(d.hi.category)} sources run at ${fmtNet(d.hi.net)}`);
         expect(r.cardBody).toContain(`a ${d.span.toFixed(2)} divergence`);
         expect(r.stats[2]).toEqual(['divergence', `${d.span.toFixed(2)} — global max`]);
     });
 
-    test('overview and summary interpolate the DERIVED category count — no hardcoded editorial claims', () => {
-        // The payload cannot support "50 sources" / "7 categories" claims;
-        // the count must come from ribbonRows (5 categories in DEMO_DATA).
-        const catCount = insightsMod.ribbonRows(demoCities).length;
-        expect(catCount).toBe(5); // fixture sanity — demo is NOT 7 categories
+    test('overview and summary interpolate the CANONICAL category count (still derived, never hardcoded)', () => {
+        // The count comes from allCategoryRows — the canonical taxonomy
+        // (design.config CATEGORIES) padded over the data — so the copy
+        // matches the taxonomy the ribbon/chips/legend enumerate even when
+        // some categories have no posts this hour. "50 sources" remains an
+        // editorial claim the payload cannot back and stays banned.
+        const catCount = insightsMod.allCategoryRows(demoCities).length;
+        expect(catCount).toBe(design.CATEGORIES.length); // 8 — full taxonomy
 
         const overview = resolveChapter(beat('overview'), demoInsights, demoCities);
         expect(overview.cardBody).not.toContain('50 sources');
-        expect(overview.cardBody).not.toContain('7 categories');
         expect(overview.cardBody).toContain(`${catCount} source categories`);
 
         const summary = resolveChapter(beat('summary'), demoInsights, demoCities);
-        expect(summary.cardBody).not.toContain('7 source categories');
         expect(summary.cardBody).toContain(`${catCount} source categories`);
+    });
+
+    test('drivers "categories tracked" stat reports the canonical count', () => {
+        const r = resolveChapter(beat('drivers'), demoInsights, demoCities);
+        const tracked = r.stats.find(([label]) => label === 'categories');
+        expect(tracked).toEqual(
+            ['categories', `${design.CATEGORIES.length} tracked`]);
     });
 
     test('positivity interpolates the warmest city\'s dominant category (mirrors negativity)', () => {
@@ -221,7 +233,7 @@ describe('resolveChapter() over DEMO_DATA', () => {
         // name the dominant source category of the warmest city instead.
         expect(r.cardBody).not.toContain('builder communities');
         const topCat = insightsMod.catBreakdown(r.highlightCities[0])[0];
-        expect(r.cardBody).toContain(topCat.category);
+        expect(r.cardBody).toContain(catLabel(topCat.category));
     });
 
     test('messengers card names the warmest/coldest categories and their lead sources', () => {
@@ -230,8 +242,8 @@ describe('resolveChapter() over DEMO_DATA', () => {
         const hi = bySent[0];
         const lo = bySent[bySent.length - 1];
         const r = resolveChapter(beat('messengers'), demoInsights, demoCities);
-        expect(r.cardBody).toContain(`${hi.category} sources run warmest this hour (${fmtNet(hi.net)}), led by ${hi.topSource}`);
-        expect(r.cardBody).toContain(`${lo.category} sources run coldest (${fmtNet(lo.net)}), led by ${lo.topSource}`);
+        expect(r.cardBody).toContain(`${catLabel(hi.category)} sources run warmest this hour (${fmtNet(hi.net)}), led by ${hi.topSource}`);
+        expect(r.cardBody).toContain(`${catLabel(lo.category)} sources run coldest (${fmtNet(lo.net)}), led by ${lo.topSource}`);
         expect(r.cardBody).toContain(`a ${(hi.net - lo.net).toFixed(2)} gap`);
     });
 
@@ -378,11 +390,13 @@ describe('resolveChapter() — isDemo propagation (demo-data transparency)', () 
     });
 });
 
-describe('resolveChapter() — XSS defense in depth (esc on data-derived names)', () => {
-    // Attacker-controlled strings enter via API city/source/category names.
-    // Consumers render via textContent, but the token builders must ALSO
-    // HTML-escape these values so a wrong consumer cannot inject markup.
+describe('resolveChapter() — raw token values (textContent is the XSS boundary)', () => {
+    // Attacker-influenceable strings enter via API city/source/category
+    // names. The ONE escaping boundary is the consumers' textContent sink —
+    // token values must pass through RAW, because pre-escaping here
+    // double-encodes ('&' would render on the page as '&amp;').
     const XSS_CITY = '<img src=x onerror=alert(1)>';
+    const SPICY_CITY = 'A&W <City> "quoted" \'town\'';
 
     // The hostile city dominates every ranking (volume, warmth) and its
     // hostile source/category dominate the ribbon, so the payloads flow
@@ -414,36 +428,55 @@ describe('resolveChapter() — XSS defense in depth (esc on data-derived names)'
     }
 
     test.each(STORY.map(b => [b.id, b]))(
-        'beat "%s" card body and stats contain no raw < or > from hostile data', (_id, b) => {
+        'beat "%s" card body and stats never contain HTML entities (no pre-escaping)', (_id, b) => {
             const cities = maliciousCities();
             const ins = computeInsights(cities);
             const r = resolveChapter(b, ins, cities);
-            expect(r.cardBody).not.toContain('<');
-            expect(r.cardBody).not.toContain('>');
-            for (const [label, value] of r.stats) {
-                expect(label).not.toContain('<');
-                expect(label).not.toContain('>');
-                expect(value).not.toContain('<');
-                expect(value).not.toContain('>');
+            // Double-encode canary: an interpolated '&' must stay '&', never
+            // become '&amp;' (which textContent would then render literally).
+            for (const text of [r.cardBody].concat(r.stats.flat())) {
+                expect(text).not.toMatch(/&(amp|lt|gt|quot|#39);/);
             }
         });
 
-    test('a hostile city name is escaped in the volume card (&lt;img …)', () => {
+    test('a hostile city name passes through RAW in the volume card', () => {
         const cities = maliciousCities();
         const ins = computeInsights(cities);
         expect(ins.highestVolumeCity.city).toBe(XSS_CITY); // it wins volume
         const r = resolveChapter(beat('volume'), ins, cities);
-        expect(r.cardBody).toContain('&lt;img');
-        expect(r.cardBody).not.toContain('<img');
+        expect(r.cardBody).toContain(XSS_CITY);        // exact raw string
+        expect(r.cardBody).not.toContain('&lt;img');   // never entity-encoded
     });
 
-    test('hostile source and category names are escaped in the messengers card', () => {
+    test('a city name with &<>\'" renders as the exact raw string', () => {
+        const cities = data.normalizeCities([
+            { city: SPICY_CITY, lat: 10, lng: 20,
+              positive: 900, neutral: 50, negative: 50, total: 1000,
+              sources: [{ source_name: 'reddit', source_category: 'social',
+                  positive: 900, neutral: 50, negative: 50, total: 1000 }] },
+            { city: 'Plainville', lat: 0, lng: 0,
+              positive: 1, neutral: 2, negative: 7, total: 10,
+              sources: [{ source_name: 'reddit', source_category: 'social',
+                  positive: 1, neutral: 2, negative: 7, total: 10 }] },
+            { city: 'Midtown', lat: 5, lng: 5,
+              positive: 5, neutral: 5, negative: 5, total: 15,
+              sources: [{ source_name: 'wire', source_category: 'news',
+                  positive: 5, neutral: 5, negative: 5, total: 15 }] },
+        ]);
+        const ins = computeInsights(cities);
+        const r = resolveChapter(beat('volume'), ins, cities);
+        expect(r.cardBody).toContain(SPICY_CITY);      // raw, character for character
+        expect(r.cardBody).not.toContain('&amp;');
+        expect(r.cardBody).not.toContain('&quot;');
+        expect(r.cardBody).not.toContain('&#39;');
+    });
+
+    test('hostile source and category names pass through RAW in the messengers card', () => {
         const cities = maliciousCities();
         const ins = computeInsights(cities);
         const r = resolveChapter(beat('messengers'), ins, cities);
-        expect(r.cardBody).toContain('&lt;script&gt;');
-        expect(r.cardBody).not.toContain('<script>');
-        expect(r.cardBody).not.toContain('"><b>');
+        expect(r.cardBody).toContain('<script>steal()</script>');
+        expect(r.cardBody).not.toContain('&lt;script&gt;');
     });
 });
 

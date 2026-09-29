@@ -2,7 +2,10 @@
 // scripts/seed.js
 // Seeds the database with:
 //   1. All 50 data_sources (7 categories) — config includes poll_interval_sec, URL/subreddit
-//   2. Initial methodology_versions for sentiment v1.0.0, relevance v1.0.0, discourse v1.0.0-DQI
+//   2. Methodology_versions: sentiment 1.0.0, relevance 1.0.0, discourse
+//      1.0.0-DQI, bias 1.1.0 (presentation-config bump — see the entry's
+//      comment), ingest 1.0.0, audit_narration 1.1.0 — rows defined in
+//      src/config/methodology-registry.js (shared with migration 009)
 // Safe to re-run: uses INSERT ... ON CONFLICT DO NOTHING
 
 'use strict';
@@ -432,56 +435,10 @@ const DATA_SOURCES = [
 ];
 
 // ─── Methodology Versions ─────────────────────────────────────────────────────
-// Registered BEFORE any inference runs. Plain-English justification required.
-
-const METHODOLOGY_VERSIONS = [
-    {
-        component: 'sentiment',
-        version: '1.0.0',
-        model_name: 'afinn-sentiment-npm-v5.0.2',
-        config: {
-            positive_threshold: 0.05,
-            negative_threshold: -0.05,
-            accuracy_target: 0.99,
-            accuracy_note: 'Phase 1 baseline — validates audit pattern. RoBERTa v2.0.0 targets 99% on benchmark.',
-        },
-        justification: 'AFINN-165 English word list (Nielsen 2011). Comparative score = raw_score / token_count (normalizes for post length). Thresholds ±0.05 separate meaningful sentiment from noise, derived from distribution analysis of AI discourse corpus (pulse-of-ai-evidence-based-thresholds.pdf §3). Phase 1 establishes the audit trail pattern; Phase 2 upgrades to RoBERTa for the 99% accuracy target.',
-    },
-    {
-        component: 'relevance',
-        version: '1.0.0',
-        model_name: 'keyword-relevance-v1.0',
-        config: {
-            keywords: ['artificial intelligence', 'machine learning', 'deep learning', 'neural network', 'chatgpt', 'gpt', 'llm', 'ai', 'automation', 'algorithm', 'robot', 'autonomous', 'computer vision', 'natural language processing', 'generative ai', 'openai', 'anthropic', 'foundation model'],
-            score_per_match: 0.1,
-            max_score: 1.0,
-            ai_relevance_threshold: 0.99,
-        },
-        justification: 'Domain keyword taxonomy from AI academic literature and conference proceedings. Each matched keyword contributes 0.1 to relevance score, capped at 1.0. Threshold 0.99 ensures near-perfect AI-relevance filtering. Phase 2 upgrades to embedding-based hybrid scoring for improved recall on implicit AI discourse.',
-    },
-    {
-        component: 'discourse',
-        version: '1.0.0-DQI',
-        model_name: 'deliberative-quality-index-v1.0',
-        config: {
-            dimensions: {
-                participation:          { weight: 0.15 },
-                justification_level:    { weight: 0.30 },
-                justification_content:  { weight: 0.15 },
-                counterargument_respect: { weight: 0.20 },
-                constructiveness:       { weight: 0.10 },
-                respect_for_groups:     { weight: 0.10 },
-            },
-            source_category_weights: {
-                academic: 1.5, policy: 1.3, news: 1.2, developer: 1.1, nonprofit: 1.0, blog: 0.9, social: 0.8,
-            },
-            accuracy_target: 0.99,
-            novelty_cosine_threshold: 0.4,
-            echo_chamber_cosine_threshold: 0.15,
-        },
-        justification: 'Deliberative Quality Index (DQI) — Steenbergen et al. (2003), operationalizing Habermas deliberative democracy theory. Applied to AI discourse with four improvements: (1) semantic argument deduplication via embeddings (cosine > 0.4 = novel), (2) echo chamber detection via cross-platform spread, (3) source authority weighting by category credibility, (4) NLP claim-evidence linkage detection. See TECHNICAL_SPEC.md §18.',
-    },
-];
+// Registered BEFORE any inference runs. The rows live in ONE shared source,
+// src/config/methodology-registry.js, which migration 009 mirrors field for
+// field (tests/unit/pure/methodologyRegistry.test.js enforces the match).
+const { METHODOLOGY_VERSIONS } = require('../src/config/methodology-registry');
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 

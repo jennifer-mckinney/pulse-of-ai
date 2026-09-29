@@ -33,7 +33,9 @@
         audit:       '/api/audit/',                       // + postId → audit receipt
         health:      '/api/health',                       // service/source health
         bias:        '/api/bias/latest',                  // bias monitor alerts
+        biasHistory: '/api/bias/history',                 // 12h alert history (health drawer)
         methodology: '/api/methodology',                  // versioned model table
+        sources:     '/api/sources',                      // source registry (active flags)
         timeseries:  '/api/sources/timeseries',           // ribbon sparklines
         themes:      '/api/themes',                       // warm/cold theme rows
         refresh:     '/api/refresh',                      // manual refresh trigger

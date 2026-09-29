@@ -566,6 +566,8 @@ Triggers a data collection + processing run. Rate limited: 1 request per minute 
 ```
 **Response 429:** `{ "error": "Rate limit exceeded. Try again in 60 seconds." }`
 
+**Response 403:** `{ "error": "Cross-site request rejected" }`. The endpoint is unauthenticated and changes state, and a cross-site "simple" POST needs no CORS preflight, so the server checks where each request came from. It allows `Sec-Fetch-Site: same-origin | none`. When that header is absent, it allows the request only if `Origin` (or, failing that, `Referer`) names the server's own host. Every other request is rejected before the rate limiter runs. The endpoint never serves CORS headers, and its `OPTIONS` preflight gets a 403.
+
 ---
 
 ### `GET /api/audit/:post_id`

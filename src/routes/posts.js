@@ -1,7 +1,7 @@
 // src/routes/posts.js
 // GET /api/posts/aggregated-by-location
 //
-// Returns sentiment counts grouped by city for the Mapbox map.
+// Returns sentiment counts grouped by city for the globe frontend.
 // Includes lat/lng from a hardcoded lookup of major cities (Phase E: geocoding service).
 //
 // Query params:
@@ -9,53 +9,50 @@
 //   ?from=ISO8601         start of date range
 //   ?to=ISO8601           end of date range
 //
-// City coordinates: common AI-discourse cities hardcoded for MVP.
-// Replace with a PostGIS lookup or geocoding API in Phase E.
+// City coordinates come from the CANONICAL city registry
+// (public/js/config/cities.config.js) — the same file the browser loads, so
+// backend geocoding and frontend rendering can never drift (see
+// docs/research/2026-07-06-city-layer-configurability.md). findCity is
+// case-insensitive and alias-aware (Grafana gazetteer lookup semantics).
+// Replace with a registry-seeded cities table / geocoding API in Phase E.
 
 'use strict';
 
-const { Router } = require('express');
-const { dbAll }  = require('../db/connection');
+const { Router }   = require('express');
+const { dbAll }    = require('../db/connection');
+// Layering note: server code requiring a public/-served file is deliberate —
+// the registry is UMD dual-export and this repo has no build step to copy a
+// shared src/config file into public/. The registry file is the source of
+// record for both consumers.
+const { findCity } = require('../../public/js/config/cities.config.js');
+const { CATEGORY_SLUGS, isCanonicalCategory } = require('../config/categories');
+const { responseCache } = require('../middleware/response-cache');
 
 const router = Router();
 
-// ─── Static city geocoder (lat/lng for known cities) ─────────────────────────
-// Covers the top cities likely to appear in AI discourse data.
-// Unknown cities are returned with lat/lng omitted (frontend handles gracefully).
-const CITY_COORDS = {
-    'San Francisco': { lat: 37.7749,  lng: -122.4194 },
-    'New York':      { lat: 40.7128,  lng:  -74.0060 },
-    'London':        { lat: 51.5074,  lng:   -0.1278 },
-    'Tokyo':         { lat: 35.6762,  lng:  139.6503 },
-    'Berlin':        { lat: 52.5200,  lng:   13.4050 },
-    'Paris':         { lat: 48.8566,  lng:    2.3522 },
-    'Seoul':         { lat: 37.5665,  lng:  126.9780 },
-    'Beijing':       { lat: 39.9042,  lng:  116.4074 },
-    'Shanghai':      { lat: 31.2304,  lng:  121.4737 },
-    'Bangalore':     { lat: 12.9716,  lng:   77.5946 },
-    'Mumbai':        { lat: 19.0760,  lng:   72.8777 },
-    'Sydney':        { lat: -33.8688, lng:  151.2093 },
-    'Toronto':       { lat: 43.6532,  lng:  -79.3832 },
-    'Vancouver':     { lat: 49.2827,  lng: -123.1207 },
-    'Amsterdam':     { lat: 52.3676,  lng:    4.9041 },
-    'Stockholm':     { lat: 59.3293,  lng:   18.0686 },
-    'Singapore':     { lat:  1.3521,  lng:  103.8198 },
-    'Zurich':        { lat: 47.3769,  lng:    8.5417 },
-    'Tel Aviv':      { lat: 32.0853,  lng:   34.7818 },
-    'Chicago':       { lat: 41.8781,  lng:  -87.6298 },
-    'Los Angeles':   { lat: 34.0522,  lng: -118.2437 },
-    'Seattle':       { lat: 47.6062,  lng: -122.3321 },
-    'Boston':        { lat: 42.3601,  lng:  -71.0589 },
-    'Austin':        { lat: 30.2672,  lng:  -97.7431 },
-    'Lagos':         { lat:  6.5244,  lng:    3.3792 },
-    'Nairobi':       { lat: -1.2921,  lng:   36.8219 },
-    'São Paulo':     { lat: -23.5505, lng:  -46.6333 },
-    'Buenos Aires':  { lat: -34.6037, lng:  -58.3816 },
-    'Cairo':         { lat: 30.0444,  lng:   31.2357 },
-    'Moscow':        { lat: 55.7558,  lng:   37.6173 },
-    'Dublin':        { lat: 53.3498,  lng:   -6.2603 },
-    'Jakarta':       { lat: -6.2088,  lng:  106.8456 },
-};
+// Locations already warned about — warn ONCE per unknown city per process so
+// a silent registry hole shows up in the logs without flooding them.
+const warnedUnknownLocations = new Set();
+
+/**
+ * Log (once per process per city) every location the city registry cannot
+ * resolve. The frontend drops null-coord rows from the globe, so a registry
+ * hole makes cities vanish — this makes the drop LOUD (gap G26).
+ * @param {string[]} cityNames  location values from the aggregation query
+ */
+function warnUnknownLocations(cityNames) {
+    const fresh = cityNames.filter(
+        name => !findCity(name) && !warnedUnknownLocations.has(name),
+    );
+    if (fresh.length === 0) return;
+    for (const name of fresh) warnedUnknownLocations.add(name);
+    console.warn(
+        `[posts] No coordinates registered for ${fresh.length} location(s): `
+        + `${fresh.join(', ')} — these rows are served with lat/lng null and `
+        + 'the globe frontend drops them. Add entries to '
+        + 'public/js/config/cities.config.js.',
+    );
+}
 
 /**
  * Determine the dominant sentiment indicator for a city row.
@@ -67,7 +64,10 @@ function getDominant(row) {
     return Object.entries(counts).sort((a, b) => b[1] - a[1])[0][0];
 }
 
-router.get('/posts/aggregated-by-location', async (req, res) => {
+// F3: 10s in-process cache, keyed per query-string (platform/from/to windows
+// cache independently). The story frontend re-requests this snapshot on every
+// poll and beat change; the underlying data moves on the 2-3 minute cycle.
+router.get('/posts/aggregated-by-location', responseCache(10000), async (req, res) => {
     try {
         const { platform, from, to } = req.query;
 
@@ -79,6 +79,15 @@ router.get('/posts/aggregated-by-location', async (req, res) => {
         const params = [];
 
         if (platform) {
+            // Validate against the canonical taxonomy (src/config/categories
+            // — the same registry the frontend renders): a non-canon value
+            // is a caller error, not an empty result set.
+            if (!isCanonicalCategory(platform)) {
+                return res.status(400).json({
+                    error: 'platform must be a canonical source category: '
+                        + CATEGORY_SLUGS.join(', '),
+                });
+            }
             params.push(platform);
             conditions.push(`ds.category = $${params.length}`);
         }
@@ -152,19 +161,28 @@ router.get('/posts/aggregated-by-location', async (req, res) => {
             });
         }
 
-        // Attach lat/lng, dominant indicator, and per-source breakdown
-        const cities = rows.map(r => ({
-            city:         r.city,
-            lat:          CITY_COORDS[r.city]?.lat  ?? null,
-            lng:          CITY_COORDS[r.city]?.lng  ?? null,
-            positive:     r.positive,
-            neutral:      r.neutral,
-            negative:     r.negative,
-            total:        r.total,
-            dominant:     getDominant(r),
-            last_updated: r.last_updated,
-            sources:      sourcesByCity[r.city] || [],   // per-source breakdown for stacked bar
-        }));
+        // Registry-hole visibility: unknown locations are logged loudly (once
+        // per city per process) because the frontend drops null-coord rows.
+        warnUnknownLocations(rows.map(r => r.city));
+
+        // Attach lat/lng/country from the registry (case-insensitive +
+        // alias-aware), dominant indicator, and per-source breakdown
+        const cities = rows.map(r => {
+            const entry = findCity(r.city);
+            return {
+                city:         r.city,
+                lat:          entry ? entry.lat     : null,
+                lng:          entry ? entry.lng     : null,
+                country:      entry ? entry.country : null,
+                positive:     r.positive,
+                neutral:      r.neutral,
+                negative:     r.negative,
+                total:        r.total,
+                dominant:     getDominant(r),
+                last_updated: r.last_updated,
+                sources:      sourcesByCity[r.city] || [],   // per-source stacked bar
+            };
+        });
 
         return res.json(cities);
     /* istanbul ignore start -- Database failure; requires error injection testing infrastructure */

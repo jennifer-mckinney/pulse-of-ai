@@ -1,12 +1,15 @@
 // tests/integration/api.sources.timeseries.test.js
 // Tests for GET /api/sources/timeseries
-// Verifies: hourly buckets per source category, zero-fill, hours clamp, validation.
+// Verifies: canonical category enumeration (one row per canon category,
+// always — forums honest zero), hourly buckets, zero-fill, hours clamp,
+// validation.
 
 'use strict';
 
 const request = require('supertest');
 const app     = require('../../src/server');
 const { insertSource, insertJob, insertMethodologyVersions, insertPostWithFullPipeline } = require('./helpers');
+const { CATEGORY_SLUGS } = require('../../src/config/categories');
 
 // Floor a Date to the start of its hour — mirrors PostgreSQL date_trunc('hour', ...)
 function hourFloor(date) {
@@ -21,10 +24,19 @@ function minutesAgo(mins) {
 }
 
 describe('GET /api/sources/timeseries', () => {
-    it('returns 200 with an empty array when no posts exist', async () => {
+    it('enumerates every canonical category (all-zero series) even when no posts exist', async () => {
+        // Enumeration comes from the canon config, never SELECT DISTINCT
+        // over the data — an empty DB still serves the full taxonomy as
+        // honest zeros.
         const res = await request(app).get('/api/sources/timeseries');
         expect(res.status).toBe(200);
-        expect(res.body).toEqual([]);
+        expect(res.body.map(e => e.category)).toEqual(CATEGORY_SLUGS);
+        for (const entry of res.body) {
+            expect(entry.top_site).toBeNull();
+            expect(entry.words).toEqual([]);
+            expect(entry.series).toHaveLength(12);
+            expect(entry.series.every(b => b.total === 0)).toBe(true);
+        }
     });
 
     it('groups sentiment counts into hourly buckets per category', async () => {
@@ -51,8 +63,8 @@ describe('GET /api/sources/timeseries', () => {
         const res = await request(app).get('/api/sources/timeseries');
         expect(res.status).toBe(200);
 
-        // Categories ordered alphabetically: news before social
-        expect(res.body.map(e => e.category)).toEqual(['news', 'social']);
+        // One row per canonical category, in canon (registry) order
+        expect(res.body.map(e => e.category)).toEqual(CATEGORY_SLUGS);
 
         const socialEntry = res.body.find(e => e.category === 'social');
         const newsEntry   = res.body.find(e => e.category === 'news');
@@ -121,7 +133,7 @@ describe('GET /api/sources/timeseries', () => {
         expect(totals).toBe(1);   // only the recent post is inside the window
     });
 
-    it('omits categories with zero posts in the window', async () => {
+    it('serves categories with zero posts in the window as honest all-zero series', async () => {
         const academic = await insertSource('ts-academic', 'academic');
         const social   = await insertSource('ts-social-2', 'social');
         const jobId    = await insertJob();
@@ -135,18 +147,46 @@ describe('GET /api/sources/timeseries', () => {
 
         const res = await request(app).get('/api/sources/timeseries');
         expect(res.status).toBe(200);
-        expect(res.body.map(e => e.category)).toEqual(['social']);
+        expect(res.body.map(e => e.category)).toEqual(CATEGORY_SLUGS);
+        const academicEntry = res.body.find(e => e.category === 'academic');
+        expect(academicEntry.series.every(b => b.total === 0)).toBe(true);
+        expect(academicEntry.top_site).toBeNull();
+        const socialEntry = res.body.find(e => e.category === 'social');
+        expect(socialEntry.series.some(b => b.total > 0)).toBe(true);
     });
 
-    it('omits categories whose only posts are future-timestamped (no all-zero resurrection)', async () => {
+    it('forums is first-class canon with honest zeros — never invented volume', async () => {
+        // Forums has ZERO seeded sources by design (the prototype renders
+        // the category; the top-50 registry carries no forum source). It
+        // must still enumerate — all-zero series, no top_site, no words.
+        const social = await insertSource('ts-forums-peer', 'social');
+        const jobId  = await insertJob();
+        const mvIds  = await insertMethodologyVersions();
+        await insertPostWithFullPipeline(social, jobId, mvIds,
+            { externalId: 'ts-fz1', collectedAt: minutesAgo(5) });
+
+        const res = await request(app).get('/api/sources/timeseries');
+        expect(res.status).toBe(200);
+        const forums = res.body.find(e => e.category === 'forums');
+        expect(forums).toBeDefined();
+        expect(forums.top_site).toBeNull();
+        expect(forums.words).toEqual([]);
+        expect(forums.series).toHaveLength(12);
+        expect(forums.series.every(
+            b => b.positive === 0 && b.neutral === 0 && b.negative === 0
+                && b.total === 0)).toBe(true);
+    });
+
+    it('never serves a non-canonical category (and future rows cannot leak counts)', async () => {
         const future = await insertSource('ts-future',  'futurecat');
         const social = await insertSource('ts-present', 'social');
         const jobId  = await insertJob();
         const mvIds  = await insertMethodologyVersions();
 
-        // Future-timestamped row (bad upstream clock / ingestion bug), 2h ahead:
-        // it can never match a returned bucket, so without an upper bound on the
-        // counts window its category came back as an all-zero series.
+        // Future-timestamped row (bad upstream clock / ingestion bug), 2h
+        // ahead, in a NON-canonical category: the canon enumeration never
+        // serves 'futurecat', and the counts upper bound keeps the future
+        // row out of every returned bucket.
         await insertPostWithFullPipeline(future, jobId, mvIds,
             { externalId: 'ts-f1', collectedAt: new Date(Date.now() + 2 * 60 * 60 * 1000) });
         await insertPostWithFullPipeline(social, jobId, mvIds,
@@ -154,7 +194,8 @@ describe('GET /api/sources/timeseries', () => {
 
         const res = await request(app).get('/api/sources/timeseries');
         expect(res.status).toBe(200);
-        expect(res.body.map(e => e.category)).toEqual(['social']);
+        expect(res.body.map(e => e.category)).toEqual(CATEGORY_SLUGS);
+        expect(res.body.some(e => e.category === 'futurecat')).toBe(false);
     });
 
     it('clamps hours above 48 down to 48', async () => {
@@ -194,5 +235,157 @@ describe('GET /api/sources/timeseries', () => {
         const bad2 = await request(app).get('/api/sources/timeseries?hours=1.5');
         expect(bad2.status).toBe(400);
         expect(bad2.body).toHaveProperty('error');
+
+        // F5: negative windows are malformed, not clampable.
+        const bad3 = await request(app).get('/api/sources/timeseries?hours=-5');
+        expect(bad3.status).toBe(400);
+        expect(bad3.body).toHaveProperty('error');
+    });
+
+    // ─── Ribbon metadata: busiest source + cue words per category ─────────────
+
+    describe('ribbon metadata (top_site + words)', () => {
+        it('top_site is the display name of the category\'s busiest source in the window', async () => {
+            const busy  = await insertSource('ts-site-busy',  'social');
+            const quiet = await insertSource('ts-site-quiet', 'social');
+            const jobId = await insertJob();
+            const mvIds = await insertMethodologyVersions();
+
+            // busy: 2 posts, quiet: 1 post — busy wins
+            await insertPostWithFullPipeline(busy, jobId, mvIds,
+                { externalId: 'tsb-1', collectedAt: minutesAgo(5) });
+            await insertPostWithFullPipeline(busy, jobId, mvIds,
+                { externalId: 'tsb-2', collectedAt: minutesAgo(10) });
+            await insertPostWithFullPipeline(quiet, jobId, mvIds,
+                { externalId: 'tsq-1', collectedAt: minutesAgo(5) });
+
+            const res = await request(app).get('/api/sources/timeseries');
+            const social = res.body.find(e => e.category === 'social');
+            // insertSource sets display_name = name
+            expect(social.top_site).toBe('ts-site-busy');
+        });
+
+        it('words are the category\'s two most-matched relevance keywords in the window', async () => {
+            const src   = await insertSource('ts-words-src', 'news');
+            const jobId = await insertJob();
+            const mvIds = await insertMethodologyVersions();
+
+            // "regulation" 3×, "safety" 2×, "misc" 1× → top-2 = regulation, safety
+            for (let i = 0; i < 3; i++) {
+                await insertPostWithFullPipeline(src, jobId, mvIds, {
+                    externalId: `tsw-r${i}`, collectedAt: minutesAgo(5),
+                    keywords: ['regulation'],
+                });
+            }
+            for (let i = 0; i < 2; i++) {
+                await insertPostWithFullPipeline(src, jobId, mvIds, {
+                    externalId: `tsw-s${i}`, collectedAt: minutesAgo(10),
+                    keywords: ['safety'],
+                });
+            }
+            await insertPostWithFullPipeline(src, jobId, mvIds, {
+                externalId: 'tsw-m0', collectedAt: minutesAgo(15),
+                keywords: ['misc'],
+            });
+
+            const res = await request(app).get('/api/sources/timeseries');
+            const news = res.body.find(e => e.category === 'news');
+            expect(news.words).toEqual(['regulation', 'safety']);
+        });
+
+        it('words is [] and top_site still set for categories whose posts matched no keywords', async () => {
+            const { dbRun } = require('../../src/db/connection');
+            const crypto2   = require('crypto');
+            const src   = await insertSource('ts-nokw-src', 'policy');
+            const jobId = await insertJob();
+            const mvIds = await insertMethodologyVersions();
+
+            // Sentiment-scored post with NO relevance row at all
+            const content = 'No-keyword post';
+            const hash    = crypto2.createHash('sha256').update(content).digest('hex');
+            const post = await dbRun(
+                `INSERT INTO raw_posts (source_id, external_id, content, content_hash, location, collected_at)
+                 VALUES ($1, 'tsnk-1', $2, $3, 'London', $4) RETURNING id`,
+                [src, content, hash, minutesAgo(5).toISOString()],
+            );
+            const audit = await dbRun(
+                `INSERT INTO decision_audit_log
+                    (raw_post_id, job_id, methodology_version_id, decision_type, model_name, input_hash, output)
+                 VALUES ($1, $2, $3, 'sentiment', 'afinn-sentiment-v5', $4, '{}'::jsonb)
+                 RETURNING id`,
+                [post.id, jobId, mvIds.sentimentMvId, hash],
+            );
+            await dbRun(
+                `INSERT INTO sentiment_results
+                    (raw_post_id, audit_id, score, comparative, indicator, positive_words, negative_words, token_count)
+                 VALUES ($1, $2, 1, 0.1, 'positive', '{}', '{}', 5)`,
+                [post.id, audit.id],
+            );
+
+            const res = await request(app).get('/api/sources/timeseries');
+            const policy = res.body.find(e => e.category === 'policy');
+            expect(policy.top_site).toBe('ts-nokw-src');
+            expect(policy.words).toEqual([]);
+        });
+    });
+
+    // ─── One window anchor for series + metadata (PR #8 review) ───────────────
+    // The counts, top-site and cue-word queries used to evaluate NOW()
+    // independently, so an hour boundary between them described different
+    // windows. The route now reads ONE hour anchor (src/db/clock.js) and
+    // passes it to all three. Pinning that anchor 3 hours in the past proves
+    // every query uses it: posts after the anchored window vanish from the
+    // series AND the metadata, even though they are "recent" by real NOW().
+    describe('single window anchor', () => {
+        const clock = require('../../src/db/clock');
+        afterEach(() => jest.restoreAllMocks());
+
+        it('series, top_site and words all describe the same anchored window, with exact boundaries', async () => {
+            const inside  = await insertSource('ts-anchor-in',  'social');
+            const outside = await insertSource('ts-anchor-out', 'social');
+            const jobId = await insertJob();
+            const mvIds = await insertMethodologyVersions();
+
+            const anchor = hourFloor(new Date(Date.now() - 3 * 3600 * 1000));
+            const at = (ms) => new Date(anchor.getTime() + ms);
+            const HOUR = 3600 * 1000;
+            const hours = 4;
+
+            // Inside: first instant of the oldest bucket, and the last
+            // millisecond of the newest (anchor) bucket.
+            await insertPostWithFullPipeline(inside, jobId, mvIds, {
+                externalId: 'tsa-in-1', collectedAt: at(-(hours - 1) * HOUR), keywords: ['anchored'],
+            });
+            await insertPostWithFullPipeline(inside, jobId, mvIds, {
+                externalId: 'tsa-in-2', collectedAt: at(HOUR - 1), keywords: ['anchored'],
+            });
+            // Outside: one ms before the window, and the first instant after
+            // the newest bucket (+ plenty of "real now" posts after it).
+            await insertPostWithFullPipeline(outside, jobId, mvIds, {
+                externalId: 'tsa-out-0', collectedAt: at(-(hours - 1) * HOUR - 1), keywords: ['late'],
+            });
+            for (let i = 0; i < 3; i++) {
+                await insertPostWithFullPipeline(outside, jobId, mvIds, {
+                    externalId: `tsa-out-${i + 1}`,
+                    collectedAt: i === 0 ? at(HOUR) : minutesAgo(5 + i),
+                    keywords: ['late'],
+                });
+            }
+
+            const spy = jest.spyOn(clock, 'hourAnchor').mockResolvedValue(anchor);
+            const res = await request(app).get(`/api/sources/timeseries?hours=${hours}`);
+            expect(res.status).toBe(200);
+            expect(spy).toHaveBeenCalledTimes(1);
+
+            const social = res.body.find(e => e.category === 'social');
+            expect(social.series).toHaveLength(hours);
+            expect(social.series[hours - 1].hour).toBe(anchor.toISOString());
+            expect(social.series[0].hour).toBe(at(-(hours - 1) * HOUR).toISOString());
+            expect(social.series.reduce((n, b) => n + b.total, 0)).toBe(2);
+            // Metadata agrees with the series: the busier-by-real-NOW source
+            // and its keyword are outside the anchored window.
+            expect(social.top_site).toBe('ts-anchor-in');
+            expect(social.words).toEqual(['anchored']);
+        });
     });
 });
