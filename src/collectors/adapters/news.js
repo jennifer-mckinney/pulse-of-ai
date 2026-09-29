@@ -75,9 +75,16 @@ class ApMediaCollector extends JsonApiCollector {
  * a fixture only — the schema is unverified without a contract.
  */
 class ReutersConnectCollector extends JsonApiCollector {
+    constructor(ctx) {
+        super(ctx);
+        // F10-11: a contract override must be https on a public host — the
+        // token request carries the client secret.
+        this.tokenUrl = this.envUrl('REUTERS_CONNECT_TOKEN_URL') || 'https://auth.thomsonreuters.com/oauth/token';
+        this.apiUrl = this.envUrl('REUTERS_CONNECT_API_URL') || 'https://api.reutersconnect.com/content/graphql';
+    }
+
     async fetchItems() {
-        const tokenUrl = this.envValue('REUTERS_CONNECT_TOKEN_URL') || 'https://auth.thomsonreuters.com/oauth/token';
-        const apiUrl = this.envValue('REUTERS_CONNECT_API_URL') || 'https://api.reutersconnect.com/content/graphql';
+        const { tokenUrl, apiUrl } = this;
         const token = await this.http.json(tokenUrl, this.requestOptions({
             method: 'POST',
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -110,6 +117,11 @@ class ReutersConnectCollector extends JsonApiCollector {
 class LicensedFeedCollector extends RssAtomCollector {
     static get robotsGated() { return false; }
 
+    constructor(ctx) {
+        super(ctx);
+        this.feedUrl = this.envUrl(this.feedEnv);   // F10-11: https, public host
+    }
+
     get feedEnv() { return (this.route.requires || []).find(k => k.endsWith('_FEED_URL')); }
 
     get keyEnv() {
@@ -117,7 +129,7 @@ class LicensedFeedCollector extends RssAtomCollector {
     }
 
     async fetchItems() {
-        const url = this.env[this.feedEnv].trim();
+        const url = this.feedUrl;
         const key = this.keyEnv && this.env[this.keyEnv] ? this.env[this.keyEnv].trim() : null;
         const res = await this.get(url, { cache: this.httpCache, headers: key ? { Authorization: `Bearer ${key}` } : {} });
         if (res.notModified) return [];

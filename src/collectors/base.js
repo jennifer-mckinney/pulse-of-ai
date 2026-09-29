@@ -29,6 +29,7 @@ const { isAiRelated } = require('./ai-filter');
 const { GateClosedError, ParseError } = require('./errors');
 const { routeAllowedHosts } = require('../config/source-registry');
 const { ResponseTooLargeError } = require('./transport');
+const { checkUrl } = require('./netguard');
 
 const DEFAULT_MAX_AGE_DAYS = 7;
 // F10-4: one dataset file is read whole, so it is capped (route
@@ -68,7 +69,24 @@ class Collector {
         }
     }
 
-    /** Request options shared by every call of this collector. */
+    /**
+     * An endpoint URL taken from env (a contract feed, a token endpoint):
+     * it must be https on a public host (F10-11), else the collector refuses
+     * to run — GateClosedError, before any network call.
+     * @param {string} name  env var
+     * @returns {string|null} the trimmed URL, or null when unset
+     */
+    envUrl(name) {
+        const v = nonEmpty(this.env[name]) ? this.env[name].trim() : null;
+        if (v === null) return null;
+        try {
+            checkUrl(v);
+        } catch (err) {
+            throw new GateClosedError(`${this.source.slug}/${this.route.id}: ${name} must be an https URL on a public host (${err.message})`);
+        }
+        return v;
+    }
+
     /**
      * Request options shared by every call of this collector: politeness,
      * robots, the route's allowed hosts (F10-2: every hop must stay on them)

@@ -167,7 +167,7 @@ const SOURCES = [
         closedStatus: 'blocked',
         routes: [{
             id: 'tencent-authorized-feed', adapter: 'blocked-wechat',
-            requires: ['WECHAT_TENCENT_AUTHORIZATION_REF', 'WECHAT_AUTHORIZED_FEED_URL'],
+            requires: ['WECHAT_TENCENT_AUTHORIZATION_REF', 'WECHAT_AUTHORIZED_FEED_URL', 'WECHAT_AUTHORIZED_FEED_HOST'],
             params: {}, scope: 'filter',
             note: 'Runs ONLY against a feed Tencent authorizes in writing; never mp.weixin.qq.com pages or Sogou search',
         }],
@@ -926,6 +926,7 @@ const ENV_DOCS = {
     CFR_FEED_PERMISSION_REF: { group: 'permission', signup: 'https://www.cfr.org/', description: 'CFR confirmation that /feed may be read despite "Disallow: /feed/"' },
     WECHAT_TENCENT_AUTHORIZATION_REF: { group: 'blocked', signup: 'https://weixin.qq.com/agreement?lang=en_US', description: 'Tencent written authorization reference' },
     WECHAT_AUTHORIZED_FEED_URL: { group: 'blocked', signup: 'https://weixin.qq.com/agreement?lang=en_US', description: 'Feed URL Tencent authorizes' },
+    WECHAT_AUTHORIZED_FEED_HOST: { group: 'blocked', signup: 'https://weixin.qq.com/agreement?lang=en_US', description: 'Exact host named in Tencent\'s written authorization; the feed URL must be on this host (G10-17)' },
     TELEGRAM_WRITTEN_PERMISSION_REF: { group: 'blocked', signup: 'https://core.telegram.org/api/terms', description: 'Telegram written permission reference (API Terms §1.5)' },
     TELEGRAM_BOT_TOKEN: { group: 'blocked', signup: 'https://core.telegram.org/bots#how-do-i-create-a-bot', description: 'Bot API token (used only with the permission reference)' },
     RESEARCHGATE_DATA_ACCESS_REF: { group: 'blocked', signup: 'https://www.researchgate.net/terms-of-service', description: 'ResearchGate data-access grant reference' },
@@ -1105,7 +1106,9 @@ const ADAPTER_HOSTS = Object.freeze({
 // Env URLs that name a route's endpoint (contract feeds, overrides).
 const ROUTE_URL_ENV = Object.freeze({
     'licensed-feed': route => (route.requires || []).filter(k => k.endsWith('_FEED_URL')),
-    'blocked-wechat': () => ['WECHAT_AUTHORIZED_FEED_URL'],
+    // G10-17: WeChat's allowed host is the one Tencent's authorization NAMES,
+    // not whatever host the feed URL points at.
+    'blocked-wechat': () => ['WECHAT_AUTHORIZED_FEED_HOST'],
     'reuters-connect': () => ['REUTERS_CONNECT_TOKEN_URL', 'REUTERS_CONNECT_API_URL'],
 });
 
@@ -1132,7 +1135,9 @@ function routeAllowedHosts(route, env = process.env) {
     }
     const envNames = ROUTE_URL_ENV[route.adapter] ? ROUTE_URL_ENV[route.adapter](route) : [];
     for (const k of envNames) {
-        const h = nonEmpty(env[k]) ? hostOf(env[k].trim()) : null;
+        if (!nonEmpty(env[k])) continue;
+        const v = env[k].trim();
+        const h = k.endsWith('_HOST') ? v.toLowerCase() : hostOf(v);
         if (h) hosts.add(h);
     }
     return [...hosts].sort();

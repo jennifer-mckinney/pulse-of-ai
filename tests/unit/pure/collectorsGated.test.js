@@ -220,9 +220,43 @@ describe('free-key and approval APIs', () => {
     });
 });
 
+// F10-11: an endpoint URL from env must be https on a public host.
+describe('env endpoint URLs are validated before any request (F10-11)', () => {
+    test.each([
+        ['http (cleartext)', 'http://wire.example/feed'],
+        ['a loopback address', 'https://127.0.0.1/feed'],
+        ['a compose service', 'https://web:3000/feed'],
+        ['cloud metadata', 'https://169.254.169.254/latest/'],
+        ['a data: URL', 'data:text/plain,x'],
+    ])('the CNN contract feed refuses %s', (_, url) => {
+        expect(() => make('cnn', 'wire-store', [], { CNN_LICENSE_REF: 'L', CNN_FEED_URL: url }))
+            .toThrow(/CNN_FEED_URL must be an https URL on a public host/);
+    });
+
+    test('Dow Jones: a private feed URL is refused', () => {
+        expect(() => make('wsj', 'dow-jones-feed', [], { DOWJONES_API_KEY: 'k', DOWJONES_FEED_URL: 'https://10.0.0.8/feed' }))
+            .toThrow(GateClosedError);
+    });
+
+    test('Reuters: an http token-URL override would send the client secret in cleartext — refused', () => {
+        const env = { REUTERS_CONNECT_CLIENT_ID: 'id', REUTERS_CONNECT_CLIENT_SECRET: 's' };
+        expect(() => make('reuters', 'reuters-connect', [], { ...env, REUTERS_CONNECT_TOKEN_URL: 'http://auth.example/oauth' }))
+            .toThrow(/REUTERS_CONNECT_TOKEN_URL must be an https URL/);
+        expect(() => make('reuters', 'reuters-connect', [], { ...env, REUTERS_CONNECT_API_URL: 'https://localhost/graphql' }))
+            .toThrow(/REUTERS_CONNECT_API_URL must be an https URL/);
+        expect(() => make('reuters', 'reuters-connect', [], env)).not.toThrow();
+    });
+
+    test('WeChat: an http feed URL is refused', () => {
+        expect(() => make('wechat', 'tencent-authorized-feed', [], {
+            WECHAT_TENCENT_AUTHORIZATION_REF: 'T', WECHAT_AUTHORIZED_FEED_URL: 'http://feed.example/wx.xml', WECHAT_AUTHORIZED_FEED_HOST: 'feed.example',
+        })).toThrow(/WECHAT_AUTHORIZED_FEED_URL must be an https URL/);
+    });
+});
+
 describe('the blocked 4 — refuse unless their official permission env is set', () => {
     const BLOCKED = [
-        ['wechat', 'tencent-authorized-feed', { WECHAT_TENCENT_AUTHORIZATION_REF: 'T', WECHAT_AUTHORIZED_FEED_URL: 'https://feed.example/wx.xml' }],
+        ['wechat', 'tencent-authorized-feed', { WECHAT_TENCENT_AUTHORIZATION_REF: 'T', WECHAT_AUTHORIZED_FEED_URL: 'https://feed.example/wx.xml', WECHAT_AUTHORIZED_FEED_HOST: 'feed.example' }],
         ['telegram', 'bot-api-with-permission', { TELEGRAM_WRITTEN_PERMISSION_REF: 'P', TELEGRAM_BOT_TOKEN: 'b' }],
         ['researchgate', 'granted-dataset', { RESEARCHGATE_DATA_ACCESS_REF: 'R', RESEARCHGATE_DATASET_PATH: path.join(FIXTURE_ROOT, 'gated/researchgate.jsonl') }],
         ['cato', 'allowlisted-rss', { CATO_ALLOWLIST_REF: 'C' }],
@@ -244,8 +278,25 @@ describe('the blocked 4 — refuse unless their official permission env is set',
     test('WeChat with authorization: reads the authorized feed only', async () => {
         const { c } = make('wechat', 'tencent-authorized-feed', [['https://feed.example/wx.xml', G('wechat-feed.xml')]], BLOCKED[0][2]);
         expect((await c.collect()).payloads[0].title).toBe('AI policy briefing');
-        const bad = make('wechat', 'tencent-authorized-feed', [], { ...BLOCKED[0][2], WECHAT_AUTHORIZED_FEED_URL: 'https://mp.weixin.qq.com/s/abc' });
-        await expect(bad.c.collect()).rejects.toThrow(/disallowed by robots/);
+        expect(() => make('wechat', 'tencent-authorized-feed', [], {
+            ...BLOCKED[0][2], WECHAT_AUTHORIZED_FEED_URL: 'https://mp.weixin.qq.com/s/abc', WECHAT_AUTHORIZED_FEED_HOST: 'mp.weixin.qq.com',
+        })).toThrow(/disallowed by robots/);
+    });
+
+    // G10-17: only the host Tencent's authorization names — exactly.
+    test.each([
+        ['another host', 'https://evil.example/wx.xml'],
+        ['a subdomain of the authorized host', 'https://sub.feed.example/wx.xml'],
+        ['a look-alike suffix', 'https://feed.example.evil.example/wx.xml'],
+    ])('WeChat refuses %s (WECHAT_AUTHORIZED_FEED_HOST)', (_, url) => {
+        expect(() => make('wechat', 'tencent-authorized-feed', [], { ...BLOCKED[0][2], WECHAT_AUTHORIZED_FEED_URL: url }))
+            .toThrow(/is not the authorized host feed\.example/);
+    });
+
+    test('WeChat without WECHAT_AUTHORIZED_FEED_HOST is refused before any request', () => {
+        const env = { ...BLOCKED[0][2] };
+        delete env.WECHAT_AUTHORIZED_FEED_HOST;
+        expect(() => make('wechat', 'tencent-authorized-feed', [], env)).toThrow(GateClosedError);
     });
 
     test('Telegram with permission: channel posts only, offset advances, no chat title', async () => {

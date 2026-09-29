@@ -232,7 +232,13 @@ describe('buildCollectors (registry-wide)', () => {
 
     test('with every credential set: every source builds, paid tiers replace free feeds', () => {
         const env = { ...TEST_ENV };
-        for (const k of registryEnvVars()) if (!/COLLECTORS_ENABLED|COLLECTORS_DISABLED/.test(k)) env[k] = '/tmp';
+        for (const k of registryEnvVars()) {
+            if (/COLLECTORS_ENABLED|COLLECTORS_DISABLED/.test(k)) continue;
+            // Endpoint URLs must be https on a public host (F10-11); WeChat's
+            // feed must sit on its authorized host (G10-17).
+            env[k] = k.endsWith('_URL') && k !== 'COLLECTOR_CONTACT_URL' ? 'https://feed.example.org/x'
+                : k.endsWith('_HOST') ? 'feed.example.org' : '/tmp';
+        }
         for (const s of SOURCES) {
             const cs = buildCollectors(s, { env, http });
             expect(cs.length).toBeGreaterThan(0);

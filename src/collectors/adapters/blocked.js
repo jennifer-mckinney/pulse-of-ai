@@ -20,19 +20,31 @@ function assertPermission(collector, envName) {
     }
 }
 
-/** WeChat: only a feed Tencent authorizes in writing (never mp.weixin.qq.com or Sogou). */
+/**
+ * WeChat: only a feed Tencent authorizes in writing (never mp.weixin.qq.com
+ * or Sogou). The feed URL must be https on a public host (F10-11) and on
+ * EXACTLY the host the authorization names, WECHAT_AUTHORIZED_FEED_HOST
+ * (G10-17) — a look-alike or a subdomain is refused.
+ */
 class WeChatAuthorizedFeedCollector extends RssAtomCollector {
     constructor(ctx) {
         super(ctx);
         assertPermission(this, 'WECHAT_TENCENT_AUTHORIZATION_REF');
-    }
-
-    feedUrls() {
-        const url = this.env.WECHAT_AUTHORIZED_FEED_URL.trim();
+        assertPermission(this, 'WECHAT_AUTHORIZED_FEED_HOST');
+        const url = this.envUrl('WECHAT_AUTHORIZED_FEED_URL');
+        const host = new URL(url).hostname.toLowerCase();
+        const authorized = this.env.WECHAT_AUTHORIZED_FEED_HOST.trim().toLowerCase();
+        if (host !== authorized) {
+            throw new GateClosedError(`wechat: the feed host ${host} is not the authorized host ${authorized} (WECHAT_AUTHORIZED_FEED_HOST)`);
+        }
         if (/(^|\.)weixin\.qq\.com\/s|weixin\.sogou\.com/i.test(url)) {
             throw new GateClosedError('wechat: article pages and Sogou WeChat search are disallowed by robots.txt — not a feed');
         }
-        return [url];
+        this.feedUrl = url;
+    }
+
+    feedUrls() {
+        return [this.feedUrl];
     }
 }
 
