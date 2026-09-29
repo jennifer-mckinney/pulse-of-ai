@@ -22,10 +22,10 @@ jest.mock('../../src/db/connection', () => ({ dbAll: jest.fn() }));
 // destructures them (only the reddit queue is exercised).
 jest.mock('../../src/queues/index', () => {
     const { Queue } = require('bullmq');
-    const connection = {
-        host: process.env.REDIS_HOST || '127.0.0.1',
-        port: parseInt(process.env.REDIS_PORT || '6379', 10),
-    };
+    // The app's own connection config, so REDIS_PASSWORD (F9-1 requirepass)
+    // is honoured exactly as the worker and web honour it.
+    const { redisConnection } = require('../../src/queues/connection');
+    const connection = redisConnection(process.env);
     const suffix = `${Date.now()}-${process.pid}`;
     return {
         collectRedditQueue:  new Queue(`test-sched-reddit-${suffix}`,  { connection }),

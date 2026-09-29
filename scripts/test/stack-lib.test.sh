@@ -45,13 +45,23 @@ new_case() {
     printf '%s' "$d"
 }
 
+# Stack variables the library lets the SHELL override (scripts/lib/stack.sh
+# "Environment knobs"). The cases set them explicitly where they matter, so
+# the caller's own values (e.g. a developer who exported COMPOSE_PROJECT_NAME
+# or POSTGRES_TEST_PORT for another stack) are removed first: every case
+# sees only what it sets.
+HERMETIC_UNSET=(COMPOSE_PROJECT_NAME WEB_PORT POSTGRES_PORT POSTGRES_TEST_PORT REDIS_PORT
+    PULSE_BIND_ADDR POSTGRES_PASSWORD REDIS_PASSWORD AUDIT_HASH_KEY CORRELATION_SALT)
+HERMETIC_ENV_U=()
+for v in "${HERMETIC_UNSET[@]}"; do HERMETIC_ENV_U+=(-u "$v"); done
+
 # lib_run DIR CODE: run CODE in a subshell that sourced the library with
 # PULSE_ENV_FILE=DIR/.env. Prints stdout; stderr goes to DIR/stderr.
 lib_run() {
     local dir=$1 code=$2
     (
         export PULSE_ENV_FILE="$dir/.env"
-        unset COMPOSE_PROJECT_NAME
+        unset "${HERMETIC_UNSET[@]}"
         # shellcheck source=scripts/lib/stack.sh
         source "$LIB"
         eval "$code"
@@ -279,7 +289,7 @@ run_teardown() {
     while (( $# )) && [[ "$1" != "--" ]]; do envs+=("$1"); shift; done
     shift
     mkdir -p "$dir/state"; : > "$dir/docker.log"
-    env -u COMPOSE_PROJECT_NAME PATH="$FAKE_BIN:$PATH" FAKE_LOG="$dir/docker.log" FAKE_STATE="$dir/state" \
+    env "${HERMETIC_ENV_U[@]}" PATH="$FAKE_BIN:$PATH" FAKE_LOG="$dir/docker.log" FAKE_STATE="$dir/state" \
         PULSE_ENV_FILE="$dir/.env" ${envs[@]+"${envs[@]}"} bash "$TEARDOWN" "$@" < /dev/null > "$dir/out" 2>&1
 }
 
