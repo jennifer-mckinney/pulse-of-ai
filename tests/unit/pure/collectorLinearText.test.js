@@ -1,7 +1,7 @@
 // tests/unit/pure/collectorLinearText.test.js
 // F10-3 regression: upstream text is processed in linear time. The old
 // regexes were quadratic (redactIdentities on 40k 'a' took ~1 s, so 1 MB
-// took minutes, blocking the event loop). Each check compares 256 KB with
+// took minutes, blocking the event loop). Each check compares 128 KB with
 // 1 MB of the same pattern (tests/helpers/scaling.js): time must grow
 // linearly (or 1 MB must finish outright fast), which catches quadratic
 // behaviour without a wall-clock budget that flakes under load.
@@ -81,7 +81,8 @@ test('stripSignatures removes signature links, timestamps and talk markers', () 
 test('the scaling check itself catches a quadratic pattern (the pre-F10-3 e-mail regex)', () => {
     const { scaling } = require('../../helpers/scaling');
     const quadratic = s => s.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '[email]');
-    const r = scaling(quadratic, n => 'a'.repeat(n), 16 * 1024, 3);
-    expect(r.ratio).toBeGreaterThan(10);
+    const { MAX_RATIO } = require('../../helpers/scaling');
+    const r = scaling(quadratic, n => 'a'.repeat(n), 32 * 1024, 3);   // ~x64 expected
+    expect(r.ratio).toBeGreaterThan(MAX_RATIO);
     expect(r.linear).toBe(false);
 });

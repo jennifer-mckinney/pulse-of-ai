@@ -21,6 +21,14 @@ const NOW = Date.parse('2026-09-28T12:00:00Z');
 const noSleep = () => Promise.resolve();
 const G = f => `gated/${f}`;
 
+// The Scholar collector loads mailparser (html-to-text, iconv, ...) lazily
+// on first use; cold, under a loaded machine, that module load alone took
+// longer than the 5 s test timeout. Load it once here, outside the tests,
+// so the tests time the collector's behaviour, not a cold require.
+beforeAll(() => {
+    require('mailparser');
+}, 60000);
+
 function make(slug, routeId, routes, env = {}, extra = {}) {
     const source = getSource(slug);
     const route = source.routes.find(r => r.id === routeId);

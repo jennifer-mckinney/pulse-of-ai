@@ -79,5 +79,6 @@ test.each([
 ])('%s: parse time does not grow with entity depth (no expansion)', async (_, parse) => {
     const r = await scalingAsync(parse, laughs, [3, 10]);
     expect(r.large).toBeLessThan(HARD_MS);
-    expect(r.large < 25 || r.ratio < 10).toBe(true);
+    const { FAST_MS, MAX_RATIO } = require('../../helpers/scaling');
+    expect(r.large < FAST_MS || r.ratio < MAX_RATIO).toBe(true);
 });
