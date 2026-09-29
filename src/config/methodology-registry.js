@@ -496,6 +496,48 @@ const METHODOLOGY_VERSIONS = [
     },
 ];
 
+// ingest@1.6.0 — P10-2: the post text is stored once (raw_posts.content),
+// never duplicated in raw_payload, so retention genuinely removes it; every
+// collected post gets a 'collected' retention row; each source's text window
+// is registered. Otherwise ingest@1.5.0 unchanged (migration 031).
+(() => {
+    const prev = METHODOLOGY_VERSIONS.find(m => m.component === 'ingest' && m.version === '1.5.0');
+    METHODOLOGY_VERSIONS.push({
+        component: 'ingest',
+        version: '1.6.0',
+        model_name: prev.model_name,
+        config: {
+            ...prev.config,
+            // Must match src/pipeline/ingest.js PAYLOAD_TEXT_KEYS
+            payload_text_keys_not_stored: ['text', 'title', 'body', 'content', 'selftext'],
+            text_storage: 'the post text is stored once, in raw_posts.content; raw_payload keeps metadata only (url, published_at, '
+                + 'location_basis, route, licence, attribution)',
+            collected_log: 'every stored post writes a data_retention_log row, action collected, legal basis GDPR Article 6(1)(f), '
+                + 'in the same statement as the insert',
+            text_retention: {
+                rule: 'after its source\'s window the text is replaced by a removal notice (raw_posts.text_removed_at); scores and '
+                    + 'audit rows are kept (ADR 0001 ruling 9, "Blank text, keep audit rows")',
+                platform_terms_hours: { reddit: 48, guardian: 24, youtube: 720, tiktok: 720 },
+                default: 'RETENTION_DETAIL_DAYS (90) days, TECHNICAL_SPEC §19',
+                applied_by_analogy: ['guardian', 'youtube', 'tiktok'],
+            },
+        },
+        justification: 'ingest@1.6.0 makes retention genuine (PR #10 review P10-2). Until 1.5.0 the text and title were copied into '
+            + 'raw_payload next to raw_posts.content, so removing the content left the text in the payload. From 1.6.0 the text is '
+            + 'stored once, in raw_posts.content, and the payload keeps metadata only; every stored post also writes a collected '
+            + 'row to data_retention_log (legal basis GDPR Article 6(1)(f)) in the same statement as the insert (TECHNICAL_SPEC §8). '
+            + 'Each source has a text window: Reddit 48 hours (ADR 0001 ruling 9), the Guardian 24 hours (its terms), YouTube and '
+            + 'TikTok 30 days (their API terms), every other source the §19 detail window of 90 days. When the window ends the '
+            + 'text, and any legacy copy in the payload, is replaced by a removal notice and the url is dropped (Reddit keeps its '
+            + 'slug-less permalink); the scores, audit rows, content hash and provenance fingerprint are kept, applying Jennifer\'s '
+            + 'ruling 9 ("Blank text, keep audit rows") to the Guardian, YouTube and TikTok by analogy. Everything else is as in '
+            + 'ingest@1.5.0: identity fields are never stored; e-mail addresses, handles (including Reddit u/ names), phone '
+            + 'numbers, sign-offs and profile links in text are redacted; free text may still contain names mentioned in content; '
+            + 'each post carries a keyed provenance fingerprint; location stays at city level with its basis recorded; processing '
+            + 'rests on legitimate interest (GDPR Art. 6(1)(f)).',
+    });
+})();
+
 // ─── Errata (P10-16) ─────────────────────────────────────────────────────────
 // A released methodology row is never edited, even when it turns out not to
 // describe the code that ran. An erratum is a NEW row in

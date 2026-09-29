@@ -183,14 +183,14 @@ function replayDecision(content, d, removal = null) {
         result.reason = 'stored post content is no longer available (retention compaction or erasure)';
         return result;
     }
-    // ADR 0001 ruling 9: a platform-terms post (Reddit) whose text was
-    // replaced by the removal notice cannot be re-run — the content no
-    // longer hashes to the input that was scored.
+    // ADR 0001 ruling 9 and P10-2: a post whose text was replaced by a
+    // removal notice (a platform-terms window, an upstream deletion, or the
+    // spec §19 detail window) cannot be re-run — the content no longer
+    // hashes to the input that was scored.
     if (removal && removal.removedAt) {
-        result.reason = `post text removed under platform terms (${removal.reason || 'retention'}) at `
-            + `${new Date(removal.removedAt).toISOString()}: the Reddit Data API Terms allow keeping it at most 48 hours or `
-            + 'until it is deleted upstream, so the content hash no longer matches; scores and audit rows are retained by '
-            + 'owner decision (ADR 0001 ruling 9)';
+        result.reason = `post text removed under the retention rules (${removal.reason || 'retention'}) at `
+            + `${new Date(removal.removedAt).toISOString()}, so the content hash no longer matches; scores and audit rows `
+            + 'are retained by owner decision (ADR 0001 ruling 9, "Blank text, keep audit rows")';
         return result;
     }
 

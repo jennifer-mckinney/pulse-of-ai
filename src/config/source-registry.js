@@ -144,6 +144,18 @@ const SOURCES = [
         }],
         termsUrl: 'https://developers.google.com/youtube/terms/developer-policies',
         termsNote: 'Stored API data must be refreshed or deleted within 30 days; derived-metrics clause to be confirmed in the API compliance audit.',
+        // P10-2: YouTube API Services policies — stored data must be refreshed
+        // or deleted within 30 days. Blanked at 30 days, audit rows kept
+        // (ruling 9's mechanism, for consistency).
+        retention: {
+            maxAgeHours: 720,
+            byAnalogy: 'ruling 9 ("Blank text, keep audit rows"), applied by analogy for consistency',
+            removalNotice: '[removed: YouTube API terms retention]',
+            legalBasis: 'YouTube API Services Developer Policies: stored API data must be refreshed or deleted within 30 days. Text '
+                + 'removed at 30 days; score and audit rows retained (ADR 0001 ruling 9 mechanism, applied by analogy).',
+            notice: 'YouTube text is removed 30 days after collection because of the YouTube API terms; its scores and audit rows '
+                + 'are retained.',
+        },
         rateLimit: { minIntervalMs: 1000, note: 'search.list quota 100 calls/day; 10,000 units/day for other endpoints' },
         pollIntervalSec: DEFAULT_POLL_SEC,
     },
@@ -179,6 +191,17 @@ const SOURCES = [
         }],
         termsUrl: 'https://www.tiktok.com/legal/page/global/terms-of-service-research-api/en',
         termsNote: 'Refresh data at least every 30 days; outputs must not be linkable to a user; public-dashboard use to be confirmed in the application.',
+        // P10-2: the Research API terms require refreshing data at least every
+        // 30 days; blanked at 30 days, audit rows kept (ruling 9 mechanism).
+        retention: {
+            maxAgeHours: 720,
+            byAnalogy: 'ruling 9 ("Blank text, keep audit rows"), applied by analogy for consistency',
+            removalNotice: '[removed: TikTok Research API terms retention]',
+            legalBasis: 'TikTok Research API terms: data must be refreshed at least every 30 days. Text removed at 30 days; score '
+                + 'and audit rows retained (ADR 0001 ruling 9 mechanism, applied by analogy).',
+            notice: 'TikTok text is removed 30 days after collection because of the Research API terms; its scores and audit rows '
+                + 'are retained.',
+        },
         rateLimit: { minIntervalMs: 1000, note: '1,000 requests/day, up to 100,000 records/day' },
         pollIntervalSec: DEFAULT_POLL_SEC,
     },
@@ -314,6 +337,21 @@ const SOURCES = [
         ],
         termsUrl: 'https://www.theguardian.com/open-platform/terms-and-conditions',
         termsNote: 'Open Platform §6 bans analysis/mining and ML use on the free key; §5 requires deletion within 24 hours; site terms apply the same to RSS.',
+        // P10-2: the Guardian's terms require deleting content within 24 hours
+        // (Open Platform §5; the termsNote records that the site terms apply
+        // the same to RSS). Applied BY ANALOGY with ruling 9, "Blank text,
+        // keep audit rows": the text is blanked at 24 h, scores and audit rows
+        // are kept — flagged for Jennifer to confirm (ADR 0001).
+        retention: {
+            maxAgeHours: 24,
+            byAnalogy: 'ruling 9 ("Blank text, keep audit rows"), applied by analogy; awaiting Jennifer\'s confirmation',
+            removalNotice: '[removed: Guardian terms retention]',
+            legalBasis: 'Guardian Open Platform terms §5: content must be deleted within 24 hours (the site terms apply the same to '
+                + 'the RSS). Text removed at 24 hours; the score and audit rows are retained, applying ADR 0001 ruling 9 ("Blank '
+                + 'text, keep audit rows") by analogy, pending the owner\'s confirmation.',
+            notice: 'Guardian post text is removed 24 hours after collection because of the Guardian\'s terms; its scores and audit '
+                + 'rows are retained (ADR 0001 ruling 9, applied by analogy).',
+        },
         rateLimit: { minIntervalMs: 1000, note: 'free key 1 call/s, 500/day; commercial per contract' },
         pollIntervalSec: DEFAULT_POLL_SEC,
     },
@@ -883,6 +921,10 @@ const SOURCES = [
         retention: {
             maxAgeHours: 48,
             recheckHours: 6,
+            removalNotice: '[removed: Reddit Data API Terms retention]',
+            // The stored permalink's slug is made from the title: cut to the
+            // slug-less form on removal (every other source's url is removed).
+            keepUrlPrefix: '^https://www\\.reddit\\.com/r/[A-Za-z0-9_]+/comments/[a-z0-9]+/',
             legalBasis: 'Reddit Data API Terms and Developer Terms §3.3: user content deleted from Reddit must be deleted, '
                 + 'and Reddit strongly recommends deleting stored user data and content within 48 hours '
                 + '(Reddit Data API Wiki, Rules). Text removed; the score and audit rows are retained by owner decision '
@@ -1136,6 +1178,18 @@ function sourceStatus(src, env = process.env) {
 }
 
 /**
+ * P10-2: hours a source's post TEXT is kept (src/collectors/retention.js).
+ * A platform-terms window (Reddit 48 h, Guardian 24 h, YouTube and TikTok
+ * 30 days) where the source has one, else the spec §19 detail window:
+ * RETENTION_DETAIL_DAYS (default 90) days.
+ */
+function retentionHours(src, env = process.env) {
+    if (src && src.retention && src.retention.maxAgeHours > 0) return src.retention.maxAgeHours;
+    const days = parseInt(env.RETENTION_DETAIL_DAYS || '', 10);
+    return (Number.isFinite(days) && days > 0 ? days : 90) * 24;
+}
+
+/**
  * Effective seconds between runs. D4 (Jennifer, 2026-09-29: "Keep 2–3
  * minutes for all"): the source's cadence (150 s, the band) unless an OPEN
  * route's documented quota needs longer (route.pollIntervalSec, e.g. NYT
@@ -1337,6 +1391,7 @@ module.exports = {
     openRoutes,
     sourceStatus,
     pollIntervalSec,
+    retentionHours,
     quotaAudit,
     CADENCE_BAND_SEC,
     collectWindowMs,

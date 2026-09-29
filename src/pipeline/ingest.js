@@ -33,10 +33,16 @@ const { saveSentiment } = require('./sentiment');
 const { saveRelevance  } = require('./relevance');
 const { saveDQI        } = require('./discourse');
 const { findCity       } = require('../../public/js/config/cities.config.js');
+const { getSource, retentionHours } = require('../config/source-registry');
 
 // ─── PII fields stripped from raw_payload before storage ─────────────────────
 // Registered as ingest@1.1.0 pii_fields_removed (methodology-registry.js).
 // Collectors never request these; this is the backstop.
+// P10-2: payload keys that duplicate the post text; not stored (ingest@1.6.0).
+const PAYLOAD_TEXT_KEYS = Object.freeze(['text', 'title', 'body', 'content', 'selftext']);
+// Spec §8: every collected post gets a 'collected' data_retention_log row.
+const COLLECTED_LEGAL_BASIS = 'GDPR Article 6(1)(f) - Legitimate Interest';
+
 const PII_FIELDS = [
     'author', 'author_fullname', 'author_id', 'authors', 'username', 'user',
     'user_id', 'screen_name', 'creator', 'uploader', 'owner', 'email',
@@ -144,7 +150,7 @@ async function storeRawPost(rawPayloadIn, sourceId, { ingestMvId = null } = {}) 
     const rawPayload = stripNul(rawPayloadIn);
     // Fetch source_type to drive normalisation logic
     const source = await dbGet(
-        'SELECT source_type FROM data_sources WHERE id = $1',
+        'SELECT source_type, name FROM data_sources WHERE id = $1',
         [sourceId],
     );
     const sourceType = source?.source_type || 'reddit';
@@ -175,13 +181,27 @@ async function storeRawPost(rawPayloadIn, sourceId, { ingestMvId = null } = {}) 
     const provenanceFingerprint = typeof fp === 'string' && /^[0-9a-f]{64}$/.test(fp) ? fp : null;
     const storedPayload = { ...normalised.rawPayload };
     delete storedPayload.provenance_fingerprint;
+    // P10-2 (ingest@1.6.0): the text lives ONLY in raw_posts.content, so
+    // removing it (src/collectors/retention.js) genuinely removes it. The
+    // payload keeps metadata (url, published_at, location_basis, route,
+    // licence), never a second copy of the text or title.
+    for (const k of PAYLOAD_TEXT_KEYS) delete storedPayload[k];
+    // One statement: the post and its spec §8 'collected' retention row
+    // are written together or not at all.
+    const src = source ? getSource(source.name) : null;
     const post = await dbRun(
-        `INSERT INTO raw_posts
-            (source_id, external_id, content, content_hash, raw_payload, location, language,
-             provenance_fingerprint, ingest_mv_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-         ON CONFLICT (source_id, external_id) DO NOTHING
-         RETURNING id`,
+        `WITH ins AS (
+             INSERT INTO raw_posts
+                 (source_id, external_id, content, content_hash, raw_payload, location, language,
+                  provenance_fingerprint, ingest_mv_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+             ON CONFLICT (source_id, external_id) DO NOTHING
+             RETURNING id
+         ), logged AS (
+             INSERT INTO data_retention_log (raw_post_id, action, reason, legal_basis, performed_by)
+             SELECT id, 'collected', $10, $11, 'src/pipeline/ingest.js' FROM ins
+         )
+         SELECT id FROM ins`,
         [
             sourceId,
             normalised.externalId,
@@ -194,6 +214,12 @@ async function storeRawPost(rawPayloadIn, sourceId, { ingestMvId = null } = {}) 
             // G10-11: the ingest methodology version this post was stored
             // under (the receipt shows it); null when the caller has none.
             ingestMvId,
+            JSON.stringify({
+                source: source ? source.name : null,
+                text_retention_hours: retentionHours(src),
+                text_retention_basis: src && src.retention ? 'platform terms' : 'detail window (spec §19)',
+            }),
+            COLLECTED_LEGAL_BASIS,
         ],
     );
     if (!post) {
@@ -286,4 +312,6 @@ module.exports = {
     ingestBatch,
     cityLocation,
     PII_FIELDS,
+    PAYLOAD_TEXT_KEYS,
+    COLLECTED_LEGAL_BASIS,
 };

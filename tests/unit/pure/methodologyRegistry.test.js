@@ -233,7 +233,7 @@ describe('migration 014 ↔ methodology registry (alignment)', () => {
 
     test('the code implements the CURRENT versions', () => {
         expect(CURRENT_VERSIONS).toEqual(expect.objectContaining({
-            sentiment: '1.0.0', relevance: '1.2.0', discourse: '1.1.0-DQI', ingest: '1.5.0',
+            sentiment: '1.0.0', relevance: '1.2.0', discourse: '1.1.0-DQI', ingest: '1.6.0',
         }));
     });
 
@@ -427,10 +427,10 @@ describe('migration 026 ↔ methodology registry (ingest@1.5.0, Reddit u/ names)
         expect(SQL_026).not.toMatch(/DO UPDATE|UPDATE methodology_versions|DELETE|DROP/);
     });
 
-    test('ingest@1.5.0 is current and redacts Reddit user names; 1.4.0 is unchanged', () => {
+    test('ingest@1.5.0 redacts Reddit user names (superseded by 1.6.0, never edited); 1.4.0 is unchanged', () => {
         const reg = registry('ingest', '1.5.0');
         const prev = registry('ingest', '1.4.0');
-        expect(latest('ingest').version).toBe('1.5.0');
+        expect(latest('ingest').version).toBe('1.6.0');
         expect(reg.config.text_redaction.reddit_user_handles).toMatch(/u\/\[user\]/);
         expect(prev.config.text_redaction.reddit_user_handles).toBeUndefined();
         expect(reg.config.pii_fields_removed).toEqual(prev.config.pii_fields_removed);
@@ -511,5 +511,27 @@ describe('migration 029 ↔ methodology registry (relevance@1.2.0, P10-13)', () 
         expect(latest('relevance').version).toBe('1.2.0');
         expect(registry('relevance', '1.1.0').config.keywords).toHaveLength(20);
         expect(registry('relevance', '1.2.0').config.keywords).toHaveLength(21);
+    });
+});
+
+describe('migration 031 ↔ methodology registry (ingest@1.6.0, P10-2)', () => {
+    const { generate } = require('../../../scripts/generate-methodology-migration');
+    const { PAYLOAD_TEXT_KEYS, PII_FIELDS } = require('../../../src/pipeline/ingest');
+    const SQL_031 = fs.readFileSync(path.join(__dirname, '../../../src/db/migrations/031_text_retention.sql'), 'utf8');
+
+    test('031 adds the retention index and ends with exactly the generated ingest@1.6.0 row', () => {
+        expect(SQL_031.endsWith(generate(['ingest@1.6.0']))).toBe(true);
+        expect(SQL_031).toMatch(/CREATE INDEX IF NOT EXISTS idx_raw_posts_text_live/);
+        expect(SQL_031).not.toMatch(/DO UPDATE|UPDATE |DELETE|DROP/);
+    });
+
+    test('ingest@1.6.0 registers the payload keys the code no longer stores and every text window', () => {
+        const reg = registry('ingest', '1.6.0');
+        const { SOURCES, retentionHours } = require('../../../src/config/source-registry');
+        expect(reg.config.payload_text_keys_not_stored).toEqual([...PAYLOAD_TEXT_KEYS]);
+        expect(reg.config.pii_fields_removed).toEqual(PII_FIELDS);
+        const platform = Object.fromEntries(SOURCES.filter(s => s.retention).map(s => [s.slug, retentionHours(s)]));
+        expect(reg.config.text_retention.platform_terms_hours).toEqual(platform);
+        expect(reg.config.privacy_claim).toBe(registry('ingest', '1.5.0').config.privacy_claim);
     });
 });

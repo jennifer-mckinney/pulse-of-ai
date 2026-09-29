@@ -9,8 +9,10 @@
 //   ingest    — scoring retries (ingest.worker.js)
 //   embed     — embeddings via the Python service (embed.worker.js)
 //   correlate — reserved (collectors store no identity signals)
-// and the Reddit maintenance timer (48 h text retention, deletion re-check,
-// subreddit discovery — src/collectors/reddit/maintenance.js),
+//   maintenance — repeatable every MAINTENANCE_EVERY_MS: text retention for
+//               every source + compaction (maintenance.worker.js, P10-2)
+// and the Reddit maintenance timer (deletion re-check, subreddit
+// discovery — src/collectors/reddit/maintenance.js),
 // and starts the collection scheduler (collector.scheduler.js): at start and
 // every RESCHEDULE_MS it (re)schedules every collecting registry source, so a
 // kill switch or a new credential takes effect without a code change.
@@ -24,7 +26,8 @@
 'use strict';
 
 const { Worker } = require('bullmq');
-const { connection, ingestQueue } = require('../queues/index');
+const { connection, ingestQueue, maintenanceQueue } = require('../queues/index');
+const { processMaintenanceJob, scheduleMaintenance } = require('./maintenance.worker');
 const { sweepUnscored } = require('../collectors/sweep');
 const { createRedisClient } = require('../queues/connection');
 const { startHeartbeat } = require('./heartbeat');
@@ -56,6 +59,8 @@ const workers = [
     new Worker('ingest',    processIngestJob,    { connection, concurrency: INGEST_CONCURRENCY }),
     new Worker('embed',     processEmbedJob,     { connection, concurrency: EMBED_CONCURRENCY }),
     new Worker('correlate', processCorrelateJob, { connection, concurrency: CORRELATE_CONCURRENCY }),
+    // P10-2: text retention + compaction (repeatable, one at a time).
+    new Worker('maintenance', job => processMaintenanceJob(job, { log }), { connection, concurrency: 1 }),
 ];
 
 workers.forEach(w => {
@@ -127,6 +132,7 @@ async function redditMaintenance() {
 
 schedule();
 redditMaintenance();
+scheduleMaintenance(maintenanceQueue).catch(err => logError(`[maintenance] scheduling failed: ${err.message}`));
 const timer = setInterval(schedule, RESCHEDULE_MS);
 const cycleTimer = setInterval(closeDueCycles, 30 * 1000);
 const redditTimer = setInterval(redditMaintenance, MAINTENANCE_MS);

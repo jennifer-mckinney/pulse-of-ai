@@ -1,15 +1,20 @@
 #!/usr/bin/env node
 // scripts/compact.js
 // Monthly compaction job: moves Tier 1 (post-level detail) to Tier 2 (monthly rollups).
-// Run on the 1st of each month, or manually: node scripts/compact.js [YYYY-MM]
+// Runs in the worker's repeatable `maintenance` job (src/workers/
+// maintenance.worker.js, P10-2), or manually: node scripts/compact.js [YYYY-MM]
 //
-// What it does:
-//   1. Identify all months older than RETENTION_DETAIL_DAYS that haven't been compacted
-//   2. Aggregate raw_posts + sentiment_results + discourse_results into monthly_*_rollups
-//   3. Null out raw_posts.content for those posts (privacy compliance)
-//   4. Delete post_embeddings for those posts (large, re-computable)
-//   5. Write data_retention_log: action='compacted' for each affected post
-//   6. Write compaction_log row
+// What it does (P10-2: everything it logs is what it actually changed):
+//   1. Identify every month that ENDS before the detail-window cutoff
+//      (RETENTION_DETAIL_DAYS) and has real posts not yet compacted
+//   2. Aggregate the month's real posts and scores into monthly_*_rollups
+//   3. Remove any text still stored with the retention mechanism
+//      (src/collectors/retention.js — content is NOT NULL, so it is replaced
+//      by a notice and text_removed_at is set; the retention job normally
+//      did this already at the end of each post's window)
+//   4. Delete post_embeddings for the month's real posts (re-computable)
+//   5. Write ONE data_retention_log row 'compacted' with the true counts
+//   6. Write the compaction_log row
 //
 // Demo posts (P9-3): posts of data_sources.source_type = 'demo' are the
 // standup's FICTIONAL population (scripts/populate.js).
@@ -29,13 +34,14 @@
 //     of EVERY delete, so real collected posts and their audit trails are
 //     never touched, whatever a post's title, content or source name says.
 //   - The purge runs BEFORE compaction, so a demo post is never compacted.
-// (Scheduling this job in the worker is tracked separately.)
 
 'use strict';
 
 require('dotenv').config();
 const { dbAll, dbTransaction, closePool } = require('../src/db/connection');
 const { DEMO_SOURCE_TYPE } = require('../src/config/data-mode');
+const { getSource } = require('../src/config/source-registry');
+const { removeTextBatch } = require('../src/collectors/retention');
 
 const RETENTION_DAYS = parseInt(process.env.RETENTION_DETAIL_DAYS || '90', 10);
 
@@ -88,31 +94,46 @@ async function getMonthsToCompact() {
         return [targetMonth + '-01'];
     }
 
-    // Find all months older than cutoff that have posts and haven't been compacted
+    // P10-2: only months that END before the cutoff (every post of the month
+    // is past the detail window), with real (non-demo) posts, not yet
+    // compacted. The month holding the cutoff waits until it is whole.
     const cutoff = getCutoffDate();
     const rows = await dbAll(`
-        SELECT DISTINCT TO_CHAR(DATE_TRUNC('month', collected_at), 'YYYY-MM-DD') AS rollup_month
-        FROM raw_posts
-        WHERE collected_at < $1
-          AND content IS NOT NULL
-          AND DATE_TRUNC('month', collected_at) NOT IN (
+        SELECT DISTINCT TO_CHAR(DATE_TRUNC('month', rp.collected_at), 'YYYY-MM-DD') AS rollup_month
+        FROM raw_posts rp
+        JOIN data_sources ds ON ds.id = rp.source_id
+        WHERE ds.source_type <> $2
+          AND DATE_TRUNC('month', rp.collected_at) + INTERVAL '1 month' <= $1
+          AND DATE_TRUNC('month', rp.collected_at) NOT IN (
               SELECT compacted_month FROM compaction_log
           )
         ORDER BY rollup_month ASC
-    `, [cutoff.toISOString()]);
+    `, [cutoff.toISOString(), DEMO_SOURCE_TYPE]);
 
     return rows.map(r => r.rollup_month);
 }
 
+/**
+ * Compact one month (spec §19), inside the caller's transaction:
+ *   1. topic and source rollups over the month's real posts (scores stay
+ *      valid after a post's text is removed, so blanked posts are counted);
+ *   2. the text of any real post of the month still stored is removed with
+ *      the retention mechanism (src/collectors/retention.js: notice +
+ *      text_removed_at, one true data_retention_log row per source batch) —
+ *      raw_posts.content is NOT NULL, so it is never "nulled";
+ *   3. the month's embeddings are deleted (re-computable, derived from text);
+ *   4. ONE data_retention_log row 'compacted' and one compaction_log row,
+ *      both with the true counts of what this call changed.
+ * Demo posts are never rolled up, blanked or counted (they are purged whole).
+ */
 async function compactMonth(client, rollupMonth, { log = console.log } = {}) {
     log(`  Compacting ${rollupMonth}...`);
     const monthStart = rollupMonth;
     const monthEnd   = new Date(new Date(rollupMonth).setMonth(new Date(rollupMonth).getMonth() + 1))
                            .toISOString().split('T')[0];
 
-    // Step 1: Aggregate topic rollups (keyword-based in Phase 1; BERTopic in Phase D)
-    // Uses top keywords from matched_keywords array as topic proxy
-    await client.query(`
+    // Step 1: topic rollups (keyword-based in Phase 1; BERTopic in Phase D).
+    const topic = await client.query(`
         INSERT INTO monthly_topic_rollups
             (rollup_month, topic_label, source_category, location, language,
              post_count, positive_count, neutral_count, negative_count, avg_comparative)
@@ -130,21 +151,18 @@ async function compactMonth(client, rollupMonth, { log = console.log } = {}) {
         FROM raw_posts rp
         JOIN data_sources ds         ON ds.id = rp.source_id
         JOIN sentiment_results sr    ON sr.raw_post_id = rp.id
-        -- Unnest first matched keyword as topic proxy (Phase 1; replaced by BERTopic in Phase D)
         LEFT JOIN LATERAL (
             SELECT rr.matched_keywords[1] AS keyword
             FROM relevance_results rr WHERE rr.raw_post_id = rp.id LIMIT 1
         ) kw ON TRUE
         WHERE rp.collected_at >= $2 AND rp.collected_at < $3
-          AND rp.content IS NOT NULL
           AND ds.source_type <> $4          -- P9-3: demo feeds never rolled up
         GROUP BY rollup_month, topic_label, source_category, location, language
-        -- Expression-based unique index; ON CONFLICT requires no target when index uses COALESCE
         ON CONFLICT DO NOTHING
     `, [monthStart, monthStart, monthEnd, DEMO_SOURCE_TYPE]);
 
-    // Step 2: Aggregate source rollups
-    await client.query(`
+    // Step 1b: source rollups
+    const source = await client.query(`
         INSERT INTO monthly_source_rollups
             (rollup_month, source_id, source_category, post_count,
              positive_count, neutral_count, negative_count, avg_comparative)
@@ -161,54 +179,66 @@ async function compactMonth(client, rollupMonth, { log = console.log } = {}) {
         JOIN data_sources ds       ON ds.id = rp.source_id
         JOIN sentiment_results sr  ON sr.raw_post_id = rp.id
         WHERE rp.collected_at >= $2 AND rp.collected_at < $3
-          AND rp.content IS NOT NULL
           AND ds.source_type <> $4          -- P9-3: demo feeds never rolled up
         GROUP BY rollup_month, rp.source_id, source_category
         ON CONFLICT (rollup_month, source_id) DO NOTHING
     `, [monthStart, monthStart, monthEnd, DEMO_SOURCE_TYPE]);
 
-    // Step 3: Count posts to compact (for log)
-    const { count } = await client.query(`
-        SELECT COUNT(*)::INTEGER AS count FROM raw_posts
-        WHERE collected_at >= $1 AND collected_at < $2 AND content IS NOT NULL
-    `, [monthStart, monthEnd]).then(r => r.rows[0]);
+    // Real posts of the month (the count the log rows state).
+    const { count } = (await client.query(`
+        SELECT COUNT(*)::INTEGER AS count FROM raw_posts rp JOIN data_sources ds ON ds.id = rp.source_id
+        WHERE rp.collected_at >= $1 AND rp.collected_at < $2 AND ds.source_type <> $3
+    `, [monthStart, monthEnd, DEMO_SOURCE_TYPE])).rows[0];
 
-    // Step 4: Delete post_embeddings for these posts
+    // Step 2: remove any text still stored (normally already removed by the
+    // retention job at the end of the detail window).
+    const live = (await client.query(`
+        SELECT ds.name, array_agg(rp.id) AS ids
+        FROM raw_posts rp JOIN data_sources ds ON ds.id = rp.source_id
+        WHERE rp.collected_at >= $1 AND rp.collected_at < $2 AND ds.source_type <> $3
+          AND rp.text_removed_at IS NULL
+        GROUP BY ds.name
+    `, [monthStart, monthEnd, DEMO_SOURCE_TYPE])).rows;
+    let contentRemoved = 0;
+    for (const row of live) {
+        const src = getSource(row.name);
+        const platform = !!(src && src.retention);
+        const ids = await removeTextBatch(client, row.name, row.ids, {
+            reason: platform ? `${src.retention.maxAgeHours}-hour retention window ended` : 'monthly compaction (spec §19)',
+            rule: platform ? `${src.retention.maxAgeHours}-hour retention` : `${RETENTION_DAYS}-day detail window (spec §19)`,
+            performedBy: 'scripts/compact.js', platform,
+        });
+        contentRemoved += ids.length;
+    }
+
+    // Step 3: delete the month's embeddings (real posts only).
     const embeddingResult = await client.query(`
         DELETE FROM post_embeddings
         WHERE raw_post_id IN (
-            SELECT id FROM raw_posts
-            WHERE collected_at >= $1 AND collected_at < $2
+            SELECT rp.id FROM raw_posts rp JOIN data_sources ds ON ds.id = rp.source_id
+            WHERE rp.collected_at >= $1 AND rp.collected_at < $2 AND ds.source_type <> $3
         )
-    `, [monthStart, monthEnd]);
+    `, [monthStart, monthEnd, DEMO_SOURCE_TYPE]);
     const embeddingsDeleted = embeddingResult.rowCount;
 
-    // Step 5: Null out raw_posts.content (privacy compliance — content no longer needed)
-    const contentResult = await client.query(`
-        UPDATE raw_posts SET content = NULL
-        WHERE collected_at >= $1 AND collected_at < $2 AND content IS NOT NULL
-    `, [monthStart, monthEnd]);
-    const contentNulled = contentResult.rowCount;
-
-    // Step 6: Write GDPR retention log for each affected post
+    // Step 4: one true retention row for the month, and the compaction log.
     await client.query(`
-        INSERT INTO data_retention_log (raw_post_id, action, reason, legal_basis)
-        SELECT id, 'compacted',
-               'Tier 1 detail window expired (' || $1 || ' days). Aggregated into monthly rollups.',
-               'GDPR Article 5(1)(e) - Storage Limitation'
-        FROM raw_posts
-        WHERE collected_at >= $2 AND collected_at < $3
-    `, [RETENTION_DAYS, monthStart, monthEnd]);
-
-    // Step 7: Record compaction in compaction_log
+        INSERT INTO data_retention_log (raw_post_id, action, reason, legal_basis, performed_by)
+        VALUES (NULL, 'compacted', $1, 'GDPR Article 5(1)(e) - Storage Limitation', 'scripts/compact.js')
+    `, [JSON.stringify({
+        summary: `Month ${monthStart} compacted into monthly rollups.`,
+        month: monthStart, retention_days: RETENTION_DAYS, posts_in_month: count,
+        topic_rollup_rows: topic.rowCount, source_rollup_rows: source.rowCount,
+        texts_removed_now: contentRemoved, embeddings_deleted: embeddingsDeleted,
+    })]);
     await client.query(`
         INSERT INTO compaction_log
             (compacted_month, posts_compacted, rollups_created, embeddings_deleted, content_nulled)
         VALUES ($1, $2, $3, $4, $5)
         ON CONFLICT (compacted_month) DO NOTHING
-    `, [monthStart, count, 1, embeddingsDeleted, contentNulled]);
+    `, [monthStart, count, topic.rowCount + source.rowCount, embeddingsDeleted, contentRemoved]);
 
-    return { postsCompacted: count, embeddingsDeleted, contentNulled };
+    return { postsCompacted: count, embeddingsDeleted, contentNulled: contentRemoved, rollupsCreated: topic.rowCount + source.rowCount };
 }
 
 // ─── Demo purge (P9-3) ────────────────────────────────────────────────────────
@@ -390,6 +420,23 @@ async function purgeDemoPosts({ cutoff = getCutoffDate(), batchSize, log = conso
     return { batches, counts: totals };
 }
 
+/**
+ * The whole job without the CLI: demo purge first, then every due month.
+ * Used by the worker's maintenance job. @returns {Promise<object>} counts
+ */
+async function runCompaction({ log = console.log } = {}) {
+    const purge = await purgeDemoPosts({ log });
+    const months = await getMonthsToCompact();
+    const total = { months: months.length, postsCompacted: 0, embeddingsDeleted: 0, contentNulled: 0 };
+    for (const month of months) {
+        const r = await dbTransaction(client => compactMonth(client, month, { log }));
+        total.postsCompacted += r.postsCompacted;
+        total.embeddingsDeleted += r.embeddingsDeleted;
+        total.contentNulled += r.contentNulled;
+    }
+    return { demoPurge: purge, ...total };
+}
+
 async function main() {
     targetMonth = process.argv[2] || null;
 
@@ -423,7 +470,7 @@ async function main() {
     console.log(`  Months processed:   ${months.length}`);
     console.log(`  Posts compacted:    ${total.postsCompacted}`);
     console.log(`  Embeddings deleted: ${total.embeddingsDeleted}`);
-    console.log(`  Content nulled:     ${total.contentNulled}`);
+    console.log(`  Texts removed:      ${total.contentNulled}`);
 
     await closePool();
 }
@@ -437,7 +484,7 @@ if (require.main === module) {
 }
 
 module.exports = {
-    getMonthsToCompact, compactMonth,
+    getMonthsToCompact, compactMonth, runCompaction,
     purgeDemoPosts, purgeDemoBatch, deleteDemoPosts,
     DEMO_POST_DEPENDENTS, DEMO_PURGE_LEGAL_BASIS,
 };

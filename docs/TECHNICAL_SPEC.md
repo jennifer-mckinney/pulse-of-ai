@@ -1502,7 +1502,7 @@ TIER 2: Monthly Compaction (3 months → indefinite)
   Granularity: Monthly aggregate per topic/category/location
   Purpose: Trend research, historical journalism, policy analysis
   Access: GET /api/rollups/:year/:month, POST /api/query (with note)
-  Raw posts: content field nulled, embeddings deleted, audit skeleton kept
+  Raw posts: text replaced by a removal notice (content is NOT NULL; text_removed_at set), embeddings deleted, audit skeleton kept
 
 TIER 3: Permanent Archival (automatic — no expiry)
   Tables: methodology_versions, processing_jobs (metadata only),
@@ -1587,7 +1587,9 @@ Runs on the 1st of each month. Compacts all posts older than 3 months:
 
 **What is deleted after compaction:**
 - `post_embeddings` (large, re-computable if needed)
-- `raw_posts.content` field (nulled — privacy compliance)
+- the post text: `raw_posts.content` (NOT NULL) is replaced by a removal notice and `text_removed_at` is set (P10-2)
+
+**Text windows (P10-2, ingest@1.6.0).** The text is stored once, in `raw_posts.content`. The worker's repeatable `maintenance` job removes it when its source's window ends: Reddit 48 h, the Guardian 24 h, YouTube and TikTok 30 days (their terms), every other source `RETENTION_DETAIL_DAYS` (90). Each batch writes one `data_retention_log` row listing the post ids it changed; every stored post has a `collected` row.
 
 **Demo data at the retention boundary (P9-3).** Posts whose source has
 `data_sources.source_type = 'demo'` (the fictional standup population from
