@@ -3,11 +3,11 @@
 # Pulse of AI — Node 22 application image.
 #
 # ONE image serves every Node role; the compose service picks the role by
-# command (see docker-compose.yml, profile "full"):
+# command (see docker-compose.yml, profiles "full" and "demo"):
 #   web        node src/server.js                         (default CMD)
 #   worker     node src/workers/start.js                  (BullMQ ingest/embed/correlate)
 #   migrate    node scripts/migrate.js && node scripts/seed.js   (one-shot)
-#   demo-feed  node scripts/demo-feed.js --loop           (demo population only)
+#   populate   node scripts/populate.js --loop            (profile "demo": the demo feed)
 #
 # Build:  docker build -t pulse-of-ai/app:local .
 #
