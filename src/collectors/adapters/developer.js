@@ -50,7 +50,11 @@ class DockerHubNamespaceCollector extends JsonApiCollector {
         const res = await this.getJson(`https://hub.docker.com/v2/namespaces/${encodeURIComponent(ns)}/repositories?${q}`);
         // The 'ai' namespace is Docker's own organisation, not a person.
         return (res.data.results || []).map(r => ({
-            id: `${ns}/${r.name}@${r.last_updated}`,
+            // G10-14: a stable id per repository. The old `@last_updated`
+            // suffix made every push a NEW post; an updated repository now
+            // dedups to the post already stored (raw_posts rows are
+            // immutable, so the first-collected text stays, as audited).
+            id: `${ns}/${r.name}`,
             title: `${ns}/${r.name}`,
             text: r.description || '',
             url: `https://hub.docker.com/r/${ns}/${r.name}`,

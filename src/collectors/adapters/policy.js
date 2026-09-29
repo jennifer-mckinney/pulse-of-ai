@@ -43,7 +43,9 @@ class CongressCollector extends JsonApiCollector {
         const bills = res.data.bills || [];
         this.cursor.fromDateTime = new Date(this.now() - 3600000).toISOString().replace(/\.\d{3}Z$/, 'Z');
         return bills.map(b => ({
-            id: `${b.congress}-${String(b.type).toLowerCase()}-${b.number}-${b.updateDate || ''}`,
+            // G10-14: stable per bill (congress-type-number); a later action
+            // on the same bill dedups to the stored post instead of adding one.
+            id: `${b.congress}-${String(b.type).toLowerCase()}-${b.number}`,
             title: b.title,
             text: b.latestAction ? `Latest action (${b.latestAction.actionDate}): ${b.latestAction.text}` : '',
             url: `https://www.congress.gov/bill/${b.congress}th-congress/${billPath(b.type)}/${b.number}`,

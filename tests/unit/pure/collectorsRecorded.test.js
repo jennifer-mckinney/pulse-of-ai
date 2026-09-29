@@ -161,6 +161,8 @@ describe('JSON APIs (recorded)', () => {
         const r = await run('docker_hub', 'ai-namespace', [['https://hub.docker.com/v2/namespaces/ai/repositories', 'recorded/dockerhub-ai.json']]);
         expect(r.fetched).toBe(3);
         expect(r.transport.calls[0].url).not.toMatch(/\/v2\/search/);
+        // G10-14: stable per repository (namespace/name), no timestamp.
+        for (const p of r.payloads) expect(p.id).toMatch(/^ai-namespace:ai\/[\w.-]+$/);
     });
 
     test('Hugging Face daily papers', async () => {

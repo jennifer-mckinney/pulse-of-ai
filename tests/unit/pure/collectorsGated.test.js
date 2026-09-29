@@ -148,6 +148,8 @@ describe('free-key and approval APIs', () => {
         expect(cr.fetched).toBe(2);
         expect(cr.payloads).toHaveLength(1);   // the broadband bill is filtered out locally
         expect(cr.payloads[0].url).toBe('https://www.congress.gov/bill/119th-congress/house-bill/1001');
+        // G10-14: stable per bill — no updateDate in the id.
+        expect(cr.payloads[0].id).toBe('bill-api:119-hr-1001');
         expect(billPath('SJRES')).toBe('senate-joint-resolution');
         expect(billPath('XX')).toBe('xx');
     });
