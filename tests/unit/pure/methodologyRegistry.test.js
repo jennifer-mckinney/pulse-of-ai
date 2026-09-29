@@ -124,9 +124,8 @@ describe('migration 011 ↔ methodology registry (audit_narration@1.2.0)', () =>
         });
     });
 
-    test('the renderer version is the newest registered audit_narration row (011)', () => {
-        expect(latest('audit_narration').version).toBe(NARRATION_VERSION);
-        expect(rows[0].version).toBe(NARRATION_VERSION);
+    test('011 registered 1.2.0 (superseded by 017\'s 1.3.0, never edited)', () => {
+        expect(rows[0].version).toBe('1.2.0');
         expect(rows[0].config.reproduce_command).toBe(REPRODUCE_COMMAND);
         expect(rows[0].config.ingest_branches).toEqual(['live_source', 'demo_feed']);
     });
@@ -234,7 +233,7 @@ describe('migration 014 ↔ methodology registry (alignment)', () => {
 
     test('the code implements the CURRENT versions', () => {
         expect(CURRENT_VERSIONS).toEqual(expect.objectContaining({
-            sentiment: '1.0.0', relevance: '1.1.0', discourse: '1.1.0-DQI', ingest: '1.2.0',
+            sentiment: '1.0.0', relevance: '1.1.0', discourse: '1.1.0-DQI', ingest: '1.3.0',
         }));
     });
 
@@ -292,10 +291,49 @@ describe('migration 015 ↔ methodology registry (ingest@1.2.0)', () => {
         expect(SQL_015).not.toMatch(/DO UPDATE|UPDATE methodology_versions|DELETE/);
     });
 
-    test('ingest@1.2.0 is what the code does and is the current ingest version', () => {
+    test('ingest@1.2.0 stays registered (superseded by 1.3.0, never edited)', () => {
         const reg = registry('ingest', '1.2.0');
-        expect(latest('ingest').version).toBe('1.2.0');
         expect(reg.config.pii_fields_removed).toEqual(PII_FIELDS);
         expect(redactIdentities('a@b.co @x1')).toBe(`${reg.config.text_redaction.email_addresses} ${reg.config.text_redaction.at_handles}`);
+    });
+});
+
+describe('migration 017 ↔ methodology registry (ingest@1.3.0, decision D2)', () => {
+    const { generate } = require('../../../scripts/generate-methodology-migration');
+    const { redactIdentities } = require('../../../src/collectors/normalize');
+    const { PII_FIELDS } = require('../../../src/pipeline/ingest');
+    const SQL_017 = fs.readFileSync(
+        path.join(__dirname, '../../../src/db/migrations/017_ingest_provenance.sql'), 'utf8');
+
+    test('017 adds the provenance column additively and ends with exactly the generated ingest@1.3.0 row', () => {
+        expect(SQL_017.endsWith(generate(['ingest@1.3.0', 'audit_narration@1.3.0']))).toBe(true);
+        expect((SQL_017.match(/INSERT INTO/g) || []).length).toBe(2);
+        expect(SQL_017).toMatch(/ALTER TABLE raw_posts ADD COLUMN IF NOT EXISTS provenance_fingerprint TEXT;/);
+        expect(SQL_017).not.toMatch(/DO UPDATE|UPDATE methodology_versions|DELETE|DROP/);
+    });
+
+    test('ingest@1.3.0 is what the code does and is the current ingest version', () => {
+        const reg = registry('ingest', '1.3.0');
+        expect(latest('ingest').version).toBe('1.3.0');
+        expect(reg.config.pii_fields_removed).toEqual(PII_FIELDS);
+        const t = reg.config.text_redaction;
+        expect(redactIdentities('a@b.co @x1')).toBe(`${t.email_addresses} ${t.at_handles}`);
+        expect(redactIdentities('call (415) 555-2671')).toBe('call [phone]');
+        expect(redactIdentities('see https://github.com/alice')).toBe(`see ${t.identity_links}`);
+        expect(redactIdentities('ok cc Jane Doe')).toBe(`ok ${t.cc_names}`);
+        // The precise claim (D2 b), verbatim in config and justification.
+        const claim = 'identity fields are never stored; e-mail addresses, handles, phone numbers, sign-offs and profile links in text are redacted; free text may still contain names mentioned in content';
+        expect(reg.config.privacy_claim).toBe(claim);
+        expect(reg.justification).toContain(`Precise claim: ${claim}.`);
+        expect(reg.justification).toContain('"both yet we need an identifier to be able to prove the audit traceability back to the source."');
+    });
+
+    test('audit_narration@1.3.0 is the renderer\'s version and registers the provenance wording', () => {
+        const { NARRATION_VERSION, VERIFY_PROVENANCE_COMMAND, PROVENANCE_VERIFIABLE } = require('../../../src/config/audit-narration');
+        const reg = registry('audit_narration', '1.3.0');
+        expect(latest('audit_narration').version).toBe(NARRATION_VERSION);
+        expect(NARRATION_VERSION).toBe('1.3.0');
+        expect(reg.config.verify_provenance_command).toBe(VERIFY_PROVENANCE_COMMAND);
+        expect(reg.justification).toContain(PROVENANCE_VERIFIABLE);
     });
 });

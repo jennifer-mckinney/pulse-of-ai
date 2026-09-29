@@ -30,6 +30,7 @@ const { GateClosedError, ParseError } = require('./errors');
 const { routeAllowedHosts } = require('../config/source-registry');
 const { ResponseTooLargeError } = require('./transport');
 const { checkUrl } = require('./netguard');
+const { provenanceKey } = require('./provenance');
 
 const DEFAULT_MAX_AGE_DAYS = 7;
 
@@ -142,8 +143,9 @@ class Collector {
         const dropped = { invalid: 0, old: 0, outOfScope: 0, duplicate: 0 };
         const seen = new Set();
         const payloads = [];
+        const key = provenanceKey(this.env);   // D2 provenance / F10-14 id fingerprints
         for (const item of items) {
-            const p = toPayload(item, this.source, this.route);
+            const p = toPayload(item, this.source, this.route, { key });
             if (!p) { dropped.invalid++; continue; }
             if (p.published_at && Date.parse(p.published_at) < cutoff) { dropped.old++; continue; }
             if (this.route.scope === 'filter' && !isAiRelated(p.text)) { dropped.outOfScope++; continue; }

@@ -20,7 +20,9 @@
 // key is unset the field is OMITTED entirely (never raw).
 //
 // Returns:
-//   200 { post: {...}, narration: {...}, ingest: {...}|null,
+//   200 { provenance: { source, published_at, permalink, external_id,
+//                       fingerprint, verifiable },            (decision D2)
+//         post: {...}, narration: {...}, ingest: {...}|null,
 //         decisions: [...],
 //         bias: { job_id, assessed_at, model_name, version,
 //                 lineage, lineage_fallback, layers } }
@@ -40,6 +42,8 @@ const {
     deriveScore,
     deriveStatus,
     renderIngestStep,
+    VERIFY_PROVENANCE_COMMAND,
+    PROVENANCE_VERIFIABLE,
 } = require('../config/audit-narration');
 const { buildLayers } = require('../config/bias-vocabulary');
 const { DEMO_SOURCE_TYPE } = require('../config/data-mode');
@@ -82,6 +86,10 @@ router.get('/audit/:post_id', async (req, res) => {
                 rp.content,
                 rp.location,
                 rp.collected_at,
+                rp.external_id,
+                rp.provenance_fingerprint,
+                rp.raw_payload->>'url'          AS permalink,
+                rp.raw_payload->>'published_at' AS published_at,
                 ds.category    AS source_category,
                 ds.name        AS source_name,
                 ds.source_type AS source_type
@@ -216,7 +224,27 @@ router.get('/audit/:post_id', async (req, res) => {
              LIMIT 1`,
         );
 
+        // ── Provenance (decision D2) ───────────────────────────────────────
+        // Traceability back to the source without storing identity: the
+        // permalink when it is not an identity link, the stored (identity-
+        // free) external id, and the keyed provenance fingerprint that
+        // `npm run verify-provenance` reproduces from the original.
+        const demo = post.source_type === DEMO_SOURCE_TYPE;
+        const provenance = {
+            source:       post.source_name,
+            published_at: post.published_at || null,
+            permalink:    /^https?:\/\//.test(post.permalink || '') ? post.permalink : null,
+            external_id:  post.external_id,
+            fingerprint:  post.provenance_fingerprint || null,
+            verifiable:   post.provenance_fingerprint
+                ? `${PROVENANCE_VERIFIABLE}: ${VERIFY_PROVENANCE_COMMAND.replace('{post_id}', post.id)}`
+                : (demo
+                    ? 'not applicable: fictional demo content, never collected from a source'
+                    : 'no provenance fingerprint was recorded for this post (collected before ingest@1.3.0, or no provenance key was configured)'),
+        };
+
         return res.json({
+            provenance,
             post: {
                 id:              post.id,
                 content_snippet: post.content.slice(0, 120),
@@ -232,7 +260,7 @@ router.get('/audit/:post_id', async (req, res) => {
             narration: { component: NARRATION_COMPONENT, version: NARRATION_VERSION },
             // Demo-feed posts get the fictional-content ingestion wording
             // (audit_narration 1.2.0 — src/config/data-mode.js defines demo).
-            ingest:    renderIngestStep(ingestMv, { demo: post.source_type === DEMO_SOURCE_TYPE }),
+            ingest:    renderIngestStep(ingestMv, { demo, provenance, postId: post.id }),
             decisions: exposed,
             bias:      biasBlock,
         });

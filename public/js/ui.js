@@ -383,6 +383,30 @@
     // Steps: synthetic ingest (when registered) → decisions in stored order
     // → bias assessment. input_hash may be absent (AUDIT_HASH_KEY unset) —
     // the fingerprint line is omitted gracefully, never faked.
+    // provenanceFrom: the served /api/audit provenance block → the drawer's
+    // one-line provenance text parts, or null. Only served facts are shown.
+    function provenanceFrom(p) {
+        if (!p || typeof p !== 'object') return null;
+        const str = v => (typeof v === 'string' && v !== '' ? v : null);
+        const out = {
+            permalink: str(p.permalink),
+            fingerprint: str(p.fingerprint),
+            published_at: str(p.published_at),
+            verifiable: str(p.verifiable),
+        };
+        return out.permalink || out.fingerprint || out.verifiable ? out : null;
+    }
+
+    // provenanceLine: one mono line for the drawer post block.
+    function provenanceLine(prov) {
+        if (!prov) return '';
+        const parts = [];
+        if (prov.permalink) parts.push('source ' + prov.permalink);
+        if (prov.fingerprint) parts.push('provenance ' + prov.fingerprint.slice(0, 12) + '…');
+        if (prov.verifiable) parts.push(prov.verifiable);
+        return parts.join(' · ');
+    }
+
     function mapAuditResponse(payload) {
         if (!payload || typeof payload !== 'object' || !payload.post) return null;
         const steps = [];
@@ -437,6 +461,9 @@
                 location: payload.post.location || null,
                 collected_at: payload.post.collected_at || null,
             },
+            // Decision D2: source traceability (permalink or keyed
+            // fingerprint + how to verify). Null when not served.
+            provenance: provenanceFrom(payload.provenance),
             steps,
             footer: 'immutable log · methodology versioned before it runs · '
                 + 'reproducible by anyone (spec §10)',
@@ -1035,6 +1062,8 @@
         biasStepFrom,
         layerRowView,
         mapAuditResponse,
+        provenanceFrom,
+        provenanceLine,
         fmtAlertTime,
         mapBiasHistory,
         mapPassSummary,
@@ -1733,6 +1762,8 @@
         if (hashText) metaParts.push('input ' + hashText);
         block.appendChild(el('div', 'post-meta mono', metaParts.join(' · ')));
         block.appendChild(el('div', 'post-text', model.post.content_snippet));
+        const provText = provenanceLine(model.provenance);
+        if (provText) block.appendChild(el('div', 'post-meta mono post-provenance', provText));
         inner.appendChild(block);
 
         // Audience segmented control (default Public).

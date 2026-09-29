@@ -230,6 +230,25 @@ function auditPayload(overrides) {
 }
 
 describe('mapAuditResponse — served audit shape → drawer model', () => {
+    test('D2: carries the served provenance and renders it as one line; absent stays absent', () => {
+        const fp = 'a'.repeat(64);
+        const m = P.mapAuditResponse(auditPayload({ provenance: {
+            source: 'Hacker News', published_at: '2026-09-29T10:00:00.000Z',
+            permalink: 'https://news.ycombinator.com/item?id=1', external_id: 'hn:1',
+            fingerprint: fp, verifiable: 'verifiable: provide the original URL or id to reproduce the fingerprint',
+        } }));
+        expect(m.provenance).toEqual({
+            permalink: 'https://news.ycombinator.com/item?id=1', fingerprint: fp,
+            published_at: '2026-09-29T10:00:00.000Z',
+            verifiable: 'verifiable: provide the original URL or id to reproduce the fingerprint',
+        });
+        expect(P.provenanceLine(m.provenance)).toBe(
+            'source https://news.ycombinator.com/item?id=1 · provenance aaaaaaaaaaaa… · verifiable: provide the original URL or id to reproduce the fingerprint');
+        expect(P.mapAuditResponse(auditPayload()).provenance).toBeNull();
+        expect(P.provenanceFrom({ permalink: '', fingerprint: null })).toBeNull();
+        expect(P.provenanceLine(null)).toBe('');
+    });
+
     test('builds ingest + decisions + bias steps in order', () => {
         const m = P.mapAuditResponse(auditPayload());
         expect(m.steps.map(s => s.stage)).toEqual([

@@ -14,13 +14,17 @@
 
 'use strict';
 
-const crypto = require('crypto');
 const { Parser } = require('htmlparser2');
 const { CITY_REGISTRY, findCity } = require('../../public/js/config/cities.config.js');
 
-// Links whose path names a person (profile / user namespace) are not stored:
-// e.g. OpenStreetMap diary links /user/<name>/diary/<id>.
-const IDENTITY_URL_RE = /\/(?:user|users|u|profile|people|member|members)\/[^/?#]+|\/@[^/?#]+/i;
+const { isIdentityUrl, redactText, EMAIL_RE, PATH_IDENTITY_RE } = require('./identity');
+const { storedExternalId, provenanceFingerprint } = require('./provenance');
+
+// Links whose path names a person (profile / user namespace) are not stored
+// (ingest@1.3.0 rules in src/collectors/identity.js isIdentityUrl), e.g.
+// OpenStreetMap diary links /user/<name>/diary/<id>. Kept for callers that
+// only need the path test.
+const IDENTITY_URL_RE = PATH_IDENTITY_RE;
 
 const MAX_TEXT = 4000;
 const MAX_TITLE = 300;
@@ -67,15 +71,12 @@ function htmlToText(html) {
     return parts.join('').replace(/\s+/g, ' ').trim();
 }
 
-// In-text identities: e-mail addresses and @handles (mentions, pings) are
-// replaced before storage — the text keeps its meaning, not the person.
-// Bounded quantifiers plus a lookbehind: a match can only START at the
-// beginning of a local part, so a long run of word characters is scanned
-// once (F10-3 measured the old unbounded pattern quadratic).
-const EMAIL_RE = /(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]{1,63}(?:\.[A-Za-z0-9-]{1,63}){0,8}\.[A-Za-z]{2,24}(?![A-Za-z])/g;
-const HANDLE_RE = /(^|[^A-Za-z0-9_.])@[A-Za-z0-9_][A-Za-z0-9_.-]{1,38}/g;
+// In-text identities (ingest@1.3.0, D2): e-mail addresses, @handles, phone
+// numbers, identity links, "cc <Name>", Wikipedia unsigned-comment notes and
+// trailing sign-offs — src/collectors/identity.js redactText (bounded,
+// linear patterns; F10-3).
 function redactIdentities(text) {
-    return String(text || '').replace(EMAIL_RE, '[email]').replace(HANDLE_RE, '$1@[user]');
+    return redactText(text);
 }
 
 /** Cut raw upstream text before any processing (F10-3). */
@@ -116,12 +117,12 @@ function isoDate(v) {
     return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 
-/** Stable, identity-free external id: the upstream id when short and clean, else a hash. */
-function externalId(routeId, id) {
-    const raw = String(id === null || id === undefined ? '' : id).trim();
-    if (!raw) return '';
-    const safe = raw.length <= 200 && /^[\w.:/?=&%#~+-]+$/.test(raw) ? raw : crypto.createHash('sha256').update(raw).digest('hex');
-    return `${routeId}:${safe}`;
+/**
+ * Stable, identity-free external id (F10-14, D2): the upstream id when it is
+ * not identity-bearing, else its keyed fingerprint (src/collectors/provenance.js).
+ */
+function externalId(routeId, id, key = null) {
+    return storedExternalId(routeId, id, key);
 }
 
 /**
@@ -131,13 +132,14 @@ function externalId(routeId, id) {
  * @param {object} route  registry route
  * @returns {object|null} payload for storeRawPost, or null when unusable
  */
-function toPayload(item, source, route) {
+function toPayload(item, source, route, { key = null } = {}) {
     if (!item) return null;
     const title = truncate(redactIdentities(htmlToText(capRaw(item.title, RAW_TITLE_CAP))), MAX_TITLE);
     const body = truncate(redactIdentities(htmlToText(capRaw(item.text, RAW_TEXT_CAP))), MAX_TEXT);
     const joined = body && body !== title && !title.includes(body) ? (title ? `${title}\n\n${body}` : body) : title;
     const text = truncate(joined, MAX_TEXT);
-    const id = externalId(route.id, item.id || item.url);
+    const rawId = String(item.id || item.url || '').trim();
+    const id = externalId(route.id, rawId, key);
     if (!id || !text) return null;
 
     let location = '';
@@ -151,8 +153,9 @@ function toPayload(item, source, route) {
         if (home && findCity(home)) { location = findCity(home).name; basis = 'publisher'; }
     }
 
-    const url = typeof item.url === 'string' && /^https?:\/\//.test(item.url) && !IDENTITY_URL_RE.test(item.url)
-        ? item.url : null;
+    const sourceUrl = typeof item.url === 'string' ? item.url.trim() : '';
+    // The canonical permalink is kept unless it is an identity link (D2).
+    const url = /^https?:\/\//.test(sourceUrl) && !isIdentityUrl(sourceUrl) ? sourceUrl : null;
     return {
         id,
         text,
@@ -166,7 +169,9 @@ function toPayload(item, source, route) {
         route: route.id,
         license: source.license || null,
         attribution: source.attribution || null,
+        // D2: HMAC(key, slug:raw id:source URL) — null without a key.
+        provenance_fingerprint: provenanceFingerprint(key, source.slug, rawId, sourceUrl),
     };
 }
 
-module.exports = { IDENTITY_URL_RE, EMAIL_RE, RAW_TEXT_CAP, RAW_TITLE_CAP, HTML_PARSE_CAP, capRaw, redactIdentities, toPayload, htmlToText, nearestCity, externalId, isoDate, truncate, MAX_TEXT };
+module.exports = { IDENTITY_URL_RE, isIdentityUrl, EMAIL_RE, RAW_TEXT_CAP, RAW_TITLE_CAP, HTML_PARSE_CAP, capRaw, redactIdentities, toPayload, htmlToText, nearestCity, externalId, isoDate, truncate, MAX_TEXT };

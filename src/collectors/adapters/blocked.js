@@ -11,7 +11,9 @@
 'use strict';
 
 const { RssAtomCollector, JsonApiCollector, BulkFileCollector } = require('../base');
+const crypto = require('crypto');
 const { GateClosedError } = require('../errors');
+const { provenanceKey, hmac } = require('../provenance');
 
 function assertPermission(collector, envName) {
     const v = collector.env[envName];
@@ -62,8 +64,12 @@ class TelegramBotApiCollector extends JsonApiCollector {
         const updates = res.data.result || [];
         if (updates.length) this.cursor.offset = Math.max(...updates.map(u => u.update_id)) + 1;
         // Channel titles and sender fields are not mapped.
+        // F10-14: the chat id identifies the channel's owner — only its
+        // fingerprint is used in the stored id.
+        const key = provenanceKey(this.env);
+        const chatFp = id => (key ? hmac(key, `telegram-chat:${id}`) : crypto.createHash('sha256').update(`telegram-chat:${id}`).digest('hex')).slice(0, 32);
         return updates.filter(u => u.channel_post && u.channel_post.text).map(u => ({
-            id: `${u.channel_post.chat.id}:${u.channel_post.message_id}`,
+            id: `chat-${chatFp(u.channel_post.chat.id)}:${u.channel_post.message_id}`,
             title: '', text: u.channel_post.text, url: null, publishedAt: u.channel_post.date,
         }));
     }

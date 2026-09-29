@@ -148,10 +148,18 @@ async function storeRawPost(rawPayload, sourceId) {
     // covers a concurrent insert of the same post by another process.
     const language = typeof rawPayload.language === 'string'
         && /^[a-z]{2}$/.test(rawPayload.language) ? rawPayload.language : 'en';
+    // D2 provenance fingerprint (ingest@1.3.0, migration 017): a column of
+    // its own, not duplicated in raw_payload. Only a well-formed HMAC-SHA256
+    // hex digest is accepted.
+    const fp = rawPayload.provenance_fingerprint;
+    const provenanceFingerprint = typeof fp === 'string' && /^[0-9a-f]{64}$/.test(fp) ? fp : null;
+    const storedPayload = { ...normalised.rawPayload };
+    delete storedPayload.provenance_fingerprint;
     const post = await dbRun(
         `INSERT INTO raw_posts
-            (source_id, external_id, content, content_hash, raw_payload, location, language)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+            (source_id, external_id, content, content_hash, raw_payload, location, language,
+             provenance_fingerprint)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          ON CONFLICT (source_id, external_id) DO NOTHING
          RETURNING id`,
         [
@@ -159,9 +167,10 @@ async function storeRawPost(rawPayload, sourceId) {
             normalised.externalId,
             normalised.content,
             normalised.contentHash,
-            JSON.stringify(normalised.rawPayload),
+            JSON.stringify(storedPayload),
             cityLocation(rawPayload.location),
             language,
+            provenanceFingerprint,
         ],
     );
     if (!post) {

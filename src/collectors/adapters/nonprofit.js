@@ -8,6 +8,7 @@
 const crypto = require('crypto');
 const { Parser } = require('htmlparser2');
 const { JsonApiCollector } = require('../base');
+const { provenanceKey, hmac } = require('../provenance');
 
 const WIKI_API = 'https://en.wikipedia.org/w/api.php';
 const SET_TTL_MS = 24 * 3600 * 1000;
@@ -109,13 +110,16 @@ class WikipediaTalkCollector extends JsonApiCollector {
             this.cursor.rotation = i % set.length;
         }
         const items = [];
+        const key = provenanceKey(this.env);
         for (const page of pages) {
             const res = await this.api({ action: 'discussiontoolspageinfo', page, prop: 'threaditemshtml' });
             const threads = res.data.discussiontoolspageinfo && res.data.discussiontoolspageinfo.threaditemshtml;
             for (const c of flattenThreads(threads)) {
                 items.push({
-                    // The DiscussionTools id embeds the signer's name: hash it.
-                    id: crypto.createHash('sha256').update(`${page}#${c.id}`).digest('hex'),
+                    // The DiscussionTools id embeds the signer's name: only its
+                    // KEYED fingerprint is used (an unkeyed hash of a name and
+                    // a timestamp could be reversed by guessing — F10-14).
+                    id: key ? hmac(key, `${page}#${c.id}`) : crypto.createHash('sha256').update(`${page}#${c.id}`).digest('hex'),
                     title: `${page}${c.heading ? ` — ${c.heading}` : ''}`,
                     text: stripSignatures(c.html),
                     url: `https://en.wikipedia.org/wiki/${encodeURIComponent(page.replace(/ /g, '_'))}`,

@@ -22,7 +22,7 @@ describe('toPayload', () => {
             author: 'someone', username: 'someone', user: { location: 'Paris' },
         }, npr, route(npr));
         expect(Object.keys(p).sort()).toEqual(['attribution', 'id', 'language', 'license', 'location', 'location_basis',
-            'published_at', 'route', 'source_slug', 'text', 'title', 'url'].sort());
+            'provenance_fingerprint', 'published_at', 'route', 'source_slug', 'text', 'title', 'url'].sort());
         for (const f of PII_FIELDS) expect(p).not.toHaveProperty(f);
         expect(p.title).toBe('AI & jobs');
         expect(p.text).toBe('AI & jobs\n\nMachine learning news');

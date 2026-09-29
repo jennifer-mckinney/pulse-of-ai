@@ -10,6 +10,7 @@
     "seed": "node scripts/seed.js",
     "seed:e2e": "node scripts/test/seed-e2e.js",
     "replay": "node scripts/replay.js",
+    "verify-provenance": "node scripts/verify-provenance.js",
     "compact": "node scripts/compact.js",
     "db:reset": "node scripts/migrate.js --fresh && node scripts/seed.js",
     "docker:up": "docker compose up -d",

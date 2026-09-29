@@ -106,7 +106,7 @@ describe('migration 014_methodology_alignment.sql', () => {
         const mv = await resolveCurrentMethodology();
         const row = await dbGet('SELECT component, version FROM methodology_versions WHERE id = $1', [mv.relevanceMvId]);
         expect(row).toEqual({ component: 'relevance', version: '1.1.0' });
-        expect(mv.versions).toEqual(expect.objectContaining({ discourse: '1.1.0-DQI', ingest: '1.2.0' }));
+        expect(mv.versions).toEqual(expect.objectContaining({ discourse: '1.1.0-DQI', ingest: '1.3.0' }));
     });
 
     it('resolveCurrentMethodology fails loudly when a version is not registered', async () => {

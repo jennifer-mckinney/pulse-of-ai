@@ -305,6 +305,17 @@ describe('the blocked 4 — refuse unless their official permission env is set',
         expect(r.payloads).toHaveLength(1);
         expect(cursor.offset).toBe(900003);
         expect(JSON.stringify(r.payloads)).not.toMatch(/REDACTED|private message/);
+        // F10-14: the chat id (the channel owner's id) is stored only as a
+        // keyed fingerprint — never the number itself.
+        expect(JSON.stringify(r.payloads)).not.toMatch(/1001234567890/);
+        expect(r.payloads[0].id).toMatch(/^bot-api-with-permission:fp:[0-9a-f]{64}$|^bot-api-with-permission:chat-[0-9a-f]{32}:55$/);
+        const keyed = make('telegram', 'bot-api-with-permission', [[/api\.telegram\.org/, G('telegram-updates.json')]],
+            { ...BLOCKED[1][2], PROVENANCE_KEY: 'k1' });
+        const other = make('telegram', 'bot-api-with-permission', [[/api\.telegram\.org/, G('telegram-updates.json')]],
+            { ...BLOCKED[1][2], PROVENANCE_KEY: 'k2' });
+        const [a, b] = [(await keyed.c.collect()).payloads[0], (await other.c.collect()).payloads[0]];
+        expect(a.id).not.toBe(b.id);   // keyed: not reversible by hashing guessed chat ids
+        expect(a.provenance_fingerprint).toMatch(/^[0-9a-f]{64}$/);
     });
 
     test('ResearchGate with a grant: loads the delivered dataset only', async () => {

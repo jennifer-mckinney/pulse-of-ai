@@ -787,8 +787,10 @@ Non-real-time query interface. Accepts structured filters and returns aggregated
 Incoming post (Reddit/Twitter)
         │
         ▼
-Strip: @mentions, u/usernames (regex)
-Strip: raw_payload.author, .author_fullname, .user_id
+Strip: identity fields (author, username, user_id, … — PII_FIELDS)
+Redact in text: e-mails, @handles, phones, profile links, cc names,
+                sign-offs, Wikipedia unsigned notes (ingest@1.3.0)
+Fingerprint: provenance HMAC; identity-bearing upstream ids
 Normalize: trim whitespace, lowercase for hashing
         │
         ▼
@@ -803,13 +805,20 @@ Check: content_hash EXISTS in raw_posts?
 Log to data_retention_log: action='collected', legal_basis='GDPR Article 6(1)(f)'
 ```
 
+**The claim (ingest@1.3.0, decision D2), exactly:** identity fields are never stored; e-mail addresses, handles, phone numbers, sign-offs and profile links in text are redacted; free text may still contain names mentioned in content.
+
 **What is NEVER stored:**
-- Usernames or account handles
-- User IDs (platform-internal)
-- Email addresses
+- Identity fields: author, username, user id, screen name, creator, uploader, owner, e-mail (`src/pipeline/ingest.js` PII_FIELDS; collectors never request them)
 - IP addresses or location beyond city-level metadata
-- Profile information of any kind
+- Profile information of any kind, including profile or user-namespace links as a post's link (`src/collectors/identity.js` isIdentityUrl)
 - Post metadata that enables user re-identification (karma score, account age, etc.)
+- An upstream id that could identify a person (a profile link, a URL with a query string, an id with `@`, `%`, `&`, `=` or `#`), or the Telegram chat id: only its keyed fingerprint is stored
+
+**What is redacted in the text before storage** (`src/collectors/identity.js` redactText): e-mail addresses → `[email]`; @handles → `@[user]`; phone numbers (E.164 and NANP) → `[phone]`; profile and identity links → `[profile link]`; `cc <Name>` → `cc [name]`; a trailing sign-off (`— Jane Doe`) and Wikipedia's "Preceding unsigned comment added by …" note are removed. All patterns are bounded and linear.
+
+**What free text may still contain:** names of people mentioned in the content itself (for example "Sam Altman said…", or a name inside a GitHub issue body). The text is not otherwise de-identified.
+
+**Provenance without identity (D2):** each collected post stores `raw_posts.provenance_fingerprint` = HMAC-SHA256(`PROVENANCE_KEY` or `AUDIT_HASH_KEY`, `source_slug + ":" + raw upstream id + ":" + canonical source URL`), next to `source_id`, the content hash and the identity-free external id; the canonical permalink is kept when it is not an identity link. The audit receipt (`GET /api/audit/:post_id` → `provenance`) shows the source, the published time, the permalink or the fingerprint, and "verifiable: provide the original URL or id to reproduce the fingerprint". `npm run verify-provenance -- --post <id> --url <original> [--id <original id>]` recomputes the fingerprint and prints `RESULT: MATCH` (exit 0) or `NO MATCH` (exit 1).
 
 ### Input Sanitization (Route Layer)
 All route inputs are validated before reaching the DB layer:
