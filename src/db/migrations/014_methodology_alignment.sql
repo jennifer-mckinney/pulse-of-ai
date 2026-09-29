@@ -1,4 +1,4 @@
--- Migration 013: methodology alignment (ADR 0001).
+-- Migration 014: methodology alignment (ADR 0001).
 --
 -- `npm run replay` reported config drift between the registered methodology
 -- and the code: relevance@1.0.0 lists 18 keywords and a 0.1-per-match rule

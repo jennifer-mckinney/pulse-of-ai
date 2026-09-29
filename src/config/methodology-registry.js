@@ -194,7 +194,7 @@ const METHODOLOGY_VERSIONS = [
         justification: 'Sentence embeddings for semantic search and discourse novelty come from all-MiniLM-L6-v2 (Reimers & Gurevych 2019; 384 dimensions, L2-normalised so cosine similarity is a dot product), served by python/embeddings_service.py. The model is loaded at a fixed Hugging Face commit (revision), not the moving main branch, so a vector can always be traced to, and regenerated from, the exact weights that produced it; each stored vector records this methodology version. Changing the model or its revision changes the vectors, so it ships as a new version row.',
     },
 
-    // ── 2026-09-29 alignment (ADR 0001; migration 013) ────────────────────
+    // ── 2026-09-29 alignment (ADR 0001; migration 014) ────────────────────
     // `npm run replay` reported config drift: the registered relevance row
     // listed 18 keywords and a 0.1-per-match rule, the code scores 20
     // keywords at 1/20 each; the registered DQI dimensions were not the
@@ -255,7 +255,7 @@ const METHODOLOGY_VERSIONS = [
     },
     {
         component: 'ingest',
-        // 1.2.0: in-text identity redaction (migration 014).
+        // 1.2.0: in-text identity redaction (migration 015).
         version: '1.2.0',
         model_name: 'pulse-ingest-v1',
         config: {

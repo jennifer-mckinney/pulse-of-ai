@@ -1,5 +1,5 @@
 // src/collectors/state.js
-// Per-source collection state and run outcomes (migration 012).
+// Per-source collection state and run outcomes (migration 013).
 //
 //   claim(sourceId, minIntervalSec)  atomic cadence guard: sets
 //       last_attempt_at = NOW() only when the previous attempt is older than

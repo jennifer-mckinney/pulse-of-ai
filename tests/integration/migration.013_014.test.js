@@ -1,10 +1,10 @@
-// tests/integration/migration.012_013.test.js
-// Migrations 012 (source collection) and 013 (methodology alignment) and the
+// tests/integration/migration.013_014.test.js
+// Migrations 013 (source collection) and 014 (methodology alignment) and the
 // registry seed, against a REAL PostgreSQL:
-//   - 012 retires every old seed row with a note, keeps its posts, never
+//   - 013 retires every old seed row with a note, keeps its posts, never
 //     touches demo feeds or registry rows, and is idempotent;
 //   - scripts/seed.js upserts exactly the 51 registry rows, all active;
-//   - 013 orders every 1.0.0 row before its 1.1.0 successor even in one
+//   - 014 orders every 1.0.0 row before its 1.1.0 successor even in one
 //     transaction, is idempotent, and leaves released rows untouched;
 //   - resolveCurrentMethodology() returns the versions the code implements.
 
@@ -18,8 +18,8 @@ const { SOURCES } = require('../../src/config/source-registry');
 const { resolveCurrentMethodology } = require('../../src/pipeline/methodology');
 
 const read = (f) => fs.readFileSync(path.join(__dirname, '../../src/db/migrations', f), 'utf8');
-const SQL_012 = read('012_source_collection.sql');
-const SQL_013 = read('013_methodology_alignment.sql');
+const SQL_013 = read('013_source_collection.sql');
+const SQL_014 = read('014_methodology_alignment.sql');
 
 async function insertOld(name, type = 'rss') {
     return dbGet(
@@ -29,7 +29,7 @@ async function insertOld(name, type = 'rss') {
     );
 }
 
-describe('migration 012_source_collection.sql', () => {
+describe('migration 013_source_collection.sql', () => {
     it('retires old seed rows (history kept), leaves demo feeds and registry rows alone', async () => {
         const old = await insertOld('techcrunch_ai');
         const demo = await insertOld('demo_news', 'demo');
@@ -38,8 +38,8 @@ describe('migration 012_source_collection.sql', () => {
             `INSERT INTO raw_posts (source_id, external_id, content, content_hash)
              VALUES ($1, 'x1', 'old post', 'h') RETURNING id`, [old.id]);
 
-        await dbTransaction(c => c.query(SQL_012));
-        await dbTransaction(c => c.query(SQL_012));   // idempotent
+        await dbTransaction(c => c.query(SQL_013));
+        await dbTransaction(c => c.query(SQL_013));   // idempotent
 
         const oldRow = await dbGet('SELECT active, retired_at, retired_note FROM data_sources WHERE id = $1', [old.id]);
         expect(oldRow.active).toBe(false);
@@ -81,12 +81,12 @@ describe('scripts/seed.js registry upsert', () => {
     });
 });
 
-describe('migration 013_methodology_alignment.sql', () => {
+describe('migration 014_methodology_alignment.sql', () => {
     const versions = (component) => dbAll(
         `SELECT version FROM methodology_versions WHERE component = $1 ORDER BY effective_from ASC`, [component]);
 
     it('orders 1.0.0 before 1.1.0 in one transaction; a later seed cannot reorder them', async () => {
-        await dbTransaction(c => c.query(SQL_013));
+        await dbTransaction(c => c.query(SQL_014));
         await seedMethodology();
         expect((await versions('relevance')).map(r => r.version)).toEqual(['1.0.0', '1.1.0']);
         expect((await versions('discourse')).map(r => r.version)).toEqual(['1.0.0-DQI', '1.1.0-DQI']);
@@ -95,8 +95,8 @@ describe('migration 013_methodology_alignment.sql', () => {
     it('is idempotent and never edits a released row', async () => {
         await seedMethodology();   // released rows first, as on an existing database
         const before = await dbAll('SELECT * FROM methodology_versions WHERE version IN ($1, $2)', ['1.0.0', '1.0.0-DQI']);
-        await dbTransaction(c => c.query(SQL_013));
-        await dbTransaction(c => c.query(SQL_013));
+        await dbTransaction(c => c.query(SQL_014));
+        await dbTransaction(c => c.query(SQL_014));
         const after = await dbAll('SELECT * FROM methodology_versions WHERE version IN ($1, $2)', ['1.0.0', '1.0.0-DQI']);
         expect(after).toEqual(before);
     });

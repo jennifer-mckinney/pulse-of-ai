@@ -190,11 +190,11 @@ describe('migration 012 ↔ methodology registry (embedding@1.0.0, P9-5)', () =>
     });
 });
 
-// ─── Migration 013 + code ↔ registry alignment (ADR 0001) ────────────────────
+// ─── Migration 014 + code ↔ registry alignment (ADR 0001) ────────────────────
 // The replay tool reported drift between the registered relevance / discourse
 // rows and the code. New versions describe the code exactly; these tests
-// hold the code, the registry and migration 013 to one another.
-describe('migration 013 ↔ methodology registry (alignment)', () => {
+// hold the code, the registry and migration 014 to one another.
+describe('migration 014 ↔ methodology registry (alignment)', () => {
     const { CURRENT_VERSIONS } = require('../../../src/config/methodology-registry');
     const relevanceCode = require('../../../src/pipeline/relevance');
     const discourseCode = require('../../../src/pipeline/discourse');
@@ -203,23 +203,23 @@ describe('migration 013 ↔ methodology registry (alignment)', () => {
     const { STAGES } = require('../../../src/audit/replay');
     const { generate } = require('../../../scripts/generate-methodology-migration');
 
-    const SQL_013 = fs.readFileSync(
-        path.join(__dirname, '../../../src/db/migrations/013_methodology_alignment.sql'), 'utf8');
-    const rows = [...SQL_013.matchAll(ROW_011_RE)].map(m => ({
+    const SQL_014 = fs.readFileSync(
+        path.join(__dirname, '../../../src/db/migrations/014_methodology_alignment.sql'), 'utf8');
+    const rows = [...SQL_014.matchAll(ROW_011_RE)].map(m => ({
         component: m[1], version: m[2], model_name: m[3],
         config: JSON.parse(m[4]), justification: m[5],
     }));
     const KEYS = ['sentiment@1.0.0', 'relevance@1.0.0', 'discourse@1.0.0-DQI',
         'relevance@1.1.0', 'discourse@1.1.0-DQI', 'ingest@1.1.0'];
 
-    test('013 registers the 1.0.0 predecessors first, then the aligned versions', () => {
+    test('014 registers the 1.0.0 predecessors first, then the aligned versions', () => {
         expect(rows.map(r => `${r.component}@${r.version}`)).toEqual(KEYS);
-        expect((SQL_013.match(/INSERT INTO/g) || []).length).toBe(rows.length);
-        expect(SQL_013).not.toMatch(/DO UPDATE|UPDATE methodology_versions|DELETE/);
+        expect((SQL_014.match(/INSERT INTO/g) || []).length).toBe(rows.length);
+        expect(SQL_014).not.toMatch(/DO UPDATE|UPDATE methodology_versions|DELETE/);
     });
 
-    test('013 is exactly what the generator emits from the registry', () => {
-        expect(SQL_013.endsWith(generate(KEYS))).toBe(true);
+    test('014 is exactly what the generator emits from the registry', () => {
+        expect(SQL_014.endsWith(generate(KEYS))).toBe(true);
     });
 
     test.each(KEYS)('%s agrees field for field', (key) => {
@@ -246,7 +246,7 @@ describe('migration 013 ↔ methodology registry (alignment)', () => {
         expect(reg.model_name).toBe(relevanceCode.MODEL_NAME);
         // Replay reports no config drift against the aligned row.
         expect(STAGES.relevance.configDrift(reg.config)).toEqual([]);
-        // …and it did against the 1.0.0 row (the drift that motivated 013).
+        // …and it did against the 1.0.0 row (the drift that motivated 014).
         expect(STAGES.relevance.configDrift(registry('relevance', '1.0.0').config)).not.toEqual([]);
     });
 
@@ -278,18 +278,18 @@ describe('migration 013 ↔ methodology registry (alignment)', () => {
     });
 });
 
-describe('migration 014 ↔ methodology registry (ingest@1.2.0)', () => {
+describe('migration 015 ↔ methodology registry (ingest@1.2.0)', () => {
     const { generate } = require('../../../scripts/generate-methodology-migration');
     const { redactIdentities } = require('../../../src/collectors/normalize');
     const { PII_FIELDS } = require('../../../src/pipeline/ingest');
-    const SQL_014 = fs.readFileSync(
-        path.join(__dirname, '../../../src/db/migrations/014_ingest_text_redaction.sql'), 'utf8');
+    const SQL_015 = fs.readFileSync(
+        path.join(__dirname, '../../../src/db/migrations/015_ingest_text_redaction.sql'), 'utf8');
 
-    test('014 is exactly the generated ingest@1.2.0 row, idempotent, and edits nothing', () => {
-        expect(SQL_014.endsWith(generate(['ingest@1.2.0']))).toBe(true);
-        expect((SQL_014.match(/INSERT INTO/g) || []).length).toBe(1);
-        expect(SQL_014).toMatch(/ON CONFLICT \(component, version\) DO NOTHING;/);
-        expect(SQL_014).not.toMatch(/DO UPDATE|UPDATE methodology_versions|DELETE/);
+    test('015 is exactly the generated ingest@1.2.0 row, idempotent, and edits nothing', () => {
+        expect(SQL_015.endsWith(generate(['ingest@1.2.0']))).toBe(true);
+        expect((SQL_015.match(/INSERT INTO/g) || []).length).toBe(1);
+        expect(SQL_015).toMatch(/ON CONFLICT \(component, version\) DO NOTHING;/);
+        expect(SQL_015).not.toMatch(/DO UPDATE|UPDATE methodology_versions|DELETE/);
     });
 
     test('ingest@1.2.0 is what the code does and is the current ingest version', () => {

@@ -4,7 +4,7 @@
 - **Date:** 2026-09-29
 - **Decider:** Jennifer McKinney (product owner)
 - **Inputs:** `docs/requirements/Top_50_Global_Online_Sources.xlsx` (Rev. 3, the registry of record), `docs/research/2026-09-29-source-access.md` (per-source routes, terms and live verification)
-- **Code:** `src/config/source-registry.js`, `src/collectors/`, `src/workers/`, migration `012_source_collection.sql`
+- **Code:** `src/config/source-registry.js`, `src/collectors/`, `src/workers/`, migrations `013_source_collection.sql`, `014_methodology_alignment.sql`, `015_ingest_text_redaction.sql`
 
 ## Context
 
@@ -47,7 +47,7 @@ They remain registry rows and are served by `/api/sources` and the health drawer
 - Every request carries `PulseOfAI/<version> (+<COLLECTOR_CONTACT_URL>; non-commercial AI discourse research)`. Without `COLLECTOR_CONTACT_URL` every source is `disabled`.
 - HTML-origin routes (feeds on a publisher's site) are checked against that host's `robots.txt` before every request, redirects included. **Conservative matching:** a `Disallow: /x/` rule is also applied to the path `/x`. This resolves the CFR ambiguity (`Disallow: /feed/` vs the feed at `/feed`) conservatively: the CFR feed is not fetched and CFR shows `awaiting_approval` until `CFR_FEED_PERMISSION_REF` records CFR's confirmation, after which literal RFC 9309 matching applies to CFR only.
 - Documented API hosts are not robots-gated (their terms and rate limits govern them), but the same per-host spacing, backoff (429/5xx, honouring `Retry-After`), timeouts and conditional GET (ETag / Last-Modified) apply.
-- Collectors never request identity fields (authors, usernames, profile locations); the normaliser drops any that arrive, does not store links whose path names a person, and replaces e-mail addresses and @handles in the text with `[email]` / `@[user]` (`ingest@1.2.0`, migration 014).
+- Collectors never request identity fields (authors, usernames, profile locations); the normaliser drops any that arrive, does not store links whose path names a person, and replaces e-mail addresses and @handles in the text with `[email]` / `@[user]` (`ingest@1.2.0`, migration 015).
 
 ### Location
 Location is capped at city level and never inferred for a person. A post gets (1) a content-level city when the item carries one (e.g. an OSM diary geotag rounded to the nearest registry city), else (2) the **publisher's** home city for editorial sources whose items are their own articles (BBC → London, NPR → Washington, D.C.), else nothing. The basis (`content` or `publisher`) is stored with the payload and registered in `ingest@1.1.0`. Platforms and repositories of third-party content (social, forums, arXiv, GitHub issues, Substack, individual newsletter authors) get no publisher city. Six tier-2 cities were added to the city registry for publisher origins.
@@ -56,7 +56,7 @@ Location is capped at city level and never inferred for a person. A post gets (1
 The NPR, SpringerLink, IEEE and Meta/TikTok routes are used on the non-commercial basis of ruling 6. Where the terms require attribution the registry carries it and the API serves it next to the source's content: NPR, NBCNews.com, Stack Exchange (CC BY-SA 4.0), Wikipedia (CC BY-SA 4.0), Our World in Data (CC BY 4.0), Pew Research Center.
 
 ### Replacing the old seed
-The old 50-row seed list is removed; `scripts/seed.js` upserts the 51 registry rows. Migration 012 marks every old seed row that is not a registry row `active = FALSE` with `retired_at` and a note. No post, score or audit row is deleted: history stays attached to the retired source. The demo feeds (`source_type = 'demo'`) are untouched and never count toward the 51.
+The old 50-row seed list is removed; `scripts/seed.js` upserts the 51 registry rows. Migration 013 marks every old seed row that is not a registry row `active = FALSE` with `retired_at` and a note. No post, score or audit row is deleted: history stays attached to the retired source. The demo feeds (`source_type = 'demo'`) are untouched and never count toward the 51.
 
 ### Methodology alignment
 The replay tool found drift: relevance was registered with 18 keywords while the code scores 20, with a 0.1-per-match rule the code does not use, and the registered DQI dimensions differ from the code's. Existing rows are never edited. New rows `relevance@1.1.0`, `discourse@1.1.0-DQI` and `ingest@1.1.0` describe exactly what the code does; the pipeline resolves the version it implements from the registry, not "latest by timestamp". The unreachable 0.40 embed gate (8 of 20 keywords) is replaced by "at least one lexicon match" (`score ≥ 1/20`), registered in `relevance@1.1.0`.

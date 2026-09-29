@@ -1,4 +1,4 @@
--- Migration 012: real source collection (ADR 0001).
+-- Migration 013: real source collection (ADR 0001).
 --
 -- Additive only — no column dropped, no row deleted:
 --   1. data_sources.retired_at / retired_note: the old 50-row seed list is
@@ -56,7 +56,7 @@ CREATE INDEX IF NOT EXISTS idx_source_runs_job    ON source_runs(job_id);
 UPDATE data_sources
 SET active       = FALSE,
     retired_at   = NOW(),
-    retired_note = 'Retired 2026-09-29 by migration 012: replaced by the 51-source registry of record '
+    retired_note = 'Retired 2026-09-29 by migration 013: replaced by the 51-source registry of record '
                 || '(src/config/source-registry.js, ADR 0001). Posts and audit history are kept.'
 WHERE retired_at IS NULL
   AND source_type <> 'demo'

@@ -3,7 +3,7 @@
 // Seeds the database with:
 //   1. The 51 data_sources of the source registry of record
 //      (src/config/source-registry.js — the workbook, ADR 0001). The old
-//      50-row seed list is gone; migration 012 retired its rows (history kept).
+//      50-row seed list is gone; migration 013 retired its rows (history kept).
 //   2. methodology_versions — every row of src/config/methodology-registry.js
 //      (shared with migrations 009 / 011 / 013).
 //

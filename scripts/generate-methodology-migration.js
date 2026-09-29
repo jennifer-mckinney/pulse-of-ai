@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // scripts/generate-methodology-migration.js
 // Prints the INSERT statements of a methodology migration from
-// src/config/methodology-registry.js, in the shape migrations 011/013 use
+// src/config/methodology-registry.js, in the shape migrations 011/014/015 use
 // (config/justification dollar-quoted so they stay byte-identical to the
 // registry; effective_from = clock_timestamp() so rows inserted in one
 // migration transaction keep their order).
