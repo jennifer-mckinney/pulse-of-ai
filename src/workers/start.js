@@ -31,6 +31,7 @@ const { processCorrelateJob }= require('./correlate.worker');
 const { scheduleAllSources } = require('./collector.scheduler');
 const { collectWindowMs } = require('../config/source-registry');
 const { closeCycles } = require('../collectors/cycle');
+const { scrub } = require('../collectors/redact');
 
 const int = (v, d) => { const n = parseInt(v || '', 10); return Number.isFinite(n) && n > 0 ? n : d; };
 const COLLECT_CONCURRENCY   = int(process.env.COLLECT_CONCURRENCY, 4);
@@ -61,7 +62,8 @@ workers.forEach(w => {
         }
     });
     w.on('failed', (job, err) => {
-        console.error(`[${w.name}] job ${job?.id} failed: ${err.message}`);
+        // F10-1: an error text can carry upstream detail — scrubbed.
+        console.error(scrub(`[${w.name}] job ${job?.id} failed: ${err.message}`));
     });
 });
 

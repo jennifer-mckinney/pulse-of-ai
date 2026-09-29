@@ -24,6 +24,7 @@ require('dotenv').config();
 const { SOURCES, sourceStatus } = require('../src/config/source-registry');
 const { ADAPTERS } = require('../src/collectors');
 const { HttpClient } = require('../src/collectors/http');
+const { scrub } = require('../src/collectors/redact');
 
 function parseArgs(argv) {
     const opts = { only: null, json: false };
@@ -65,7 +66,9 @@ async function smokeSource(src, env, http, now = () => Date.now()) {
     return row;
 }
 
-async function main(argv, env = process.env, out = line => process.stdout.write(line + '\n')) {
+async function main(argv, env = process.env, rawOut = line => process.stdout.write(line + '\n')) {
+    // F10-1: every printed line is scrubbed of env secrets and URL credentials.
+    const out = line => rawOut(scrub(line, env));
     const opts = parseArgs(argv);
     const http = new HttpClient({ env });
     out(`collect:smoke — live, keyless routes only (UA: ${http.ua})`);
@@ -105,7 +108,7 @@ async function main(argv, env = process.env, out = line => process.stdout.write(
 /* istanbul ignore next -- process entry point */
 if (require.main === module) {
     main(process.argv.slice(2)).then(code => process.exit(code)).catch((err) => {
-        process.stderr.write(`collect:smoke: FAILED — ${err.message}\n`);
+        process.stderr.write(`collect:smoke: FAILED — ${scrub(err.message)}\n`);
         process.exit(2);
     });
 }

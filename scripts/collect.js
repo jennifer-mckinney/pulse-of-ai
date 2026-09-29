@@ -10,6 +10,7 @@
 require('dotenv').config();
 const db = require('../src/db/connection');
 const { runCollection } = require('../src/collectors/runner');
+const { scrub } = require('../src/collectors/redact');
 
 function parseArgs(argv) {
     const i = argv.indexOf('--only');
@@ -36,7 +37,7 @@ if (require.main === module) {
             process.exit(0);
         })
         .catch(async (err) => {
-            process.stderr.write(`collect: FAILED — ${err.message}\n`);
+            process.stderr.write(`collect: FAILED — ${scrub(err.message)}\n`);
             await db.closePool().catch(() => {});
             process.exit(1);
         });

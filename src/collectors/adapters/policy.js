@@ -6,11 +6,12 @@
 
 const { JsonApiCollector } = require('../base');
 
+/** GovInfo search (api.data.gov key in the X-Api-Key HEADER, never the URL — F10-1). */
 class GovinfoSearchCollector extends JsonApiCollector {
     async fetchItems() {
-        const res = await this.http.json(`https://api.govinfo.gov/search?api_key=${encodeURIComponent(this.envValue('GOVINFO_API_KEY'))}`, this.requestOptions({
+        const res = await this.http.json('https://api.govinfo.gov/search', this.requestOptions({
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', 'X-Api-Key': this.envValue('GOVINFO_API_KEY') },
             body: JSON.stringify({
                 query: this.params.query, pageSize: this.params.pageSize || 50, offsetMark: '*',
                 sorts: [{ field: 'publishdate', sortOrder: 'DESC' }],
@@ -26,15 +27,19 @@ class GovinfoSearchCollector extends JsonApiCollector {
     }
 }
 
-/** Congress.gov: no keyword search exists — recent bills, AI-filtered locally. */
+/**
+ * Congress.gov: no keyword search exists — recent bills, AI-filtered locally.
+ * The api.data.gov key travels in the X-Api-Key HEADER, never the URL (F10-1).
+ */
 class CongressCollector extends JsonApiCollector {
     async fetchItems() {
         const from = this.cursor.fromDateTime || new Date(this.now() - 3 * 86400000).toISOString().replace(/\.\d{3}Z$/, 'Z');
         const q = new URLSearchParams({
-            format: 'json', sort: 'updateDate desc', limit: String(this.params.limit || 250),
-            fromDateTime: from, api_key: this.envValue('CONGRESS_API_KEY'),
+            format: 'json', sort: 'updateDate desc', limit: String(this.params.limit || 250), fromDateTime: from,
         });
-        const res = await this.getJson(`https://api.congress.gov/v3/bill?${q}`);
+        const res = await this.getJson(`https://api.congress.gov/v3/bill?${q}`, {
+            headers: { 'X-Api-Key': this.envValue('CONGRESS_API_KEY') },
+        });
         const bills = res.data.bills || [];
         this.cursor.fromDateTime = new Date(this.now() - 3600000).toISOString().replace(/\.\d{3}Z$/, 'Z');
         return bills.map(b => ({

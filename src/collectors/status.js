@@ -45,7 +45,10 @@ function registryFields(row, env, now) {
         last_attempt_at: row.last_attempt_at || null,
         last_success_at: row.last_success_at || null,
         last_item_count: row.last_item_count === undefined ? null : row.last_item_count,
-        last_error: row.last_error || null,
+        // F10-1: the classification only — never the error text.
+        last_error_kind: row.last_error_kind || null,
+        last_http_status: row.last_http_status === undefined ? null : row.last_http_status,
+        last_error_at: row.last_error_at || null,
         consecutive_failures: row.consecutive_failures || 0,
         terms_url: src.termsUrl,
         terms_note: src.termsNote,
@@ -64,7 +67,8 @@ async function sourceRows({ includeInactive = false, env = process.env, now = Da
     const rows = await dbAll(
         `SELECT ds.id, ds.name, ds.display_name, ds.source_type, ds.category, ds.active,
                 ds.retired_at, ds.retired_note,
-                s.last_attempt_at, s.last_success_at, s.last_item_count, s.last_error, s.consecutive_failures
+                s.last_attempt_at, s.last_success_at, s.last_item_count, s.last_error_kind, s.last_http_status,
+                s.last_error_at, s.consecutive_failures
          FROM data_sources ds
          LEFT JOIN source_collection_state s ON s.source_id = ds.id
          ${includeInactive ? '' : 'WHERE ds.active = true'}

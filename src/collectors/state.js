@@ -39,7 +39,11 @@ async function claim(sourceId, minIntervalSec) {
     );
 }
 
-async function saveOutcome(sourceId, { cursor, httpCache, ok, itemCount, newPosts, error }) {
+/**
+ * `error` must already be scrubbed (src/collectors/redact.js); `errorKind` /
+ * `httpStatus` are its public classification (migration 016).
+ */
+async function saveOutcome(sourceId, { cursor, httpCache, ok, itemCount, newPosts, error, errorKind = null, httpStatus = null }) {
     await dbRun(
         `UPDATE source_collection_state
          SET cursor = $2::jsonb,
@@ -48,20 +52,28 @@ async function saveOutcome(sourceId, { cursor, httpCache, ok, itemCount, newPost
              last_item_count = CASE WHEN $4::boolean THEN $5::int ELSE last_item_count END,
              last_new_posts  = CASE WHEN $4::boolean THEN $6::int ELSE last_new_posts END,
              last_error      = $7::text,
+             last_error_kind = $8::text,
+             last_http_status = $9::int,
              last_error_at   = CASE WHEN $7::text IS NULL THEN last_error_at ELSE NOW() END,
              consecutive_failures = CASE WHEN $4::boolean THEN 0 ELSE consecutive_failures + 1 END,
              updated_at = NOW()
          WHERE source_id = $1`,
-        [sourceId, JSON.stringify(cursor || {}), JSON.stringify(httpCache || {}), ok, itemCount, newPosts, error || null],
+        [sourceId, JSON.stringify(cursor || {}), JSON.stringify(httpCache || {}), ok, itemCount, newPosts, error || null,
+            error ? errorKind : null, error ? httpStatus : null],
     );
 }
 
-async function recordRun({ sourceId, jobId, gateStatus, outcome, itemsFetched = 0, postsNew = 0, requests = 0, error = null, startedAt }) {
+async function recordRun({
+    sourceId, jobId, gateStatus, outcome, itemsFetched = 0, postsNew = 0, requests = 0,
+    error = null, errorKind = null, httpStatus = null, startedAt,
+}) {
     await dbRun(
         `INSERT INTO source_runs
-            (source_id, job_id, gate_status, outcome, items_fetched, posts_new, requests, error, started_at, finished_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())`,
-        [sourceId, jobId, gateStatus, outcome, itemsFetched, postsNew, requests, error, startedAt || new Date()],
+            (source_id, job_id, gate_status, outcome, items_fetched, posts_new, requests, error, error_kind, http_status,
+             started_at, finished_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())`,
+        [sourceId, jobId, gateStatus, outcome, itemsFetched, postsNew, requests, error,
+            error ? errorKind : null, error ? httpStatus : null, startedAt || new Date()],
     );
 }
 

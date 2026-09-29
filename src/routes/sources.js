@@ -19,7 +19,10 @@
 //           status_reason, missing_env,       // env var NAMES only, never values
 //           open_routes, licence_refs_on_file, kill_switch_env,
 //           online,                           // collecting + success in the last hour
-//           last_attempt_at, last_success_at, last_item_count, last_error,
+//           last_attempt_at, last_success_at, last_item_count,
+//           last_error_kind, last_http_status, last_error_at,
+//                                             // classification only (F10-1):
+//                                             // never an error text
 //           consecutive_failures,
 //           terms_url, terms_note, attribution, license, blocked, ruling } ]
 //   Non-registry rows carry only the first block plus registry: false.

@@ -9,6 +9,7 @@
 'use strict';
 
 const { JsonApiCollector, RssAtomCollector, rssItem } = require('../base');
+const { ParseError } = require('../errors');
 
 class NytArticleSearchCollector extends JsonApiCollector {
     async fetchItems() {
@@ -33,13 +34,15 @@ class NytArticleSearchCollector extends JsonApiCollector {
     }
 }
 
+/** Guardian Content API; the key travels in the `api-key` HEADER, never the URL (F10-1). */
 class GuardianContentApiCollector extends JsonApiCollector {
     async fetchItems() {
         const q = new URLSearchParams({
             tag: this.params.tag, 'show-fields': 'trailText', 'order-by': 'newest', 'page-size': '30',
-            'api-key': this.envValue('GUARDIAN_API_KEY'),
         });
-        const res = await this.getJson(`https://content.guardianapis.com/search?${q}`);
+        const res = await this.getJson(`https://content.guardianapis.com/search?${q}`, {
+            headers: { 'api-key': this.envValue('GUARDIAN_API_KEY') },
+        });
         const results = (res.data.response && res.data.response.results) || [];
         return results.map(r => ({
             id: r.id, title: r.webTitle, text: r.fields && r.fields.trailText,
@@ -122,7 +125,12 @@ class LicensedFeedCollector extends RssAtomCollector {
             const feed = await this.parse(res.body);
             return (feed.items || []).map(rssItem);
         }
-        const data = JSON.parse(res.body);
+        let data;
+        try {
+            data = JSON.parse(res.body);
+        } catch {
+            throw new ParseError('licensed feed parse error (JSON)');   // F10-13: body never quoted
+        }
         const list = Array.isArray(data) ? data : (data.items || data.articles || data.data || []);
         return list.map(a => ({
             id: a.id || a.guid || a.url || a.link,

@@ -12,7 +12,9 @@
 //     object; 304 → { notModified: true };
 //   - robots.txt check before every gated request AND every redirect hop
 //     (redirects are followed manually so a hop into a disallowed path is
-//     refused, never fetched).
+//     refused, never fetched);
+//   - error messages carry REDACTED URLs only (F10-1: API keys travel in
+//     query strings) and never quote a response body (F10-13).
 //
 // Transport: an injectable function (url, { method, headers, body, signal })
 // → { status, headers, body }. The default uses global fetch. Under
@@ -23,8 +25,9 @@
 'use strict';
 
 const { version } = require('../../package.json');
-const { AccessDeniedError, HttpError, RobotsDisallowedError } = require('./errors');
+const { AccessDeniedError, HttpError, RobotsDisallowedError, ParseError } = require('./errors');
 const { RobotsPolicy } = require('./robots');
+const { redactUrl, redactUrlsIn } = require('./redact');
 
 const DEFAULT_TIMEOUT_MS = 20000;
 const MAX_RETRIES = 2;
@@ -48,7 +51,7 @@ async function fetchTransport(url, { method = 'GET', headers = {}, body, signal 
 /** Default transport: real network, except under tests. */
 function defaultTransport(url, opts) {
     if (process.env.NODE_ENV === 'test' && process.env.PULSE_ALLOW_NETWORK !== '1') {
-        return Promise.reject(new Error(`network disabled under NODE_ENV=test (${url}) — use a fixture transport`));
+        return Promise.reject(new Error(`network disabled under NODE_ENV=test (${redactUrl(url)}) — use a fixture transport`));
     }
     return fetchTransport(url, opts);
 }
@@ -144,7 +147,7 @@ class HttpClient {
         for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
             if (o.robots) {
                 const verdict = await this.robots.check(current, { conservative: o.robotsConservative !== false });
-                if (!verdict.allowed) throw new RobotsDisallowedError(verdict.reason, { url: current });
+                if (!verdict.allowed) throw new RobotsDisallowedError(verdict.reason, { url: redactUrl(current) });
             }
             const headers = { ...(o.headers || {}) };
             const validators = o.cache && o.cache[current];
@@ -161,17 +164,17 @@ class HttpClient {
             if (res.status === 304) return { ...res, notModified: true, url: current };
             if ([401, 403, 451].includes(res.status) || (res.status >= 400 && CHALLENGE_RE.test(res.body || ''))) {
                 throw new AccessDeniedError(`${new URL(current).host} refused access (HTTP ${res.status}) — not retried, not worked around`,
-                    { status: res.status, url: current });
+                    { status: res.status, url: redactUrl(current) });
             }
             if (res.status < 200 || res.status >= 300) {
-                throw new HttpError(`HTTP ${res.status} from ${current}`, { status: res.status, url: current });
+                throw new HttpError(`HTTP ${res.status} from ${redactUrl(current)}`, { status: res.status, url: redactUrl(current) });
             }
             if (o.cache && method === 'GET' && (res.headers.etag || res.headers['last-modified'])) {
                 o.cache[current] = { etag: res.headers.etag || null, last_modified: res.headers['last-modified'] || null };
             }
             return { ...res, notModified: false, url: current };
         }
-        throw new HttpError(`too many redirects from ${url}`, { url });
+        throw new HttpError(`too many redirects from ${redactUrl(url)}`, { url: redactUrl(url) });
     }
 
     async withRetries(url, init, minIntervalMs) {
@@ -186,7 +189,9 @@ class HttpClient {
                     await this.sleep(1000 * 2 ** attempt);
                     continue;
                 }
-                throw new HttpError(`request to ${url} failed: ${err.message}`, { url, cause: err });
+                // The transport's own message may quote the URL: redact it too.
+                throw new HttpError(`request to ${redactUrl(url)} failed: ${redactUrlsIn(err.message)}`,
+                    { url: redactUrl(url), cause: { name: err.name, message: redactUrlsIn(err.message) } });
             }
             // A bot challenge is a refusal, never something to retry into.
             if ((res.status === 429 || res.status >= 500) && attempt < MAX_RETRIES && !CHALLENGE_RE.test(res.body || '')) {
@@ -209,10 +214,11 @@ class HttpClient {
         if (res.notModified) return { data: null, notModified: true, headers: res.headers, status: res.status };
         try {
             return { data: JSON.parse(res.body), notModified: false, headers: res.headers, status: res.status };
-        } catch (err) {
-            throw new HttpError(`invalid JSON from ${url}: ${err.message}`, { url });
+        } catch {
+            // F10-13: JSON.parse's message quotes the body — never kept.
+            throw new ParseError(`invalid JSON from ${redactUrl(url)}`, { url: redactUrl(url), status: res.status });
         }
     }
 }
 
-module.exports = { HttpClient, HostLimiter, userAgent, defaultTransport, fetchTransport, retryAfterMs, CHALLENGE_RE };
+module.exports = { HttpClient, HostLimiter, userAgent, defaultTransport, fetchTransport, retryAfterMs, CHALLENGE_RE, redactUrl };

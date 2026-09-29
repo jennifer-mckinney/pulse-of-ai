@@ -9,6 +9,7 @@ const xml2js = require('xml2js');
 const { Collector, JsonApiCollector, BulkFileCollector, RssAtomCollector, rssItem } = require('../base');
 const { findCity } = require('../../../public/js/config/cities.config.js');
 const { htmlToText } = require('../normalize');
+const { ParseError } = require('../errors');
 
 /** arXiv export API (Atom). One request per run; the API allows 1 per 3 s. */
 class ArxivCollector extends RssAtomCollector {
@@ -64,7 +65,12 @@ class PubmedCollector extends JsonApiCollector {
         const f = this.common();
         f.set('db', 'pubmed'); f.set('id', ids.join(',')); f.set('retmode', 'xml');
         const res = await this.get(`${base}/efetch.fcgi?${f}`);
-        const doc = await xml2js.parseStringPromise(res.body, { explicitArray: false });
+        let doc;
+        try {
+            doc = await xml2js.parseStringPromise(res.body, { explicitArray: false });
+        } catch (err) {
+            throw new ParseError('PubMed efetch parse error (XML)', { detail: String(err && err.message).slice(0, 200) });
+        }
         let articles = (doc.PubmedArticleSet && doc.PubmedArticleSet.PubmedArticle) || [];
         if (!Array.isArray(articles)) articles = [articles];
         return articles.map((a) => {

@@ -437,7 +437,7 @@ async function populateOnce(opts, seed) {
                 + `bias ${collected.bias ? `${collected.bias.violationsFound} violation(s)` : 'not run'}, `
                 + `${collected.embedQueued} embed job(s) queued`);
         } catch (err) {
-            log(`collection failed: ${err.message}`);
+            log(`collection failed: ${require('../src/collectors/redact').scrub(err.message)}`);
         }
     } else {
         log(`collection unavailable: ${live.reason}`);

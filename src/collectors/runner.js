@@ -20,6 +20,12 @@
 //     job   — processing_jobs completed with the genuine posts_collected /
 //             posts_processed / sources_queried counts
 //
+// Errors (F10-1): every error string is scrubbed (src/collectors/redact.js —
+// no env secret, raw or URL-encoded, and no credential query parameter
+// survives) before it is stored, logged or returned, and is classified
+// (errors.js classifyError) into { error_kind, http_status } — the only
+// error information the public API serves.
+//
 // Job rows: a caller-owned job (POST /api/refresh pre-creates one) is always
 // completed. Otherwise the job row is created LAZILY, at the first NEW post:
 // a scheduled run that stores nothing (304 Not Modified, all duplicates,
@@ -42,6 +48,8 @@ const { resolveCurrentMethodology } = require('../pipeline/methodology');
 const { runBiasChecks } = require('../pipeline/bias');
 const { EMBED_GATE_MIN_SCORE } = require('../pipeline/relevance');
 const cycle = require('./cycle');
+const { scrub } = require('./redact');
+const { classifyError } = require('./errors');
 
 /** Default queue hooks: lazily bind BullMQ (opening Redis only when needed). */
 function defaultQueues() {
@@ -71,7 +79,8 @@ function defaultQueues() {
  */
 async function runCollection(o = {}) {
     const env = o.env || process.env;
-    const log = o.log || (() => {});
+    const rawLog = o.log || (() => {});
+    const log = (m) => rawLog(scrub(m, env));
     const slugs = o.slugs || SOURCES.map(s => s.slug);
     const queues = o.queues || defaultQueues();
 
@@ -121,13 +130,18 @@ async function runCollection(o = {}) {
             const before = http.requests;
             const cursor = claimed.cursor || {};
             const httpCache = claimed.http_cache || {};
+            // { text, err } per failure; the first one classifies the run.
             const routeErrors = [];
+            const fail = (text, err) => {
+                routeErrors.push({ text, err });
+                if (err && err.detail) log(`[collect] ${slug}: ${text} — detail: ${err.detail}`);
+            };
             let okRoutes = 0;
             let collectors = [];
             try {
                 collectors = buildCollectors(src, { env, http, cursor, httpCache, now: o.now, ...(o.collectorCtx || {}) });
             } catch (err) {
-                routeErrors.push(err.message);
+                fail(err.message, err);
             }
             for (const c of collectors) {
                 let result;
@@ -135,7 +149,7 @@ async function runCollection(o = {}) {
                     result = await c.collect();
                     okRoutes++;
                 } catch (err) {
-                    routeErrors.push(`${c.route.id}: ${err.message}`);
+                    fail(`${c.route.id}: ${err.message}`, err);
                     continue;
                 }
                 row.fetched += result.fetched;
@@ -145,7 +159,7 @@ async function runCollection(o = {}) {
                     try {
                         stored = await storeRawPost(payload, sourceId);
                     } catch (err) {
-                        routeErrors.push(`${c.route.id}: store failed: ${err.message}`);
+                        fail(`${c.route.id}: store failed: ${err.message}`, Object.assign(new Error('store'), { kind: 'store' }));
                         continue;
                     }
                     if (!stored.isNew) continue;
@@ -163,14 +177,21 @@ async function runCollection(o = {}) {
             }
             const ok = okRoutes > 0;
             row.outcome = ok ? 'ok' : 'error';
-            row.error = routeErrors.length ? routeErrors.join('; ') : null;
+            row.error = routeErrors.length ? scrub(routeErrors.map(e => e.text).join('; '), env) : null;
+            const cls = routeErrors.length ? classifyError(routeErrors[0].err) : { error_kind: null, http_status: null };
+            row.errorKind = cls.error_kind;
+            row.httpStatus = cls.http_status;
             if (row.error) summary.errors.push(`${slug}: ${row.error}`);
             summary.postsCollected += row.kept;
             summary.byCategory[src.category] = (summary.byCategory[src.category] || 0) + row.new;
-            await state.saveOutcome(sourceId, { cursor, httpCache, ok, itemCount: row.kept, newPosts: row.new, error: row.error });
+            await state.saveOutcome(sourceId, {
+                cursor, httpCache, ok, itemCount: row.kept, newPosts: row.new,
+                error: row.error, errorKind: row.errorKind, httpStatus: row.httpStatus,
+            });
             await state.recordRun({
                 sourceId, jobId, gateStatus: st.status, outcome: row.outcome, itemsFetched: row.fetched,
-                postsNew: row.new, requests: http.requests - before, error: row.error, startedAt,
+                postsNew: row.new, requests: http.requests - before, error: row.error,
+                errorKind: row.errorKind, httpStatus: row.httpStatus, startedAt,
             });
             log(`[collect] ${slug}: ${row.outcome} fetched ${row.fetched}, kept ${row.kept}, new ${row.new}${row.error ? ` — ${row.error}` : ''}`);
         }
@@ -191,7 +212,7 @@ async function runCollection(o = {}) {
                     await queues.enqueueEmbeds(gated.map(r => r.raw_post_id));
                     summary.embedQueued = gated.length;
                 } catch (err) {
-                    summary.errors.push(`embed queue unavailable: ${err.message}`);
+                    summary.errors.push(scrub(`embed queue unavailable: ${err.message}`, env));
                 }
             }
         }
@@ -215,7 +236,7 @@ async function runCollection(o = {}) {
         if (jobId && !o.cycle) {
             await dbRun(
                 `UPDATE processing_jobs SET status = 'failed', error_details = $2, completed_at = NOW() WHERE id = $1`,
-                [jobId, err.message],
+                [jobId, scrub(err.message, env)],
             ).catch(() => {});
         }
         throw err;

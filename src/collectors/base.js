@@ -26,7 +26,7 @@ const path = require('path');
 const Parser = require('rss-parser');
 const { toPayload } = require('./normalize');
 const { isAiRelated } = require('./ai-filter');
-const { GateClosedError } = require('./errors');
+const { GateClosedError, ParseError } = require('./errors');
 
 const DEFAULT_MAX_AGE_DAYS = 7;
 const nonEmpty = v => typeof v === 'string' && v.trim() !== '';
@@ -145,8 +145,17 @@ class RssAtomCollector extends Collector {
         return this.params.urls || [];
     }
 
+    /**
+     * Parse an RSS / Atom body. A failure is a ParseError whose message never
+     * quotes the body (F10-13); the parser's own message goes to `detail`,
+     * which the runner writes only to the (scrubbed) server log.
+     */
     async parse(xml) {
-        return parser.parseString(xml);
+        try {
+            return await parser.parseString(xml);
+        } catch (err) {
+            throw new ParseError('feed parse error (RSS/Atom)', { detail: String(err && err.message).slice(0, 200) });
+        }
     }
 
     async fetchItems() {
@@ -230,9 +239,16 @@ class BulkFileCollector extends Collector {
             const mtime = fs.statSync(file).mtimeMs;
             if (seenFiles[file] === mtime) continue;   // unchanged since the last run
             const text = fs.readFileSync(file, 'utf8');
-            const records = /\.json$/i.test(file) && text.trim().startsWith('[')
-                ? JSON.parse(text)
-                : text.split(/\r?\n/).filter(l => l.trim()).map(l => JSON.parse(l));
+            let records;
+            try {
+                records = /\.json$/i.test(file) && text.trim().startsWith('[')
+                    ? JSON.parse(text)
+                    : text.split(/\r?\n/).filter(l => l.trim()).map(l => JSON.parse(l));
+            } catch (err) {
+                // The file path is an operator setting and the parser quotes
+                // the record: neither goes into the stored error (F10-13).
+                throw new ParseError('dataset parse error (JSON lines)', { detail: String(err && err.message).slice(0, 200) });
+            }
             for (const rec of records) if (this.accepts(rec)) out.push(this.mapRecord(rec));
             seenFiles[file] = mtime;
         }
