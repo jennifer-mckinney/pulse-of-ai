@@ -57,6 +57,7 @@ describe('scripts/smoke-check.js', () => {
         expect(text).toContain('[PASS] globe data (trailing hour) — 30 cities with coordinates');
         expect(text).toMatch(/\[PASS\] audit receipt — post [0-9a-f-]+: 3 decisions, 3 with all four audience views, bias lineage 'recorded'/);
         expect(text).toMatch(/\[PASS\] npm run replay — post [0-9a-f-]+: RESULT PASS \(exit 0\)/);
+        expect(text).toContain("[PASS] data mode reported — /api/health data_mode 'demo' (60 of 60 trailing-hour posts from demo feeds)");
         expect(text).toContain('[WARN] embeddings stored');
         expect(text).toContain('data:               DEMO — fictional posts scored by the real pipeline');
         expect(text).toContain('SMOKE: PASS');

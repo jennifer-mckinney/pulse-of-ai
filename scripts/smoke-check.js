@@ -8,7 +8,8 @@
 //   node scripts/smoke-check.js [--base-url URL] [--expect-embeddings]
 //
 // Checks (PASS / FAIL / WARN per line):
-//   - GET /api/health → 200, db_connected true
+//   - GET /api/health → 200, db_connected true; data_mode matches the
+//     demo-feed share of the trailing hour (demo / live / mixed / none)
 //   - GET / serves the story page (index.html + its main.js bundle)
 //   - the page's own API calls return DATA, not just 200: aggregated cities
 //     in the trailing hour (with coordinates), themes, latest bias job,
@@ -115,6 +116,24 @@ async function run(opts, out) {
         } else {
             r.fail('GET /api/health', `status ${status}, db_connected ${body && body.db_connected}`);
         }
+    });
+
+    // The API must SAY where the data came from (the page's DEMO kicker and
+    // "Demo data" markers read this): cross-check /api/health data_mode
+    // against the demo-feed share of the trailing hour in the database.
+    await check(r, 'data mode reported', async () => {
+        const { body } = await getJson(base, '/api/health');
+        const w = await db.dbGet(
+            `SELECT COUNT(*)::int AS posts,
+                    COUNT(*) FILTER (WHERE ds.source_type = 'demo')::int AS demo
+             FROM raw_posts rp JOIN data_sources ds ON ds.id = rp.source_id
+             WHERE rp.collected_at >= NOW() - INTERVAL '1 hour'`);
+        const expected = w.posts === 0 ? 'none'
+            : w.demo === w.posts ? 'demo' : w.demo === 0 ? 'live' : 'mixed';
+        const got = body && body.data_mode;
+        (got === expected ? r.pass : r.fail)('data mode reported',
+            `/api/health data_mode '${got}' (${w.demo} of ${w.posts} trailing-hour posts from demo feeds), `
+            + `${body && body.active_sources} real active sources, ${body && body.demo_feeds} demo feeds`);
     });
 
     await check(r, 'GET / serves the story page', async () => {

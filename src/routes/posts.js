@@ -3,6 +3,10 @@
 //
 // Returns sentiment counts grouped by city for the globe frontend.
 // Includes lat/lng from a hardcoded lookup of major cities (Phase E: geocoding service).
+// Every row also carries its data origin: demo_posts (posts from demo feeds,
+// source_type 'demo') and data_mode ('demo' | 'live' | 'mixed') — the
+// response stays a plain array so existing consumers are unaffected; the
+// frontend sums demo_posts across rows to label the whole view.
 //
 // Query params:
 //   ?platform=social      filter by source category
@@ -27,6 +31,7 @@ const { dbAll }    = require('../db/connection');
 const { findCity } = require('../../public/js/config/cities.config.js');
 const { CATEGORY_SLUGS, isCanonicalCategory } = require('../config/categories');
 const { responseCache } = require('../middleware/response-cache');
+const { DEMO_SOURCE_TYPE, deriveDataMode } = require('../config/data-mode');
 
 const router = Router();
 
@@ -116,6 +121,7 @@ router.get('/posts/aggregated-by-location', responseCache(10000), async (req, re
                 COUNT(*) FILTER (WHERE sr.indicator = 'neutral')::int     AS neutral,
                 COUNT(*) FILTER (WHERE sr.indicator = 'negative')::int    AS negative,
                 COUNT(*)::int                                              AS total,
+                COUNT(*) FILTER (WHERE ds.source_type = '${DEMO_SOURCE_TYPE}')::int AS demo_posts,
                 MAX(rp.collected_at)                                       AS last_updated
              FROM raw_posts rp
              JOIN sentiment_results sr ON sr.raw_post_id = rp.id
@@ -179,6 +185,11 @@ router.get('/posts/aggregated-by-location', responseCache(10000), async (req, re
                 negative:     r.negative,
                 total:        r.total,
                 dominant:     getDominant(r),
+                // Data origin (src/config/data-mode.js): posts from demo
+                // feeds in this row, and the row's mode. The frontend sums
+                // demo_posts across rows to label the whole view.
+                demo_posts:   r.demo_posts,
+                data_mode:    deriveDataMode(r.demo_posts, r.total),
                 last_updated: r.last_updated,
                 sources:      sourcesByCity[r.city] || [],   // per-source stacked bar
             };
