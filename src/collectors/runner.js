@@ -63,6 +63,9 @@ function defaultQueues() {
     return {
         enqueueEmbeds: ids => get().embedQueue.addBulk(ids.map(rawPostId => ({ name: 'embed-post', data: { rawPostId } }))),
         enqueueIngestRetry: data => get().ingestQueue.add('ingest-retry', data),
+        // P10-12: scoring off the collect event loop — one ingest job per
+        // new post, deduplicated per post.
+        enqueueIngest: data => get().ingestQueue.add('ingest-score', data, { jobId: `score-${data.rawPostId}` }),
     };
 }
 
@@ -79,6 +82,13 @@ function defaultQueues() {
  * @param {AbortSignal} [o.signal]    collection deadline (G10-9)
  * @param {number}   [o.deadlineMs]   deadline from now, when no signal
  * @param {object}   [o.collectorCtx] extra collector context (imapFactory, sleep)
+ * @param {'inline'|'queue'} [o.scoreVia]  P10-12: 'queue' (the worker's
+ *                    collect jobs) enqueues one `ingest` job per new post
+ *                    instead of scoring on the collect event loop; each holds
+ *                    a slot on its job (inflight_runs) until it scored, so the
+ *                    cycle's bias checks wait for it (G10-2), and an enqueue
+ *                    failure is a run error with the post left to the
+ *                    unscored sweep (G10-4). Default 'inline' (CLI, populate).
  * @param {{ windowMs: number }} [o.cycle]  scheduled per-source run: score
  *                    under the shared collection-cycle job (src/collectors/
  *                    cycle.js), which runs the bias checks when it closes
@@ -102,6 +112,8 @@ async function runCollection(o = {}) {
     let joinedCycle = false;   // G10-2: this run is in the cycle's inflight_runs
     let queried = 0;
     const newPostIds = [];     // posts scored by this run (counted even if it throws)
+    const scoreVia = o.scoreVia === 'queue' ? 'queue' : 'inline';
+    let queuedForScoring = 0;
     const ensureJob = async () => {
         if (!jobId && o.cycle) {
             jobId = await cycle.currentCycleJob(o.cycle.windowMs);
@@ -220,6 +232,22 @@ async function runCollection(o = {}) {
                     if (!stored.isNew) continue;
                     row.new++;
                     await ensureJob();
+                    if (scoreVia === 'queue') {
+                        // The slot is reserved BEFORE the enqueue, so the
+                        // cycle cannot close between the two (G10-2).
+                        await cycle.reserveRetry(jobId);
+                        try {
+                            await queues.enqueueIngest({ rawPostId: stored.postId, sourceId, jobId, reserved: true });
+                            queuedForScoring++;
+                        } catch (qerr) {
+                            await cycle.releaseRetry(jobId).catch(() => {});
+                            // G10-4: never swallowed; the sweep re-queues it.
+                            queueFailed = true;
+                            fail(`${c.route.id}: the scoring job could not be queued (${qerr.message})`,
+                                Object.assign(new Error('queue'), { kind: 'queue' }));
+                        }
+                        continue;
+                    }
                     try {
                         await scorePost(stored.postId, jobId, mv);
                         newPostIds.push(stored.postId);
@@ -290,6 +318,7 @@ async function runCollection(o = {}) {
         }
 
         summary.postsProcessed = newPostIds.length;
+        summary.queuedForScoring = queuedForScoring;
         // Copilot 4129565673: with scoring retries outstanding, a non-cycle
         // job's bias checks wait for them — the job goes to
         // 'awaiting_retries' and closeCycles finalizes it (counts from the

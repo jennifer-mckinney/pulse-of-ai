@@ -21,7 +21,9 @@ const pool = new Pool({
                 : (process.env.POSTGRES_DB       || 'pulse_of_ai'),
     user:     process.env.POSTGRES_USER     || 'pulse_user',
     password: process.env.POSTGRES_PASSWORD,
-    max:      10,           // max pool size — adequate for single-node MVP
+    // P10-12: configurable (PG_POOL_MAX). Web default 10; the worker sizes
+    // its pool against its job concurrency (src/db/pool-size.js).
+    max:      (() => { const n = parseInt(process.env.PG_POOL_MAX || '', 10); return Number.isFinite(n) && n > 0 ? n : 10; })(),
     idleTimeoutMillis:  30000,
     connectionTimeoutMillis: 5000,
 });

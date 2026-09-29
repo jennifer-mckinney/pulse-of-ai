@@ -20,7 +20,8 @@ async function processCollectJob(job, opts = {}) {
     const { slug } = job.data || {};
     if (!slug) throw new Error('collect job without a source slug');
     // Scheduled runs share the collection-cycle job (src/collectors/cycle.js).
-    const s = await runCollection({ cycle: { windowMs: collectWindowMs() }, ...opts, slugs: [slug], triggeredBy: 'cron' });
+    // P10-12: new posts are scored by `ingest` jobs, off this event loop.
+    const s = await runCollection({ cycle: { windowMs: collectWindowMs() }, scoreVia: 'queue', ...opts, slugs: [slug], triggeredBy: 'cron' });
     const src = s.sources[0] || {};
     return {
         slug,
@@ -29,7 +30,8 @@ async function processCollectJob(job, opts = {}) {
         outcome: src.outcome,
         fetched: src.fetched || 0,
         kept: src.kept || 0,
-        newPosts: s.postsProcessed,
+        newPosts: s.postsProcessed + (s.queuedForScoring || 0),
+        queuedForScoring: s.queuedForScoring || 0,
         embedQueued: s.embedQueued,
         error: src.error || null,
         reason: src.reason || null,
@@ -49,10 +51,10 @@ async function processRefreshJob(job, opts = {}) {
     const { dbGet } = require('../db/connection');
     const row = await dbGet('SELECT status FROM processing_jobs WHERE id = $1', [jobId]);
     if (!row || row.status !== 'running') return { jobId, skipped: true, status: row ? row.status : null };
-    const s = await runCollection({ ...opts, jobId, triggeredBy: 'api' });
+    const s = await runCollection({ scoreVia: 'queue', ...opts, jobId, triggeredBy: 'api' });
     return {
         jobId: s.jobId, sourcesQueried: s.sourcesQueried, collected: s.postsCollected,
-        processed: s.postsProcessed, embedQueued: s.embedQueued, errors: s.errors.length,
+        processed: s.postsProcessed, queuedForScoring: s.queuedForScoring || 0, embedQueued: s.embedQueued, errors: s.errors.length,
     };
 }
 

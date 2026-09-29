@@ -218,15 +218,22 @@ describe('POST /api/refresh', () => {
     function useFixtures(slugs) {
         _setEnqueue(async (jobId) => {
             enqueued.push(jobId);
+            // P10-12: the refresh job queues scoring to `ingest` jobs; this
+            // stand-in worker runs them, then the cycle close finalizes the
+            // job (counts from the audit log, bias once).
+            const scoring = [];
             await processRefreshJob({ data: { jobId } }, {
                 slugs, env: TEST_ENV, now: () => Date.parse(RECORDED_AT),
-                queues: { enqueueEmbeds: async () => {}, enqueueIngestRetry: async () => {} },
+                queues: { enqueueEmbeds: async () => {}, enqueueIngestRetry: async () => {}, enqueueIngest: async d => scoring.push(d) },
                 transport: fixtureTransport([
                     ['https://feeds.bbci.co.uk/robots.txt', 'recorded/bbc-robots.txt'],
                     ['https://feeds.bbci.co.uk/news/technology/rss.xml', 'recorded/bbc-technology.xml'],
                     [/hn\.algolia\.com/, 'recorded/hn-algolia.json'],
                 ]),
             }).catch(() => {});   // runCollection marks the job failed itself
+            const { processIngestJob } = require('../../src/workers/ingest.worker');
+            for (const d of scoring) await processIngestJob({ data: d });
+            await require('../../src/collectors/cycle').closeCycles(150000);
         });
     }
 

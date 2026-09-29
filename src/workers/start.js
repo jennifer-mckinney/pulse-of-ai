@@ -19,11 +19,17 @@
 //
 // Concurrency rationale:
 //   collect:   4 per type — I/O-bound; per-host spacing lives in the HTTP client
-//   ingest:   20 — CPU-bound scoring
+//   ingest:    8 — scoring; each job holds up to 3 DB connections (P10-12)
 //   embed:     4 — the Python service is the bottleneck
 //   correlate: 8 — DB-bound
 
 'use strict';
+
+// P10-12: size the PostgreSQL pool against this process's job concurrency
+// BEFORE anything opens the pool (src/db/pool-size.js).
+const { workerPoolSize, workerConcurrency } = require('../db/pool-size');
+const POOL = workerPoolSize();
+if (!POOL.explicit) process.env.PG_POOL_MAX = String(POOL.size);
 
 const { Worker } = require('bullmq');
 const { connection, ingestQueue, maintenanceQueue } = require('../queues/index');
@@ -42,10 +48,11 @@ const { evaluateSourceHealth } = require('../collectors/source-health');
 const { runRedditMaintenance, MAINTENANCE_MS } = require('../collectors/reddit/maintenance');
 
 const int = (v, d) => { const n = parseInt(v || '', 10); return Number.isFinite(n) && n > 0 ? n : d; };
-const COLLECT_CONCURRENCY   = int(process.env.COLLECT_CONCURRENCY, 4);
-const INGEST_CONCURRENCY    = int(process.env.INGEST_CONCURRENCY, 20);
-const EMBED_CONCURRENCY     = int(process.env.EMBED_CONCURRENCY, 4);
-const CORRELATE_CONCURRENCY = int(process.env.CORRELATE_CONCURRENCY, 8);
+const CONC = workerConcurrency();
+const COLLECT_CONCURRENCY   = CONC.collect;
+const INGEST_CONCURRENCY    = CONC.ingest;     // P10-12: 8 (was 20) — each job holds up to 3 DB connections
+const EMBED_CONCURRENCY     = CONC.embed;
+const CORRELATE_CONCURRENCY = CONC.correlate;
 const RESCHEDULE_MS         = int(process.env.COLLECT_RESCHEDULE_MS, 10 * 60 * 1000);
 
 // Every line is scrubbed of secrets (src/workers/logging.js).
@@ -147,8 +154,12 @@ const timer = setInterval(schedule, RESCHEDULE_MS);
 const cycleTimer = setInterval(closeDueCycles, 30 * 1000);
 const redditTimer = setInterval(redditMaintenance, MAINTENANCE_MS);
 
+if (POOL.short) {
+    logError(`[pool] PG_POOL_MAX=${POOL.size} is below the ${POOL.required} connections this worker's concurrency can use; `
+        + 'jobs will wait for connections (src/db/pool-size.js)');
+}
 log(
-    `Workers started — collect:${COLLECT_CONCURRENCY}/type ingest:${INGEST_CONCURRENCY} `
+    `Workers started — pg pool ${POOL.size} (needs ${POOL.required}) — collect:${COLLECT_CONCURRENCY}/type ingest:${INGEST_CONCURRENCY} `
     + `embed:${EMBED_CONCURRENCY} correlate:${CORRELATE_CONCURRENCY}; rescheduling every ${Math.round(RESCHEDULE_MS / 1000)}s`,
 );
 
