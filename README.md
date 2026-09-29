@@ -11,6 +11,7 @@ Pulse of AI aggregates AI-related posts from the top 50 online sources across 7 
 - [Features](#features)
 - [Architecture](#architecture)
 - [Tech Stack](#tech-stack)
+- [Stand it up](#stand-it-up)
 - [Quick Start](#quick-start)
 - [Environment Variables](#environment-variables)
 - [Database](#database)
@@ -105,7 +106,93 @@ For the complete technical specification see [`docs/TECHNICAL_SPEC.md`](docs/TEC
 
 ---
 
+## Stand it up
+
+One command builds and starts the whole solution (frontend, API, workers, embeddings service, databases), fills it with data and checks that it works:
+
+```bash
+git clone https://github.com/jennifer-mckinney/pulse-of-ai.git
+cd pulse-of-ai
+npm run standup          # or: bash scripts/standup.sh
+```
+
+When it finishes, open **http://localhost:3000**: the globe, the eleven chapters with their numbers, and a "why?" receipt on any post that opens its real audit trail.
+
+### Prerequisites
+
+- Docker Desktop (macOS / Windows) or Docker Engine with the Compose v2 plugin (Linux), with the daemon running.
+- `curl` (used by the smoke check).
+- No Node.js or Python on the host. Everything runs in containers.
+
+The script checks these first and prints how to fix anything that is missing.
+
+### What it does
+
+1. Creates `.env` from `.env.example` if you don't have one, generating strong random `POSTGRES_PASSWORD`, `AUDIT_HASH_KEY` and `CORRELATION_SALT` values. It never prints them. An existing `.env` is left as it is: only keys that are missing get added, and it warns about any secret that still has its placeholder value.
+2. Builds two images: `pulse-of-ai/app` (Node 22; one image for web, worker, migrate and populate) and `pulse-of-ai/embeddings` (Python 3.13, FastAPI and sentence-transformers, CPU only). Both run as non-root users.
+3. Starts the compose `full` profile. A one-shot `migrate` job applies migrations 001–010 and the seed, and web and the worker start only after it exits successfully.
+4. Waits for health, with timeouts. If a service fails, its logs are printed.
+5. Populates data (see below) and starts the `populate` feed.
+6. Runs a smoke check. It looks at the API, the page, and the page's own data calls (globe, themes, bias, ribbon, drill-down). It counts posts, audit decisions, bias assessments and embeddings, opens one receipt and checks its four audience views and bias lineage, and runs `npm run replay` on that post, which must PASS. It ends with a population summary.
+
+Re-running is safe. The images come from the build cache, running containers are kept, and a second population batch is skipped while the trailing hour is still full.
+
+### What runs where
+
+| Service | Host port (override) | Role |
+|---|---|---|
+| `web` | `3000` (`WEB_PORT`) | Express API and the static frontend (`public/`) |
+| `worker` | none | BullMQ workers for ingest, embed and correlate (`src/workers/start.js`) |
+| `embeddings` | `8000` (`EMBEDDINGS_PORT`) | `/embeddings` and `/health`. The model downloads once into the `hf_cache` volume |
+| `populate` | none | Demo feed. Adds a batch of fictional posts every 150 s (profile `demo`) |
+| `migrate` | none | One-shot job: migrations and seed |
+| `postgres` | `5434` in `.env` (`POSTGRES_PORT`) | PostgreSQL 16 + pgvector (`postgres_data` volume) |
+| `postgres_test` | `5433` (`POSTGRES_TEST_PORT`) | Test database (not used by the running app) |
+| `redis` | `6379` (`REDIS_PORT`) | BullMQ queue backend (`redis_data` volume) |
+
+The web and embeddings ports bind to `127.0.0.1` by default (`PULSE_BIND_ADDR`). To run a second stack beside this one, give it its own project name and ports:
+
+```bash
+COMPOSE_PROJECT_NAME=pulse-demo WEB_PORT=3200 EMBEDDINGS_PORT=8100 \
+POSTGRES_PORT=5534 POSTGRES_TEST_PORT=5533 REDIS_PORT=6479 npm run standup
+```
+
+`npm run docker:up` hasn't changed. It still starts only `postgres`, `postgres_test` and `redis`, for host-side development.
+
+### Live vs demo data
+
+**Live collection is not implemented yet.** Nothing consumes the `collect.*` queues, the collector scheduler is not wired in, and `POST /api/refresh` is a placeholder that completes its job with 0 posts. So standup always populates **demo** data, and it says so in its output and in the smoke-check summary.
+
+The demo data is honest about what it is:
+
+- **Real pipeline, fictional input.** The posts are invented text with no people, handles or personal data. They go through the real ingest normaliser, the real sentiment, relevance and discourse scorers, the real job-level bias checks, and the real embed worker, which calls the embeddings container. No score is made up: every one has a genuine audit trail, and `npm run replay -- --post <id>` reports PASS.
+- **Labelled in the data.** Posts belong to inactive `demo_<category>` sources named "Demo feed — <Category> (fictional)", and that name shows up in the source ribbon. Every text starts with `[Demo]`, and the processing jobs are recorded as `triggered_by = 'demo'`.
+- **Real timestamps, kept current.** The page shows the trailing hour. Every demo post is stamped with the time it was actually ingested, and nothing is backdated or re-stamped. The `populate` service ingests 14 more every 150 s (`DEMO_FEED_BATCH`, `DEMO_FEED_INTERVAL_MS`), which keeps the hour full. If you stop that service, the demo posts age out of the window on their own.
+- **One limitation.** The frontend's own "Demo data" marker only appears when the page falls back to its bundled set, and the intro copy says "LIVE" whatever the data source is. Until the frontend reads the demo labels above, rely on the `[Demo]` text, the source names and the standup summary.
+
+`scripts/populate.js` is the seam for real collectors. When they exist, the population step becomes "collect live, with demo as the fallback".
+
+### Embeddings
+
+The first start downloads the ~90 MB `all-MiniLM-L6-v2` model into the `hf_cache` volume. Later starts and rebuilds reuse it. If the download fails (you're offline, behind a proxy, or Hugging Face is unreachable), standup says so clearly and carries on without embeddings: posts are still scored and audited, but vector search stays empty. Fix the network and run `npm run standup` again.
+
+### Tear it down
+
+```bash
+npm run teardown                    # stop and remove containers, keep the data volumes
+npm run teardown -- --purge         # also delete the volumes (database, redis, model cache); asks first
+npm run teardown -- --purge --yes   # non-interactive purge
+```
+
+Both act on one compose project only: `COMPOSE_PROJECT_NAME` if it's set, otherwise the one in `.env`, otherwise `pulse-of-ai`.
+
+Flags: `npm run standup -- --help`. `--no-build` skips the image build, and `--demo` adds a fresh demo batch even when the hour is already full. Timeouts: `STANDUP_TIMEOUT` (core services, default 300 s) and `STANDUP_EMBEDDINGS_TIMEOUT` (first model download, default 900 s).
+
+---
+
 ## Quick Start
+
+For host-side development: Node and Python run on your machine, and only the databases and redis run in Docker. For the all-in-Docker path, see [Stand it up](#stand-it-up).
 
 ### Prerequisites
 
@@ -183,6 +270,12 @@ Copy `.env.example` to `.env` and fill in the values below.
 | `CORRELATION_SALT` | Yes | 64-hex-char salt for verb-noun pseudonymous IDs — generate once, never change |
 | `CORRELATION_MIN_CONFIDENCE` | No | Min confidence to assign a cross-platform ID (default `0.85`) |
 | `RETENTION_DETAIL_DAYS` | No | Days before compaction (default `90`) |
+| `REDIS_PORT` | No | Redis host port (default `6379`) |
+| `WEB_PORT` | No | Standup: host port of the web service (default `3000`) |
+| `EMBEDDINGS_PORT` | No | Standup: host port of the embeddings service (default `8000`) |
+| `PULSE_BIND_ADDR` | No | Standup: interface the web and embeddings ports bind to (default `127.0.0.1`) |
+| `DEMO_FEED_INTERVAL_MS` | No | Standup demo feed: ms between fictional batches (default `150000`) |
+| `DEMO_FEED_BATCH` | No | Standup demo feed: posts per batch (default `14`) |
 
 Generate secrets:
 
@@ -322,7 +415,8 @@ pulse-of-ai/
 │   ├── unit/                   Unit tests (no DB)
 │   └── integration/            API integration tests
 ├── .env.example                Environment variable template
-├── docker-compose.yml          PostgreSQL + test DB + Redis
+├── docker-compose.yml          PostgreSQL + test DB + Redis; profile "full" adds web, worker, embeddings, migrate
+├── Dockerfile                  Node 22 app image (web / worker / migrate / populate)
 ├── jest.config.js
 └── package.json
 ```
