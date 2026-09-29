@@ -7,7 +7,7 @@
 
 const xml2js = require('xml2js');
 const { Parser } = require('htmlparser2');
-const { Collector, JsonApiCollector, BulkFileCollector, RssAtomCollector, rssItem } = require('../base');
+const { Collector, JsonApiCollector, BulkFileCollector, RssAtomCollector, rssItem, rejectDtdEntities } = require('../base');
 const { findCity } = require('../../../public/js/config/cities.config.js');
 const { htmlToText } = require('../normalize');
 const { ParseError } = require('../errors');
@@ -67,6 +67,7 @@ class PubmedCollector extends JsonApiCollector {
         f.set('db', 'pubmed'); f.set('id', ids.join(',')); f.set('retmode', 'xml');
         const res = await this.get(`${base}/efetch.fcgi?${f}`);
         let doc;
+        rejectDtdEntities(res.body);   // F10-15
         try {
             doc = await xml2js.parseStringPromise(res.body, { explicitArray: false });
         } catch (err) {

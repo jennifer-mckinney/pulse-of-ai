@@ -32,6 +32,21 @@ const { ResponseTooLargeError } = require('./transport');
 const { checkUrl } = require('./netguard');
 
 const DEFAULT_MAX_AGE_DAYS = 7;
+
+/**
+ * F10-15: feeds never need a DTD. A body that declares one WITH entity
+ * declarations (external entities, "billion laughs") is refused before any
+ * XML parser sees it. The parsers in use (sax via rss-parser and xml2js)
+ * do not expand them today; this keeps it that way whatever they become.
+ * @throws {ParseError}
+ */
+function rejectDtdEntities(xml) {
+    const head = String(xml || '');
+    if (/<!DOCTYPE/i.test(head) && /<!ENTITY/i.test(head)) {
+        throw new ParseError('refused: the document declares a DTD with entities');
+    }
+    return xml;
+}
 // F10-4: one dataset file is read whole, so it is capped (route
 // params.maxFileBytes overrides). A larger delivery must be split.
 const BULK_MAX_FILE_BYTES = 50 * 1024 * 1024;
@@ -181,6 +196,7 @@ class RssAtomCollector extends Collector {
      * which the runner writes only to the (scrubbed) server log.
      */
     async parse(xml) {
+        rejectDtdEntities(xml);
         try {
             return await parser.parseString(xml);
         } catch (err) {
@@ -298,6 +314,7 @@ module.exports = {
     JsonApiCollector,
     BulkFileCollector,
     rssItem,
+    rejectDtdEntities,
     DEFAULT_MAX_AGE_DAYS,
     BULK_MAX_FILE_BYTES,
 };
