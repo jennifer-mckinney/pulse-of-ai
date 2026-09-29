@@ -124,7 +124,7 @@ jobs:
 
       # Cache the Hugging Face model download between runs.
       - name: Cache Hugging Face models
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/huggingface
           key: hf-${{ runner.os }}-${{ hashFiles('python/requirements.txt') }}
@@ -162,7 +162,7 @@ jobs:
           python -m pip install pytest pytest-asyncio httpx
 
       - name: Cache Hugging Face models
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/huggingface
           key: hf-${{ runner.os }}-py313-${{ hashFiles('python/requirements-service.txt') }}
