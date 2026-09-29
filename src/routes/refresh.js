@@ -18,6 +18,27 @@ const { dbRun }  = require('../db/connection');
 
 const router = Router();
 
+function isSameOrigin(req) {
+    const origin = req.get('Origin');
+    if (!origin) return true;
+    try {
+        const url = new URL(origin);
+        return url.protocol === `${req.protocol}:` && url.host === req.get('host');
+    } catch {
+        return false;
+    }
+}
+
+router.use('/refresh', (req, res, next) => {
+    if (req.method === 'OPTIONS') {
+        return res.status(403).json({ error: 'Refresh preflight is not allowed' });
+    }
+    if (!isSameOrigin(req)) {
+        return res.status(403).json({ error: 'Cross-origin refresh is not allowed' });
+    }
+    return next();
+});
+
 // ─── In-process global debounce ──────────────────────────────────────────────
 let lastRefreshAt = 0;            // epoch ms of the last accepted refresh (any caller)
 const RATE_LIMIT_MS = 60 * 1000;  // 1 minute

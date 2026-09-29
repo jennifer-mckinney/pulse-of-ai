@@ -135,6 +135,7 @@ body {
 .hdr-health:hover { border-color: rgba(245,195,107,0.5); }
 .health-light { width: 8px; height: 8px; border-radius: 50%; background: #3BDC7E; box-shadow: 0 0 8px #3BDC7E; }
 .h-yellow .health-light, .health-light.yellow { background: #F5C36B; box-shadow: 0 0 8px #F5C36B; animation: blink 2.4s ease-in-out infinite; }
+.h-red .health-light { background: #F36B6B; box-shadow: 0 0 8px #F36B6B; animation: blink 1.2s ease-in-out infinite; }
 
 /* chapter cards — docked bottom-left so the globe stays clear */
 .card-col {
@@ -472,6 +473,7 @@ body {
   .hdr-dot,
   .hdr-dot::after,
   .h-yellow .health-light,
+  .h-red .health-light,
   .health-light.yellow,
   .intro-cue,
   .exp-filters,

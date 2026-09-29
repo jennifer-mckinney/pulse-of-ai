@@ -38,8 +38,9 @@ const { severityLabel, layerName, citationFor, alertDetail } = require('../confi
 
 const router = Router();
 
-// Hard cap on history rows per response — the drawer shows a short list, and
-// an unbounded window query must not become a memory hazard.
+// Hard cap on history rows per response. The response reports the exact count
+// and whether rows were omitted so the caller cannot mistake a truncated list
+// for the full requested window.
 const HISTORY_ROW_LIMIT = 200;
 
 router.get('/bias/history', async (req, res) => {
@@ -58,23 +59,22 @@ router.get('/bias/history', async (req, res) => {
         }
         hours = Math.min(48, Math.max(1, hours));
 
-        // Versioned bias methodology config: layer display names, citations.
-        const biasMv = await dbGet(
-            `SELECT config FROM methodology_versions
-             WHERE component = 'bias' AND deprecated_at IS NULL
-             ORDER BY effective_from DESC
-             LIMIT 1`,
+        const countRow = await dbGet(
+            `SELECT COUNT(*)::int AS total_count
+             FROM bias_assessments
+             WHERE created_at >= NOW() - ($1::int * INTERVAL '1 hour')`,
+            [hours],
         );
-        const biasConfig = biasMv ? biasMv.config : null;
 
         const rows = await dbAll(
             `SELECT
                 id, assessment_type, group_field, group_value,
                 metric_name, metric_value, threshold, is_violation, severity,
-                created_at
-             FROM bias_assessments
-             WHERE created_at >= NOW() - ($1::int * INTERVAL '1 hour')
-             ORDER BY created_at DESC
+                created_at, methodology_version_id, mv.config AS methodology_config
+             FROM bias_assessments ba
+             LEFT JOIN methodology_versions mv ON mv.id = ba.methodology_version_id
+             WHERE ba.created_at >= NOW() - ($1::int * INTERVAL '1 hour')
+             ORDER BY ba.created_at DESC
              LIMIT ${HISTORY_ROW_LIMIT}`,
             [hours],
         );
@@ -83,20 +83,22 @@ router.get('/bias/history', async (req, res) => {
             id:              row.id,
             time:            row.created_at,
             severity:        severityLabel(row),
-            layer:           layerName(row.assessment_type, biasConfig),
+            layer:           layerName(row.assessment_type, row.methodology_config),
             assessment_type: row.assessment_type,
             group_value:     row.group_value,
             metric_name:     row.metric_name,
             value:           row.metric_value,
             threshold:       row.threshold,
-            detail:          alertDetail(row, biasConfig),
-            citation:        citationFor(row.assessment_type, biasConfig),
+            detail:          alertDetail(row, row.methodology_config),
+            citation:        citationFor(row.assessment_type, row.methodology_config),
         }));
 
         return res.json({
             window_hours: hours,
             generated_at: new Date().toISOString(),
             alerts,
+            total_count: countRow ? countRow.total_count : 0,
+            truncated: alerts.length < (countRow ? countRow.total_count : 0),
         });
     /* istanbul ignore start -- Database failure; requires error injection testing infrastructure */
     } catch (err) {
@@ -132,7 +134,7 @@ router.get('/bias/latest', async (req, res) => {
             `SELECT
                 id, assessment_type, group_field, group_value,
                 metric_name, metric_value, threshold, is_violation, severity,
-                evidence, created_at
+                evidence, created_at, methodology_version_id
              FROM bias_assessments
              WHERE job_id = $1
              ORDER BY created_at ASC`,

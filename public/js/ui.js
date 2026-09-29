@@ -469,12 +469,21 @@
             };
         }
         const alerts = Array.isArray(health.active_alerts)
-            ? health.active_alerts.length : 0;
-        if (alerts > 0) {
+            ? health.active_alerts : [];
+        const critical = alerts.some(a => a.severity === 'critical')
+            || health.status === 'degraded';
+        if (critical) {
+            return {
+                state: 'red',
+                title: 'Red — critical health alert',
+                sub: 'A critical fairness or system-health condition requires attention.',
+            };
+        }
+        if (alerts.length > 0) {
             return {
                 state: 'yellow',
-                title: 'Yellow — ' + alerts + ' active alert'
-                    + (alerts === 1 ? '' : 's'),
+                title: 'Yellow — ' + alerts.length + ' active alert'
+                    + (alerts.length === 1 ? '' : 's'),
                 sub: 'Fairness checks run on every processing job — not on '
                     + 'request. When a threshold trips, it alerts and logs here.',
             };
@@ -1723,16 +1732,21 @@
         if (!els.healthChip) return;
         const label = document.getElementById('health-label');
         const banner = healthBanner(health);
-        els.healthChip.classList.remove('h-green', 'h-yellow');
+        els.healthChip.classList.remove('h-green', 'h-yellow', 'h-red');
         els.healthChip.classList.add(
-            banner.state === 'green' ? 'h-green' : 'h-yellow');
+            banner.state === 'red' ? 'h-red'
+                : banner.state === 'green' ? 'h-green' : 'h-yellow');
         if (label) {
             if (!health) label.textContent = 'model health: unavailable';
             else {
-                const n = Array.isArray(health.active_alerts)
-                    ? health.active_alerts.length : 0;
-                label.textContent = n === 0 ? 'model health: nominal'
-                    : n === 1 ? '1 active alert' : n + ' active alerts';
+                const alerts = Array.isArray(health.active_alerts)
+                    ? health.active_alerts : [];
+                const critical = alerts.some(a => a.severity === 'critical')
+                    || health.status === 'degraded';
+                label.textContent = critical ? 'critical health alert'
+                    : alerts.length === 0 ? 'model health: nominal'
+                    : alerts.length === 1 ? '1 active alert'
+                    : alerts.length + ' active alerts';
             }
         }
     }

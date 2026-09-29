@@ -51,12 +51,14 @@ async function writeBiasAssessment({
     isViolation,
     severity,
     evidence,
+    biasMvId,
 }) {
     await dbRun(
         `INSERT INTO bias_assessments
             (job_id, assessment_type, group_field, group_value,
-             metric_name, metric_value, threshold, is_violation, severity, evidence)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)`,
+             metric_name, metric_value, threshold, is_violation, severity, evidence,
+             methodology_version_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11)`,
         [
             jobId,
             assessmentType,
@@ -68,6 +70,7 @@ async function writeBiasAssessment({
             isViolation,
             severity,                              // null when not a violation
             JSON.stringify(evidence || {}),
+            biasMvId,
         ],
     );
 }
@@ -132,6 +135,7 @@ async function checkLocationConcentration(jobId, biasMvId) {
             isViolation:    false,
             severity:       null,
             evidence:       { rows: [], total: 0 },
+                biasMvId,
         });
         return { isViolation: false, metricValue: 0, groupValue: null };
     }
@@ -157,6 +161,7 @@ async function checkLocationConcentration(jobId, biasMvId) {
         isViolation,
         severity,
         evidence:       { rows, total, dominantLocation: dominant.location },
+        biasMvId,
     });
 
     if (isViolation) {
@@ -222,6 +227,7 @@ async function checkPlatformSentimentParity(jobId, biasMvId) {
             isViolation:    false,
             severity:       null,
             evidence:       { rows, note: 'fewer than 2 platforms' },
+            biasMvId,
         });
         return { isViolation: false, metricValue: 0, groupValue: null };
     }
@@ -253,6 +259,7 @@ async function checkPlatformSentimentParity(jobId, biasMvId) {
         isViolation,
         severity,
         evidence:       { rows, maxDiff, worstPair },
+        biasMvId,
     });
 
     if (isViolation) {
@@ -313,6 +320,7 @@ async function checkNegativeDominance(jobId, biasMvId) {
             isViolation:    false,
             severity:       null,
             evidence:       { rows: [], total: 0 },
+            biasMvId,
         });
         return { isViolation: false, metricValue: 0 };
     }
@@ -335,6 +343,7 @@ async function checkNegativeDominance(jobId, biasMvId) {
         isViolation,
         severity,
         evidence:       { rows, total, negCount },
+        biasMvId,
     });
 
     if (isViolation) {

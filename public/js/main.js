@@ -75,8 +75,9 @@
         const chip = document.getElementById('health-chip');
         const labelEl = document.getElementById('health-label');
         if (!chip || !labelEl) return;
-        chip.classList.remove('h-green', 'h-yellow');
-        chip.classList.add(state === 'yellow' ? 'h-yellow' : 'h-green');
+        chip.classList.remove('h-green', 'h-yellow', 'h-red');
+        chip.classList.add(state === 'red' ? 'h-red'
+            : state === 'yellow' ? 'h-yellow' : 'h-green');
         labelEl.textContent = label;
     }
 
@@ -89,11 +90,15 @@
             })
             .then((data) => {
                 const alerts = Array.isArray(data.active_alerts)
-                    ? data.active_alerts.length : 0;
-                if (alerts > 0) {
-                    setHealthChip('yellow', alerts === 1
+                    ? data.active_alerts : [];
+                const critical = alerts.some(a => a.severity === 'critical')
+                    || data.status === 'degraded';
+                if (critical) {
+                    setHealthChip('red', 'critical health alert');
+                } else if (alerts.length > 0) {
+                    setHealthChip('yellow', alerts.length === 1
                         ? '1 active alert'
-                        : alerts + ' active alerts');
+                        : alerts.length + ' active alerts');
                 } else {
                     setHealthChip('green', 'model health: nominal');
                 }

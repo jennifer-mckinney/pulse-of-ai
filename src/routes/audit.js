@@ -149,25 +149,22 @@ router.get('/audit/:post_id', async (req, res) => {
         // model_name + version ride along so the drawer's bias step can show
         // the same model@version pill as every other pipeline step — the
         // fairness checks are versioned methodology like any inference.
-        const biasMv = await dbGet(
-            `SELECT model_name, version, config FROM methodology_versions
-             WHERE component = 'bias' AND deprecated_at IS NULL
-             ORDER BY effective_from DESC
-             LIMIT 1`,
-        );
-        const biasConfig = biasMv ? biasMv.config : null;
-
         let biasAssessments = [];
         if (latestJobId) {
             biasAssessments = await dbAll(
                 `SELECT assessment_type, group_field, group_value, metric_name,
-                        metric_value, threshold, is_violation, severity, created_at
-                 FROM bias_assessments
-                 WHERE job_id = $1
-                 ORDER BY created_at ASC`,
+                        metric_value, threshold, is_violation, severity, created_at,
+                        methodology_version_id, mv.model_name, mv.version,
+                        mv.config AS methodology_config
+                 FROM bias_assessments ba
+                 LEFT JOIN methodology_versions mv ON mv.id = ba.methodology_version_id
+                 WHERE ba.job_id = $1
+                 ORDER BY ba.created_at ASC`,
                 [latestJobId],
             );
         }
+        const latestBias = biasAssessments[biasAssessments.length - 1];
+        const biasConfig = latestBias ? latestBias.methodology_config : null;
 
         const biasBlock = {
             job_id:      latestJobId,
@@ -177,8 +174,8 @@ router.get('/audit/:post_id', async (req, res) => {
             // Versioned bias-monitor identity (e.g. pulse-bias-monitor-v1 @
             // 1.0.0); null when no 'bias' methodology is registered — the
             // frontend omits the pill rather than inventing one.
-            model_name:  biasMv ? biasMv.model_name : null,
-            version:     biasMv ? biasMv.version    : null,
+            model_name:  latestBias ? latestBias.model_name : null,
+            version:     latestBias ? latestBias.version    : null,
             layers:      buildLayers(biasAssessments, biasConfig),
         };
 

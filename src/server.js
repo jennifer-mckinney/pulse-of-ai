@@ -70,9 +70,10 @@ app.use(express.static(path.join(__dirname, '../public')));
 
 // ─── API routes ───────────────────────────────────────────────────────────────
 // F2: CORS is scoped to the READ-ONLY surface only. POST /api/refresh mutates
-// state (creates a processing job), so it is mounted FIRST and without cors()
-// — cross-origin pages get no Access-Control-Allow-Origin for it, while the
-// same-origin frontend is unaffected. Everything below serves read-only data
+// state (creates a processing job), so it is mounted FIRST and without cors().
+// The route also rejects cross-origin requests and preflights; omitting CORS
+// headers alone would not stop a simple cross-origin POST from being sent.
+// Everything below serves read-only data
 // (POST /api/query is a read-only search) and stays world-readable.
 app.use('/api', refreshRouter);
 

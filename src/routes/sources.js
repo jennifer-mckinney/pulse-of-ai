@@ -35,7 +35,7 @@
 'use strict';
 
 const { Router } = require('express');
-const { dbAll }  = require('../db/connection');
+const { dbGet, dbAll }  = require('../db/connection');
 const { CATEGORY_SLUGS } = require('../config/categories');
 const { responseCache } = require('../middleware/response-cache');
 
@@ -45,6 +45,8 @@ router.get('/sources', async (req, res) => {
     try {
         const includeInactive = req.query.include_inactive === 'true';
 
+        const anchorRow = await dbGet('SELECT date_trunc(\'hour\', NOW()) AS anchor');
+        const anchor = anchorRow.anchor;
         const rows = await dbAll(
             `SELECT
                 id,
@@ -105,8 +107,8 @@ router.get('/sources/timeseries', responseCache(10000), async (req, res) => {
         const rows = await dbAll(
             `WITH buckets AS (
                 SELECT generate_series(
-                    date_trunc('hour', NOW()) - ($1::int - 1) * INTERVAL '1 hour',
-                    date_trunc('hour', NOW()),
+                    $3::timestamptz - ($1::int - 1) * INTERVAL '1 hour',
+                    $3::timestamptz,
                     INTERVAL '1 hour'
                 ) AS hour
             ),
@@ -121,13 +123,13 @@ router.get('/sources/timeseries', responseCache(10000), async (req, res) => {
                 FROM raw_posts rp
                 JOIN sentiment_results sr ON sr.raw_post_id = rp.id
                 JOIN data_sources ds      ON ds.id = rp.source_id
-                WHERE rp.collected_at >= date_trunc('hour', NOW()) - ($1::int - 1) * INTERVAL '1 hour'
+                WHERE rp.collected_at >= $3::timestamptz - ($1::int - 1) * INTERVAL '1 hour'
                   -- Upper bound: end of the CURRENT hour (the newest bucket).
                   -- Future-timestamped rows (bad upstream clocks) truncate to
                   -- buckets that are never returned, but without this bound
                   -- they still put their category into counts — resurrecting
                   -- it as an all-zero series via the cross join below.
-                  AND rp.collected_at < date_trunc('hour', NOW()) + INTERVAL '1 hour'
+                  AND rp.collected_at < $3::timestamptz + INTERVAL '1 hour'
                 GROUP BY ds.category, date_trunc('hour', rp.collected_at)
             )
             SELECT
@@ -141,7 +143,7 @@ router.get('/sources/timeseries', responseCache(10000), async (req, res) => {
             CROSS JOIN buckets b
             LEFT JOIN counts c ON c.category = cat.category AND c.hour = b.hour
             ORDER BY cat.ord ASC, b.hour ASC`,
-            [hours, CATEGORY_SLUGS],
+            [hours, CATEGORY_SLUGS, anchor],
         );
 
         // ─── Ribbon metadata: busiest source + cue words per category ────────
@@ -160,12 +162,12 @@ router.get('/sources/timeseries', responseCache(10000), async (req, res) => {
                 FROM raw_posts rp
                 JOIN sentiment_results sr ON sr.raw_post_id = rp.id
                 JOIN data_sources ds      ON ds.id = rp.source_id
-                WHERE rp.collected_at >= date_trunc('hour', NOW()) - ($1::int - 1) * INTERVAL '1 hour'
-                  AND rp.collected_at <  date_trunc('hour', NOW()) + INTERVAL '1 hour'
+                WHERE rp.collected_at >= $2::timestamptz - ($1::int - 1) * INTERVAL '1 hour'
+                  AND rp.collected_at <  $2::timestamptz + INTERVAL '1 hour'
                 GROUP BY ds.category, ds.display_name
              ) ranked
              WHERE rn = 1`,
-            [hours],
+            [hours, anchor],
         );
         const topSiteByCategory = {};
         for (const row of siteRows) topSiteByCategory[row.category] = row.display_name;
@@ -186,13 +188,13 @@ router.get('/sources/timeseries', responseCache(10000), async (req, res) => {
                     FROM relevance_results rr
                     WHERE rr.raw_post_id = rp.id
                 ) kw ON TRUE
-                WHERE rp.collected_at >= date_trunc('hour', NOW()) - ($1::int - 1) * INTERVAL '1 hour'
-                  AND rp.collected_at <  date_trunc('hour', NOW()) + INTERVAL '1 hour'
+                WHERE rp.collected_at >= $2::timestamptz - ($1::int - 1) * INTERVAL '1 hour'
+                  AND rp.collected_at <  $2::timestamptz + INTERVAL '1 hour'
                 GROUP BY ds.category, kw.keyword
              ) ranked
              WHERE rn <= 2
              ORDER BY category ASC, rn ASC`,
-            [hours],
+            [hours, anchor],
         );
         const wordsByCategory = {};
         for (const row of wordRows) {
