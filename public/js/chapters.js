@@ -279,8 +279,14 @@
     // from the bundled demo fallback rather than the API. The resolved
     // chapter then carries isDemo:true and a visible "Demo data" marker on
     // the card title so viewers are never shown demo numbers as live ones.
+    // opts.demoLabel (default = isDemo): show the SAME "Demo data" marker
+    // without the bundled-fallback behaviour — set when the API itself
+    // serves demo-feed posts (data mode 'demo' / 'mixed'), so backend demo
+    // data is labeled exactly like the bundled set. resolved.isDemo keeps
+    // meaning "bundled fallback" (consumers skip fetches on it).
     function resolveChapter(beat, ins, cities, opts) {
         const isDemo = Boolean(opts && opts.isDemo);
+        const demoLabel = isDemo || Boolean(opts && opts.demoLabel);
 
         const rule = beat.highlightRule === null
             ? null
@@ -329,7 +335,7 @@
             kicker: beat.kicker,
             // Visible demo marker: renderers show the suffixed title as-is,
             // and can additionally badge on the isDemo flag below.
-            cardTitle: isDemo ? beat.title + ' — Demo data' : beat.title,
+            cardTitle: demoLabel ? beat.title + ' — Demo data' : beat.title,
             cardBody,
             camera,
             cameraMs: beat.cameraMs,
@@ -344,8 +350,81 @@
             stats,
             highlightCities,
             isDemo,
+            demoLabel,
         };
     }
 
-    return { STORY, FALLBACK_COPY, resolveChapter };
+    // ── Intro (editorial lede) ──────────────────────────────────────────────────
+    // FR-19 + the prototype README: the intro's numbers are INTERPOLATED from
+    // the same aggregated data the globe renders, never hard-coded (the old
+    // static "4,500 posts an hour across 50 sources and 30 cities"). The
+    // kicker states where that data came from.
+    //
+    // dataMode (PulseData.loadCityData): 'live' | 'none' | 'demo' | 'mixed' |
+    // 'fallback' (bundled demo set, backend unavailable).
+    const INTRO_KICKERS = {
+        live:     'LIVE · UPDATED EVERY 2–3 MINUTES',
+        none:     'LIVE · UPDATED EVERY 2–3 MINUTES',
+        mixed:    'LIVE + DEMO · UPDATED EVERY 2–3 MINUTES',
+        demo:     'DEMO · UPDATED EVERY 2–3 MINUTES',
+        fallback: 'DEMO · BUNDLED SAMPLE DATA',
+    };
+    const INTRO_LEAD = 'Everyone has an opinion about artificial intelligence. ';
+    const INTRO_TAIL = ', every score traceable to the model that made it.';
+    const INTRO_TEMPLATES = {
+        live: INTRO_LEAD + 'Right now you can watch all of them move — '
+            + '{postCount} posts an hour across {sourceCount} sources and {cityCount} cities',
+        none: INTRO_LEAD + 'Right now you can watch all of them move — '
+            + '{postCount} posts an hour across {sourceCount} sources and {cityCount} cities',
+        mixed: INTRO_LEAD + 'Right now you can watch them move — {postCount} posts an hour, '
+            + 'some of them fictional demo posts, across {sourceCount} sources and demo feeds '
+            + 'and {cityCount} cities',
+        demo: INTRO_LEAD + 'This installation is running on demo data — {postCount} fictional '
+            + 'posts an hour across {sourceCount} demo feeds and {cityCount} cities',
+        fallback: INTRO_LEAD + 'The live backend is unavailable, so this is a bundled demo view — '
+            + '{postCount} fictional posts an hour across {sourceCount} sources and {cityCount} cities',
+    };
+    const DEMO_LABEL_MODES = ['demo', 'mixed', 'fallback'];
+
+    // introFacts: the three intro numbers from the rendered snapshot.
+    //   postCount   — posts in the window (ins.globalTotals.total)
+    //   cityCount   — cities REPORTING (ins.cityCount: total > 0)
+    //   sourceCount — distinct sources with posts in the window
+    function introFacts(ins, cities) {
+        const names = new Set();
+        for (const c of (Array.isArray(cities) ? cities : [])) {
+            if (!c || !Array.isArray(c.sources)) continue;
+            for (const src of c.sources) {
+                if (src && src.total > 0 && src.source_name) names.add(src.source_name);
+            }
+        }
+        return {
+            postCount: ins && ins.globalTotals ? ins.globalTotals.total : 0,
+            cityCount: ins ? ins.cityCount || 0 : 0,
+            sourceCount: names.size,
+        };
+    }
+
+    // resolveIntro: pure → { kicker, sub, dataMode, demoLabel, facts }.
+    // dataMode comes from PulseData.loadCityData, which only ever produces
+    // the modes above; a missing value (older callers) gets the live copy.
+    function resolveIntro(ins, cities, dataMode) {
+        const mode = Object.prototype.hasOwnProperty.call(INTRO_KICKERS, dataMode)
+            ? dataMode : 'live';
+        const facts = introFacts(ins, cities);
+        const sub = renderTemplate(INTRO_TEMPLATES[mode], {
+            postCount: fmtCount(facts.postCount),
+            cityCount: fmtCount(facts.cityCount),
+            sourceCount: fmtCount(facts.sourceCount),
+        }) + INTRO_TAIL;
+        return {
+            kicker: INTRO_KICKERS[mode],
+            sub,
+            dataMode: mode,
+            demoLabel: DEMO_LABEL_MODES.indexOf(mode) !== -1,
+            facts,
+        };
+    }
+
+    return { STORY, FALLBACK_COPY, resolveChapter, resolveIntro, introFacts, INTRO_KICKERS };
 }));

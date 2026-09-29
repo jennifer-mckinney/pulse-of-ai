@@ -24,7 +24,7 @@
 //         fired by the featured-post "Why does it say that? →" button when
 //         window.PulseUI.openAudit is absent; when present it is called
 //         directly with the same post row instead.
-//   - CustomEvent 'pulse:data'               detail {cities, isDemo}
+//   - CustomEvent 'pulse:data'               detail {cities, isDemo, dataMode}
 //         fired after every successful snapshot (re)load, so ui.js can
 //         re-render the explore list / detail / ribbon from fresh data.
 //   - PulseStory.getCities() → the current normalized city snapshot (copy)
@@ -32,7 +32,7 @@
 //   - PulseStory.setExploreSelection(cityId|null) — ui.js reports its city
 //         selection so the next-steps card hides while a city is open
 //         (prototype: exploring && !selectedId && !stepsDone).
-//   - PulseStory.getState() → {prog, exploring, activeIndex, isDemo}
+//   - PulseStory.getState() → {prog, exploring, activeIndex, isDemo, dataMode}
 //
 // DOM discipline: createElement/textContent/classList/style ONLY — the repo
 // Write hook blocks innerHTML in client JS, and card strings may echo API
@@ -72,7 +72,7 @@
     const {
         computeInsights, allCategoryRows, partitionThemes, themeNet,
     } = insightsMod;
-    const { STORY, resolveChapter } = chaptersMod;
+    const { STORY, resolveChapter, resolveIntro } = chaptersMod;
     const gmath = globeMod.math;
     const GLOBE = designConfig.GLOBE;
     const CAT_COLORS = designConfig.CAT_COLORS;
@@ -385,6 +385,10 @@
         activeIndex: -1,     // last beat applied to the globe (−1 = none yet)
         cities: [],
         isDemo: false,
+        // Data origin from PulseData.loadCityData: 'live' | 'none' | 'demo' |
+        // 'mixed' | 'fallback'. Drives the intro kicker and the "Demo data"
+        // markers; isDemo keeps meaning "bundled fallback, never fetch".
+        dataMode: 'live',
         liveSeen: false,     // a live snapshot has been served at least once
         citiesDirty: false,  // snapshot changed since the globe last got it (#9)
         resolved: [],        // resolveChapter output per beat
@@ -899,17 +903,29 @@
 
     // ── Data lifecycle ──────────────────────────────────────────────────────
 
+    // renderIntro: kicker + lede from PulseChapters.resolveIntro, written via
+    // textContent only. data-mode on #intro exposes the mode to tests/CSS
+    // without changing the prototype's styling or position.
+    function renderIntro(intro) {
+        if (!els || !intro) return;
+        if (els.introKicker) els.introKicker.textContent = intro.kicker;
+        if (els.introSub) els.introSub.textContent = intro.sub;
+        if (els.intro) els.intro.setAttribute('data-mode', intro.dataMode);
+    }
+
     function loadAndRender() {
         if (state.loading) return Promise.resolve();
         state.loading = true;
         return dataMod.loadCityData()
-            .then(({ cities, isDemo }) => {
+            .then(({ cities, isDemo, dataMode }) => {
                 // Snapshot-change gate (grumpy #9): an unchanged poll keeps
                 // the OLD array identity and never re-sends cities to the
                 // globe (citiesDirty stays false), so the land-heat memo and
                 // adapted rows survive quiet polls. Cards / cadence-driven
                 // consumers still refresh below.
+                const mode = dataMode || (isDemo ? 'fallback' : 'live');
                 const changed = state.isDemo !== isDemo
+                    || state.dataMode !== mode
                     || !snapshotsEqual(state.cities, cities);
                 if (changed) {
                     state.cities = cities;
@@ -920,10 +936,16 @@
                 if (flipWarning) console.warn(flipWarning);
                 if (!isDemo) state.liveSeen = true;
                 state.isDemo = isDemo;
+                state.dataMode = mode;
                 const insights = computeInsights(state.cities);
+                // Intro numbers + kicker from the SAME snapshot the globe
+                // renders (FR-19); backend demo data is labeled like the
+                // bundled fallback via demoLabel.
+                const intro = resolveIntro(insights, state.cities, mode);
+                renderIntro(intro);
                 state.resolved = STORY.map(
                     (beat) => resolveChapter(beat, insights, state.cities,
-                        { isDemo }));
+                        { isDemo, demoLabel: intro.demoLabel }));
                 rebuildCards();
                 state.legendMode = null;   // category list may have changed
                 state.activeIndex = -1;    // force globe re-apply on new data
@@ -940,6 +962,7 @@
                 dispatch('pulse:data', {
                     cities: state.cities,
                     isDemo: state.isDemo,
+                    dataMode: state.dataMode,
                 });
                 return Promise.all([loadThemes(), loadFeaturedPosts()]);
             })
@@ -977,6 +1000,8 @@
 
         els = {
             intro: document.getElementById('intro'),
+            introKicker: document.getElementById('intro-kicker'),
+            introSub: document.getElementById('intro-sub'),
             cardCol: document.getElementById('card-col'),
             rail: document.getElementById('rail'),
             skipBtn: document.getElementById('skip-btn'),
@@ -1013,6 +1038,7 @@
             exploring: state.exploring,
             activeIndex: activeIndexFor(state.prog, N),
             isDemo: state.isDemo,
+            dataMode: state.dataMode,
         };
     }
 

@@ -427,12 +427,37 @@ describe('loadCityData() — windowed fetch, demo-flip guard (G16)', () => {
         expect(cities.filter(c => c.total === 0)).toHaveLength(30);
     });
 
+    test('live rows report dataMode "live"; demo-feed rows report "demo" but stay isDemo:false', async () => {
+        global.fetch = jest.fn().mockResolvedValue({
+            ok: true, json: async () => [{ ...validRow(), demo_posts: 0 }],
+        });
+        expect(await data.loadCityData()).toMatchObject({ isDemo: false, dataMode: 'live' });
+
+        // Backend demo feed: every windowed post is from a demo source. The
+        // page must LABEL it demo (dataMode) without switching to the bundled
+        // fallback (isDemo stays false, so receipts/posts are still fetched).
+        const row = validRow();
+        global.fetch = jest.fn().mockResolvedValue({
+            ok: true, json: async () => [{ ...row, demo_posts: row.total }],
+        });
+        const demo = await data.loadCityData();
+        expect(demo).toMatchObject({ isDemo: false, dataMode: 'demo' });
+        expect(demo.cities.find(c => c.city === 'Testville').total).toBe(row.total);
+        expect(data.labelsAsDemo(demo.dataMode)).toBe(true);
+    });
+
+    test('labelsAsDemo: demo, mixed and the bundled fallback are labeled; live and none are not', () => {
+        expect(['live', 'none', 'demo', 'mixed', 'fallback'].map(data.labelsAsDemo))
+            .toEqual([false, false, true, true, true]);
+    });
+
     test('DEMO-FLIP GUARD: empty window + non-empty total → honest zeros, isDemo:false', async () => {
         global.fetch = jest.fn()
             .mockResolvedValueOnce({ ok: true, json: async () => [] })          // windowed
             .mockResolvedValueOnce({ ok: true, json: async () => [validRow()] }); // probe
-        const { cities, isDemo } = await data.loadCityData();
+        const { cities, isDemo, dataMode } = await data.loadCityData();
         expect(isDemo).toBe(false);
+        expect(dataMode).toBe('none');
         expect(global.fetch).toHaveBeenCalledTimes(2);
         expect(global.fetch.mock.calls[1][0]).toBe(AGG);   // probe is UNWINDOWED
         expect(cities).toHaveLength(30);                   // zero baseline, no demo
@@ -443,8 +468,9 @@ describe('loadCityData() — windowed fetch, demo-flip guard (G16)', () => {
         global.fetch = jest.fn()
             .mockResolvedValueOnce({ ok: true, json: async () => [] })
             .mockResolvedValueOnce({ ok: true, json: async () => [] });
-        const { cities, isDemo } = await data.loadCityData();
+        const { cities, isDemo, dataMode } = await data.loadCityData();
         expect(isDemo).toBe(true);
+        expect(dataMode).toBe('fallback');
         expect(cities).toHaveLength(data.DEMO_DATA.length);
         expect(cities.some(c => c.total > 0)).toBe(true);  // demo numbers, labeled
     });
@@ -494,6 +520,8 @@ describe('module export shape', () => {
         expect(Object.keys(data).sort()).toEqual([
             'DEMO_DATA',
             'buildDemoData',
+            'dataModeOf',
+            'labelsAsDemo',
             'loadCityData',
             'mergeWithBaseline',
             'normalizeCities',

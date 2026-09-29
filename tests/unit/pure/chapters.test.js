@@ -484,8 +484,91 @@ describe('module export shape', () => {
     test('exports exactly the documented public API', () => {
         expect(Object.keys(chapters).sort()).toEqual([
             'FALLBACK_COPY',
+            'INTRO_KICKERS',
             'STORY',
+            'introFacts',
             'resolveChapter',
+            'resolveIntro',
         ]);
+    });
+});
+
+describe('demoLabel — backend demo data labeled like the bundled fallback', () => {
+    test('demoLabel adds the SAME "— Demo data" marker without claiming the bundled fallback', () => {
+        for (const beat of STORY) {
+            const r = resolveChapter(beat, demoInsights, demoCities, { isDemo: false, demoLabel: true });
+            expect(r.cardTitle).toBe(beat.title + ' — Demo data');
+            expect(r.demoLabel).toBe(true);
+            expect(r.isDemo).toBe(false);      // still fetched: receipts are real
+        }
+    });
+
+    test('bundled fallback implies the label; live has neither', () => {
+        const beat = STORY[0];
+        expect(resolveChapter(beat, demoInsights, demoCities, { isDemo: true }))
+            .toMatchObject({ isDemo: true, demoLabel: true });
+        expect(resolveChapter(beat, demoInsights, demoCities, {}))
+            .toMatchObject({ isDemo: false, demoLabel: false, cardTitle: beat.title });
+    });
+});
+
+describe('resolveIntro — kicker by data origin, numbers interpolated (FR-19)', () => {
+    const { resolveIntro, introFacts, INTRO_KICKERS } = chapters;
+
+    function citiesWith(rows) {
+        return data.normalizeCities(rows.map(([city, lat, lng, total, sources]) => ({
+            city, lat, lng, positive: total, neutral: 0, negative: 0,
+            sources: sources.map(([name, n]) => ({
+                source_name: name, source_category: 'news', positive: n, neutral: 0, negative: 0,
+            })),
+        })));
+    }
+    const cities = citiesWith([
+        ['A', 10, 10, 5, [['feed_x', 3], ['feed_y', 2]]],
+        ['B', 20, 20, 7, [['feed_x', 7]]],
+        ['C', 30, 30, 0, []],                     // zero-count baseline: not reporting
+    ]);
+    const ins = computeInsights(cities);
+
+    test('introFacts: posts, reporting cities and distinct sources come from the rendered snapshot', () => {
+        expect(introFacts(ins, cities)).toEqual({ postCount: 12, cityCount: 2, sourceCount: 2 });
+    });
+
+    test('demo mode: DEMO kicker and fictional wording with the computed numbers', () => {
+        const intro = resolveIntro(ins, cities, 'demo');
+        expect(intro.kicker).toBe('DEMO · UPDATED EVERY 2–3 MINUTES');
+        expect(intro.demoLabel).toBe(true);
+        expect(intro.sub).toContain('12 fictional posts an hour across 2 demo feeds and 2 cities');
+        expect(intro.sub).not.toMatch(/4,500|50 sources|30 cities/);
+    });
+
+    test('live mode keeps the prototype wording with computed numbers', () => {
+        const intro = resolveIntro(ins, cities, 'live');
+        expect(intro.kicker).toBe('LIVE · UPDATED EVERY 2–3 MINUTES');
+        expect(intro.demoLabel).toBe(false);
+        expect(intro.sub).toBe('Everyone has an opinion about artificial intelligence. Right now you '
+            + 'can watch all of them move — 12 posts an hour across 2 sources and 2 cities, every '
+            + 'score traceable to the model that made it.');
+    });
+
+    test('mixed, fallback and none each say what they are', () => {
+        expect(resolveIntro(ins, cities, 'mixed')).toMatchObject({
+            kicker: 'LIVE + DEMO · UPDATED EVERY 2–3 MINUTES', demoLabel: true });
+        expect(resolveIntro(ins, cities, 'mixed').sub).toContain('some of them fictional demo posts');
+        expect(resolveIntro(ins, cities, 'fallback')).toMatchObject({
+            kicker: 'DEMO · BUNDLED SAMPLE DATA', demoLabel: true });
+        expect(resolveIntro(computeInsights([]), [], 'none').sub)
+            .toContain('0 posts an hour across 0 sources and 0 cities');
+    });
+
+    test('every kicker keeps the prototype cadence phrase or names the demo', () => {
+        for (const [mode, k] of Object.entries(INTRO_KICKERS)) {
+            if (['demo', 'mixed', 'fallback'].includes(mode)) expect(k).toMatch(/DEMO/);
+            else expect(k).toMatch(/^LIVE/);
+        }
+    });
+
+    test('an unset mode gets the live copy (older callers)', () => {
+        expect(resolveIntro(ins, cities, undefined).dataMode).toBe('live');
     });
 });
