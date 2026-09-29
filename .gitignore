@@ -1,7 +1,10 @@
 # Environment — never commit secrets
+# .env.* covers .env.local, .env.<name>.local and standup's temporary
+# .env.tmp.<pid> (it holds generated secrets until it is renamed).
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
+
 
 # Node
 node_modules/

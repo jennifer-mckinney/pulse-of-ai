@@ -86,7 +86,148 @@ effective() {
     printf '%s' "${file_val:-$default}"
 }
 
+# ─── Env file creation / merge (scripts/standup.sh) ──────────────────────────
+# Keys whose value standup GENERATES (openssl rand -hex 32) instead of
+# copying the .env.example placeholder. Values are never printed.
+STACK_SECRET_KEYS=(POSTGRES_PASSWORD AUDIT_HASH_KEY CORRELATION_SALT)
+# Temp file of an env file being created (removed on any exit — F9-4).
+STACK_ENV_TMP=''
+
+# 64 hex chars (256 bits) on stdout; non-zero exit when no source works.
+gen_secret() {
+    local s
+    if command -v openssl >/dev/null 2>&1; then
+        s=$(openssl rand -hex 32) || return 1
+    else
+        s=$(od -An -N32 -tx1 /dev/urandom | tr -d ' \n') || return 1
+    fi
+    [[ "$s" =~ ^[0-9a-f]{64}$ ]] || return 1
+    printf '%s' "$s"
+}
+
+is_secret_key() {
+    local k
+    for k in "${STACK_SECRET_KEYS[@]}"; do [[ "$1" == "$k" ]] && return 0; done
+    return 1
+}
+
+# One env line for KEY: a fresh secret for secret keys, else the
+# .env.example line verbatim. Fails (instead of writing an empty secret)
+# when the generator fails — command substitution inside printf's arguments
+# would otherwise swallow that failure.
+env_line_for() {
+    local key=$1 example_line=$2 secret
+    if is_secret_key "$key"; then
+        secret=$(gen_secret) || return 1
+        printf '%s=%s\n' "$key" "$secret"
+    else
+        printf '%s\n' "$example_line"
+    fi
+}
+
+# True when PATH is writable by its group or by others.
+writable_by_others() {
+    [[ -n "$(find "$1" -prune \( -perm -020 -o -perm -002 \) -print 2>/dev/null)" ]]
+}
+
+_stack_drop_env_tmp() {
+    if [[ -n "${STACK_ENV_TMP:-}" ]]; then
+        rm -f "$STACK_ENV_TMP"
+        STACK_ENV_TMP=''
+    fi
+}
+
+# Create the env file from .env.example (generating the secret keys), or
+# append the keys an existing file lacks. Existing values are never changed.
+ensure_env_file() {
+    local line key
+    if [[ ! -f "$STACK_ENV_FILE" ]]; then
+        STACK_ENV_TMP="$STACK_ENV_FILE.tmp.$$"
+        # F9-4: the temp file holds secrets — remove it on ANY exit until
+        # the final mv (a failing generator, `die`, Ctrl-C, SIGTERM).
+        trap '_stack_drop_env_tmp' EXIT
+        trap '_stack_drop_env_tmp; exit 130' INT
+        trap '_stack_drop_env_tmp; exit 143' TERM
+        ( umask 077; : > "$STACK_ENV_TMP" ) || die "cannot create $STACK_ENV_TMP"
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)= ]]; then
+                key=${BASH_REMATCH[1]}
+                env_line_for "$key" "$line" >> "$STACK_ENV_TMP" \
+                    || die "could not generate a value for $key (needs openssl or /dev/urandom)"
+            else
+                printf '%s\n' "$line" >> "$STACK_ENV_TMP"
+            fi
+        done < "$STACK_EXAMPLE_FILE"
+        chmod 600 "$STACK_ENV_TMP"
+        mv "$STACK_ENV_TMP" "$STACK_ENV_FILE"
+        STACK_ENV_TMP=''
+        trap - EXIT INT TERM
+        ok "created $STACK_ENV_FILE from .env.example (generated: ${STACK_SECRET_KEYS[*]} — values not shown)"
+        return 0
+    fi
+
+    # Merge path: collect the missing keys first, so the permission check
+    # below runs BEFORE anything is written.
+    local missing=() missing_secret=0
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)= ]] || continue
+        key=${BASH_REMATCH[1]}
+        grep -Eq "^(export[[:space:]]+)?${key}=" "$STACK_ENV_FILE" && continue
+        missing+=("$key")
+        if is_secret_key "$key"; then missing_secret=1; fi
+    done < "$STACK_EXAMPLE_FILE"
+
+    # F9-3: a file others can write is not a place for new secrets (someone
+    # else may read or have edited it). Nothing is appended; the owner fixes it.
+    if (( missing_secret )) && writable_by_others "$STACK_ENV_FILE"; then
+        die "$STACK_ENV_FILE is group- or world-writable — refusing to append generated secrets to it.
+    Check that nobody else edited it, then: chmod 600 $STACK_ENV_FILE   and re-run."
+    fi
+
+    if (( ${#missing[@]} == 0 )); then
+        ok "kept existing $STACK_ENV_FILE (all keys present, values untouched)"
+        return 0
+    fi
+    # Make sure the append starts on its own line.
+    [[ -z "$(tail -c 1 "$STACK_ENV_FILE")" ]] || printf '\n' >> "$STACK_ENV_FILE"
+    printf '\n# Added by scripts/standup.sh on %s (missing from this file)\n' \
+        "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$STACK_ENV_FILE"
+    for key in "${missing[@]}"; do
+        line=$(grep -E "^${key}=" "$STACK_EXAMPLE_FILE" | head -n 1)
+        env_line_for "$key" "$line" >> "$STACK_ENV_FILE" \
+            || die "could not generate a value for $key (needs openssl or /dev/urandom)"
+    done
+    ok "kept existing $STACK_ENV_FILE; added missing key(s): ${missing[*]}"
+}
+
+# F9-3: the env file holds secrets — always mode 600, and say so when it is
+# not ours (chmod then fails for a non-root user, which is fatal).
+secure_env_file() {
+    [[ -f "$STACK_ENV_FILE" ]] || return 0
+    [[ -O "$STACK_ENV_FILE" ]] \
+        || warn "$STACK_ENV_FILE is not owned by you (uid $(id -u)) but holds secrets — check who created it"
+    chmod 600 "$STACK_ENV_FILE" 2>/dev/null \
+        || die "could not chmod 600 $STACK_ENV_FILE — it holds secrets; fix its ownership and re-run"
+}
+
+# Placeholder or empty secrets are not secrets. Existing values are never
+# rewritten, so this only reports them.
+check_env_secrets() {
+    local key example_val current
+    for key in "${STACK_SECRET_KEYS[@]}"; do
+        example_val=$(grep -E "^${key}=" "$STACK_EXAMPLE_FILE" | head -n 1 || true)
+        example_val=$(env_value_body "${example_val#*=}")
+        current=$(env_file_value "$key")
+        if [[ -z "$current" ]]; then
+            warn "$key is empty in $STACK_ENV_FILE — set it (openssl rand -hex 32)"
+        elif [[ -n "$example_val" && "$current" == "$example_val" ]]; then
+            warn "$key still has the .env.example placeholder — replace it (openssl rand -hex 32)"
+        fi
+    done
+}
+
 # ─── Compose project ─────────────────────────────────────────────────────────
+
 
 stack_project() {
     local project

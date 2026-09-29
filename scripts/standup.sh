@@ -48,7 +48,6 @@ done
 
 CORE_TIMEOUT=${STANDUP_TIMEOUT:-300}
 EMBED_TIMEOUT=${STANDUP_EMBEDDINGS_TIMEOUT:-900}
-SECRET_KEYS=(POSTGRES_PASSWORD AUDIT_HASH_KEY CORRELATION_SALT)
 T_START=$(date +%s)
 
 elapsed() { echo $(( $(date +%s) - $1 )); }
@@ -61,86 +60,12 @@ command -v curl >/dev/null 2>&1 || die "curl not found — needed for the smoke 
 [[ -f "$STACK_EXAMPLE_FILE" ]] || die "$STACK_EXAMPLE_FILE is missing — run from a complete checkout"
 
 # ─── 2. Environment file ─────────────────────────────────────────────────────
-gen_secret() {
-    if command -v openssl >/dev/null 2>&1; then
-        openssl rand -hex 32
-    else
-        od -An -N32 -tx1 /dev/urandom | tr -d ' \n'
-    fi
-}
-
-is_secret_key() {
-    local k
-    for k in "${SECRET_KEYS[@]}"; do [[ "$1" == "$k" ]] && return 0; done
-    return 1
-}
-
-# Emit one env line for KEY: a fresh secret for secret keys, else the
-# .env.example line verbatim.
-env_line_for() {
-    local key=$1 example_line=$2
-    if is_secret_key "$key"; then
-        printf '%s=%s\n' "$key" "$(gen_secret)"
-    else
-        printf '%s\n' "$example_line"
-    fi
-}
-
-ensure_env_file() {
-    local line key
-    if [[ ! -f "$STACK_ENV_FILE" ]]; then
-        local tmp="$STACK_ENV_FILE.tmp.$$"
-        ( umask 077; : > "$tmp" )
-        while IFS= read -r line || [[ -n "$line" ]]; do
-            if [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)= ]]; then
-                env_line_for "${BASH_REMATCH[1]}" "$line" >> "$tmp"
-            else
-                printf '%s\n' "$line" >> "$tmp"
-            fi
-        done < "$STACK_EXAMPLE_FILE"
-        mv "$tmp" "$STACK_ENV_FILE"
-        chmod 600 "$STACK_ENV_FILE"
-        ok "created $STACK_ENV_FILE from .env.example (generated: ${SECRET_KEYS[*]} — values not shown)"
-        return
-    fi
-
-    local added=()
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)= ]] || continue
-        key=${BASH_REMATCH[1]}
-        grep -Eq "^(export[[:space:]]+)?${key}=" "$STACK_ENV_FILE" && continue
-        if (( ${#added[@]} == 0 )); then
-            # Make sure the append starts on its own line.
-            [[ -z "$(tail -c 1 "$STACK_ENV_FILE")" ]] || printf '\n' >> "$STACK_ENV_FILE"
-            printf '\n# Added by scripts/standup.sh on %s (missing from this file)\n' \
-                "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$STACK_ENV_FILE"
-        fi
-        env_line_for "$key" "$line" >> "$STACK_ENV_FILE"
-        added+=("$key")
-    done < "$STACK_EXAMPLE_FILE"
-
-    if (( ${#added[@]} > 0 )); then
-        ok "kept existing $STACK_ENV_FILE; added missing key(s): ${added[*]}"
-    else
-        ok "kept existing $STACK_ENV_FILE (all keys present, values untouched)"
-    fi
-
-    # Placeholder values are left alone (existing values are never changed),
-    # but say so: a placeholder password or key is not a secret.
-    local example_val current
-    for key in "${SECRET_KEYS[@]}"; do
-        example_val=$(grep -E "^${key}=" "$STACK_EXAMPLE_FILE" | head -n 1 | cut -d= -f2- || true)
-        current=$(env_file_value "$key")
-        if [[ -z "$current" ]]; then
-            warn "$key is empty in $STACK_ENV_FILE — set it (openssl rand -hex 32)"
-        elif [[ -n "$example_val" && "$current" == "$example_val" ]]; then
-            warn "$key still has the .env.example placeholder — replace it (openssl rand -hex 32)"
-        fi
-    done
-}
-
+# ensure_env_file / secure_env_file / check_env_secrets live in
+# scripts/lib/stack.sh (tested by scripts/test/stack-lib.test.sh).
 step "Preparing environment file"
 ensure_env_file
+secure_env_file
+check_env_secrets
 [[ -n "$(effective POSTGRES_PASSWORD)" ]] || die "POSTGRES_PASSWORD is empty in $STACK_ENV_FILE"
 
 STACK_PROJECT=$(stack_project)
