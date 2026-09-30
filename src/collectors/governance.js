@@ -18,7 +18,7 @@
 'use strict';
 
 const crypto = require('crypto');
-const { dbAll, dbGet, dbRun } = require('../db/connection');
+const { dbAll, dbGet, dbRun, dbTransaction } = require('../db/connection');
 const { SOURCES, getSource, sourceStatus } = require('../config/source-registry');
 const { correlationStatus } = require('../pipeline/correlation-gate');
 const termsText = require('./terms-text');
@@ -162,32 +162,36 @@ async function snapshotTerms({ http, slugs, log = () => {} }) {
 /**
  * Store snapshot rows. For a fetched page whose normalised-text hash differs
  * from the source's previous fetched snapshot, open ONE terms_changed alert
- * (warning) for the source — an operator reviews the new terms.
+ * (warning) for the source — an operator reviews the new terms. Each row and
+ * its alert are written in one transaction (PR #22 grumpy L16).
  * @returns {Promise<{ saved: number, changed: string[] }>}
  */
 async function saveTermsSnapshots(rows) {
     const { openSourceAlert } = require('./source-alerts');
     const changed = [];
     for (const r of rows) {
-        const prev = r.text_sha256 ? await dbGet(
-            `SELECT text_sha256, captured_at FROM source_terms_snapshots
-             WHERE slug = $1 AND status = 'fetched' AND text_sha256 IS NOT NULL
-             ORDER BY captured_at DESC, id DESC LIMIT 1`, [r.slug]) : null;
-        const saved = await dbRun(
-            `INSERT INTO source_terms_snapshots (source_id, slug, terms_url, status, sha256, http_status, bytes, reason,
-                                                 terms_text, text_sha256, normaliser)
-             VALUES ((SELECT id FROM data_sources WHERE name = $1), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-             RETURNING id, source_id`,
-            [r.slug, r.terms_url, r.status, r.sha256, r.http_status, r.bytes, r.reason, r.terms_text || null,
-                r.text_sha256 || null, r.normaliser || null],
-        );
-        if (prev && prev.text_sha256 !== r.text_sha256 && saved.source_id) {
-            await openSourceAlert('terms_changed', 'warning', saved.source_id, {
-                slug: r.slug, terms_url: r.terms_url, previous_text_sha256: prev.text_sha256,
-                previous_captured_at: prev.captured_at, text_sha256: r.text_sha256, snapshot_id: saved.id,
-            });
-            changed.push(r.slug);
-        }
+        await dbTransaction(async (client) => {
+            const one = async (sql, params) => (await client.query(sql, params)).rows[0];
+            const prev = r.text_sha256 ? await one(
+                `SELECT text_sha256, captured_at FROM source_terms_snapshots
+                 WHERE slug = $1 AND status = 'fetched' AND text_sha256 IS NOT NULL
+                 ORDER BY captured_at DESC, id DESC LIMIT 1`, [r.slug]) : null;
+            const saved = await one(
+                `INSERT INTO source_terms_snapshots (source_id, slug, terms_url, status, sha256, http_status, bytes, reason,
+                                                     terms_text, text_sha256, normaliser)
+                 VALUES ((SELECT id FROM data_sources WHERE name = $1), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                 RETURNING id, source_id`,
+                [r.slug, r.terms_url, r.status, r.sha256, r.http_status, r.bytes, r.reason, r.terms_text || null,
+                    r.text_sha256 || null, r.normaliser || null],
+            );
+            if (prev && prev.text_sha256 !== r.text_sha256 && saved.source_id) {
+                await openSourceAlert('terms_changed', 'warning', saved.source_id, {
+                    slug: r.slug, terms_url: r.terms_url, previous_text_sha256: prev.text_sha256,
+                    previous_captured_at: prev.captured_at, text_sha256: r.text_sha256, snapshot_id: saved.id,
+                }, client);
+                changed.push(r.slug);
+            }
+        });
     }
     return { saved: rows.length, changed };
 }

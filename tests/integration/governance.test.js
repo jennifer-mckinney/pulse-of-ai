@@ -184,6 +184,22 @@ describe('terms snapshots', () => {
         expect(alerts[0]).toMatchObject({ severity: 'warning', details: { slug: 'npr' } });
     });
 
+    // Grumpy L16: a snapshot and the terms_changed alert it raises are one transaction.
+    it('a failed terms_changed alert rolls its snapshot back', async () => {
+        await seedSources({ actor: 'test-seed' });
+        const row = (text) => ({ slug: 'npr', terms_url: 'https://www.npr.org/t', status: 'fetched', sha256: 'h', http_status: 200,
+            bytes: 1, reason: null, terms_text: text, text_sha256: require('crypto').createHash('sha256').update(text).digest('hex'),
+            normaliser: 'terms-text@1' });
+        await saveTermsSnapshots([row('first terms')]);
+        const alerts = require('../../src/collectors/source-alerts');
+        const spy = jest.spyOn(alerts, 'openSourceAlert').mockRejectedValueOnce(new Error('alert insert failed'));
+        try {
+            await expect(saveTermsSnapshots([row('changed terms')])).rejects.toThrow(/alert insert failed/);
+        } finally { spy.mockRestore(); }
+        expect(await db.dbGet(`SELECT COUNT(*)::int AS n FROM source_terms_snapshots WHERE slug = 'npr'`)).toEqual({ n: 1 });
+        expect(await saveTermsSnapshots([row('changed terms')])).toEqual({ saved: 1, changed: ['npr'] });
+    });
+
     it('terms:snapshot parses --only / --json strictly (--json is never a slug)', () => {
         const { parseArgs } = require('../../scripts/terms-snapshot');
         expect(parseArgs(['--only', 'npr,bbc_news', '--json'])).toEqual({ slugs: ['npr', 'bbc_news'], json: true });
