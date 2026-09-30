@@ -73,12 +73,39 @@ it('an enqueue failure is a run error, releases its slot, and the sweep re-queue
 });
 
 describe('pool sizing (src/db/pool-size.js)', () => {
-    it('sizes the worker pool to its concurrency unless PG_POOL_MAX is set; flags a short explicit pool', () => {
+    const OPEN = { CORRELATION_DPIA_REF: 'DPIA-1', CORRELATION_ENABLED: 'true', CORRELATION_SALT: 'a3f09c1be4d27f6a8c5e0b9d1f2a7c3e' };
+
+    it('sizes the worker pool to its concurrency; correlate counts only while the DPIA gate is open', () => {
         const c = workerConcurrency({});
         expect(c).toEqual({ collect: 4, ingest: 8, embed: 4, correlate: 8 });
         expect(requiredWorkerPool(c)).toBe(2 * 4 + 2 + 24 + 4 + 8 + 1 + 2);
-        expect(workerPoolSize({})).toEqual({ size: 49, required: 49, explicit: false, short: false });
-        expect(workerPoolSize({ PG_POOL_MAX: '10' })).toEqual({ size: 10, required: 49, explicit: true, short: true });
+        expect(requiredWorkerPool(c, { correlation: false })).toBe(41);
+        expect(workerPoolSize({})).toMatchObject({ size: 41, required: 41, explicit: false, short: false, correlation: false });
+        expect(workerPoolSize(OPEN)).toMatchObject({ size: 49, required: 49, correlation: true });
         expect(workerPoolSize({ INGEST_CONCURRENCY: '40' }).size).toBe(60);   // capped
+    });
+
+    // PR #22 P1-21: a host PG_POOL_MAX never shrinks the worker pool.
+    it('ignores PG_POOL_MAX for the worker; WORKER_PG_POOL_MAX sizes it and a short one is flagged', () => {
+        expect(workerPoolSize({ PG_POOL_MAX: '10' })).toMatchObject({ size: 41, explicit: false, hostPoolMaxIgnored: 10 });
+        expect(workerPoolSize({ WORKER_PG_POOL_MAX: '10' })).toMatchObject({ size: 10, required: 41, explicit: true, short: true });
+    });
+
+    it('budgets every process against max_connections and refuses an over-budget deployment', async () => {
+        const { connectionBudget, checkPoolBudget } = require('../../src/db/pool-size');
+        expect(connectionBudget({}, 41)).toEqual({ replicas: 1, workerPool: 41, web: 10, oneShot: 10, total: 61 });
+        expect(connectionBudget({ WORKER_REPLICAS: '2', PG_POOL_MAX: '20' }, 41).total).toBe(2 * 41 + 20 + 10);
+        const pg = (max, reserved) => async sql => (/max_connections/.test(sql) ? { max_connections: String(max) } : { superuser_reserved_connections: String(reserved) });
+        expect(await checkPoolBudget({ env: {}, workerPool: 41, get: pg(100, 3) })).toMatchObject({ ok: true, total: 61, available: 97 });
+        const over = await checkPoolBudget({ env: { WORKER_REPLICAS: '2' }, workerPool: 41, get: pg(100, 3) });
+        expect(over).toMatchObject({ ok: false, total: 102, available: 97 });
+        expect(over.message).toMatch(/connection budget exceeded: 2 worker\(s\) × 41 \+ web 10 \+ one-shot reserve 10 = 102/);
+    });
+
+    it('reads the real server settings (test database)', async () => {
+        const { checkPoolBudget } = require('../../src/db/pool-size');
+        const r = await checkPoolBudget({ env: {}, workerPool: 1, get: sql => dbGet(sql) });
+        expect(r.available).toBeGreaterThan(0);
+        expect(r.ok).toBe(true);
     });
 });

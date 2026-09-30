@@ -269,10 +269,16 @@ services:
     # redis_data would crash-loop an upgraded stack. Nothing is lost by
     # starting empty: the queue data is transient — the worker re-registers
     # every collection and maintenance schedule when it starts, and the
-    # heartbeat and refresh debounce are short-lived keys. Only one-off jobs
-    # still waiting at the moment of the switch are dropped (the next
-    # collection run re-fetches their items), so stop the stack cleanly first
-    # (docker stop gives the worker 180 s to finish in-flight jobs). The old
+    # heartbeat and refresh debounce are short-lived keys. Jobs still waiting
+    # at the moment of the switch ARE dropped, and a later collection does not
+    # re-fetch their items (ingest dedupes stored posts): dropped scoring jobs
+    # are recovered by the unscored-post sweep only for posts collected in the
+    # last 24 h, their cycles close at the 15-minute hard cap, and dropped
+    # embed jobs are lost (nothing re-queues a missing embedding). So drain
+    # first (README, "Upgrading a stack that ran Redis 7"): stop the stack
+    # cleanly (docker stop gives the worker 180 s to finish in-flight jobs)
+    # only when /api/health shows the ingest and embed queues empty, and
+    # upgrade within 24 h of the last collection. The old
     # <project>_redis_data volume is left in place, unused; remove it by
     # hand once the stack is healthy (docker volume rm <project>_redis_data).
     image: valkey/valkey:8.1.10-alpine@sha256:081c2f5cb575efc901aa80ff9cdbd1ec6a301682fd35e1ebb4b0990a4a4a8507
@@ -378,9 +384,13 @@ services:
     # The only role with collector credentials (F9-2): the operator's env
     # file, whole (P10-18). `environment` below still wins for the container
     # settings (app-env fixes the database and Redis hosts to the network).
+    # PR #22 grumpy L12: required — a wrong PULSE_ENV_FILE or a missing .env
+    # stops `up` with "env file … not found" instead of booting a worker with
+    # every keyed source silently closed. The long env_file syntax needs
+    # Compose 2.24+; this file already requires 2.39 (build.provenance).
     env_file:
       - path: ${PULSE_ENV_FILE:-.env}
-        required: false
+        required: true
     environment:
       <<: [*app-env, *collector-settings]
       # PR #22 security L1: the per-deployment correlation salt goes to the

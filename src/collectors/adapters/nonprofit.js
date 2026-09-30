@@ -92,6 +92,14 @@ class WikipediaTalkCollector extends JsonApiCollector {
     }
 
     async fetchItems() {
+        // PR #22 security L7: comment ids embed the signer's name; they are
+        // stored ONLY as keyed fingerprints. Without a key the route makes no
+        // request at all and records a warning (fail closed).
+        if (!provenanceKey(this.env)) {
+            this.warn('not collected: talk-page comment ids embed usernames and need PROVENANCE_KEY or AUDIT_HASH_KEY '
+                + 'for a keyed fingerprint (none is set)');
+            return [];
+        }
         const set = await this.articleSet();
         const talk = new Set(set.map(t => `Talk:${t}`));
         // Recently edited talk pages (titles + timestamps only; no user field requested).
@@ -119,7 +127,7 @@ class WikipediaTalkCollector extends JsonApiCollector {
                     // The DiscussionTools id embeds the signer's name: only its
                     // KEYED fingerprint is used (an unkeyed hash of a name and
                     // a timestamp could be reversed by guessing — F10-14).
-                    id: key ? hmac(key, `${page}#${c.id}`) : crypto.createHash('sha256').update(`${page}#${c.id}`).digest('hex'),
+                    id: hmac(key, `${page}#${c.id}`),
                     title: `${page}${c.heading ? ` — ${c.heading}` : ''}`,
                     text: stripSignatures(c.html),
                     url: `https://en.wikipedia.org/wiki/${encodeURIComponent(page.replace(/ /g, '_'))}`,

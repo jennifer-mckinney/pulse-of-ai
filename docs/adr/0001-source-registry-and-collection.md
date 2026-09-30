@@ -164,7 +164,7 @@ Research: `docs/research/2026-09-29-reddit-access.md`. Recorded verbatim.
 
 ### Worker topology and pool sizing (P10-12)
 - The worker's collect jobs (and refresh jobs) STORE posts and enqueue one `ingest` job per new post (`scoreVia: 'queue'`), so scoring leaves the collect event loop. G10-2 holds: each queued post reserves a slot on its job (`inflight_runs`) before the enqueue, the ingest worker scores it under that job and releases the slot, and the cycle (or refresh job) closes and runs its bias checks only when every slot is released. G10-4 holds: an enqueue failure is a run error, its slot is released and the unscored-post sweep re-queues it. The CLI and the standup population still score inline.
-- `PG_POOL_MAX` is configurable (web default 10). The worker sizes its pool from its concurrency (`src/db/pool-size.js`: 2×COLLECT + 2 + 3×INGEST + EMBED + CORRELATE + 3, capped at 60) unless `PG_POOL_MAX` is set, and logs a short explicit pool; `INGEST_CONCURRENCY` defaults to 8 (each job can hold three connections). Tests: `tests/integration/collect.topology.test.js`, `tests/integration/api.refresh.test.js`.
+- `PG_POOL_MAX` is configurable (web and CLI, default 10); the worker never reads it, so a host value in `.env` cannot shrink the worker pool (PR #22 P1-21). The worker sizes its pool from its concurrency (`src/db/pool-size.js`: 2×COLLECT + 2 + 3×INGEST + EMBED + 3, plus CORRELATE only while the correlation DPIA gate is open, capped at 60) unless `WORKER_PG_POOL_MAX` is set, and logs a short explicit pool. At start it checks `WORKER_REPLICAS` × its pool + web + a one-shot reserve of 10 against `max_connections` − `superuser_reserved_connections` and refuses to start (exit 1) when that does not fit; `INGEST_CONCURRENCY` defaults to 8 (each job can hold three connections). Tests: `tests/integration/collect.topology.test.js`, `tests/integration/api.refresh.test.js`.
 
 ### The collector test slowdown (item 14)
 - Not reproduced: a full run on a throwaway stack took 180 s for 1,774 tests; the slowest collector files were `collect.secrets` and `reddit.retention` at 7.2 s each.
@@ -196,6 +196,25 @@ Research: `docs/research/2026-09-29-reddit-access.md`. Recorded verbatim.
 - **The mechanism is ruling 9's, generalised.** `raw_posts.content` is NOT NULL, so the old compaction's `SET content = NULL` could never succeed; removal now replaces the text with the source's notice and sets `text_removed_at` / `text_removed_reason` (migration 025's columns), drops the payload's url (Reddit keeps its slug-less permalink) and any legacy text/title copy, and keeps every score, audit row, the content hash and the provenance fingerprint. **For the Guardian (and YouTube and TikTok) this applies Jennifer's Reddit ruling "Blank text, keep audit rows" by analogy, for consistency; it is recorded in each log row (`applied_by_analogy`) and awaits her confirmation.**
 - **True logs.** Each batch writes one `data_retention_log` row listing exactly the post ids it changed (`blanked_platform_terms` or `text_removed_detail_window`); monthly compaction (`scripts/compact.js`, run by the same job) compacts only months that ended before the cutoff, writes one `compacted` row and a `compaction_log` row with the counts it actually changed. Demo posts keep their full purge (P9-3).
 - Tests: `tests/integration/text.retention.test.js`, `tests/integration/reddit.retention.test.js`, `tests/unit/pure/methodologyRegistry.test.js` (031).
+
+## Decisions of 2026-09-29 (PR #22 review)
+
+Jennifer McKinney's rulings on the PR #22 review (security, principal and grumpy reports). Her rule for the review: "all bugs found must be fixed. no exception."
+
+### G1 — superseded alerts have a named approver
+Alerts closed by migrations 028 and 032 because a later bias version would not raise them name Jennifer McKinney as the approver and have their own status, `superseded` (by a methodology change), separate from `resolved`. Recorded additively (`alert_resolution_approvals`, the `alert_status` view, migration 036); no released row is edited, and migration 032 no longer edits 028's rows. `/api/health` reports `alerts_closed: { resolved, superseded }`.
+
+### G4 — every processing_jobs row is kept
+All `processing_jobs` rows are kept permanently, failed ones included (spec §19 Tier 3). The job-deletion part of P10-9's retention was removed; the `source_runs` rollups stay.
+
+### G6 — the admission filter is versioned methodology
+The collection admission filter (`src/collectors/ai-filter.js`) decides what is stored, so it is a versioned methodology component: `admission_filter@1.0.0` (migration 042) registers exactly the code's patterns, search terms and scope rule, and `tests/unit/pure/admissionFilter.test.js` fails on any difference. Every collected post records the version it was admitted under (`raw_posts.admission_mv_id`, additive); the audit receipt shows it (`provenance.admission`). Posts stored earlier keep NULL ("not recorded"), never a guessed back-fill. Any change is a new version.
+
+### Upgrade runbook — take a pg_dump first
+The first maintenance run after an upgrade permanently removes text past each window and compacts old months. The README's upgrade section tells operators to take a `pg_dump` before the first worker start after upgrading (principal #22).
+
+### Merge order
+PR #22 merges first; the docs branch (`docs/diagrams-and-readme`) then reconciles its v1.2.0 spec against master.
 
 ## Consequences
 
