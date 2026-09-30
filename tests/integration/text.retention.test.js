@@ -190,12 +190,13 @@ describe('the repeatable maintenance job', () => {
 
     // PR #22 principal #7: retention every 5 minutes; compaction and the
     // run-table rollup once a day.
-    it('registers two BullMQ job schedulers: retention (5 min) and daily (24 h)', async () => {
+    it('registers three BullMQ job schedulers: retention (5 min), daily (24 h), terms (7 days)', async () => {
         const calls = [];
         await scheduleMaintenance({ upsertJobScheduler: async (...a) => calls.push(a) }, {});
         expect(calls).toEqual([
             ['retention', { every: 300000 }, { name: 'maintenance', data: { task: 'retention' } }],
             ['daily', { every: 86400000 }, { name: 'maintenance', data: { task: 'daily' } }],
+            ['terms', { every: 604800000 }, { name: 'maintenance', data: { task: 'terms' } }],
         ]);
         expect(maintenanceEveryMs({ MAINTENANCE_EVERY_MS: '60000' })).toBe(60000);
         expect(maintenanceEveryMs({ MAINTENANCE_EVERY_MS: '5' })).toBe(300000);
@@ -208,6 +209,7 @@ describe('the repeatable maintenance job', () => {
         const names = (task) => defaultSteps({ log: () => {}, task }).map(([n]) => n);
         expect(names('retention')).toEqual(['retention', 'stale_jobs']);
         expect(names('daily')).toEqual(['compaction', 'source_runs']);
+        expect(names('terms')).toEqual(['terms_snapshot']);
         expect(taskOf({ data: {} })).toBe('retention');           // a job from before the split
         expect(taskOf({ data: { task: 'daily' } })).toBe('daily');
     });

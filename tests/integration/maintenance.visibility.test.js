@@ -101,7 +101,7 @@ describe('retention_overdue', () => {
 describe('GET /api/health — maintenance block', () => {
     it('reports the last run per task (null before any run)', async () => {
         let res = await request(app).get('/api/health');
-        expect(res.body.maintenance.tasks).toEqual({ retention: null, daily: null });
+        expect(res.body.maintenance.tasks).toEqual({ retention: null, daily: null, terms: null });
         await processMaintenanceJob({ data: { task: 'daily' } }, { steps: [['compaction', async () => 0]] });
         res = await request(app).get('/api/health');
         expect(res.body.maintenance.tasks.daily).toMatchObject({ last_error: null });

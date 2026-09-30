@@ -5,13 +5,17 @@
 //                          last recorded one and append gate_opened /
 //                          gate_closed on a change (the worker's scheduler
 //                          calls it with the env it runs under)
-//   snapshotTerms          fetch and hash each source's terms page politely
+//   snapshotTerms          fetch each source's terms page politely; keep its
+//                          normalised text and hash (P1-13, migration 041)
+//   saveTermsSnapshots     store the rows; a changed text hash opens a
+//                          terms_changed alert for the source
 
 'use strict';
 
 const crypto = require('crypto');
-const { dbAll, dbRun } = require('../db/connection');
+const { dbAll, dbGet, dbRun } = require('../db/connection');
 const { SOURCES, getSource, sourceStatus } = require('../config/source-registry');
+const termsText = require('./terms-text');
 
 async function recordGateEvent({ sourceId, slug, event, gateStatus = null, actor, reason = null }) {
     await dbRun(
@@ -53,7 +57,8 @@ async function recordGateTransitions({ env = process.env, actor = 'worker schedu
 async function snapshotTerms({ http, slugs, log = () => {} }) {
     const out = [];
     for (const src of SOURCES.filter(s => !slugs || slugs.includes(s.slug))) {
-        const row = { slug: src.slug, terms_url: src.termsUrl, status: 'not_fetched', sha256: null, http_status: null, bytes: null, reason: null };
+        const row = { slug: src.slug, terms_url: src.termsUrl, status: 'not_fetched', sha256: null, http_status: null, bytes: null, reason: null,
+            terms_text: null, text_sha256: null, normaliser: null };
         if (src.auth.kind === 'blocked') {
             row.reason = 'blocked source (ADR 0001 ruling 5): its site is walled to automated clients; not fetched, never worked around';
             row.status = 'unreachable';
@@ -69,6 +74,12 @@ async function snapshotTerms({ http, slugs, log = () => {} }) {
                     row.status = 'fetched';
                     row.sha256 = crypto.createHash('sha256').update(body).digest('hex');
                     row.bytes = Buffer.byteLength(body);
+                    // P1-13: the normalised text is the evidence; its hash is
+                    // reproducible from the stored text.
+                    const ct = res.headers && (res.headers['content-type'] || res.headers['Content-Type']) || '';
+                    row.terms_text = termsText.normaliseTermsText(body, ct);
+                    row.text_sha256 = termsText.sha256(row.terms_text);
+                    row.normaliser = termsText.VERSION;
                 } else {
                     row.status = 'unreachable';
                     row.reason = `HTTP ${res.status}`;
@@ -78,21 +89,43 @@ async function snapshotTerms({ http, slugs, log = () => {} }) {
                 row.reason = String(err && err.message || err).slice(0, 300);
             }
         }
-        log(`[terms] ${src.slug}: ${row.status}${row.sha256 ? ` ${row.sha256.slice(0, 12)}…` : ''}${row.reason ? ` — ${row.reason}` : ''}`);
+        log(`[terms] ${src.slug}: ${row.status}${row.text_sha256 ? ` text ${row.text_sha256.slice(0, 12)}…` : ''}${row.reason ? ` — ${row.reason}` : ''}`);
         out.push(row);
     }
     return out;
 }
 
-/** Store snapshot rows. */
+/**
+ * Store snapshot rows. For a fetched page whose normalised-text hash differs
+ * from the source's previous fetched snapshot, open ONE terms_changed alert
+ * (warning) for the source — an operator reviews the new terms.
+ * @returns {Promise<{ saved: number, changed: string[] }>}
+ */
 async function saveTermsSnapshots(rows) {
+    const { openSourceAlert } = require('./source-alerts');
+    const changed = [];
     for (const r of rows) {
-        await dbRun(
-            `INSERT INTO source_terms_snapshots (source_id, slug, terms_url, status, sha256, http_status, bytes, reason)
-             VALUES ((SELECT id FROM data_sources WHERE name = $1), $1, $2, $3, $4, $5, $6, $7)`,
-            [r.slug, r.terms_url, r.status, r.sha256, r.http_status, r.bytes, r.reason],
+        const prev = r.text_sha256 ? await dbGet(
+            `SELECT text_sha256, captured_at FROM source_terms_snapshots
+             WHERE slug = $1 AND status = 'fetched' AND text_sha256 IS NOT NULL
+             ORDER BY captured_at DESC, id DESC LIMIT 1`, [r.slug]) : null;
+        const saved = await dbRun(
+            `INSERT INTO source_terms_snapshots (source_id, slug, terms_url, status, sha256, http_status, bytes, reason,
+                                                 terms_text, text_sha256, normaliser)
+             VALUES ((SELECT id FROM data_sources WHERE name = $1), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+             RETURNING id, source_id`,
+            [r.slug, r.terms_url, r.status, r.sha256, r.http_status, r.bytes, r.reason, r.terms_text || null,
+                r.text_sha256 || null, r.normaliser || null],
         );
+        if (prev && prev.text_sha256 !== r.text_sha256 && saved.source_id) {
+            await openSourceAlert('terms_changed', 'warning', saved.source_id, {
+                slug: r.slug, terms_url: r.terms_url, previous_text_sha256: prev.text_sha256,
+                previous_captured_at: prev.captured_at, text_sha256: r.text_sha256, snapshot_id: saved.id,
+            });
+            changed.push(r.slug);
+        }
     }
+    return { saved: rows.length, changed };
 }
 
 module.exports = { recordGateEvent, recordGateTransitions, snapshotTerms, saveTermsSnapshots };

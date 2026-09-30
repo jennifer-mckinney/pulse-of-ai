@@ -26,7 +26,7 @@
 //                  migration 036 alert_status view)
 //   maintenance    { tasks: { retention|daily: { last_run_at, last_ok_at,
 //                    last_failed_at, last_error } | null },
-//                    retention_overdue: { posts, sources: [{ slug, posts,
+//                    (and terms), retention_overdue: { posts, sources: [{ slug, posts,
 //                    oldest_collected_at }] } | { error } } — PR #22 P0-1:
 //                  the last successful maintenance run per task
 //                  (maintenance_state, migration 039) and text held past
@@ -116,7 +116,7 @@ function withTimeout(promise, ms) {
 async function maintenanceStatus() {
     const rows = await dbAll(
         `SELECT task, last_run_at, last_ok_at, last_failed_at, last_error FROM maintenance_state`);
-    const tasks = { retention: null, daily: null };
+    const tasks = { retention: null, daily: null, terms: null };
     for (const r of rows) tasks[r.task] = { last_run_at: r.last_run_at, last_ok_at: r.last_ok_at,
         last_failed_at: r.last_failed_at, last_error: r.last_error };
     let overdue;

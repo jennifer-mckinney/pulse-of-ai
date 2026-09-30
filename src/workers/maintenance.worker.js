@@ -17,6 +17,11 @@
 //        month, so a daily check is enough);
 //     2. source_runs: raw rows older than 30 days rolled up into
 //        source_run_daily and removed (src/collectors/run-retention.js).
+//   'terms'      every MAINTENANCE_TERMS_EVERY_MS (default 7 days; PR #22
+//                P1-13): a polite snapshot of every source's terms page with
+//                its normalised text (src/collectors/governance.js); a changed
+//                text opens a terms_changed alert. Skipped (recorded) while
+//                COLLECTOR_CONTACT_URL is unset — nothing collects then.
 //   processing_jobs are never removed (spec §19 Tier 3, decision G4).
 //
 // Each step is independent: a failing step is reported in the result and
@@ -41,6 +46,8 @@ const DEFAULT_MAINTENANCE_EVERY_MS = 5 * 60 * 1000;
 const DEFAULT_DAILY_EVERY_MS = 24 * 60 * 60 * 1000;
 const MAINTENANCE_SCHEDULER_ID = 'retention';
 const DAILY_SCHEDULER_ID = 'daily';
+const DEFAULT_TERMS_EVERY_MS = 7 * 24 * 60 * 60 * 1000;
+const TERMS_SCHEDULER_ID = 'terms';
 
 function maintenanceEveryMs(env = process.env) {
     const n = parseInt(env.MAINTENANCE_EVERY_MS || '', 10);
@@ -52,14 +59,33 @@ function dailyEveryMs(env = process.env) {
     return Number.isFinite(n) && n >= 60000 ? n : DEFAULT_DAILY_EVERY_MS;
 }
 
-/** The two tasks: scheduler id and cadence. */
+function termsEveryMs(env = process.env) {
+    const n = parseInt(env.MAINTENANCE_TERMS_EVERY_MS || '', 10);
+    return Number.isFinite(n) && n >= 3600000 ? n : DEFAULT_TERMS_EVERY_MS;
+}
+
+/** The tasks: scheduler id and cadence. */
 const TASKS = Object.freeze({
     retention: { schedulerId: MAINTENANCE_SCHEDULER_ID, every: maintenanceEveryMs },
     daily: { schedulerId: DAILY_SCHEDULER_ID, every: dailyEveryMs },
+    terms: { schedulerId: TERMS_SCHEDULER_ID, every: termsEveryMs },
 });
+
+/** P1-13: the weekly terms snapshot (governance.js), stored with change alerts. */
+async function termsSnapshotStep({ env = process.env, log = () => {} } = {}) {
+    if (!String(env.COLLECTOR_CONTACT_URL || '').trim()) {
+        return { skipped: 'COLLECTOR_CONTACT_URL is not set: no request may be made without a contact' };
+    }
+    const { HttpClient } = require('../collectors/http');
+    const { snapshotTerms, saveTermsSnapshots } = require('../collectors/governance');
+    const rows = await snapshotTerms({ http: new HttpClient({ env }), log });
+    const { changed } = await saveTermsSnapshots(rows);
+    return { fetched: rows.filter(r => r.status === 'fetched').length, total: rows.length, changed };
+}
 
 /** The steps of a task, in order: [name, run]. Exported so tests can inject and extend. */
 function defaultSteps({ log, task = 'retention' }) {
+    if (task === 'terms') return [['terms_snapshot', () => termsSnapshotStep({ log })]];
     if (task === 'daily') {
         return [
             ['compaction', () => require('../../scripts/compact').runCompaction({ log })],
@@ -132,7 +158,7 @@ async function processMaintenanceJob(job, { steps, log = () => {}, logError = lo
     return out;
 }
 
-/** Register (or update) both repeatable jobs. Idempotent across processes. */
+/** Register (or update) every repeatable job. Idempotent across processes. */
 async function scheduleMaintenance(queue, env = process.env) {
     const out = [];
     for (const [task, t] of Object.entries(TASKS)) {
@@ -143,6 +169,6 @@ async function scheduleMaintenance(queue, env = process.env) {
 
 module.exports = {
     processMaintenanceJob, scheduleMaintenance, maintenanceEveryMs, dailyEveryMs, defaultSteps, taskOf, TASKS,
-    recordMaintenanceRun, MaintenanceStepsFailed,
+    recordMaintenanceRun, MaintenanceStepsFailed, termsEveryMs, termsSnapshotStep, DEFAULT_TERMS_EVERY_MS, TERMS_SCHEDULER_ID,
     DEFAULT_MAINTENANCE_EVERY_MS, DEFAULT_DAILY_EVERY_MS, MAINTENANCE_SCHEDULER_ID, DAILY_SCHEDULER_ID,
 };
