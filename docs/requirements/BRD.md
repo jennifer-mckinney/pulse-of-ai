@@ -4,10 +4,12 @@
 |---|---|
 | **Document** | Business Requirements Document |
 | **Product** | The Pulse of AI — global real-time AI discourse dashboard |
-| **Version** | 1.0 |
-| **Date** | 2026-07-05 |
-| **Status** | Approved baseline, derived from Technical Specification v1.1.0 |
-| **Related documents** | `docs/TECHNICAL_SPEC.md` (v1.1.0), `docs/requirements/PRD.md`, `docs/plans/2026-07-05-globe-storytelling-design.md` |
+| **Version** | 1.1 |
+| **Date** | 2026-09-30 |
+| **Status** | Approved baseline, aligned with Technical Specification v1.2.0 |
+| **Related documents** | `docs/TECHNICAL_SPEC.md` (v1.2.0), `docs/requirements/PRD.md` (v1.1), `docs/adr/0001-source-registry-and-collection.md`; superseded: `docs/plans/2026-07-05-globe-storytelling-design.md` |
+
+**v1.1 changes (2026-09-30), aligned to code per independent audit, 2026-09-30:** §2 and §6.1 (52-source registry, 8 categories, the shipped Canvas-2D globe story); §3 (the bias checks that run today); §5 O7 and §7 (pseudonym format, correlation status, source economics); §10 (spec version). Business objectives are unchanged.
 
 This document describes the business context: why the product exists, who it serves, what business outcomes it must deliver, and the boundaries within which it must operate. The companion PRD (`docs/requirements/PRD.md`) translates these business requirements into product requirements. The Technical Specification describes how the system is built; this document intentionally does not.
 
@@ -26,7 +28,7 @@ The Pulse of AI addresses all four gaps with a single system: a global, near-rea
 
 ## 2. Product Vision
 
-A global, real-time AI discourse monitoring dashboard that aggregates AI-related content from the top 50 online sources across 7 categories, applies NLP analysis (sentiment, relevance, discourse quality), and presents findings through an interactive globe-driven narrative — with every inferred score traceable to the model, version, parameters, and plain-English justification that produced it (spec §1).
+A global, real-time AI discourse monitoring dashboard that aggregates AI-related content from the 52-source registry of record across 8 categories (ADR 0001), applies NLP analysis (sentiment, relevance, discourse quality), and presents findings through an interactive globe-driven narrative — with every inferred score traceable to the model, version, parameters, and plain-English justification that produced it (spec §1).
 
 The one-line positioning: **responsible AI monitoring, not just another dashboard.**
 
@@ -37,7 +39,7 @@ Most sentiment dashboards are black boxes. The Pulse of AI is architected so tha
 - **Every inferred decision** — sentiment score, relevance rating, topic classification, demographic inference, discourse quality score — is captured in an immutable audit log with full provenance: which model, which version, which parameters, what the input was, what the output was (spec §1, §10).
 - **Every algorithm version is documented before it runs**, with a plain-English justification field written to be defensible to regulators (spec §6, §10).
 - **Anyone asking "why does this say that?" gets a traceable answer** through a public audit endpoint, tailored to the asker: plain English for journalists, model/version/config for regulators, full reproducibility traces for researchers (spec §10).
-- **Bias is monitored automatically**, not on request: a three-layer bias detection stack (demographic parity, equalized odds, counterfactual fairness) runs against every processing job and raises alerts when evidence-based thresholds are exceeded (spec §9).
+- **Bias is monitored automatically**, not on request: aggregate fairness checks (location concentration, platform sentiment parity, negative dominance) run once per collection cycle or processing job and raise alerts when evidence-based thresholds are exceeded; equalized odds and counterfactual fairness complete the target three-layer stack and are planned (spec §9).
 
 This audit trail is the moat. Competing on data volume or visualization polish is a commodity race; competing on *defensibility of every number on screen* is not. It is also what makes the product credible to its most demanding audiences — regulators, researchers, and journalists whose reputations depend on the numbers they cite.
 
@@ -64,7 +66,7 @@ Objectives are taken directly from the specification's objectives table (spec §
 | O4 | Be explainable to any audience | Audit endpoint returns a human-readable decision trail for any post |
 | O5 | Be compliant by design | GDPR data minimization, AI Act documentation, layered retention built in |
 | O6 | Be testable and reproducible | 80%+ test coverage; 99% inference accuracy; all thresholds documented |
-| O7 | Surface cross-platform discourse patterns | Cross-platform user correlation with PII-obfuscated verb-noun pseudonymous IDs |
+| O7 | Surface cross-platform discourse patterns | Cross-platform user correlation with PII-obfuscated pseudonymous IDs (adjective-animal; correlation is built but not yet enabled, spec §20) |
 | O8 | Support user interaction and queries | Insights delivered via interactive frontend and on-demand query API |
 | O9 | Maintain research-grade historical access | Monthly compacted rollups preserve trends beyond the 3-month detail window |
 
@@ -74,13 +76,16 @@ Objectives are taken directly from the specification's objectives table (spec §
 
 **Phase 1 — Foundation (delivered):**
 - Ingestion, processing, and storage backbone: immutable raw post store, processing jobs, versioned methodology registry, immutable decision audit log (spec §6, §13 Phases A–C)
-- Sentiment v1 (lexicon-based, establishing the audit pattern), keyword relevance scoring, three-layer bias monitoring with alerting (spec §9)
+- Sentiment v1 (lexicon-based, establishing the audit pattern), keyword relevance scoring, aggregate bias monitoring with alerting (spec §9)
 - Public read API: health, aggregated posts by location, latest sentiment, audit trail, bias results, methodology, sources, on-demand refresh, structured query (spec §7)
 - Embedding pipeline and vector storage for semantic capabilities (spec §12, §13 Phase D)
 - Privacy-first collection: PII stripped at ingest, GDPR lifecycle logging (spec §8)
 
-**Phase E — Storytelling frontend (in flight):**
-- Globe-based scroll-driven narrative with dynamically derived insights, ending in free exploration with sentiment and source-category filters (spec §11; approved design of 2026-07-05)
+**Phase E — Storytelling frontend (delivered):**
+- The FuN.zip prototype frontend: a Canvas-2D globe with an 11-beat scroll-driven narrative of dynamically derived insights, ending in free exploration with sentiment and source-category filters; demo data always labelled (spec §11; PRD §4.3)
+
+**Source collection (delivered, ADR 0001):**
+- Real collection from the 52-source registry through each source's official route, with per-source gates, kill switches and the refused state; fresh clones collect nothing until the operator opts in (spec §17)
 
 **Phase 2 — Accuracy and depth (planned, spec §16):**
 - Transformer-based sentiment upgrade validated to the 99% accuracy target; demographic inference; topic clustering; similar-post retrieval; full discourse quality scoring; full cross-platform correlation; automated monthly compaction
@@ -102,10 +107,10 @@ Objectives are taken directly from the specification's objectives table (spec §
 |---|---|
 | **GDPR compliance posture** | Target posture (planned — verified as the retention and lifecycle-logging phases land): data minimization at ingest (no PII stored); every data action logged with legal basis; right-to-erasure supported through the retention log; DPIA required before shipping cross-platform correlation, which is high-risk processing under GDPR Article 35 (spec §8, §20) |
 | **EU AI Act readiness** | Documented, versioned methodology with plain-English justification for every automated inference; fairness thresholds sourced from academic literature and regulatory guidance (spec §3, §9, §10) |
-| **Privacy-first architecture** | Target posture (planned — verified when cross-platform correlation ships behind its DPIA gate): pseudonymization by design — correlation to use salted, non-reversible verb-noun IDs without storing the underlying identity (spec §20); location capped at city granularity (spec §17) |
+| **Privacy-first architecture** | Target posture (planned — verified when cross-platform correlation ships behind its DPIA gate): pseudonymization by design — correlation to use salted, non-reversible pseudonymous IDs without storing the underlying identity (spec §20); location capped at city granularity (spec §17) |
 | **Open-source, self-hosted ethos** | No data leaves the operator's infrastructure for inference or embedding; managed AI APIs were explicitly rejected on GDPR and lock-in grounds; the stack is composed of mature open-source components and can run on a single host (spec §5, §15) |
 | **Layered retention** | Post-level detail retained 3 months, then compacted into permanent monthly rollups with content nulled and embeddings deleted — bounding both privacy exposure and storage cost while preserving research-grade trends (spec §19) |
-| **Source economics** | Almost all 50 sources use free APIs or RSS; the only recurring data cost under decision is one commercial platform API (~$100/month), with free substitutes identified (spec §16, §17) |
+| **Source economics** | Of the 52 registry sources, 31 collect without keys once the operator opts in; the rest wait for a free key, an approval or a paid licence and stay closed until it is configured, so no recurring data cost is incurred by default (spec §17; ADR 0001, Consequences) |
 | **Quality bar** | Nothing ships without passing tests, 98% coverage, and the ethical quality gates (all thresholds documented, all decisions auditable, no PII in the database, bias assessment on every job) (spec §14) |
 
 ## 8. Risks
@@ -113,7 +118,7 @@ Objectives are taken directly from the specification's objectives table (spec §
 | # | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|---|
 | R1 | Phase 1 lexicon sentiment falls short of the 99% accuracy target and is quoted as authoritative | High (by design — v1 is the audit-pattern foundation, spec §14) | Reputational | Methodology endpoint discloses model and accuracy status; Phase 2 transformer upgrade is the accuracy vehicle; accuracy validated monthly on a labeled benchmark |
-| R2 | Source APIs change terms, pricing, or rate limits (notably the commercial social platform tier) | Medium | Coverage gaps | 50-source diversification across 7 categories; free substitutes identified; source concentration is itself a monitored bias metric (spec §9, §17) |
+| R2 | Source APIs change terms, pricing, or rate limits (notably the commercial social platform tier) | Medium | Coverage gaps | 52-source diversification across 8 categories; per-source kill switches and a refused state that stops requests to a source that refuses access; source concentration as a monitored bias metric is planned (spec §9, §17) |
 | R3 | Cross-platform correlation is perceived as surveillance despite pseudonymization | Medium | Regulatory / reputational | Hard privacy rules (spec §20): no identity stored, salted non-reversible IDs, DPIA before launch, documented legitimate-interest basis |
 | R4 | Location inference for platforms without location metadata is weak, skewing the geographic story | Medium | Data quality | GDPR-safe inference approaches selected (community geography mapping plus content NLP); location concentration alerts flag skew automatically (spec §9, §16) |
 | R5 | Bias monitoring thresholds generate alert fatigue or, conversely, miss real violations | Medium | Trust | All thresholds are evidence-based with academic citations, stored as versioned configuration, and adjustable without code changes (spec §3, §9) |
@@ -131,4 +136,4 @@ Beyond the objective criteria in Section 5, the programme is judged on:
 
 ## 10. Approval and Change Control
 
-The Technical Specification v1.1.0 is the source of truth for requirements; this BRD summarizes its business content and must be revised when the specification's objectives (§2), scope resolutions (§16), or compliance posture (§8, §19, §20) change. Methodology and threshold changes do not require BRD revision — they are governed by the versioned methodology registry by design.
+The Technical Specification (v1.2.0) is the source of truth for requirements; this BRD summarizes its business content and must be revised when the specification's objectives (§2), scope resolutions (§16), or compliance posture (§8, §19, §20) change. Methodology and threshold changes do not require BRD revision — they are governed by the versioned methodology registry by design.

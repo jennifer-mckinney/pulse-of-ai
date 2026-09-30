@@ -64,4 +64,4 @@ npm run teardown       # stop it (keeps volumes); `-- --purge` deletes volumes a
 ## Status
 Phase B (pipeline TDD) is implemented — `tests/unit/` covers sentiment, relevance, discourse, ingest, bias, correlation, embeddings, and the ingest/embed/correlate workers; `tests/integration/` covers all API routes. The plan file previously referenced here (`~/.claude/plans/composed-coalescing-duckling.md`) no longer exists.
 
-The storytelling frontend follows the FuN.zip design-handoff prototype (11 beats, Canvas-2D globe); PRD §4.3 is the requirement of record and `docs/plans/2026-07-05-globe-storytelling-design.md` (globe.gl / Mapbox era) is superseded.
+The storytelling frontend follows the FuN.zip design-handoff prototype (11 beats, Canvas-2D globe), the master contract by Jennifer's ruling of 2026-09-28. PRD §4.3 (FR-17 to FR-25, rewritten to that design in PRD v1.1 on 2026-09-30) is the requirement of record, and `docs/TECHNICAL_SPEC.md` v1.2.0 §11 describes the shipped frontend; `docs/plans/2026-07-05-globe-storytelling-design.md` (globe.gl / Mapbox era) is superseded.
