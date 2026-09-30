@@ -127,6 +127,22 @@ describe('text retention: every window, one job, true logs', () => {
     });
 });
 
+describe('P1-8: blanking strips every payload text key ingest declares', () => {
+    it('a legacy payload with body / content / selftext keeps no text after removal', async () => {
+        const { PAYLOAD_TEXT_KEYS } = require('../../src/pipeline/ingest');
+        const id = await post('hacker_news', 91 * 24, 'hn-legacy');
+        await db.dbRun('UPDATE raw_posts SET raw_payload = $2::jsonb WHERE id = $1', [id, JSON.stringify({
+            text: 'Secret a', title: 'Secret b', body: 'Secret c', content: 'Secret d', selftext: 'Secret e',
+            url: 'https://example.org/x', published_at: '2026-09-01T00:00:00Z', route: 'r',
+        })]);
+        await retention.blankExpired();
+        const row = await db.dbGet('SELECT raw_payload FROM raw_posts WHERE id = $1', [id]);
+        expect(JSON.stringify(row.raw_payload)).not.toMatch(/Secret/);
+        for (const k of PAYLOAD_TEXT_KEYS) expect(row.raw_payload[k]).toBe(retention.DETAIL_NOTICE);
+        expect(row.raw_payload).toMatchObject({ url: null, published_at: '2026-09-01T00:00:00Z', route: 'r' });
+    });
+});
+
 describe('monthly compaction (spec §19) with the NOT NULL content column', () => {
     it('compacts only months that ended before the cutoff; removes remaining text; logs true counts', async () => {
         const monthStart = new Date(Date.UTC(new Date().getUTCFullYear() - 1, 0, 1));   // January last year

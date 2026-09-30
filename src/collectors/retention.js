@@ -14,9 +14,10 @@
 // deleted upstream (src/collectors/reddit/recheck.js → blankPosts).
 //
 //   WHAT  raw_posts.content (NOT NULL) becomes the source's removal notice;
-//         raw_payload loses its text: the text and title keys (present on
-//         rows stored before ingest@1.6.0, which stopped duplicating them)
-//         become the notice, and the url is removed — except Reddit's, which
+//         raw_payload loses its text: every key ingest declares as text
+//         (PAYLOAD_TEXT_KEYS: text, title, body, content, selftext — present
+//         on rows stored before ingest@1.6.0, which stopped duplicating
+//         them) becomes the notice, and the url is removed — except Reddit's, which
 //         is cut to the slug-less permalink (the slug is made from the
 //         title). text_removed_at / text_removed_reason record when and why
 //         (migration 025).
@@ -41,6 +42,10 @@
 const { dbAll, dbGet, dbTransaction } = require('../db/connection');
 const { getSource, retentionHours } = require('../config/source-registry');
 const { DEMO_SOURCE_TYPE } = require('../config/data-mode');
+// P1-8: every payload key ingest declares as text (ingest@1.6.0
+// payload_text_keys_not_stored), so a legacy row's body / content /
+// selftext copy is removed too, not only text and title.
+const { PAYLOAD_TEXT_KEYS } = require('../pipeline/ingest');
 
 const BLANK_ACTION = 'blanked_platform_terms';
 const DETAIL_ACTION = 'text_removed_detail_window';
@@ -90,9 +95,9 @@ async function removeTextBatch(client, slug, postIds, { reason, rule, performedB
     const res = await client.query(
         `UPDATE raw_posts rp
          SET content = $4,
-             raw_payload = (COALESCE(rp.raw_payload, '{}'::jsonb) - 'text' - 'title' - 'url')
-                 || CASE WHEN rp.raw_payload ? 'text' THEN jsonb_build_object('text', $4::text) ELSE '{}'::jsonb END
-                 || CASE WHEN rp.raw_payload ? 'title' THEN jsonb_build_object('title', $4::text) ELSE '{}'::jsonb END
+             raw_payload = (COALESCE(rp.raw_payload, '{}'::jsonb) - $7::text[] - 'url')
+                 || COALESCE((SELECT jsonb_object_agg(k, to_jsonb($4::text))
+                              FROM unnest($7::text[]) AS k WHERE rp.raw_payload ? k), '{}'::jsonb)
                  || CASE WHEN $6::text IS NOT NULL AND rp.raw_payload->>'url' ~ $6::text
                          THEN jsonb_build_object('url', substring(rp.raw_payload->>'url' FROM $6::text))
                          WHEN rp.raw_payload ? 'url' THEN jsonb_build_object('url', NULL)
@@ -106,7 +111,7 @@ async function removeTextBatch(client, slug, postIds, { reason, rule, performedB
            AND rp.id = ANY($3::uuid[])
            AND rp.text_removed_at IS NULL
          RETURNING rp.id`,
-        [slug, DEMO_SOURCE_TYPE, postIds, notice, reason, keepUrl],
+        [slug, DEMO_SOURCE_TYPE, postIds, notice, reason, keepUrl, [...PAYLOAD_TEXT_KEYS]],
     );
     const ids = res.rows.map(r => r.id);
     if (ids.length) {
