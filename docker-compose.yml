@@ -30,6 +30,9 @@ x-app-env: &app-env
   REDIS_HOST: redis
   REDIS_PORT: "6379"
   REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required (npm run standup generates it)}
+  # Pinned here for EVERY role (P10-18): the worker also loads the env file,
+  # and web and worker must agree on the logical database the queues use.
+  REDIS_DB: ${REDIS_DB:-}
   EMBEDDINGS_SERVICE_URL: http://embeddings:8000
   EMBED_MODEL: ${EMBED_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
   # Pinned model commit (P9-5); the worker records embedding@<ver> only when
@@ -136,50 +139,14 @@ x-collector-settings: &collector-settings
   SOURCE_ONE_USEFUL_THING_ENABLED: ${SOURCE_ONE_USEFUL_THING_ENABLED:-}
   SOURCE_PLATFORMER_ENABLED: ${SOURCE_PLATFORMER_ENABLED:-}
 
-# Collector CREDENTIALS — merged into `worker` ONLY (F9-2). web is the
-# internet-facing process: an RCE or debug leak there must not expose paid
-# API keys via /proc/self/environ, and migrate / populate never need them.
-# Collection with credentials runs in the worker; scripts/test/check-compose.sh
-# fails if a credential value reaches another role.
-x-collector-env: &collector-env
-  META_CONTENT_LIBRARY_EXPORT_DIR: ${META_CONTENT_LIBRARY_EXPORT_DIR:-}
-  YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
-  TIKTOK_RESEARCH_CLIENT_KEY: ${TIKTOK_RESEARCH_CLIENT_KEY:-}
-  TIKTOK_RESEARCH_CLIENT_SECRET: ${TIKTOK_RESEARCH_CLIENT_SECRET:-}
-  REDDIT_CLIENT_ID: ${REDDIT_CLIENT_ID:-}
-  REDDIT_CLIENT_SECRET: ${REDDIT_CLIENT_SECRET:-}
-  REDDIT_USER_AGENT: ${REDDIT_USER_AGENT:-}
-  WECHAT_AUTHORIZED_FEED_URL: ${WECHAT_AUTHORIZED_FEED_URL:-}
-  WECHAT_AUTHORIZED_FEED_HOST: ${WECHAT_AUTHORIZED_FEED_HOST:-}
-  TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-  X_BEARER_TOKEN: ${X_BEARER_TOKEN:-}
-  NYT_API_KEY: ${NYT_API_KEY:-}
-  CNN_FEED_URL: ${CNN_FEED_URL:-}
-  CNN_API_KEY: ${CNN_API_KEY:-}
-  GUARDIAN_API_KEY: ${GUARDIAN_API_KEY:-}
-  DOWJONES_API_KEY: ${DOWJONES_API_KEY:-}
-  DOWJONES_FEED_URL: ${DOWJONES_FEED_URL:-}
-  AP_API_KEY: ${AP_API_KEY:-}
-  REUTERS_CONNECT_CLIENT_ID: ${REUTERS_CONNECT_CLIENT_ID:-}
-  REUTERS_CONNECT_CLIENT_SECRET: ${REUTERS_CONNECT_CLIENT_SECRET:-}
-  SPRINGER_API_KEY: ${SPRINGER_API_KEY:-}
-  NCBI_API_KEY: ${NCBI_API_KEY:-}
-  NCBI_EMAIL: ${NCBI_EMAIL:-}
-  ELSEVIER_API_KEY: ${ELSEVIER_API_KEY:-}
-  SCHOLAR_ALERTS_IMAP_HOST: ${SCHOLAR_ALERTS_IMAP_HOST:-}
-  SCHOLAR_ALERTS_IMAP_USER: ${SCHOLAR_ALERTS_IMAP_USER:-}
-  SCHOLAR_ALERTS_IMAP_PASSWORD: ${SCHOLAR_ALERTS_IMAP_PASSWORD:-}
-  RESEARCHGATE_DATASET_PATH: ${RESEARCHGATE_DATASET_PATH:-}
-  IEEE_API_KEY: ${IEEE_API_KEY:-}
-  JSTOR_DATASET_PATH: ${JSTOR_DATASET_PATH:-}
-  GOVINFO_API_KEY: ${GOVINFO_API_KEY:-}
-  CONGRESS_API_KEY: ${CONGRESS_API_KEY:-}
-  GITHUB_TOKEN: ${GITHUB_TOKEN:-}
-  GITLAB_TOKEN: ${GITLAB_TOKEN:-}
-  HF_TOKEN: ${HF_TOKEN:-}
-  STACKEXCHANGE_KEY: ${STACKEXCHANGE_KEY:-}
-  REUTERS_CONNECT_TOKEN_URL: ${REUTERS_CONNECT_TOKEN_URL:-}
-  REUTERS_CONNECT_API_URL: ${REUTERS_CONNECT_API_URL:-}
+# Collector CREDENTIALS reach `worker` ONLY (F9-2), through env_file (P10-18):
+# the worker loads the operator's env file (PULSE_ENV_FILE, default .env)
+# whole, so no credential is hand-listed here. web is the internet-facing
+# process: an RCE or debug leak there must not expose paid API keys via
+# /proc/self/environ, so web never loads the env file — it gets the settings
+# and a presence marker per credential (below); migrate / populate get
+# neither. scripts/test/check-compose.sh fails if a credential value reaches
+# another role, and tests/unit/pure/sourceEnv.test.js holds the lists.
 
 # Presence markers for web (F9-2): the literal "set" when the credential is
 # set in the env file, empty otherwise — web reports each source's gate
@@ -381,9 +348,14 @@ services:
   worker:
     <<: *app
     command: ["node", "src/workers/start.js"]
-    # The only role with collector credentials (F9-2).
+    # The only role with collector credentials (F9-2): the operator's env
+    # file, whole (P10-18). `environment` below still wins for the container
+    # settings (app-env fixes the database and Redis hosts to the network).
+    env_file:
+      - path: ${PULSE_ENV_FILE:-.env}
+        required: false
     environment:
-      <<: [*app-env, *collector-settings, *collector-env]
+      <<: [*app-env, *collector-settings]
     # Healthy = the worker's heartbeat file is fresh (P9-7). It is written
     # every 15 s only after the heartbeat reached Redis, so a stuck worker or
     # one that lost Redis turns unhealthy (src/workers/heartbeat.js).

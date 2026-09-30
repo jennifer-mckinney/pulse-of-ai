@@ -86,9 +86,15 @@ CRED_PROBE=(YOUTUBE_API_KEY GITHUB_TOKEN TIKTOK_RESEARCH_CLIENT_SECRET SCHOLAR_A
     NCBI_EMAIL CNN_FEED_URL JSTOR_DATASET_PATH REUTERS_CONNECT_CLIENT_ID)
 probe_env=()
 for k in "${CRED_PROBE[@]}"; do probe_env+=("$k=probe-secret-$k"); done
+# P10-18: the worker gets credentials from its env_file (PULSE_ENV_FILE), so
+# the probes are written to a throwaway env file as well as the process env
+# (the latter drives web's ${NAME:+set} presence markers).
+probe_file=$(mktemp "${TMPDIR:-/tmp}/compose-check-env.XXXXXX")
+trap 'rm -f "$probe_file"' EXIT
+printf '%s\n' "${probe_env[@]}" > "$probe_file"
 cfg_probe=$(env -i PATH="$PATH" HOME="$HOME" ${DOCKER_HOST:+DOCKER_HOST="$DOCKER_HOST"} \
     ${DOCKER_CONTEXT:+DOCKER_CONTEXT="$DOCKER_CONTEXT"} \
-    POSTGRES_PASSWORD=compose-check REDIS_PASSWORD=compose-check "${probe_env[@]}" \
+    POSTGRES_PASSWORD=compose-check REDIS_PASSWORD=compose-check PULSE_ENV_FILE="$probe_file" "${probe_env[@]}" \
     docker compose --project-directory "$ROOT" -f "$ROOT/docker-compose.yml" \
         --env-file /dev/null -p compose-check --profile full --profile demo \
         config --format json)
@@ -102,8 +108,8 @@ check "collector credential values are passed to worker only" "$leaks"
 probe_json=$(printf '%s\n' "${CRED_PROBE[@]}" | jq -R . | jq -s .)
 missing_values=$(jq -r --argjson probe "$probe_json" '(.services.worker.environment // {}) as $w
     | $probe[] | select(. as $k | ($w[$k] // "") != "probe-secret-\($k)")
-    | "worker lacks the value of \(.) (x-collector-env)"' <<< "$cfg_probe")
-check "worker receives the collector credentials (x-collector-env)" "$missing_values"
+    | "worker lacks the value of \(.) (its env_file)"' <<< "$cfg_probe")
+check "worker receives the collector credentials (env_file, P10-18)" "$missing_values"
 nomark=$(jq -r --argjson probe "$probe_json" '(.services.web.environment // {}) as $w
     | $probe[] | select(. as $k | ($w[$k] // "") != "set")
     | "web lacks the presence marker for \(.) (x-collector-presence)"' <<< "$cfg_probe")

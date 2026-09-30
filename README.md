@@ -154,7 +154,7 @@ Re-running is safe. The images come from the build cache, running containers are
 | Service | Host port (override) | Role |
 |---|---|---|
 | `web` | `3000` (`WEB_PORT`) | Express API and the static frontend (`public/`) |
-| `worker` | none | Collection scheduler + `collect.{rss,api,bulk}` consumers (live data from the 52-source registry), ingest retries, embed, correlate (`src/workers/start.js`). The only role holding collector credentials. Healthy while its Redis heartbeat is fresh; `docker stop` gives it 180 s to finish in-flight jobs |
+| `worker` | none | Collection scheduler + `collect.{rss,api,bulk}` consumers (live data from the 52-source registry), ingest retries, embed, correlate (`src/workers/start.js`). The only role holding collector credentials: it loads the env file (`PULSE_ENV_FILE`, default `.env`) whole through Compose `env_file`, while web gets only a "set" marker per credential. Healthy while its Redis heartbeat is fresh; `docker stop` gives it 180 s to finish in-flight jobs |
 | `embeddings` | none (compose network only: `embeddings:8000`) | `/embeddings` and `/health`, unauthenticated, so never published; standup checks it with `compose exec`. The model downloads once into the `hf_cache` volume |
 | `populate` | none | Demo fallback. Adds fictional posts every 150 s only while the trailing hour has no live posts (profile `demo`) |
 | `migrate` | none | One-shot job: migrations and seed |

@@ -24,6 +24,7 @@ function anchorBlock(name) {
     return m ? m[1] : '';
 }
 const settingsBlock = anchorBlock('collector-settings');
+// P10-18: credentials are no longer hand-listed — the worker loads the env file.
 const credentialBlock = anchorBlock('collector-env');
 const presenceBlock = anchorBlock('collector-presence');
 const passes = (block, k) => new RegExp(`^\\s+${k}: \\$\\{${k}:-[^}]*\\}$`, 'm').test(block);
@@ -35,8 +36,10 @@ test.each(registryEnvVars())('%s is in .env.example and docker-compose.yml under
         expect(passes(settingsBlock, k)).toBe(true);
         expect(credentialBlock).not.toMatch(new RegExp(`^\\s+${k}:`, 'm'));
     } else {
-        // Credentials: the value to the worker only; web gets a presence marker.
-        expect(passes(credentialBlock, k)).toBe(true);
+        // Credentials: the value to the worker only (its env_file); web gets a
+        // presence marker, never the value.
+        expect(credentialBlock).toBe('');
+        expect(compose).not.toMatch(new RegExp(`^\\s+${k}: \\$\\{${k}:-`, 'm'));
         expect(presenceBlock).toContain(`  ${k}: \${${k}:+set}`);
         expect(settingsBlock).not.toMatch(new RegExp(`^\\s+${k}:`, 'm'));
     }
@@ -46,10 +49,14 @@ test.each(registryEnvVars())('%s is in .env.example and docker-compose.yml under
 test('the anchors are merged into the right roles only (F9-2)', () => {
     const env = (svc) => (compose.match(new RegExp(`^  ${svc}:\\n(?:(?!^  [a-z_]+:\\n)[\\s\\S])*?^    environment:\\n      <<: \\[([^\\]]*)\\]`, 'm')) || [])[1];
     expect(env('web')).toBe('*app-env, *collector-settings, *collector-presence');
-    expect(env('worker')).toBe('*app-env, *collector-settings, *collector-env');
+    expect(env('worker')).toBe('*app-env, *collector-settings');
     expect(env('populate')).toBe('*app-env, *collector-settings');
-    // *collector-env is referenced exactly once (the worker).
-    expect(compose.match(/\*collector-env\b/g)).toHaveLength(1);
+    // P10-18: the worker — and ONLY the worker — loads the env file.
+    expect(compose.match(/env_file:/g)).toHaveLength(1);
+    const worker = compose.slice(compose.indexOf('\n  worker:\n'), compose.indexOf('\n  embeddings:'));
+    expect(worker).toMatch(/env_file:\n\s+- path: \$\{PULSE_ENV_FILE:-\.env\}\n\s+required: false/);
+    // web and the env-file-fed worker must use the same Redis logical db.
+    expect(compose).toMatch(/^  REDIS_DB: \$\{REDIS_DB:-\}$/m);
 });
 
 test('credentials, keys and permission references ship EMPTY', () => {

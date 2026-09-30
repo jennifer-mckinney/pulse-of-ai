@@ -407,7 +407,9 @@ project_from_foreign_shell() {
 compose_full() {
     local env_args=()
     [[ -f "$STACK_ENV_FILE" ]] && env_args=(--env-file "$STACK_ENV_FILE")
-    docker compose --project-directory "$STACK_ROOT" -f "$STACK_COMPOSE_FILE" \
+    # PULSE_ENV_FILE is passed explicitly: the worker's env_file (P10-18)
+    # must be the SAME file that --env-file interpolates, never a default.
+    PULSE_ENV_FILE="$STACK_ENV_FILE" docker compose --project-directory "$STACK_ROOT" -f "$STACK_COMPOSE_FILE" \
         ${env_args[@]+"${env_args[@]}"} -p "$STACK_PROJECT" --profile full "$@"
 }
 
@@ -416,7 +418,9 @@ compose_full() {
 compose_all() {
     local env_args=()
     [[ -f "$STACK_ENV_FILE" ]] && env_args=(--env-file "$STACK_ENV_FILE")
-    docker compose --project-directory "$STACK_ROOT" -f "$STACK_COMPOSE_FILE" \
+    # PULSE_ENV_FILE is passed explicitly: the worker's env_file (P10-18)
+    # must be the SAME file that --env-file interpolates, never a default.
+    PULSE_ENV_FILE="$STACK_ENV_FILE" docker compose --project-directory "$STACK_ROOT" -f "$STACK_COMPOSE_FILE" \
         ${env_args[@]+"${env_args[@]}"} -p "$STACK_PROJECT" --profile full --profile demo "$@"
 }
 
