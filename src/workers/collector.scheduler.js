@@ -16,6 +16,8 @@
 
 'use strict';
 
+const { recordGateTransitions } = require('../collectors/governance');
+
 const { dbAll } = require('../db/connection');
 const { COLLECT_QUEUES } = require('../queues/index');
 const {
@@ -77,6 +79,12 @@ async function scheduleAllSources({ env = process.env, log = () => {} } = {}) {
         );
     }
     log(`[scheduler] ${schedulable.length} collecting sources scheduled across ${Math.round(windowMs / 1000)}s`);
+    // P10-14: record every gate opening / closing seen under this env.
+    try {
+        for (const e of await recordGateTransitions({ env })) log(`[scheduler] ${e.slug}: ${e.event} (${e.gate_status})`);
+    } catch (err) {
+        log(`[scheduler] gate events not recorded: ${err.message}`);
+    }
     return schedulable.length;
 }
 

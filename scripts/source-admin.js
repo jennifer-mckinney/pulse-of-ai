@@ -63,11 +63,15 @@ async function main(argv, io = {}) {
     try {
         const row = await db.dbGet('SELECT id FROM data_sources WHERE name = $1', [parsed.slug]);
         if (!row) { err(`source '${parsed.slug}' has no data_sources row — run npm run seed`); return 2; }
+        const recordGateEvent = io.recordGateEvent || require('../src/collectors/governance').recordGateEvent;
         if (parsed.command === 'disable') {
             await state.setDbKillSwitch(row.id, true, { reason: parsed.reason, by: who });
+            // P10-14: every enable / disable is recorded with who and when.
+            await recordGateEvent({ sourceId: row.id, slug: parsed.slug, event: 'disabled', actor: who, reason: parsed.reason });
             out(`${parsed.slug}: disabled (database kill switch) — applies before its next run in every process`);
         } else if (parsed.command === 'enable') {
             await state.setDbKillSwitch(row.id, false);
+            await recordGateEvent({ sourceId: row.id, slug: parsed.slug, event: 'enabled', actor: who, reason: parsed.note || 'database kill switch cleared' });
             out(`${parsed.slug}: database kill switch cleared (env kill switches still apply)`);
         } else if (parsed.command === 'reset') {
             await state.clearRefusal(row.id, `manual reset by ${who}${parsed.note ? `: ${parsed.note}` : ''}`);

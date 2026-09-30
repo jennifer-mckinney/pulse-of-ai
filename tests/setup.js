@@ -27,6 +27,8 @@ const TABLES = [
     'alert_resolutions',
     'alert_events',
     'bias_assessments',
+    'source_gate_events',
+    'source_terms_snapshots',
     'source_run_daily',
     'source_runs',
     'source_collection_state',

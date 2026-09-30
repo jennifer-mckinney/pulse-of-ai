@@ -21,7 +21,7 @@
 'use strict';
 
 require('dotenv').config();
-const { dbRun, closePool } = require('../src/db/connection');
+const { dbRun, dbGet, closePool } = require('../src/db/connection');
 const { SOURCES } = require('../src/config/source-registry');
 const { METHODOLOGY_VERSIONS, METHODOLOGY_ERRATA } = require('../src/config/methodology-registry');
 
@@ -43,10 +43,15 @@ function sourceConfig(s) {
     };
 }
 
-async function seedSources() {
+async function seedSources({ actor = `scripts/seed.js (${process.env.USER || 'operator'})` } = {}) {
+    const { recordGateEvent } = require('../src/collectors/governance');
     let n = 0;
     for (const s of SOURCES) {
-        await dbRun(
+        // P10-14: seed never activates a row silently — a new row, or a
+        // retired / inactive one it switches back on, gets a
+        // source_gate_events 'seeded_active' row (who and when).
+        const prior = await dbGet('SELECT active FROM data_sources WHERE name = $1', [s.slug]);
+        const row = await dbRun(
             `INSERT INTO data_sources (name, display_name, source_type, category, config, active)
              VALUES ($1, $2, $3, $4, $5::jsonb, TRUE)
              ON CONFLICT (name) DO UPDATE
@@ -56,9 +61,17 @@ async function seedSources() {
                     config       = EXCLUDED.config,
                     active       = TRUE,
                     retired_at   = NULL,
-                    retired_note = NULL`,
+                    retired_note = NULL
+             RETURNING id`,
             [s.slug, s.name, s.sourceType, s.category, JSON.stringify(sourceConfig(s))],
         );
+        if (!prior || prior.active !== true) {
+            const id = row && row.id ? row.id : (await dbGet('SELECT id FROM data_sources WHERE name = $1', [s.slug])).id;
+            await recordGateEvent({
+                sourceId: id, slug: s.slug, event: 'seeded_active', actor,
+                reason: prior ? 'registry row re-activated by seed (was inactive or retired)' : 'registry row created by seed',
+            });
+        }
         n++;
     }
     return n;

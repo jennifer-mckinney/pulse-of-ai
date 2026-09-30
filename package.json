@@ -31,7 +31,8 @@
     "test:e2e": "playwright test",
     "verify": "bash scripts/test/run-all.sh",
     "collect:smoke": "node scripts/collect-smoke.js",
-    "collect": "node scripts/collect.js"
+    "collect": "node scripts/collect.js",
+    "terms:snapshot": "node scripts/terms-snapshot.js"
   },
   "keywords": [
     "ai",
