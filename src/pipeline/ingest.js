@@ -34,6 +34,7 @@ const { saveRelevance  } = require('./relevance');
 const { saveDQI        } = require('./discourse');
 const { findCity       } = require('../../public/js/config/cities.config.js');
 const { getSource, retentionHours } = require('../config/source-registry');
+const { DEMO_SOURCE_TYPE } = require('../config/data-mode');
 
 // ─── PII fields stripped from raw_payload before storage ─────────────────────
 // Registered as ingest@1.1.0 pii_fields_removed (methodology-registry.js).
@@ -42,6 +43,10 @@ const { getSource, retentionHours } = require('../config/source-registry');
 const PAYLOAD_TEXT_KEYS = Object.freeze(['text', 'title', 'body', 'content', 'selftext']);
 // Spec §8: every collected post gets a 'collected' data_retention_log row.
 const COLLECTED_LEGAL_BASIS = 'GDPR Article 6(1)(f) - Legitimate Interest';
+// PR #22 grumpy NIT 19: demo posts are fictional and purged whole, never
+// blanked; their retention row says so instead of a legal basis and window.
+const DEMO_LEGAL_BASIS = 'Not applicable: fictional demo content, no personal data';
+const DEMO_RETENTION_BASIS = 'demo: fictional content, deleted whole after the detail window (scripts/compact.js purgeDemoPosts), never blanked';
 
 const PII_FIELDS = [
     'author', 'author_fullname', 'author_id', 'authors', 'username', 'user',
@@ -190,6 +195,7 @@ async function storeRawPost(rawPayloadIn, sourceId, { ingestMvId = null, admissi
     // One statement: the post and its spec §8 'collected' retention row
     // are written together or not at all.
     const src = source ? getSource(source.name) : null;
+    const demo = !!source && source.source_type === DEMO_SOURCE_TYPE;
     const post = await dbRun(
         `WITH ins AS (
              INSERT INTO raw_posts
@@ -215,12 +221,14 @@ async function storeRawPost(rawPayloadIn, sourceId, { ingestMvId = null, admissi
             // G10-11: the ingest methodology version this post was stored
             // under (the receipt shows it); null when the caller has none.
             ingestMvId,
-            JSON.stringify({
+            JSON.stringify(demo ? {
+                source: source.name, text_retention_hours: null, text_retention_basis: DEMO_RETENTION_BASIS,
+            } : {
                 source: source ? source.name : null,
                 text_retention_hours: safeRetentionHours(src),
                 text_retention_basis: src && src.retention ? 'platform terms' : 'detail window (spec §19)',
             }),
-            COLLECTED_LEGAL_BASIS,
+            demo ? DEMO_LEGAL_BASIS : COLLECTED_LEGAL_BASIS,
             admissionMvId,
         ],
     );
