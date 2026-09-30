@@ -195,6 +195,15 @@ When demo data is used, it is honest about what it is:
 
 
 
+### Adding a keyed source (supervised first run)
+
+A source whose key, licence or approval arrives later is not scheduled blind (PR #10 review P10-17):
+
+1. Put the new credential in your shell only (not yet in `.env`) and run a supervised dry run of that one source:
+   `GUARDIAN_API_KEY=... GUARDIAN_COMMERCIAL_LICENSE_REF=... npm run collect -- --supervised --only guardian`
+2. It fetches every open route through the real collectors (robots, allowed hosts, quotas and redaction all apply), prints what each route returned and a sample of up to 5 payloads exactly as they would be stored, and stores nothing: no posts, scores, cursors, collection state or job (it does not touch the database).
+3. Sign off if the sample is on topic and carries no personal data beyond the ingest claim. Then add the credential to `.env` and recreate the containers (`docker compose up -d worker web`); the worker schedules the source on its next reschedule.
+
 ### Embeddings
 
 The first start downloads the ~90 MB `all-MiniLM-L6-v2` model into the `hf_cache` volume. Later starts and rebuilds reuse it. If the download fails (you're offline, behind a proxy, or Hugging Face is unreachable), standup says so clearly and carries on without embeddings: posts are still scored and audited, but vector search stays empty. Fix the network and run `npm run standup` again.

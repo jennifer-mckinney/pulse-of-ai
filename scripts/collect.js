@@ -12,25 +12,85 @@ const db = require('../src/db/connection');
 const { runCollection } = require('../src/collectors/runner');
 const { scrub } = require('../src/collectors/redact');
 
-const USAGE = 'usage: npm run collect [-- --only slug1,slug2]';
+const USAGE = 'usage: npm run collect [-- --only slug1,slug2]\n'
+    + '       npm run collect -- --supervised --only <slug>   (dry run: fetch, print a sample, store nothing)';
+const SAMPLE_SIZE = 5;
 
-/** @returns {{ slugs?: string[] } | { error: string }} */
+/** @returns {{ slugs?: string[], supervised?: boolean } | { error: string }} */
 function parseArgs(argv) {
     const args = Array.isArray(argv) ? argv : [];
+    const supervised = args.includes('--supervised');
     const i = args.indexOf('--only');
-    if (i < 0) return { slugs: undefined };
+    if (i < 0) {
+        return supervised ? { error: `--supervised needs --only <slug> (one source)\n${USAGE}` } : { slugs: undefined };
+    }
     // G10-23: `--only` without a value is a usage error, not a TypeError.
     const v = args[i + 1];
     const slugs = typeof v === 'string' && !v.startsWith('--') ? v.split(',').map(s => s.trim()).filter(Boolean) : [];
-    return slugs.length ? { slugs } : { error: `--only needs a comma-separated list of source slugs\n${USAGE}` };
+    if (!slugs.length) return { error: `--only needs a comma-separated list of source slugs\n${USAGE}` };
+    if (supervised) {
+        return slugs.length === 1 ? { slugs, supervised: true } : { error: `--supervised runs exactly one source\n${USAGE}` };
+    }
+    return { slugs };
 }
 
 class UsageError extends Error {}
 
-async function main(argv, out = line => process.stdout.write(line + '\n')) {
+/**
+ * P10-17: the supervised first run of a newly keyed source. Fetches every
+ * OPEN route of ONE source through the real collectors and the polite HTTP
+ * client (robots, allowed hosts and redaction all apply), prints what it got
+ * and a sample of the payloads exactly as they would be stored, and stores
+ * NOTHING: no raw_posts, scores, cursor, collection state or job — it does
+ * not touch the database. The operator reads the sample and signs off before
+ * the credential goes into the worker's env, which is what schedules the
+ * source (README, "Adding a keyed source").
+ * @returns {Promise<{ slug, status, routes: object[], sample: object[] }>}
+ */
+async function supervisedRun({ slug, env = process.env, transport, out = line => process.stdout.write(line + '\n') }) {
+    const { getSource, sourceStatus } = require('../src/config/source-registry');
+    const { buildCollectors } = require('../src/collectors/index');
+    const { HttpClient } = require('../src/collectors/http');
+    const src = getSource(slug);
+    if (!src) throw new UsageError(`unknown source '${slug}' (not a registry slug)\n${USAGE}`);
+    const st = sourceStatus(src, env);
+    if (st.status !== 'collecting') {
+        throw new UsageError(`${slug} is not collecting under this environment (${st.status}): ${st.reason}`);
+    }
+    out(`SUPERVISED DRY RUN — ${src.name} (${slug}); routes: ${st.openRoutes.join(', ')}`);
+    out('Nothing is stored: no posts, scores, cursors or collection state are written.');
+    const http = new HttpClient({ env, transport });
+    const routes = [];
+    const sample = [];
+    for (const c of buildCollectors(src, { env, http, cursor: {}, httpCache: {} })) {
+        try {
+            const r = await c.collect();
+            const warnings = (r.warnings || []).map(w => scrub(w.text, env));
+            routes.push({ route: c.route.id, fetched: r.fetched, kept: r.payloads.length, warnings });
+            out(`  ${c.route.id}: fetched ${r.fetched}, kept ${r.payloads.length}${warnings.length ? `, ${warnings.length} warning(s)` : ''}`);
+            for (const p of r.payloads) if (sample.length < SAMPLE_SIZE) sample.push({ route: c.route.id, ...p });
+        } catch (err) {
+            routes.push({ route: c.route.id, error: scrub(err.message, env) });
+            out(`  ${c.route.id}: FAILED — ${scrub(err.message, env)}`);
+        }
+    }
+    out(`Sample (${sample.length} of what would be stored, text as redacted):`);
+    for (const p of sample) {
+        const text = String(p.text || '').replace(/\s+/g, ' ');
+        out(`  - [${p.published_at || 'no date'}] ${p.id}${p.location ? ` · ${p.location} (${p.location_basis})` : ''}`);
+        out(`    ${text.slice(0, 200)}${text.length > 200 ? '…' : ''}`);
+        if (p.url) out(`    ${p.url}`);
+    }
+    out('Sign-off: if the sample is on topic and carries no personal data beyond the ingest claim, add the credential to '
+        + 'the worker\'s env and recreate it (docker compose up -d worker web) to schedule the source.');
+    return { slug, status: st.status, routes, sample };
+}
+
+async function main(argv, out = line => process.stdout.write(line + '\n'), { transport, env } = {}) {
     const parsed = parseArgs(argv);
     if (parsed.error) throw new UsageError(parsed.error);
     const { slugs } = parsed;
+    if (parsed.supervised) return supervisedRun({ slug: slugs[0], out, transport, env });
     const s = await runCollection({ slugs, triggeredBy: 'manual', log: out });
     out(`job ${s.jobId}: ${s.sourcesQueried} sources queried, ${s.postsCollected} items collected, `
         + `${s.postsProcessed} new posts scored, ${s.embedQueued} embed jobs queued, `
@@ -73,4 +133,4 @@ if (require.main === module) {
         });
 }
 
-module.exports = { main, parseArgs, closeQueuesIfOpened, UsageError, USAGE };
+module.exports = { main, parseArgs, supervisedRun, closeQueuesIfOpened, UsageError, USAGE, SAMPLE_SIZE };
