@@ -10,7 +10,7 @@ sentence-transformers==2.7.0
 psycopg2-binary>=2.9.9
 pgvector>=0.2.4
 
-# HTTP server (used if running without Infinity)
+# HTTP server for python/embeddings_service.py (the production embedder)
 fastapi>=0.110.0
 uvicorn>=0.27.0
 

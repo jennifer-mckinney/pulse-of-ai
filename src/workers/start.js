@@ -6,12 +6,16 @@
 // Registers a Worker for every queue and keeps running until killed:
 //   collect.rss / collect.api / collect.bulk — source runs (collect.worker.js)
 //   collect.refresh — POST /api/refresh collections (processRefreshJob)
-//   ingest    — scoring retries (ingest.worker.js)
+//   ingest    — scoring of every new post, its retries and the unscored
+//               sweep (ingest.worker.js, P10-12)
 //   embed     — embeddings via the Python service (embed.worker.js)
 //   correlate — reserved (collectors store no identity signals)
-//   maintenance — two repeatable jobs (maintenance.worker.js, P10-2, PR #22
-//               P1-7): every MAINTENANCE_EVERY_MS text retention + stale
-//               jobs; every MAINTENANCE_DAILY_EVERY_MS compaction + run rollup
+//   maintenance — three repeatable jobs (maintenance.worker.js, P10-2, PR #22
+//               P1-7, P1-13): 'retention' every MAINTENANCE_EVERY_MS (text
+//               retention for every source + stale-job sweep); 'daily' every
+//               MAINTENANCE_DAILY_EVERY_MS (compaction + run rollup + the
+//               rolling 24 h bias window); 'terms' every
+//               MAINTENANCE_TERMS_EVERY_MS (terms-page snapshots)
 // and the Reddit maintenance timer (deletion re-check, subreddit
 // discovery — src/collectors/reddit/maintenance.js),
 // and starts the collection scheduler (collector.scheduler.js): at start and
@@ -166,9 +170,11 @@ async function closeDueCyclesOnce() {
     }
 }
 
-// Reddit (#52): the 48 h text retention always, and — while Reddit's gate is
-// open — the 6-hourly deletion re-check and the daily subreddit discovery
-// (src/collectors/reddit/maintenance.js; ADR 0001 rulings 8 and 9).
+// Reddit (#52): while Reddit's gate is open, the 6-hourly deletion re-check
+// and the daily subreddit discovery (src/collectors/reddit/maintenance.js;
+// ADR 0001 rulings 8 and 9). Reddit's 48 h text retention is NOT here: it
+// runs for every source in the 'retention' job on the maintenance queue
+// (src/collectors/retention.js, src/workers/maintenance.worker.js).
 let redditRunning = false;
 async function redditMaintenance() {
     if (redditRunning) return;

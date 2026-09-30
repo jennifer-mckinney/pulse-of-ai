@@ -22,7 +22,8 @@
 //             no scoring of the job is outstanding: here when none is,
 //             else by closeCycles when the job's last reserved slot frees
 //     embed — one `embed` job per new post passing the relevance gate
-//             (relevance score >= 1/20, registered in relevance@1.1.0)
+//             (relevance score >= 1/21, one lexicon term matched; registered
+//             in relevance@1.2.0 — EMBED_GATE_MIN_SCORE, src/pipeline/relevance.js)
 //     job   — processing_jobs completed with the genuine posts_collected /
 //             posts_processed (posts audited under the job, whoever scored
 //             them) / sources_queried counts

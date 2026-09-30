@@ -75,15 +75,18 @@ const refreshQueue = new Queue('collect.refresh', { connection, defaultJobOption
 /** source_type → collect queue (the DB vocabulary). */
 const COLLECT_QUEUES = Object.freeze({ rss: collectRssQueue, api: collectApiQueue, bulk: collectBulkQueue });
 
-// Ingest queue — scoring retries for stored posts.
-// Each job carries: { rawPostId, sourceId, jobId }
+// Ingest queue — scoring of stored posts (P10-12): every new post a
+// collection run stores (score-<id>), inline-failure retries (retry-<id>)
+// and the unscored sweep (sweep-<id>-<hour>).
+// Each job carries: { rawPostId, sourceId, jobId, reserved? }
 // Workers run sentiment + relevance + discourse in-process (CPU-bound, no I/O wait).
 const ingestQueue = new Queue('ingest', { connection, defaultJobOptions: BASE_JOB_OPTIONS });
 
 // Embed queue — one job per raw post after ingest completes.
 // Each job carries: { rawPostId }
-// Workers call the Python Infinity service (I/O-bound — isolated to prevent
-// embedding latency from blocking sentiment throughput).
+// Workers call the Python embeddings service (python/embeddings_service.py:
+// FastAPI + sentence-transformers, OpenAI-compatible POST /embeddings;
+// I/O-bound — isolated to prevent embedding latency from blocking scoring).
 const embedQueue = new Queue('embed', {
     connection,
     defaultJobOptions: {
@@ -93,15 +96,19 @@ const embedQueue = new Queue('embed', {
     },
 });
 
-// Correlate queue — one job per post after embed completes.
-// Each job carries: { rawPostId, sourceId, signalHash, topicAffinity, confidence }
-// Workers write to pseudonymous_users + user_platform_sightings (DB-bound, GDPR-sensitive).
+// Correlate queue — reserved. Cross-platform correlation is NOT IMPLEMENTED
+// (PR #22 grumpy M7): nothing enqueues correlate jobs, and the correlate
+// worker (src/workers/correlate.worker.js) REFUSES every job that reaches it
+// with the DPIA gate's status and reason. It writes nothing (no
+// pseudonymous_users / user_platform_sightings rows).
 const correlateQueue = new Queue('correlate', { connection, defaultJobOptions: BASE_JOB_OPTIONS });
 
-// P10-2 / P10-9 / P10-18: the worker's repeatable maintenance jobs (text
-// retention + stale-job sweep every MAINTENANCE_EVERY_MS; compaction +
-// run-table rollup every MAINTENANCE_DAILY_EVERY_MS). One attempt: the next
-// tick is the retry.
+// P10-2 / P10-9 / P10-18: the worker's three repeatable maintenance jobs
+// (src/workers/maintenance.worker.js): 'retention' — text retention +
+// stale-job sweep every MAINTENANCE_EVERY_MS; 'daily' — compaction +
+// run-table rollup + the rolling 24 h bias window every
+// MAINTENANCE_DAILY_EVERY_MS; 'terms' — terms-page snapshots every
+// MAINTENANCE_TERMS_EVERY_MS. One attempt: the next tick is the retry.
 const maintenanceQueue = new Queue('maintenance', {
     connection,
     defaultJobOptions: { attempts: 1, removeOnComplete: { count: 100 }, removeOnFail: { count: 500 } },

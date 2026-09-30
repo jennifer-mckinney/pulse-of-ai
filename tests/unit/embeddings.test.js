@@ -1,7 +1,7 @@
 // tests/unit/embeddings.test.js
 // TDD tests for src/pipeline/embeddings.js
 //
-// The Infinity embedding service is an external HTTP dependency.
+// The embeddings service (python/embeddings_service.py) is an external HTTP dependency.
 // HTTP calls are mocked via jest.spyOn(axios, 'post') so tests run without
 // a running service.  The DB write (post_embeddings) uses the real test DB.
 
@@ -25,8 +25,8 @@ function fakeEmbedding(fill = 0.1) {
     return Array(EMBEDDING_DIMENSIONS).fill(fill);
 }
 
-/** Return a jest mock that resolves with a valid Infinity-format response. */
-function mockInfinityResponse(embedding = fakeEmbedding()) {
+/** Return a jest mock that resolves with a valid OpenAI-compatible response. */
+function mockServiceResponse(embedding = fakeEmbedding()) {
     return jest.spyOn(axios, 'post').mockResolvedValue({
         data: {
             model: 'sentence-transformers/all-MiniLM-L6-v2',
@@ -63,8 +63,8 @@ async function insertRawPost(sourceId, externalId = 'emb-test-1') {
 describe('generateEmbedding()', () => {
     afterEach(() => jest.restoreAllMocks());
 
-    it('calls the Infinity service with the correct OpenAI-compatible payload', async () => {
-        const spy = mockInfinityResponse();
+    it('calls the embeddings service with the correct OpenAI-compatible payload', async () => {
+        const spy = mockServiceResponse();
 
         await generateEmbedding('Hello world');
 
@@ -75,7 +75,7 @@ describe('generateEmbedding()', () => {
     });
 
     it(`returns an array of exactly ${384} floats`, async () => {
-        mockInfinityResponse();
+        mockServiceResponse();
 
         const embedding = await generateEmbedding('test text');
 
@@ -84,7 +84,7 @@ describe('generateEmbedding()', () => {
         expect(typeof embedding[0]).toBe('number');
     });
 
-    it('throws when the Infinity service is unavailable', async () => {
+    it('throws when the embeddings service is unavailable', async () => {
         jest.spyOn(axios, 'post').mockRejectedValue(new Error('ECONNREFUSED'));
 
         await expect(generateEmbedding('test')).rejects.toThrow();
@@ -173,7 +173,7 @@ describe('embedPost()', () => {
     it('generates and stores an embedding for the post', async () => {
         const srcId  = await insertSource();
         const postId = await insertRawPost(srcId, 'embed-post-1');
-        mockInfinityResponse(fakeEmbedding(0.5));
+        mockServiceResponse(fakeEmbedding(0.5));
 
         await embedPost(postId);
 
@@ -187,7 +187,7 @@ describe('embedPost()', () => {
     it('passes the post content to the embedding service', async () => {
         const srcId  = await insertSource();
         const postId = await insertRawPost(srcId, 'embed-post-2');
-        const spy = mockInfinityResponse();
+        const spy = mockServiceResponse();
 
         await embedPost(postId);
 
@@ -198,7 +198,7 @@ describe('embedPost()', () => {
     it('returns an object with postId, embeddingId, and dimensions', async () => {
         const srcId  = await insertSource();
         const postId = await insertRawPost(srcId, 'embed-post-3');
-        mockInfinityResponse();
+        mockServiceResponse();
 
         const result = await embedPost(postId);
 
