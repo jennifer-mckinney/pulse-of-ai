@@ -2,6 +2,19 @@
 # hash-locked embeddings requirements (F9-6). Digest pins are bumped with
 # their tags; every bump goes through CI and review like any other change.
 version: 2
+# The embeddings image pins the CPU-only torch build (torch==X.Y.Z+cpu), which
+# is published only on the PyTorch index, not PyPI. Dependabot re-runs
+# pip-compile with index options taken from its registries, not from the
+# --extra-index-url line in requirements-service.in/.txt, so without this entry
+# the resolver sees PyPI alone and fails with "Could not find a version that
+# satisfies the requirement torch==...+cpu". replaces-base: false keeps PyPI as
+# the base index and adds the PyTorch index as an extra, mirroring the
+# documented pip-compile command. The index is public: no credentials.
+registries:
+  pytorch-cpu:
+    type: python-index
+    url: https://download.pytorch.org/whl/cpu
+    replaces-base: false
 updates:
   - package-ecosystem: docker
     directory: "/"
@@ -25,6 +38,8 @@ updates:
         update-types: ["version-update:semver-major"]
   - package-ecosystem: pip
     directory: "/python"
+    registries:
+      - pytorch-cpu
     schedule:
       interval: weekly
   - package-ecosystem: github-actions
