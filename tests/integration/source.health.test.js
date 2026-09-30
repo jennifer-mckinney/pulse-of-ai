@@ -75,7 +75,54 @@ describe('evaluateSourceHealth', () => {
         expect(await openAlerts()).toEqual([]);
     });
 
-    it('conditionsFor never invents a reference date for a source that never succeeded', () => {
+    it('conditionsFor never invents a reference date: no new post and no anchor means no stale verdict', () => {
         expect(conditionsFor({ last_attempt_at: new Date(), consecutive_failures: 0 }, getSource('npr'), Date.now() + 1000 * HOUR)).toEqual({});
+    });
+
+    // PR #22 principal P0-2: the frozen-feed failure mode. A source that keeps
+    // answering 200 with nothing new was measured from last_success_at, which
+    // every run refreshes, so it never went stale.
+    it('a source that succeeds repeatedly with zero new posts goes stale (fixed anchor, never last_success_at)', async () => {
+        const hours = getSource('npr').expectedNewWithinHours;
+        await db.dbRun(`UPDATE source_collection_state SET freshness_anchor_at = NOW() - make_interval(hours => $2), last_new_post_at = NULL
+                        WHERE source_id = $1`, [npr, hours + 2]);
+        for (let i = 0; i < 3; i++) await state.saveOutcome(npr, { ok: true, itemCount: 10, newPosts: 0 });
+        const row = await db.dbGet('SELECT last_success_at, last_new_post_at FROM source_collection_state WHERE source_id = $1', [npr]);
+        expect(Date.now() - new Date(row.last_success_at).getTime()).toBeLessThan(60000);   // just succeeded
+        expect(row.last_new_post_at).toBeNull();
+        const r = await evaluateSourceHealth({ env: ENV });
+        expect(r.opened).toEqual([{ slug: 'npr', type: 'source_stale' }]);
+    });
+
+    it('a new state row is anchored at its creation (a fixed time)', async () => {
+        const row = await db.dbGet('SELECT freshness_anchor_at FROM source_collection_state WHERE source_id = $1', [npr]);
+        expect(row.freshness_anchor_at).not.toBeNull();
+        await state.saveOutcome(npr, { ok: true, itemCount: 1, newPosts: 0 });
+        const again = await db.dbGet('SELECT freshness_anchor_at FROM source_collection_state WHERE source_id = $1', [npr]);
+        expect(again.freshness_anchor_at).toEqual(row.freshness_anchor_at);
+    });
+});
+
+describe('migration 037: last_new_post_at backfilled from stored posts', () => {
+    it('sets last_new_post_at to MAX(collected_at) where it is NULL, and leaves set values alone', async () => {
+        const fs = require('fs');
+        const path = require('path');
+        const SQL = fs.readFileSync(path.join(__dirname, '../../src/db/migrations/037_source_freshness_backfill.sql'), 'utf8');
+        const bbc = (await db.dbGet(`SELECT id FROM data_sources WHERE name = 'bbc_news'`)).id;
+        await state.claim(bbc, 0, 150000);
+        const t1 = new Date(Date.now() - 50 * HOUR); const t2 = new Date(Date.now() - 30 * HOUR);
+        for (const [i, t] of [t1, t2].entries()) {
+            await db.dbRun(`INSERT INTO raw_posts (source_id, external_id, content, content_hash, collected_at) VALUES ($1, $2, 'x', md5($2), $3)`,
+                [npr, `bf-${i}`, t]);
+        }
+        const fixed = new Date(Date.now() - 5 * HOUR);
+        await db.dbRun('UPDATE source_collection_state SET last_new_post_at = NULL WHERE source_id = $1', [npr]);
+        await db.dbRun('UPDATE source_collection_state SET last_new_post_at = $2 WHERE source_id = $1', [bbc, fixed]);
+        await db.dbTransaction(c => c.query(SQL));
+        await db.dbTransaction(c => c.query(SQL));   // idempotent
+        const n = await db.dbGet('SELECT last_new_post_at FROM source_collection_state WHERE source_id = $1', [npr]);
+        expect(new Date(n.last_new_post_at).getTime()).toBe(t2.getTime());
+        const b = await db.dbGet('SELECT last_new_post_at FROM source_collection_state WHERE source_id = $1', [bbc]);
+        expect(new Date(b.last_new_post_at).getTime()).toBe(fixed.getTime());
     });
 });

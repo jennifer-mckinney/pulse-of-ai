@@ -6,9 +6,11 @@
 //
 //   source_stale    warning   no NEW post for longer than the registry's
 //                             expectedNewWithinHours (reference:
-//                             last_new_post_at, else last_success_at; a
-//                             source that never succeeded is 'failing',
-//                             never given an invented date)
+//                             last_new_post_at, else the row's FIXED
+//                             freshness_anchor_at — migration 037, PR #22
+//                             P0-2; never last_success_at, which every
+//                             successful run refreshes, so a feed answering
+//                             200 with nothing new goes stale)
 //   source_failing  warning   FAILING_AFTER (3) or more consecutive failed
 //                             runs
 //   source_refused  critical  the source refused access (F10-5); normally
@@ -33,7 +35,8 @@ const TYPES = Object.freeze(['source_stale', 'source_failing', 'source_refused']
 function conditionsFor(row, src, now = Date.now()) {
     const out = {};
     const hours = src.expectedNewWithinHours;
-    const ref = row.last_new_post_at || row.last_success_at;
+    // P0-2: a fixed anchor, never a time that moves with each run.
+    const ref = row.last_new_post_at || row.freshness_anchor_at;
     if (hours > 0 && ref && row.last_attempt_at) {
         const ageH = (now - new Date(ref).getTime()) / 3600000;
         if (ageH > hours) {
@@ -59,7 +62,7 @@ function conditionsFor(row, src, now = Date.now()) {
 async function evaluateSourceHealth({ env = process.env, now = Date.now() } = {}) {
     const rows = await dbAll(
         `SELECT ds.id, ds.name, ds.collection_disabled_at,
-                s.last_attempt_at, s.last_success_at, s.last_new_post_at, s.consecutive_failures,
+                s.last_attempt_at, s.last_success_at, s.last_new_post_at, s.freshness_anchor_at, s.consecutive_failures,
                 s.last_error_kind, s.last_http_status, s.access_denied_at, s.access_denied_kind,
                 s.access_denied_status, s.refused_until
          FROM data_sources ds
