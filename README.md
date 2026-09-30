@@ -201,8 +201,21 @@ When demo data is used, it is honest about what it is:
 
 A source whose key, licence or approval arrives later is not scheduled blind (PR #10 review P10-17):
 
-1. Put the new credential in your shell only (not yet in `.env`) and run a supervised dry run of that one source:
-   `GUARDIAN_API_KEY=... GUARDIAN_COMMERCIAL_LICENSE_REF=... npm run collect -- --supervised --only guardian`
+1. Keep the new credential out of `.env` for now, and run a supervised dry run of that one source. **Never type a key on the command line** (a `NAME=value` prefix in front of a command): the whole line is saved in your shell history (`~/.zsh_history`, `~/.bash_history`), which persists, is often backed up or synced, and is outside every log-scrubbing control. Use one of these instead:
+   - Prompt for it. `read -rs` does not echo the key and nothing reaches the history; unset it afterwards:
+     ```bash
+     read -rs -p 'Guardian API key: ' GUARDIAN_API_KEY; echo; export GUARDIAN_API_KEY
+     read -r -p 'Guardian licence reference: ' GUARDIAN_COMMERCIAL_LICENSE_REF; export GUARDIAN_COMMERCIAL_LICENSE_REF
+     npm run collect -- --supervised --only guardian
+     unset GUARDIAN_API_KEY GUARDIAN_COMMERCIAL_LICENSE_REF
+     ```
+     (In zsh, `read -rs` takes the prompt as `read -rs 'GUARDIAN_API_KEY?Guardian API key: '`.)
+   - Or write it with an editor into a private env file outside the repository, readable only by you, load it for this one run, then delete it:
+     ```bash
+     umask 077 && "${EDITOR:-vi}" ~/guardian-trial.env        # GUARDIAN_API_KEY=… and GUARDIAN_COMMERCIAL_LICENSE_REF=…
+     node --env-file="$HOME/guardian-trial.env" scripts/collect.js --supervised --only guardian
+     rm ~/guardian-trial.env
+     ```
 2. It fetches every open route through the real collectors (robots, allowed hosts, quotas and redaction all apply), prints what each route returned and a sample of up to 5 payloads exactly as they would be stored, and stores nothing: no posts, scores, cursors, collection state or job. Its only database access is one read of the source's kill switch and refusal state: a source disabled with `npm run source:disable` or still in its refusal cooldown is refused before any request, exactly as the worker would refuse it.
 3. Sign off if the sample is on topic and carries no personal data beyond the ingest claim. Then add the credential to `.env` and recreate the containers (`docker compose up -d worker web`); the worker schedules the source on its next reschedule.
 
