@@ -375,9 +375,13 @@ services:
     # The only role with collector credentials (F9-2): the operator's env
     # file, whole (P10-18). `environment` below still wins for the container
     # settings (app-env fixes the database and Redis hosts to the network).
+    # PR #22 grumpy L12: required — a wrong PULSE_ENV_FILE or a missing .env
+    # stops `up` with "env file … not found" instead of booting a worker with
+    # every keyed source silently closed. The long env_file syntax needs
+    # Compose 2.24+; this file already requires 2.39 (build.provenance).
     env_file:
       - path: ${PULSE_ENV_FILE:-.env}
-        required: false
+        required: true
     environment:
       <<: [*app-env, *collector-settings]
     # Healthy = the worker's heartbeat file is fresh (P9-7). It is written
