@@ -14,9 +14,12 @@
 //      with an explicit 403 and never reaches the read-only surface's cors().
 //   2. Shared secret (F10-8): when REFRESH_TOKEN is set, the request must
 //      carry it in X-Refresh-Token. When the site is bound beyond loopback
-//      (PULSE_BIND_ADDR or HOST not a loopback address) a REFRESH_TOKEN is
+//      (PULSE_BIND_ADDR or HOST not a loopback address, or the actual bound
+//      address a wildcard) or the request came through a reverse proxy
+//      (Forwarded / X-Forwarded-* / X-Real-IP), a REFRESH_TOKEN is
 //      REQUIRED — without one, refresh is refused (403), because the
-//      same-origin headers are unforgeable only from browsers.
+//      same-origin headers are unforgeable only from browsers. The compose
+//      published address can only make this stricter (PR #22 security M4).
 //   3. In flight (F10-8): while a refresh job is running, 409 with its
 //      job_id. A refresh row still 'running' after REFRESH_STALE_MINUTES
 //      (worker crash) is marked failed first. Migration 019's partial unique
@@ -72,25 +75,55 @@ const LOOPBACK_RE = /^(127(?:\.\d{1,3}){3}|::1|\[::1\]|localhost)$/i;
 
 const LOOPBACK_BOUND_RE = /^(127(?:\.\d{1,3}){3}|::1|::ffff:127(?:\.\d{1,3}){3})$/i;
 
+const WILDCARD_RE = /^(0\.0\.0\.0|::|\[::\]|::ffff:0\.0\.0\.0)$/i;
+
 /**
- * Whether the site is reachable beyond this machine.
- *   1. In the compose web container: PULSE_CONTAINER_PUBLISHED_ADDR is the
- *      address Docker publishes the port on — authoritative.
+ * PR #22 security M4: whether this process really is the compose web
+ * container — the compose-only marker PULSE_IN_CONTAINER=1 (docker-compose.yml)
+ * AND the runtime's /.dockerenv. An env var alone (a host `.env` copied from
+ * a container env) can never make a host process count as a container.
+ */
+function runningInContainer(env = process.env, exists = require('fs').existsSync) {
+    return String(env.PULSE_IN_CONTAINER || '').trim() === '1' && exists('/.dockerenv');
+}
+
+/**
+ * Whether the site is reachable beyond this machine. Every signal can only
+ * make the answer STRICTER (PR #22 security M4):
+ *   1. PULSE_CONTAINER_PUBLISHED_ADDR (compose: the address Docker publishes
+ *      the port on) naming a non-loopback address.
  *   2. HOST or PULSE_BIND_ADDR naming a non-loopback address.
  *   3. The ACTUAL address the server bound (app.locals.boundAddress, set by
- *      src/server.js start()): 0.0.0.0 / :: or any non-loopback address is
- *      beyond loopback (the dev bind gap: bare `npm run dev` used to listen
- *      everywhere while being treated as loopback).
+ *      src/server.js start()): 0.0.0.0 / :: or any non-loopback address (the
+ *      dev bind gap: bare `npm run dev` used to listen everywhere while
+ *      being treated as loopback).
+ * The one exception: inside the compose web container (runningInContainer)
+ * the process listens on a WILDCARD address behind Docker's port publish,
+ * so a wildcard in 2 or 3 is judged by the loopback published address. A
+ * loopback published address never excuses a wildcard bind anywhere else.
+ * @param {object} [env]
+ * @param {string|null} [boundAddress]
+ * @param {{ inContainer?: boolean }} [o]
  */
-function boundBeyondLoopback(env = process.env, boundAddress = null) {
+function boundBeyondLoopback(env = process.env, boundAddress = null, { inContainer = runningInContainer(env) } = {}) {
     const published = typeof env.PULSE_CONTAINER_PUBLISHED_ADDR === 'string' ? env.PULSE_CONTAINER_PUBLISHED_ADDR.trim() : '';
-    if (published) return !LOOPBACK_RE.test(published);
+    if (published && !LOOPBACK_RE.test(published)) return true;
+    const behindLoopbackPublish = inContainer && !!published;
+    const beyond = (v, loopbackRe) => !loopbackRe.test(v) && !(behindLoopbackPublish && WILDCARD_RE.test(v));
     for (const k of ['PULSE_BIND_ADDR', 'HOST']) {
         const v = typeof env[k] === 'string' ? env[k].trim() : '';
-        if (v && !LOOPBACK_RE.test(v)) return true;
+        if (v && beyond(v, LOOPBACK_RE)) return true;
     }
-    if (typeof boundAddress === 'string' && boundAddress) return !LOOPBACK_BOUND_RE.test(boundAddress);
+    if (typeof boundAddress === 'string' && boundAddress) return beyond(boundAddress, LOOPBACK_BOUND_RE);
     return false;
+}
+
+// A request that came through a reverse proxy: the proxy makes the site
+// reachable beyond this machine whatever this process is bound to, so such
+// a request needs REFRESH_TOKEN (PR #22 security M4).
+const PROXY_HEADERS = Object.freeze(['forwarded', 'x-forwarded-for', 'x-forwarded-host', 'x-real-ip']);
+function viaProxy(req) {
+    return !!(req && typeof req.get === 'function' && PROXY_HEADERS.some(h => req.get(h)));
 }
 
 function sameSecret(a, b) {
@@ -104,6 +137,9 @@ function refreshTokenCheck(req, env = process.env) {
     const token = typeof env.REFRESH_TOKEN === 'string' ? env.REFRESH_TOKEN.trim() : '';
     const bound = req && req.app && req.app.locals ? req.app.locals.boundAddress : null;
     if (!token) {
+        if (viaProxy(req)) {
+            return { status: 403, error: 'Refresh is disabled: the request came through a proxy and no REFRESH_TOKEN is set' };
+        }
         return boundBeyondLoopback(env, bound)
             ? { status: 403, error: 'Refresh is disabled: the site is bound beyond loopback and no REFRESH_TOKEN is set' }
             : null;
@@ -202,3 +238,5 @@ module.exports._resetRateLimiter = _resetRateLimiter;
 module.exports._setEnqueue = _setEnqueue;
 module.exports.boundBeyondLoopback = boundBeyondLoopback;
 module.exports.refreshTokenCheck = refreshTokenCheck;
+module.exports.runningInContainer = runningInContainer;
+module.exports.viaProxy = viaProxy;

@@ -118,6 +118,24 @@ describe('POST /api/refresh', () => {
             expect((await refresh()).status).toBe(202);
         });
 
+        // PR #22 security M4: a reverse proxy in front of a loopback bind
+        // makes the site reachable beyond this machine.
+        it('loopback without a token but through a proxy (X-Forwarded-For): refused (403), no job', async () => {
+            setEnv({ PULSE_BIND_ADDR: '127.0.0.1', REFRESH_TOKEN: undefined, HOST: undefined });
+            const res = await refresh().set('X-Forwarded-For', '203.0.113.9');
+            expect(res.status).toBe(403);
+            expect(res.body.error).toMatch(/through a proxy and no REFRESH_TOKEN/);
+            expect(enqueued).toHaveLength(0);
+        });
+
+        it('a loopback PULSE_CONTAINER_PUBLISHED_ADDR does not excuse HOST=0.0.0.0 outside the container', async () => {
+            setEnv({ PULSE_BIND_ADDR: undefined, REFRESH_TOKEN: undefined, HOST: '0.0.0.0',
+                PULSE_CONTAINER_PUBLISHED_ADDR: '127.0.0.1', PULSE_IN_CONTAINER: '1' });
+            const res = await refresh();
+            expect(res.status).toBe(403);
+            expect(res.body.error).toMatch(/bound beyond loopback and no REFRESH_TOKEN/);
+        });
+
         it('boundBeyondLoopback reads PULSE_BIND_ADDR and HOST', () => {
             expect(boundBeyondLoopback({})).toBe(false);
             expect(boundBeyondLoopback({ PULSE_BIND_ADDR: '127.0.0.1' })).toBe(false);
@@ -154,12 +172,20 @@ describe('POST /api/refresh', () => {
         // The debounce is a single in-process timestamp, deliberately not
         // keyed on req.ip: rotating IPs or spoofed forwarding headers must
         // not buy extra collection cycles. Distinct X-Forwarded-For values
-        // therefore share the same window.
-        await refresh().set('X-Forwarded-For', '203.0.113.1');
-        const res = await refresh().set('X-Forwarded-For', '198.51.100.7');
+        // therefore share the same window. (A proxied request needs the
+        // token since PR #22 security M4, so this runs with one.)
+        const prev = process.env.REFRESH_TOKEN;
+        process.env.REFRESH_TOKEN = 'proxy-test-token';
+        try {
+            const first = await refresh().set('X-Forwarded-For', '203.0.113.1').set('X-Refresh-Token', 'proxy-test-token');
+            expect(first.status).toBe(202);
+            const res = await refresh().set('X-Forwarded-For', '198.51.100.7').set('X-Refresh-Token', 'proxy-test-token');
 
-        expect(res.status).toBe(429);
-        expect(res.body.error).toMatch(/global/i);
+            expect(res.status).toBe(429);
+            expect(res.body.error).toMatch(/global/i);
+        } finally {
+            if (prev === undefined) delete process.env.REFRESH_TOKEN; else process.env.REFRESH_TOKEN = prev;
+        }
     });
 
     it('returns the job_id as a valid UUID', async () => {

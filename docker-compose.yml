@@ -343,7 +343,12 @@ services:
       PULSE_BIND_ADDR: ${PULSE_BIND_ADDR:-127.0.0.1}
       # The process listens on every container interface behind Docker's
       # port publish; the published address decides exposure (src/server.js).
+      # PR #22 security M4: the published address is trusted for the
+      # wildcard listen only in THIS container — PULSE_IN_CONTAINER=1 plus
+      # the runtime's /.dockerenv (src/routes/refresh.js). It can only make
+      # the refresh guard stricter anywhere else.
       HOST: 0.0.0.0
+      PULSE_IN_CONTAINER: "1"
       PULSE_CONTAINER_PUBLISHED_ADDR: ${PULSE_BIND_ADDR:-127.0.0.1}
       REFRESH_TOKEN: ${REFRESH_TOKEN:-}
       REFRESH_STALE_MINUTES: ${REFRESH_STALE_MINUTES:-30}
