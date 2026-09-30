@@ -70,7 +70,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v7
@@ -107,26 +107,45 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: python/requirements.txt
+          # The workflow is part of the key: the torch pin below lives here.
+          cache-dependency-path: |
+            python/requirements.txt
+            .github/workflows/ci.yml
 
       # Full service requirements: the pytest suite imports the FastAPI app
       # and exercises the real sentence-transformers model (384-dim vectors).
+      # torch is installed FIRST as the CPU-only build from the PyTorch CPU
+      # index, so the sentence-transformers dependency is already satisfied
+      # and pip does not pull the default PyPI torch with its CUDA (nvidia-*)
+      # wheels. Keep TORCH_VERSION in step with the torch pin in
+      # python/requirements-service.in / requirements-service.txt, so this
+      # job tests the same torch build the embeddings image runs.
       - name: Install dependencies
-        run: pip install -r python/requirements.txt
+        env:
+          TORCH_VERSION: 2.12.1+cpu
+        run: |
+          pip install "torch==${TORCH_VERSION}" --index-url https://download.pytorch.org/whl/cpu
+          pip install -r python/requirements.txt
+          pip list 2>/dev/null | grep -iE '^(torch|sentence-transformers) '
+          if pip list 2>/dev/null | grep -i '^nvidia-'; then
+            echo "::error::CUDA (nvidia-*) packages were installed alongside the CPU torch build"
+            exit 1
+          fi
+          echo "No nvidia-* packages installed."
 
       - name: Check black formatting
         run: black --check python/
 
       # Cache the Hugging Face model download between runs.
       - name: Cache Hugging Face models
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/huggingface
           key: hf-${{ runner.os }}-${{ hashFiles('python/requirements.txt') }}
@@ -151,7 +170,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python 3.13
         uses: actions/setup-python@v7
@@ -164,7 +183,7 @@ jobs:
           python -m pip install pytest pytest-asyncio httpx
 
       - name: Cache Hugging Face models
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/huggingface
           key: hf-${{ runner.os }}-py313-${{ hashFiles('python/requirements-service.txt') }}
@@ -177,7 +196,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # docker-compose.yml needs Compose 2.39.0+ (build.provenance / sbom);
       # the runner image ships 2.38.2, which rejects the file.
@@ -277,7 +296,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node.js 22
         uses: actions/setup-node@v7

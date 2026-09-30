@@ -1,24 +1,28 @@
 # Embedding service dependencies
 # Install: pip install -r requirements.txt
 
-# Core embedding service
-sentence-transformers==2.7.0
+# Core embedding service. Must equal requirements-service.in and the
+# `library` of the current embedding methodology row (embedding@1.1.0);
+# tests/unit/pure/embeddingLibraryPins.test.js fails on drift. A bump is a
+# methodology change: register a new embedding version with it.
+sentence-transformers==6.1.0
 # Infinity (PyPI package: infinity-emb) is the planned Phase-2 embedding server
 # per docs/TECHNICAL_SPEC.md §5 — add the dependency when actually adopted.
 
 # Database
-psycopg2-binary>=2.9.9
-pgvector>=0.2.4
+psycopg2-binary>=2.9.13
+# No Python pgvector client: no Python file imports it. Vectors are stored
+# through PostgreSQL's pgvector extension from the Node side.
 
-# HTTP server (used if running without Infinity)
-fastapi>=0.110.0
-uvicorn>=0.27.0
+# HTTP server for python/embeddings_service.py (the production embedder)
+fastapi>=0.141.1
+uvicorn>=0.54.0
 
 # Testing
-pytest>=7.4.0
-pytest-asyncio>=0.23.0
-httpx>=0.26.0         # async HTTP client for test requests
+pytest>=9.1.1
+pytest-asyncio>=1.4.0
+httpx>=0.28.1         # async HTTP client for test requests
 
 # Code quality
-black>=24.0.0         # code formatter (run: black python/)
-flake8>=7.0.0         # linter
+black>=26.5.1         # code formatter (run: black python/)
+flake8>=7.4.1         # linter

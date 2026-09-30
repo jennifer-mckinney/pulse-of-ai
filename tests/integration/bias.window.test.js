@@ -65,16 +65,20 @@ async function scoredPost(sourceId, jobId, mvId, { location = null, indicator = 
     return post.id;
 }
 
-describe('runBiasWindow (bias@1.5.0, G2)', () => {
-    it('bias@1.5.0 is the version the code runs, with a 24 h rolling window', () => {
-        expect(CURRENT_VERSIONS.bias).toBe('1.5.0');
-        const cfg = METHODOLOGY_VERSIONS.find(r => r.component === 'bias' && r.version === '1.5.0').config;
+// The window (added by bias@1.5.0) runs under the CURRENT bias version:
+// bias@1.6.0 keeps 1.5.0's rolling window unchanged.
+describe('runBiasWindow (bias@1.5.0 window, G2; current bias@1.6.0)', () => {
+    it('bias@1.6.0 is the version the code runs, with 1.5.0\'s 24 h rolling window', () => {
+        expect(CURRENT_VERSIONS.bias).toBe('1.6.0');
+        const cfg = METHODOLOGY_VERSIONS.find(r => r.component === 'bias' && r.version === '1.6.0').config;
+        const v15 = METHODOLOGY_VERSIONS.find(r => r.component === 'bias' && r.version === '1.5.0').config;
+        expect(cfg.rolling_window).toEqual(v15.rolling_window);
         expect(cfg.rolling_window).toMatchObject({ hours: 24 });
         expect(cfg.rolling_window.checks).toEqual(CHECKS);
     });
 
-    it('refuses to run without a registered bias@1.5.0 (no run row written)', async () => {
-        await expect(runBiasWindow()).rejects.toThrow(/bias@1\.5\.0 is not registered/);
+    it('refuses to run without a registered bias@1.6.0 (no run row written)', async () => {
+        await expect(runBiasWindow()).rejects.toThrow(/bias@1\.6\.0 is not registered/);
         expect(await dbAll('SELECT id FROM bias_window_runs')).toEqual([]);
     });
 
@@ -83,7 +87,7 @@ describe('runBiasWindow (bias@1.5.0, G2)', () => {
     });
 
     it('pools posts from many small cycles: each cycle is "insufficient sample", the 24 h window is not', async () => {
-        const mv = await registerBias('1.5.0');
+        const mv = await registerBias('1.6.0');
         const sMv = await sentimentMv();
         const news = await insertSource('w-news', 'news');
         const forums = await insertSource('w-forums', 'forums');
@@ -104,7 +108,7 @@ describe('runBiasWindow (bias@1.5.0, G2)', () => {
         expect(cycle.map(r => r.group_value)).toEqual(['insufficient sample', 'insufficient sample', 'insufficient sample']);
 
         const r = await runBiasWindow({ triggeredBy: 'on_demand' });
-        expect(r).toMatchObject({ version: '1.5.0', windowHours: 24, postsAssessed: 40, violationsFound: 1 });
+        expect(r).toMatchObject({ version: '1.6.0', windowHours: 24, postsAssessed: 40, violationsFound: 1 });
         const run = await dbGet('SELECT * FROM bias_window_runs WHERE id = $1', [r.runId]);
         expect(run).toMatchObject({
             status: 'completed', triggered_by: 'on_demand', window_hours: 24, posts_assessed: 40,
@@ -134,7 +138,7 @@ describe('runBiasWindow (bias@1.5.0, G2)', () => {
     });
 
     it('bias_window_assessments are append-only', async () => {
-        await registerBias('1.5.0');
+        await registerBias('1.6.0');
         const r = await runBiasWindow();
         await expect(dbRun(`UPDATE bias_window_assessments SET is_violation = TRUE WHERE window_run_id = $1`, [r.runId]))
             .rejects.toThrow(/append-only/);
@@ -143,7 +147,7 @@ describe('runBiasWindow (bias@1.5.0, G2)', () => {
     });
 
     it('an empty window records three "insufficient sample" assessments (M5) and no alert', async () => {
-        await registerBias('1.5.0');
+        await registerBias('1.6.0');
         const r = await runBiasWindow();
         expect(r).toMatchObject({ postsAssessed: 0, violationsFound: 0 });
         const rows = await dbAll('SELECT group_value FROM bias_window_assessments WHERE window_run_id = $1', [r.runId]);
@@ -152,7 +156,7 @@ describe('runBiasWindow (bias@1.5.0, G2)', () => {
     });
 
     it('a check that throws marks the run failed (never left running) and rethrows', async () => {
-        await registerBias('1.5.0');
+        await registerBias('1.6.0');
         let isolated;
         jest.isolateModules(() => {
             jest.doMock('../../src/pipeline/bias', () => ({
@@ -187,7 +191,7 @@ describe('insufficient-sample share (principal #11)', () => {
     }
 
     it('reports per check, per cycle over 24 h and 7 days, and the latest window run', async () => {
-        await registerBias('1.5.0');
+        await registerBias('1.6.0');
         await seedCycleRows();
         await runBiasWindow();
         const rep = await insufficientSampleReport();
@@ -198,7 +202,7 @@ describe('insufficient-sample share (principal #11)', () => {
         });
         expect(rep.per_cycle.last_7d.negative_dominance).toEqual({ assessments: 2, insufficient: 1, share: 0.5 });
         expect(rep.rolling_window.latest_run).toMatchObject({
-            status: 'completed', version: '1.5.0', window_hours: 24, posts_assessed: 0, triggered_by: 'schedule',
+            status: 'completed', version: '1.6.0', window_hours: 24, posts_assessed: 0, triggered_by: 'schedule',
         });
         expect(rep.rolling_window.latest_run.checks.location_concentration).toMatchObject({ outcome: 'insufficient_sample' });
         expect(rep.rolling_window.last_7d.negative_dominance).toEqual({ assessments: 1, insufficient: 1, share: 1 });
@@ -214,7 +218,7 @@ describe('insufficient-sample share (principal #11)', () => {
     });
 
     it('GET /api/bias/latest and GET /api/health serve the report', async () => {
-        await registerBias('1.5.0');
+        await registerBias('1.6.0');
         await seedCycleRows();
         const bias = await request(app).get('/api/bias/latest');
         expect(bias.status).toBe(200);
@@ -234,7 +238,7 @@ describe('insufficient-sample share (principal #11)', () => {
     });
 
     it('GET /api/bias/history counts insufficient-sample rows apart from passes', async () => {
-        await registerBias('1.5.0');
+        await registerBias('1.6.0');
         await seedCycleRows();
         const res = await request(app).get('/api/bias/history');
         expect(res.body.insufficient_count).toBe(3);
@@ -254,11 +258,11 @@ describe('npm run bias:window (scripts/bias-window.js)', () => {
     });
 
     it('runs one on-demand window and prints a summary (or JSON)', async () => {
-        await registerBias('1.5.0');
+        await registerBias('1.6.0');
         const lines = [];
         const s = await main([], { out: l => lines.push(l) });
-        expect(s).toMatchObject({ version: 'bias@1.5.0', window_hours: 24, posts_assessed: 0, violations_found: 0 });
-        expect(lines[0]).toMatch(/^bias window .* \(bias@1\.5\.0\): .* 0 posts, 0 violation\(s\)$/);
+        expect(s).toMatchObject({ version: 'bias@1.6.0', window_hours: 24, posts_assessed: 0, violations_found: 0 });
+        expect(lines[0]).toMatch(/^bias window .* \(bias@1\.6\.0\): .* 0 posts, 0 violation\(s\)$/);
         expect(lines.slice(1)).toEqual([
             '  location_concentration: insufficient_sample (0.000)',
             '  platform_sentiment_parity: insufficient_sample (0.000)',

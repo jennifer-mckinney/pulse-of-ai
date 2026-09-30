@@ -7,7 +7,9 @@
 //             database kill switch (data_sources.collection_disabled_at, F10-10)
 //     refusal — src/collectors/refusal.js: a source that refused access
 //             (401/403/451, bot wall, robots) is skipped through its
-//             cooldown and reported 'blocked_by_source' (F10-5)
+//             cooldown and reported 'blocked_by_source' (F10-5); a clean
+//             probe starts a 24 h probation during which a refusal keeps
+//             escalating the cooldown (ADR 0001 note 2026-09-30)
 //     claim — state.claim(): the source's poll interval is honoured across
 //             processes (worker schedule + POST /api/refresh)
 //     fetch — one collector per open route (src/collectors), through the
@@ -18,11 +20,15 @@
 //             decision_audit_log row under the CURRENT methodology versions;
 //             a scoring failure queues an `ingest` retry for that post
 //   then, for the job:
-//     bias  — runBiasChecks() over the job's scored posts (when any)
+//     bias  — runBiasChecks() over the job's scored posts (when any), once
+//             no scoring of the job is outstanding: here when none is,
+//             else by closeCycles when the job's last reserved slot frees
 //     embed — one `embed` job per new post passing the relevance gate
-//             (relevance score >= 1/20, registered in relevance@1.1.0)
+//             (relevance score >= 1/21, one lexicon term matched; registered
+//             in relevance@1.2.0 — EMBED_GATE_MIN_SCORE, src/pipeline/relevance.js)
 //     job   — processing_jobs completed with the genuine posts_collected /
-//             posts_processed / sources_queried counts
+//             posts_processed (posts audited under the job, whoever scored
+//             them) / sources_queried counts
 //
 // Errors (F10-1): every error string is scrubbed (src/collectors/redact.js —
 // no env secret, raw or URL-encoded, and no credential query parameter
@@ -54,7 +60,7 @@ const { EMBED_GATE_MIN_SCORE } = require('../pipeline/relevance');
 const cycle = require('./cycle');
 const { scrub } = require('./redact');
 const { classifyError } = require('./errors');
-const { refusalGate, refusalOf, resetEnv, BLOCKED_BY_SOURCE } = require('./refusal');
+const { refusalGate, refusalOf, resetEnv, probationOver, BLOCKED_BY_SOURCE } = require('./refusal');
 
 /** Default queue hooks: lazily bind BullMQ (opening Redis only when needed). */
 function defaultQueues() {
@@ -330,13 +336,28 @@ async function runCollection(o = {}) {
                 cursor, httpCache, ok, itemCount: row.kept, newPosts: row.new,
                 error: row.error, errorKind: row.errorKind, httpStatus: row.httpStatus,
             });
+            // Diagnosis 2026-09-30 (option D): the refusal's allow-listed,
+            // scrubbed response headers (http.js refusalHeaders; never a
+            // cookie, credential or body), logged and stored with the refusal.
+            const refusedErr = refusedIdx >= 0 ? routeErrors[refusedIdx].err : null;
+            const refusalHeaders = refusedErr && refusedErr.headers && Object.keys(refusedErr.headers).length
+                ? refusedErr.headers : null;
             if (refused) {
-                const r = await state.recordRefusal(sourceId, refused, slug);
+                const r = await state.recordRefusal(sourceId, { ...refused, headers: refusalHeaders }, slug);
                 row.status = BLOCKED_BY_SOURCE;
-                row.reason = `refused (${refused.kind}${refused.status ? ` HTTP ${refused.status}` : ''}); cooldown until ${new Date(r.refused_until).toISOString()}`;
+                row.refusalCount = r.refusal_count;
+                row.reason = `refused (${refused.kind}${refused.status ? ` HTTP ${refused.status}` : ''}); refusal ${r.refusal_count},`
+                    + ` cooldown until ${new Date(r.refused_until).toISOString()}`;
                 log(`[collect] ${slug}: REFUSED by the source — ${row.reason}`);
+                if (refusalHeaders) log(`[collect] ${slug}: refusal response headers ${JSON.stringify(refusalHeaders)}`);
             } else if (ok && refusal && refusal.access_denied_at && gate.state === 'probe') {
-                await state.clearRefusal(sourceId, 'a probe run after the cooldown succeeded');
+                // Probation (ADR 0001 note 2026-09-30): one clean probe ends
+                // the cooldown, not the count.
+                const p = await state.endCooldown(sourceId, refusal.access_denied_at);
+                if (p) log(`[collect] ${slug}: probe succeeded — on probation until ${new Date(p.probation_until).toISOString()} (refusal count ${p.refusal_count} kept)`);
+            } else if (ok && refusal && !refusal.access_denied_at && refusal.refusal_count > 0 && probationOver(refusal, Date.now())) {
+                // 24 h without a refusal: the count decays.
+                if (await state.decayRefusal(sourceId)) log(`[collect] ${slug}: probation over — refusal count reset to 0`);
             }
             // G10-12: a run that changed nothing (304 / nothing fetched, no
             // error) is counted on the state row, not inserted.
@@ -346,6 +367,7 @@ async function runCollection(o = {}) {
                 sourceId, jobId, gateStatus: st.status, outcome: row.outcome, itemsFetched: row.fetched,
                 postsNew: row.new, requests: http.requests - before, error: row.error,
                 errorKind: row.errorKind, httpStatus: row.httpStatus, startedAt,
+                responseHeaders: refused ? refusalHeaders : null,
             });
             log(`[collect] ${slug}: ${row.outcome} fetched ${row.fetched}, kept ${row.kept}, new ${row.new}${row.error ? ` — ${row.error}` : ''}`);
             await touch();
@@ -368,9 +390,23 @@ async function runCollection(o = {}) {
             ));
             summary.awaitingRetries = awaitingRetries;
         }
-        if (newPostIds.length > 0 && !o.cycle && !awaitingRetries) {
-            const bias = await runBiasChecks(jobId, mv.biasMvId);
-            summary.bias = { checksRun: bias.checksRun, violationsFound: bias.violationsFound };
+        // A one-shot job with no scoring outstanding is finalized HERE, the
+        // way closeCycles finalizes cycles and 'awaiting_retries' jobs: its
+        // posts_processed is the number of posts scored under it
+        // (decision_audit_log, cycle.jobPostsProcessed) and its bias checks
+        // run when that is > 0. Counting only the posts this run scored
+        // inline (newPostIds) lost every post scored by an ingest job that
+        // finished BEFORE the run ended (scoreVia 'queue': posts_processed 0,
+        // no per-job bias checks) and every inline-failure retry that did.
+        // A job the stale-job sweeper closed meanwhile is left as it is.
+        if (jobId && !o.cycle && !awaitingRetries) {
+            summary.postsProcessed = await cycle.jobPostsProcessed(jobId);
+            const open = summary.postsProcessed > 0 && await dbGet(
+                `SELECT id FROM processing_jobs WHERE id = $1 AND status = 'running'`, [jobId]);
+            if (open) {
+                const bias = await runBiasChecks(jobId, mv.biasMvId);
+                summary.bias = { checksRun: bias.checksRun, violationsFound: bias.violationsFound };
+            }
         }
         if (newPostIds.length > 0) {
             const gated = await dbAll(

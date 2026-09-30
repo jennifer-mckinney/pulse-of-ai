@@ -12,14 +12,35 @@
 # run covers the x86_64 and aarch64 images.) Separate from requirements.txt,
 # which carries the dev/test toolchain and runs on CI's Python 3.11.
 #
+# Refreshing is MANUAL: Dependabot's pip job excludes requirements-service.*
+# (.github/dependabot.yml explains why). To bump a pin, edit it here and run
+# the command above from the repo root; to take the newest allowed versions,
+# add --upgrade (everything) or --upgrade-package NAME. Re-running it
+# unchanged reproduces the committed lock byte for byte (verified 2026-09-30,
+# pip-tools 7.6.1, on linux/arm64 and linux/amd64). Commit the .in and .txt
+# together; CI's "Python 3.13 (image dependencies)" job installs the lock
+# with --require-hashes.
+#
+# Do NOT copy the command from the lock's own header: pip-tools renders it
+# with --no-index, which on the command line means "ignore every package
+# index", so the run fails with "No matching distribution found for
+# torch==...+cpu".
+#
 # torch: the CPU-only build from the PyTorch index — the default PyPI wheel
 # pulls ~2 GB of CUDA libraries this CPU service never loads.
 torch==2.12.1+cpu
-# Keep sentence-transformers in step with requirements.txt.
-sentence-transformers==2.7.0
-transformers==4.57.6
-huggingface_hub==0.36.2
-tokenizers==0.22.2
+# Keep sentence-transformers in step with requirements.txt AND with the
+# `library` of the current embedding methodology row
+# (src/config/methodology-registry.js; tests/unit/pure/embeddingLibraryPins.test.js
+# fails on any drift). A sentence-transformers bump is a methodology change:
+# embedding@1.1.0 (migration 065) registered 6.1.0 after the 2.7.0 -> 6.1.0
+# vectors compared bit-identical on linux/arm64 and linux/amd64.
+# transformers / huggingface_hub / tokenizers are pinned with it: 6.x needs
+# transformers 5 (<6) and huggingface_hub 1.x (<2).
+sentence-transformers==6.1.0
+transformers==5.18.0
+huggingface_hub==1.33.0
+tokenizers==0.23.2
 numpy==2.5.1
 fastapi==0.139.0
 uvicorn==0.50.0

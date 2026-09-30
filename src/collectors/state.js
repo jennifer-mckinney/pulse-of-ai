@@ -9,8 +9,9 @@
 //   saveOutcome(...)                 cursor, validators, last success /
 //       error / counts, consecutive failures
 //   recordRun(...)                   one source_runs row per run
-//   getRefusal / recordRefusal / clearRefusal   the refused state (F10-5,
-//       migration 018; src/collectors/refusal.js has the rules)
+//   getRefusal / recordRefusal / endCooldown / decayRefusal / clearRefusal
+//       the refused state and its probation (F10-5, migrations 018 and
+//       062; src/collectors/refusal.js has the rules)
 
 'use strict';
 
@@ -88,17 +89,22 @@ async function countUnchangedRun(sourceId) {
     );
 }
 
+/**
+ * `responseHeaders`: the allow-listed, scrubbed headers of a refusal
+ * (migration 062); null on every other run.
+ */
 async function recordRun({
     sourceId, jobId, gateStatus, outcome, itemsFetched = 0, postsNew = 0, requests = 0,
-    error = null, errorKind = null, httpStatus = null, startedAt,
+    error = null, errorKind = null, httpStatus = null, startedAt, responseHeaders = null,
 }) {
+    const headers = responseHeaders && Object.keys(responseHeaders).length ? JSON.stringify(responseHeaders) : null;
     await dbRun(
         `INSERT INTO source_runs
             (source_id, job_id, gate_status, outcome, items_fetched, posts_new, requests, error, error_kind, http_status,
-             started_at, finished_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())`,
+             started_at, finished_at, response_headers)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), $12::jsonb)`,
         [sourceId, jobId, gateStatus, outcome, itemsFetched, postsNew, requests, error,
-            error ? errorKind : null, error ? httpStatus : null, startedAt || new Date()],
+            error ? errorKind : null, error ? httpStatus : null, startedAt || new Date(), headers],
     );
 }
 
@@ -134,46 +140,137 @@ async function setDbKillSwitch(sourceId, disabled, { reason = null, by = null, c
 /** The refusal columns of a source (null when it has no state row yet). */
 async function getRefusal(sourceId) {
     return dbGet(
-        `SELECT access_denied_at, access_denied_status, access_denied_kind, refused_until, refusal_count
+        `SELECT access_denied_at, access_denied_status, access_denied_kind, refused_until, refusal_count, probation_until,
+                last_refused_at
          FROM source_collection_state WHERE source_id = $1`,
         [sourceId],
     );
 }
 
+// The count a new refusal continues from: the stored count while the source
+// is refused or on probation, else 0 (probation over — 24 h without a
+// refusal; refusal.js probationOver is the same rule in JS). In an UPDATE
+// every expression reads the row as it was before the update.
+const PRIOR_COUNT_SQL = `(CASE WHEN access_denied_at IS NULL AND (probation_until IS NULL OR probation_until <= NOW())
+                               THEN 0 ELSE refusal_count END)`;
+
 /**
- * Enter (or extend) the refused state: the n-th consecutive refusal sets a
- * cooldown of min(1 h × 2^(n-1), 24 h), and one critical 'source_refused'
- * alert is opened unless one is already open for the source.
- * @returns {Promise<{ refusal_count: number, refused_until: Date }>}
+ * Enter (or extend) the refused state: the n-th refusal of an episode (the
+ * count continues through probation, refusal.js) sets a cooldown of
+ * min(1 h × 2^(n-1), 24 h). One critical 'source_refused' alert is opened
+ * unless one is already open for the source; an open one is updated to the
+ * current count (an escalation), so it never understates the refusal.
+ * @param {{ kind: string, status?: number|null, headers?: object|null }} refusal
+ *        headers: the allow-listed, scrubbed response headers (http.js refusalHeaders)
+ * @returns {Promise<{ refusal_count: number, refused_until: Date, alert: 'opened'|'escalated'|null }>}
  */
-async function recordRefusal(sourceId, { kind, status = null }, slug) {
+async function recordRefusal(sourceId, { kind, status = null, headers = null }, slug) {
     const { COOLDOWN_BASE_MS, COOLDOWN_MAX_MS } = require('./refusal');
+    const saved = headers && Object.keys(headers).length ? headers : null;
     const row = await dbGet(
         `UPDATE source_collection_state
          SET access_denied_at = NOW(),
              access_denied_status = $2::int,
              access_denied_kind = $3::text,
-             refused_until = NOW() + make_interval(secs => LEAST($4::float8, $5::float8 * power(2, LEAST(refusal_count, 10)))),
-             refusal_count = refusal_count + 1,
+             refused_until = NOW() + make_interval(secs => LEAST($4::float8, $5::float8 * power(2, LEAST(${PRIOR_COUNT_SQL}, 10)))),
+             refusal_count = ${PRIOR_COUNT_SQL} + 1,
+             probation_until = NULL,
+             last_refused_at = NOW(),
+             access_denied_headers = $6::jsonb,
              updated_at = NOW()
          WHERE source_id = $1
-         RETURNING refusal_count, refused_until`,
-        [sourceId, status, kind, COOLDOWN_MAX_MS / 1000, COOLDOWN_BASE_MS / 1000],
+         RETURNING refusal_count, refused_until, access_denied_at`,
+        [sourceId, status, kind, COOLDOWN_MAX_MS / 1000, COOLDOWN_BASE_MS / 1000, saved ? JSON.stringify(saved) : null],
     );
-    // P1-6: atomic one-open-alert rule (migration 038).
-    await require('./source-alerts').openSourceAlert('source_refused', 'critical', sourceId, {
+    // Security L1 / grumpy #7: response_headers is ALWAYS set (null when
+    // this refusal has none, e.g. robots), so an escalated alert never
+    // shows the headers of an earlier refusal as if they were this one's.
+    const details = {
         slug, error_kind: kind, http_status: status,
         refusal_count: row ? row.refusal_count : null,
         refused_until: row ? row.refused_until : null,
+        response_headers: saved,
+    };
+    // P1-6: atomic one-open-alert rule (migration 038).
+    const alerts = require('./source-alerts');
+    let alert = null;
+    if (await alerts.openSourceAlert('source_refused', 'critical', sourceId, { ...details, opened_refusal_count: details.refusal_count })) {
+        alert = 'opened';
+    } else if (row && await alerts.escalateSourceAlert('source_refused', sourceId, { ...details, last_refused_at: row.access_denied_at })) {
+        alert = 'escalated';
+    }
+    return row ? { refusal_count: row.refusal_count, refused_until: row.refused_until, alert } : row;
+}
+
+/**
+ * A probe after the cooldown succeeded: leave the refused state (the source
+ * collects again, its alert is resolved) but KEEP the refusal count — the
+ * source is on probation until NOW() + PROBATION_MS (refusal.js). A refusal
+ * during probation continues the count.
+ *
+ * Security M1 / grumpy #2: guarded on the refusal the probe was run for
+ * (`probedDeniedAt`, the access_denied_at read before the run). If another
+ * run recorded a NEWER refusal meanwhile, nothing is changed and no alert is
+ * resolved — a stale success never clears a fresh refusal.
+ * @returns {Promise<{ refusal_count: number, probation_until: Date }|null>} null when the guard did not match
+ */
+async function endCooldown(sourceId, probedDeniedAt) {
+    const { PROBATION_MS } = require('./refusal');
+    const row = await dbGet(
+        `UPDATE source_collection_state
+         SET access_denied_at = NULL, access_denied_status = NULL, access_denied_kind = NULL,
+             refused_until = NULL, access_denied_headers = NULL,
+             probation_until = NOW() + make_interval(secs => $2::float8), updated_at = NOW()
+         -- JS Dates hold milliseconds, timestamptz microseconds: match the
+         -- probed refusal within 1 ms (a newer refusal is a later run,
+         -- whole seconds apart).
+         WHERE source_id = $1 AND access_denied_at IS NOT NULL
+           AND abs(extract(epoch FROM access_denied_at - $3::timestamptz)) < 0.001
+         RETURNING refusal_count, probation_until`,
+        [sourceId, PROBATION_MS / 1000, probedDeniedAt],
+    );
+    // Grumpy #9: resolve only when this call actually ended the cooldown.
+    if (!row) return null;
+    const n = row.refusal_count;
+    const until = new Date(row.probation_until).toISOString();
+    await require('./source-alerts').resolveSourceAlert('source_refused', sourceId, {
+        resolvedBy: 'refusal state (src/collectors/state.js endCooldown)',
+        resolution: `a probe run after the cooldown succeeded; on probation until ${until}`
+            + ` (refusal count ${n} kept: a refusal before then continues it, 24 h without one decays it)`,
+        basis: { cleared: true, probation: true, refusal_count: n, probation_until: until },
     });
     return row;
 }
 
-/** Leave the refused state and resolve its open alert, recording why. */
+/**
+ * Probation over (24 h without a refusal): the refusal count decays to 0.
+ * A no-op unless the source is not refused, has a count and its probation
+ * has ended.
+ * @returns {Promise<boolean>} whether the count was reset
+ */
+async function decayRefusal(sourceId) {
+    const row = await dbGet(
+        `UPDATE source_collection_state
+         SET refusal_count = 0, probation_until = NULL, last_refused_at = NULL, updated_at = NOW()
+         WHERE source_id = $1 AND access_denied_at IS NULL AND refusal_count > 0
+           AND (probation_until IS NULL OR probation_until <= NOW())
+         RETURNING source_id`,
+        [sourceId],
+    );
+    return !!row;
+}
+
+/**
+ * Leave the refused state completely (a manual reset: env or
+ * npm run source:reset) — count and probation too — and resolve its open
+ * alert, recording why.
+ */
 async function clearRefusal(sourceId, resolution, { client = null } = {}) {
     const sql = `UPDATE source_collection_state
          SET access_denied_at = NULL, access_denied_status = NULL, access_denied_kind = NULL,
-             refused_until = NULL, refusal_count = 0, updated_at = NOW()
+             refused_until = NULL, refusal_count = 0, probation_until = NULL, access_denied_headers = NULL,
+             last_refused_at = NULL,
+             updated_at = NOW()
          WHERE source_id = $1`;
     if (client) await client.query(sql, [sourceId]);
     else await dbRun(sql, [sourceId]);
@@ -186,5 +283,6 @@ async function clearRefusal(sourceId, resolution, { client = null } = {}) {
 
 module.exports = {
     sourceIdsBySlug, claim, saveOutcome, recordRun, countUnchangedRun, getRefusal, recordRefusal, clearRefusal,
+    endCooldown, decayRefusal,
     dbKillSwitch, setDbKillSwitch, CLAIM_SLACK_SEC, CLAIM_SLACK_FRACTION, claimSlackSec,
 };

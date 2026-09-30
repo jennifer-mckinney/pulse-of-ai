@@ -7,11 +7,12 @@ Exposes an OpenAI-compatible POST /embeddings endpoint using sentence-transforme
 src/pipeline/embeddings.js.
 
 PRODUCTION:
-    For maximum throughput, run via Infinity for dynamic batching + ctranslate2:
-        infinity_emb start \\
-            --model-name-or-path sentence-transformers/all-MiniLM-L6-v2 \\
-            --batch-size 64 --model-warmup true
-    This file provides an equivalent fallback for environments without Infinity.
+    This service IS the production embedder: compose service `embeddings`
+    (python/Dockerfile) runs it with the pinned model revision.
+    Infinity (infinity-emb, dynamic batching + ctranslate2) is a planned
+    Phase-2 alternative, not adopted (python/requirements.txt). It speaks the
+    same OpenAI-compatible API, so it could replace this service without a
+    Node.js change.
 
 DEVELOPMENT:
     uvicorn python.embeddings_service:app --port 8000
@@ -30,15 +31,19 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
+from sentence_transformers import __version__ as SENTENCE_TRANSFORMERS_VERSION
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 
 MODEL_NAME = os.getenv("EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 # P9-5: load the model at a pinned Hugging Face COMMIT, never the moving main
 # branch, so every vector traces to exact weights. Registered as
-# methodology_versions embedding@1.0.0 (src/config/methodology-registry.js,
-# migration 012); tests/unit/pure/methodologyRegistry.test.js keeps this
-# default, python/Dockerfile and docker-compose.yml on the same SHA.
+# methodology_versions embedding@1.0.0 (sentence-transformers 2.7.0,
+# migration 012) and, since the library moved to sentence-transformers 6.1.0
+# with the same model and revision, embedding@1.1.0 (migration 065) — the
+# version the Node pipeline records on new vectors (src/pipeline/embeddings.js).
+# tests/unit/pure/methodologyRegistry.test.js keeps this default,
+# python/Dockerfile and docker-compose.yml on the same SHA.
 MODEL_REVISION = os.getenv("EMBED_MODEL_REVISION", "1110a243fdf4706b3f48f1d95db1a4f5529b4d41")
 BATCH_SIZE = int(os.getenv("EMBED_BATCH_SIZE", "64"))
 
@@ -117,6 +122,10 @@ async def health():
             "status": "healthy",
             "model": MODEL_NAME,
             "revision": MODEL_REVISION,
+            # The installed library, in the form of the embedding methodology
+            # row's config.library (embedding@1.1.0: sentence-transformers==6.1.0),
+            # so an operator can confirm a rebuilt image runs the registered one.
+            "library": f"sentence-transformers=={SENTENCE_TRANSFORMERS_VERSION}",
             "model_loaded": model_loaded,
             "load_time_s": round(_model_load_time, 2) if _model_load_time else None,
             "embedding_dims": 384,

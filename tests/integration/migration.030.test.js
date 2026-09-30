@@ -26,7 +26,10 @@ describe('migration 030_methodology_errata.sql (relevance@1.0.0 erratum)', () =>
         const after = await dbGet(`SELECT * FROM methodology_versions WHERE component = 'relevance' AND version = '1.0.0'`);
         expect(after).toEqual(before);
 
-        const rows = await dbAll('SELECT methodology_version_id, erratum_key, corrected_by, erratum FROM methodology_errata');
+        // Only migration 030's relevance@1.0.0 row (later errata, e.g. the
+        // bias ones of migration 061, are seeded too and checked there).
+        const rows = await dbAll(`SELECT methodology_version_id, erratum_key, corrected_by, erratum FROM methodology_errata
+                                  WHERE erratum_key = 'relevance-1.0.0-config-mismatch'`);
         expect(rows).toHaveLength(1);
         const e = METHODOLOGY_ERRATA[0];
         expect(rows[0]).toEqual({
@@ -39,7 +42,7 @@ describe('migration 030_methodology_errata.sql (relevance@1.0.0 erratum)', () =>
         expect(await dbAll('SELECT id FROM methodology_errata')).toEqual([]);
     });
 
-    it('GET /api/methodology serves the erratum with relevance@1.0.0 only', async () => {
+    it('GET /api/methodology serves the erratum with relevance@1.0.0, and the bias ones with their versions only', async () => {
         await seedMethodology();
         await seedErrata();
         const res = await request(app).get('/api/methodology');
@@ -48,7 +51,16 @@ describe('migration 030_methodology_errata.sql (relevance@1.0.0 erratum)', () =>
         expect(v100.errata).toHaveLength(1);
         expect(v100.errata[0]).toMatchObject({ corrected_by: 'relevance@1.1.0' });
         expect(v100.errata[0].erratum).toMatch(/does not describe the code that produced its decisions/);
-        for (const r of res.body.filter(x => !(x.component === 'relevance' && x.version === '1.0.0'))) {
+        // Migration 061 (audit drift D-2): bias@1.4.0 and 1.5.0 each carry
+        // the parity erratum, corrected by bias@1.6.0.
+        const corrected = [['relevance', '1.0.0'], ['bias', '1.4.0'], ['bias', '1.5.0']];
+        for (const [component, version] of corrected.slice(1)) {
+            const row = res.body.find(r => r.component === component && r.version === version);
+            expect(row.errata).toHaveLength(1);
+            expect(row.errata[0]).toMatchObject({ corrected_by: 'bias@1.6.0' });
+            expect(row.errata[0].erratum).toMatch(/recorded metric_value 0/);
+        }
+        for (const r of res.body.filter(x => !corrected.some(([c, v]) => x.component === c && x.version === v))) {
             expect(r.errata).toEqual([]);
         }
     });

@@ -11,7 +11,8 @@
 //     audit_narration@1.2.0 (009 is released, so later versions ship as
 //     new migrations);
 //   - src/db/migrations/012_embedding_methodology.sql inserts embedding@1.0.0
-//     (the pinned embedding model revision, P9-5);
+//     (the pinned embedding model revision, P9-5); 065 inserts
+//     embedding@1.1.0 (sentence-transformers 6.1.0, same model and revision);
 //   - tests/integration/helpers.js registers the real bias/ingest rows.
 // A component may list several versions (history is kept); the renderer's
 // current version is the LAST entry for its component.
@@ -665,6 +666,49 @@ const METHODOLOGY_VERSIONS = [
     });
 })();
 
+// bias@1.6.0 — audit drift D-2 (2026-09-30): bias@1.4.0 / 1.5.0 register
+// that below a minimum "the value is stated", but the parity check recorded
+// 0 on its "insufficient sample" rows. 1.6.0 records the computed gap (the
+// largest pairwise difference across ALL the job's categories, small ones
+// included); still no violation, no alert. Everything else is bias@1.5.0.
+// Rows recorded under 1.4.0 / 1.5.0 keep their 0 (reproduced as they ran,
+// src/pipeline/bias.js reads parity_insufficient_value); the errata below
+// say so next to those versions.
+(() => {
+    const prev = METHODOLOGY_VERSIONS.find(m => m.component === 'bias' && m.version === '1.5.0');
+    METHODOLOGY_VERSIONS.push({
+        component: 'bias',
+        version: '1.6.0',
+        model_name: prev.model_name,
+        config: {
+            ...prev.config,
+            // Read by src/pipeline/bias.js checkPlatformSentimentParity
+            parity_insufficient_value: 'max_diff_all_categories',
+            sample_rules: {
+                ...prev.config.sample_rules,
+                platform_sentiment_parity: 'only categories with at least 10 posts are compared (parity_min_per_category); fewer '
+                    + 'than two such categories: insufficient sample, stating the largest pairwise gap in average comparative '
+                    + 'sentiment across all the job\'s categories (0 when it has fewer than two)',
+            },
+            changelog: [
+                'bias@1.6.0 (audit drift D-2, 2026-09-30): a platform-parity "insufficient sample" assessment states its computed '
+                    + 'value (the largest pairwise gap across all categories, small ones included) instead of 0, as '
+                    + 'sample_rules.below_minimum registered since bias@1.4.0; no violation and no alert, as before',
+            ],
+        },
+        justification: 'bias@1.6.0 makes the platform sentiment parity check (Barocas & Selbst 2016) do what bias@1.4.0 and '
+            + 'bias@1.5.0 registered for every check below its minimum sample: "the value is stated". When fewer than two source '
+            + 'categories have at least 10 posts in the job, the assessment is still recorded as "insufficient sample" with no '
+            + 'violation and no alert, but its value is now the largest pairwise difference in average comparative sentiment '
+            + 'across all of the job\'s categories, small ones included (0 when the job has fewer than two categories), with the '
+            + 'pair named in the evidence. Until now the check recorded 0 there, so a reader could not tell a small gap from a '
+            + 'large one. Location concentration and negative dominance already stated their values. Assessments recorded under '
+            + 'bias@1.4.0 and bias@1.5.0 are kept as they ran (0); an erratum on each of those versions records the difference. '
+            + 'Thresholds, minimum samples, the rolling 24-hour window, names, citations and planned layers are as in bias@1.5.0 '
+            + '(AI Act Article 13).',
+    });
+})();
+
 // admission_filter@1.0.0 — PR #22 G6 (Jennifer, 2026-09-29): the collection
 // admission filter (src/collectors/ai-filter.js) decides which items are
 // stored, so it is a versioned methodology component. The config IS the
@@ -704,6 +748,59 @@ const METHODOLOGY_VERSIONS = [
     });
 })();
 
+// embedding@1.1.0 — Dependabot #29 (Jennifer McKinney 2026-09-30: "Adopt as
+// embedding@1.1.0"): the embeddings service moves from sentence-transformers
+// 2.7.0 to 6.1.0 (transformers 5, huggingface_hub 1, tokenizers 0.23) with
+// the SAME model and pinned revision. The library is part of the methodology
+// (config.library), so the bump is a new version row, registered by migration
+// 065; embedding@1.0.0 is never edited. Pushed last among the embedding rows,
+// so it is CURRENT_VERSIONS.embedding and src/pipeline/embeddings.js records
+// it on every new vector. tests/unit/pure/embeddingLibraryPins.test.js holds
+// config.library and config.library_dependencies to python/requirements.txt,
+// requirements-service.in and the hash lock.
+(() => {
+    const prev = METHODOLOGY_VERSIONS.find(m => m.component === 'embedding' && m.version === '1.0.0');
+    METHODOLOGY_VERSIONS.push({
+        component: 'embedding',
+        version: '1.1.0',
+        model_name: prev.model_name,
+        config: {
+            ...prev.config,
+            library: 'sentence-transformers==6.1.0',
+            // Must equal python/requirements-service.in and requirements-service.txt
+            library_dependencies: {
+                transformers:    '5.18.0',
+                huggingface_hub: '1.33.0',
+                tokenizers:      '0.23.2',
+                torch:           '2.12.1+cpu',
+            },
+            lock: 'python/requirements-service.txt (pip-compile --generate-hashes, installed with --require-hashes)',
+            equivalence: {
+                compared_with: 'embedding@1.0.0 (sentence-transformers 2.7.0, transformers 4.57.6, huggingface_hub 0.36.2, tokenizers 0.22.2), same torch build on each platform',
+                texts: 12,
+                result: 'bit-identical float32 vectors (normalised and raw), identical token ids; max abs difference 0, minimum cosine 1.0',
+                platforms: ['macOS arm64 (virtualenv)', 'linux/arm64 (embeddings image)', 'linux/amd64 (embeddings image, emulated)'],
+            },
+            changelog: [
+                'embedding@1.1.0 (Dependabot #29, 2026-09-30): sentence-transformers 2.7.0 -> 6.1.0 with transformers 5.18.0, '
+                    + 'huggingface_hub 1.33.0 and tokenizers 0.23.2; same model, revision, dimensions and normalisation; '
+                    + 'vectors bit-identical to embedding@1.0.0 on the comparison set',
+            ],
+        },
+        justification: 'embedding@1.1.0 moves the embeddings service from sentence-transformers 2.7.0 to 6.1.0, which brings '
+            + 'transformers 5.18.0, huggingface_hub 1.33.0 and tokenizers 0.23.2 (torch stays 2.12.1+cpu). The model is the same '
+            + 'all-MiniLM-L6-v2 (Reimers & Gurevych 2019) at the same pinned Hugging Face commit, with 384 dimensions and L2 '
+            + 'normalisation, so cosine similarity is still a dot product. The library is part of the methodology because a new '
+            + 'version could change the vectors; it was therefore compared before adoption: 12 test texts (English, French, '
+            + 'Chinese, an emoji line, an empty string, a single character and a text longer than the 256-token limit, which '
+            + 'exercises truncation) were embedded with both versions on macOS arm64, and inside the embeddings image on '
+            + 'linux/arm64 and linux/amd64, each version against its own torch build of that platform. On every platform the vectors were bit-identical (maximum absolute difference 0, '
+            + 'minimum cosine similarity 1.0), normalised and raw, and the token ids were identical. Vectors recorded under '
+            + 'embedding@1.0.0 therefore stay directly comparable with new ones and are not re-embedded. New vectors record '
+            + 'embedding@1.1.0; the embedding@1.0.0 row is kept unedited.',
+    });
+})();
+
 // ─── Errata (P10-16) ─────────────────────────────────────────────────────────
 // A released methodology row is never edited, even when it turns out not to
 // describe the code that ran. An erratum is a NEW row in
@@ -723,6 +820,20 @@ const METHODOLOGY_ERRATA = [
             + 'relevance@1.1.0\'s config; `npm run replay` re-runs them with that rule. The 1.0.0 row is kept unedited as it '
             + 'was registered. Found by the replay tool (ADR 0001, methodology alignment); recorded 2026-09-29 (PR #10 review P10-16).',
     },
+    // Audit drift D-2 (2026-09-30), corrected by bias@1.6.0 (migration 061).
+    ...['1.4.0', '1.5.0'].map(version => ({
+        component: 'bias',
+        version,
+        erratum_key: `bias-${version}-parity-insufficient-value`,
+        corrected_by: 'bias@1.6.0',
+        erratum: `bias@${version} registers that an assessment below its minimum sample is recorded as "insufficient sample" `
+            + 'with its value stated. The platform sentiment parity check did not do that: its "insufficient sample" rows '
+            + '(fewer than two categories with at least 10 posts) recorded metric_value 0, not the computed gap between '
+            + 'categories. Read those rows as "insufficient sample, value not recorded"; the category averages are in the '
+            + 'row\'s evidence. Location concentration and negative dominance did state their values. bias@1.6.0 records the '
+            + `gap. The bias@${version} row is kept unedited as it was registered. Found by the documentation audit (drift D-2); `
+            + 'recorded 2026-09-30.',
+    })),
 ];
 
 /**

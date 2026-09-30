@@ -1,6 +1,7 @@
 // src/workers/maintenance.worker.js
 // The worker's repeatable `maintenance` jobs (P10-2; cadence split by PR #22
-// principal #7). Two BullMQ job schedulers on the `maintenance` queue:
+// principal #7; 'terms' added by PR #22 P1-13). Three BullMQ job schedulers
+// on the `maintenance` queue:
 //
 //   'retention'  every MAINTENANCE_EVERY_MS (default 5 minutes) — the short
 //                platform-terms windows (Reddit 48 h) need it:
