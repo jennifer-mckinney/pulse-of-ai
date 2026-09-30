@@ -116,6 +116,56 @@ describe('48-hour retention: text blanked, scores and audit rows kept (ruling 9)
     });
 });
 
+// PR #22 decision G3 (Jennifer, 2026-09-29): the embedding is derived from
+// the text, so platform-terms blanking deletes it in the same transaction;
+// scores and audit rows stay (ruling 9). The §19 detail window leaves
+// embeddings to monthly compaction.
+describe('G3: platform-terms blanking deletes the post embedding, keeps scores and audit rows', () => {
+    const embeddings = async (id) => (await db.dbGet('SELECT COUNT(*)::int AS n FROM post_embeddings WHERE raw_post_id = $1', [id])).n;
+    const embed = (id) => db.dbRun('INSERT INTO post_embeddings (raw_post_id) VALUES ($1)', [id]);
+
+    it('48 h window: the blanked post loses its embedding, the fresh one and other sources keep theirs', async () => {
+        const old = await redditPost('t3_emb01', 49);
+        const fresh = await redditPost('t3_emb02', 1);
+        const hn = await insertPostWithFullPipeline(ids.hacker_news, jobId, mv, { externalId: 'hn:emb', collectedAt: new Date(Date.now() - 100 * HOUR) });
+        for (const id of [old, fresh, hn]) await embed(id);
+        const before = await snapshotRows(old);
+
+        await retention.blankExpired();
+        expect(await embeddings(old)).toBe(0);
+        expect(await embeddings(fresh)).toBe(1);
+        expect(await embeddings(hn)).toBe(1);
+        const after = await snapshotRows(old);
+        for (const k of ['audit', 'sentiment', 'relevance', 'discourse']) expect([k, after[k]]).toEqual([k, before[k]]);
+        const log = JSON.parse((await db.dbGet(`SELECT reason FROM data_retention_log WHERE action = 'blanked_platform_terms'`)).reason);
+        expect(log).toMatchObject({ post_ids: [old], embeddings_deleted: 1, retained: expect.stringMatching(/embedding.*deleted.*G3/) });
+    });
+
+    it('upstream deletion (blankPosts) deletes the embedding in the same transaction; a failed blank keeps it', async () => {
+        const r = await redditPost('t3_emb03', 1);
+        await embed(r);
+        // The whole batch rolls back when the log insert fails: text AND embedding stay.
+        await expect(db.dbTransaction(async (client) => {
+            await retention.blankPlatformPosts(client, 'reddit', [r], { reason: 'x', rule: 'x', performedBy: 'test' });
+            throw new Error('abort');
+        })).rejects.toThrow('abort');
+        expect(await embeddings(r)).toBe(1);
+        expect((await db.dbGet('SELECT text_removed_at FROM raw_posts WHERE id = $1', [r])).text_removed_at).toBeNull();
+
+        expect(await retention.blankPosts('reddit', [r], { reason: 'deleted upstream' })).toEqual([r]);
+        expect(await embeddings(r)).toBe(0);
+    });
+
+    it('the detail window (§19) blanks text but leaves the embedding to compaction', async () => {
+        const hn = await insertPostWithFullPipeline(ids.hacker_news, jobId, mv, { externalId: 'hn:old', collectedAt: new Date(Date.now() - 91 * 24 * HOUR) });
+        await embed(hn);
+        expect((await retention.blankExpired()).hacker_news).toBe(1);
+        expect(await embeddings(hn)).toBe(1);
+        const log = JSON.parse((await db.dbGet(`SELECT reason FROM data_retention_log WHERE action = 'text_removed_detail_window'`)).reason);
+        expect(log).not.toHaveProperty('embeddings_deleted');
+    });
+});
+
 describe('6-hourly deletion re-check (/api/info, fixtures)', () => {
     const thing = (name, extra = {}) => ({ kind: 't3', data: { name, subreddit: 'OpenAI', subreddit_type: 'public', title: 'AI', selftext: 'x', ...extra } });
 

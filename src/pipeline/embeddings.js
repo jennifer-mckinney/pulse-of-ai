@@ -152,6 +152,10 @@ async function missingPost(postId) {
  * read and this write gets no vector (null is returned). A purge that
  * commits during the insert surfaces as a foreign-key violation (23503),
  * also returned as null — the caller re-reads the post's state.
+ * FOR SHARE (PR #22 G3): a concurrent blanking either waits for this insert
+ * and then deletes the new vector in its own transaction, or commits first
+ * and this re-checked WHERE excludes the blanked post — never a vector left
+ * behind for removed text.
  * @returns {Promise<string|null>} post_embeddings.id, or null
  */
 async function saveEmbeddingIfTextStored(postId, embedding, modelName = MODEL_NAME) {
@@ -162,6 +166,7 @@ async function saveEmbeddingIfTextStored(postId, embedding, modelName = MODEL_NA
              SELECT rp.id, $2::vector, $3, $4
              FROM raw_posts rp
              WHERE rp.id = $1 AND rp.text_removed_at IS NULL
+             FOR SHARE OF rp
              ON CONFLICT (raw_post_id) DO UPDATE
                 SET embedding           = EXCLUDED.embedding,
                     model_name          = EXCLUDED.model_name,
