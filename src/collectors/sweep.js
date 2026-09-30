@@ -7,6 +7,14 @@
 // 24 h (and more than SETTLE_MS ago, so posts still being scored inline
 // are left alone) with no sentiment_results row is re-queued for scoring.
 // Scoring is idempotent, so a re-queued post only fills its missing stages.
+//
+// PR #22 P1-5 / grumpy #2: scoring now runs on the ingest queue, so a post
+// can be unscored for longer than SETTLE_MS simply because the queue is
+// behind. The sweep asks isPending(jobIds) — the worker passes
+// src/queues/pending.js anyPending on the ingest queue — and SKIPS every
+// post that still has a waiting / delayed / active scoring job (score-,
+// retry-, or an earlier sweep- job). A backlog is never fed duplicates, and
+// the reserved job keeps the post's cycle attribution.
 
 'use strict';
 
@@ -16,11 +24,17 @@ const SWEEP_WINDOW_HOURS = 24;
 const SETTLE_MS = 5 * 60 * 1000;
 const SWEEP_LIMIT = 500;
 
+/** The ingest job ids that may still be scoring a post (this hour's and the previous hour's sweep). */
+function pendingJobIds(rawPostId, bucket) {
+    return [`score-${rawPostId}`, `retry-${rawPostId}`, `sweep-${rawPostId}-${bucket}`, `sweep-${rawPostId}-${bucket - 1}`];
+}
+
 /**
- * @param {{ enqueue: (data: object, jobKey: string) => Promise<unknown>, now?: () => number }} o
- * @returns {Promise<{ found: number, queued: number, failed: number }>}
+ * @param {{ enqueue: (data: object, jobKey: string) => Promise<unknown>, now?: () => number,
+ *           isPending?: (jobIds: string[]) => Promise<boolean> }} o
+ * @returns {Promise<{ found: number, queued: number, pending: number, failed: number }>}
  */
-async function sweepUnscored({ enqueue, now = () => Date.now(), limit = SWEEP_LIMIT } = {}) {
+async function sweepUnscored({ enqueue, isPending = async () => false, now = () => Date.now(), limit = SWEEP_LIMIT } = {}) {
     const rows = await dbAll(
         `SELECT rp.id, rp.source_id
          FROM raw_posts rp
@@ -35,16 +49,18 @@ async function sweepUnscored({ enqueue, now = () => Date.now(), limit = SWEEP_LI
     // One queued retry per post per hour (BullMQ dedupes on the job key).
     const bucket = Math.floor(now() / 3600000);
     let queued = 0;
+    let pending = 0;
     let failed = 0;
     for (const r of rows) {
         try {
+            if (await isPending(pendingJobIds(r.id, bucket))) { pending++; continue; }
             await enqueue({ rawPostId: r.id, sourceId: r.source_id, jobId: null }, `sweep-${r.id}-${bucket}`);
             queued++;
         } catch {
             failed++;
         }
     }
-    return { found: rows.length, queued, failed };
+    return { found: rows.length, queued, pending, failed };
 }
 
-module.exports = { sweepUnscored, SWEEP_WINDOW_HOURS, SETTLE_MS };
+module.exports = { sweepUnscored, pendingJobIds, SWEEP_WINDOW_HOURS, SETTLE_MS };

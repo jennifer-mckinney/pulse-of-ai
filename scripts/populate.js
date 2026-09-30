@@ -326,7 +326,8 @@ async function closeQueues() {
 /** Enqueue one embed job per post — the worker container does the embedding. */
 async function enqueueEmbeddings(postIds) {
     const { embedQueue } = getQueues();
-    await embedQueue.addBulk(postIds.map(rawPostId => ({ name: 'embed-post', data: { rawPostId } })));
+    // PR #22 P1-5: one embed job per post (deterministic id).
+    await embedQueue.addBulk(require('../src/queues/pending').embedJobs(postIds));
 }
 
 /** Poll post_embeddings until every post is embedded or the timeout passes. */

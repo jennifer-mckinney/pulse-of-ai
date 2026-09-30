@@ -61,8 +61,10 @@ function defaultQueues() {
     let q = null;
     const get = () => (q = q || require('../queues/index'));
     return {
-        enqueueEmbeds: ids => get().embedQueue.addBulk(ids.map(rawPostId => ({ name: 'embed-post', data: { rawPostId } }))),
-        enqueueIngestRetry: data => get().ingestQueue.add('ingest-retry', data),
+        // PR #22 P1-5: deterministic job ids (src/queues/pending.js), so a
+        // second enqueue of the same post is a no-op while the first exists.
+        enqueueEmbeds: ids => get().embedQueue.addBulk(require('../queues/pending').embedJobs(ids)),
+        enqueueIngestRetry: data => get().ingestQueue.add('ingest-retry', data, { jobId: `retry-${data.rawPostId}` }),
         // P10-12: scoring off the collect event loop — one ingest job per
         // new post, deduplicated per post.
         enqueueIngest: data => get().ingestQueue.add('ingest-score', data, { jobId: `score-${data.rawPostId}` }),

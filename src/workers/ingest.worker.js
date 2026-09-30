@@ -20,6 +20,7 @@
 'use strict';
 
 const { scorePost } = require('../pipeline/ingest');
+const { embedJobId } = require('../queues/pending');
 const { passesEmbedGate, EMBED_GATE_MIN_SCORE } = require('../pipeline/relevance');
 const { resolveCurrentMethodology } = require('../pipeline/methodology');
 const { embedQueue } = require('../queues/index');
@@ -87,7 +88,8 @@ async function embedIfGated(rawPostId, relevance) {
     if (!passesEmbedGate(relevance.score)) {
         return { rawPostId, relevance: Number(relevance.score), embedJobId: null };
     }
-    const embedJob = await embedQueue.add('embed-post', { rawPostId });
+    // PR #22 P1-5: one embed job per post (deterministic id).
+    const embedJob = await embedQueue.add('embed-post', { rawPostId }, { jobId: embedJobId(rawPostId) });
     return { rawPostId, relevance: Number(relevance.score), embedJobId: embedJob.id };
 }
 

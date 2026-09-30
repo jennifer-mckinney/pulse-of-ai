@@ -67,7 +67,7 @@ test('one keyword match passes the embed gate → an embed job is queued', async
     scorePost.mockResolvedValue({ relevance: { score: String(one.score) } });
     const r = await processIngestJob(job());
     expect(r).toEqual({ rawPostId: 'post-1', relevance: 1 / 21, embedJobId: 'embed-job-1' });
-    expect(embedQueue.add).toHaveBeenCalledWith('embed-post', { rawPostId: 'post-1' });
+    expect(embedQueue.add).toHaveBeenCalledWith('embed-post', { rawPostId: 'post-1' }, { jobId: 'embed-post-1' });   // P1-5: deterministic id
 });
 
 test('no keyword match → no embed job', async () => {

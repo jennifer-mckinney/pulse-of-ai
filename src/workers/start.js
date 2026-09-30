@@ -36,6 +36,7 @@ const { Worker } = require('bullmq');
 const { connection, ingestQueue, maintenanceQueue } = require('../queues/index');
 const { processMaintenanceJob, scheduleMaintenance } = require('./maintenance.worker');
 const { sweepUnscored } = require('../collectors/sweep');
+const { anyPending } = require('../queues/pending');
 const { createRedisClient } = require('../queues/connection');
 const { startHeartbeat } = require('./heartbeat');
 const { processCollectJob, processRefreshJob } = require('./collect.worker');
@@ -147,10 +148,12 @@ async function closeDueCyclesOnce() {
     }
     // G10-4: re-queue posts from the last 24 h that were never scored.
     try {
+        // PR #22 P1-5: posts with a scoring job still pending are skipped.
         const s = await sweepUnscored({
             enqueue: (data, key) => ingestQueue.add('ingest-sweep', data, { jobId: key }),
+            isPending: ids => anyPending(ingestQueue, ids),
         });
-        if (s.found) log(`[sweep] ${s.found} unscored post(s): ${s.queued} re-queued, ${s.failed} failed`);
+        if (s.found) log(`[sweep] ${s.found} unscored post(s): ${s.queued} re-queued, ${s.pending} still queued, ${s.failed} failed`);
     } catch (err) {
         logError(`[sweep] failed: ${err.message}`);
     }
