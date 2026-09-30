@@ -45,10 +45,13 @@
 require('dotenv').config();
 const { dbAll, dbTransaction, closePool } = require('../src/db/connection');
 const { DEMO_SOURCE_TYPE, DEMO_PURGE_ACTION } = require('../src/config/data-mode');
-const { getSource } = require('../src/config/source-registry');
+const { getSource, retentionDetailDays } = require('../src/config/source-registry');
 const { removeTextBatch } = require('../src/collectors/retention');
 
-const RETENTION_DAYS = parseInt(process.env.RETENTION_DETAIL_DAYS || '90', 10);
+// M1: the detail window is read per call through the strict registry
+// parser (src/config/source-registry.js retentionDetailDays): a bad
+// RETENTION_DETAIL_DAYS throws before anything is purged or compacted.
+const retentionDays = () => retentionDetailDays(process.env);
 
 // Demo purge batch size: bounded so one transaction never holds locks on an
 // unbounded set of rows. Clamped to [1, 5000]; default 500 posts per batch.
@@ -82,7 +85,7 @@ let targetMonth = null;
 
 function getCutoffDate() {
     const d = new Date();
-    d.setDate(d.getDate() - RETENTION_DAYS);
+    d.setDate(d.getDate() - retentionDays());
     return d;
 }
 
@@ -210,7 +213,7 @@ async function compactMonth(client, rollupMonth, { log = console.log } = {}) {
         const platform = !!(src && src.retention);
         const ids = await removeTextBatch(client, row.name, row.ids, {
             reason: platform ? `${src.retention.maxAgeHours}-hour retention window ended` : 'monthly compaction (spec §19)',
-            rule: platform ? `${src.retention.maxAgeHours}-hour retention` : `${RETENTION_DAYS}-day detail window (spec §19)`,
+            rule: platform ? `${src.retention.maxAgeHours}-hour retention` : `${retentionDays()}-day detail window (spec §19)`,
             performedBy: 'scripts/compact.js', platform,
         });
         contentRemoved += ids.length;
@@ -232,7 +235,7 @@ async function compactMonth(client, rollupMonth, { log = console.log } = {}) {
         VALUES (NULL, 'compacted', $1, 'GDPR Article 5(1)(e) - Storage Limitation', 'scripts/compact.js')
     `, [JSON.stringify({
         summary: `Month ${monthStart} compacted into monthly rollups.`,
-        month: monthStart, retention_days: RETENTION_DAYS, posts_in_month: count,
+        month: monthStart, retention_days: retentionDays(), posts_in_month: count,
         topic_rollup_rows: topic.rowCount, source_rollup_rows: source.rowCount,
         texts_removed_now: contentRemoved, embeddings_deleted: embeddingsDeleted,
     })]);
@@ -391,7 +394,7 @@ async function purgeDemoBatch(client, { cutoff, batchSize }) {
         VALUES (NULL, $3, $1, $2, 'scripts/compact.js')
     `, [JSON.stringify({
         summary: 'Fictional demo data past the retention boundary deleted.',
-        retention_days: RETENTION_DAYS,
+        retention_days: retentionDays(),
         cutoff: cutoffIso,
         window,
         counts,
@@ -457,6 +460,7 @@ function defaultRemoveEmbedJobs(ids) {
  * Used by the worker's maintenance job. @returns {Promise<object>} counts
  */
 async function runCompaction({ log = console.log, removeEmbedJobs = defaultRemoveEmbedJobs } = {}) {
+    retentionDays();   // M1: a bad window throws here, before the purge
     const purge = await purgeDemoPosts({ log, removeEmbedJobs });
     const months = await getMonthsToCompact();
     const total = { months: months.length, postsCompacted: 0, embeddingsDeleted: 0, contentNulled: 0 };

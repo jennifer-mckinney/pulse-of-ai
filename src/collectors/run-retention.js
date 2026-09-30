@@ -20,6 +20,7 @@
 'use strict';
 
 const { dbTransaction } = require('../db/connection');
+const { retentionWindowDays } = require('../config/source-registry');
 
 const DEFAULT_RAW_DAYS = 30;
 const DEFAULT_JOB_DAYS = 30;
@@ -29,7 +30,8 @@ const days = (v, d) => { const n = parseInt(v || '', 10); return Number.isFinite
 
 /** @returns {Promise<{ rolledUp: number, batches: number }>} */
 async function rollupSourceRuns({ env = process.env, batch = BATCH } = {}) {
-    const keep = days(env.SOURCE_RUNS_RAW_DAYS, DEFAULT_RAW_DAYS);
+    // M1: strict — a bad SOURCE_RUNS_RAW_DAYS throws, nothing is removed.
+    const keep = retentionWindowDays(env, { name: 'SOURCE_RUNS_RAW_DAYS', def: DEFAULT_RAW_DAYS, min: 7 });
     let rolledUp = 0; let batches = 0;
     for (;;) {
         const n = await dbTransaction(async (client) => {

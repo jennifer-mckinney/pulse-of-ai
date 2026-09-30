@@ -1205,8 +1205,39 @@ function sourceStatus(src, env = process.env) {
  */
 function retentionHours(src, env = process.env) {
     if (src && src.retention && src.retention.maxAgeHours > 0) return src.retention.maxAgeHours;
-    const days = parseInt(env.RETENTION_DETAIL_DAYS || '', 10);
-    return (Number.isFinite(days) && days > 0 ? days : 90) * 24;
+    return retentionDetailDays(env) * 24;
+}
+
+// PR #22 security M1: ONE strict parser for every retention window. The
+// maintenance job acts on these values irreversibly every few minutes, so a
+// bad value (0, negative, "1e3" which parseInt reads as 1, text, below the
+// safe minimum) THROWS a clear error: the destructive step fails and changes
+// nothing. It never falls back to another value. Unset or empty means the
+// documented default.
+const RETENTION_DETAIL_DAYS_DEFAULT = 90;
+const RETENTION_DETAIL_DAYS_MIN = 30;
+const RETENTION_WINDOW_DAYS_MAX = 3650;
+
+/**
+ * @param {object} env
+ * @param {{ name: string, def: number, min: number, max?: number }} o
+ * @returns {number} whole days
+ */
+function retentionWindowDays(env, { name, def, min, max = RETENTION_WINDOW_DAYS_MAX }) {
+    const raw = env ? env[name] : undefined;
+    if (raw === undefined || raw === null || String(raw).trim() === '') return def;
+    const t = String(raw).trim();
+    const n = /^\d+$/.test(t) ? Number(t) : NaN;
+    if (!Number.isSafeInteger(n) || n < min || n > max) {
+        throw new Error(`${name}=${JSON.stringify(t)} is not a valid retention window: a whole number of days from ${min} `
+            + `to ${max} is required (unset means ${def}). Nothing is removed until it is fixed.`);
+    }
+    return n;
+}
+
+/** The spec §19 detail window in days (RETENTION_DETAIL_DAYS, default 90, minimum 30). */
+function retentionDetailDays(env = process.env) {
+    return retentionWindowDays(env, { name: 'RETENTION_DETAIL_DAYS', def: RETENTION_DETAIL_DAYS_DEFAULT, min: RETENTION_DETAIL_DAYS_MIN });
 }
 
 /**
@@ -1412,6 +1443,10 @@ module.exports = {
     sourceStatus,
     pollIntervalSec,
     retentionHours,
+    retentionDetailDays,
+    retentionWindowDays,
+    RETENTION_DETAIL_DAYS_MIN,
+    RETENTION_DETAIL_DAYS_DEFAULT,
     quotaAudit,
     CADENCE_BAND_SEC,
     collectWindowMs,

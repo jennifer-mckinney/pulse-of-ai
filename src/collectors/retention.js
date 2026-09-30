@@ -40,7 +40,7 @@
 'use strict';
 
 const { dbAll, dbGet, dbTransaction } = require('../db/connection');
-const { getSource, retentionHours } = require('../config/source-registry');
+const { getSource, retentionHours, retentionDetailDays } = require('../config/source-registry');
 const { DEMO_SOURCE_TYPE } = require('../config/data-mode');
 // P1-8: every payload key ingest declares as text (ingest@1.6.0
 // payload_text_keys_not_stored), so a legacy row's body / content /
@@ -155,6 +155,9 @@ async function blankPosts(slug, postIds, { reason, performedBy = 'src/collectors
  */
 async function blankExpired({ batchSize = DEFAULT_BATCH, log = () => {}, env = process.env } = {}) {
     const size = Math.min(Math.max(Number.isInteger(batchSize) ? batchSize : DEFAULT_BATCH, 1), MAX_BATCH);
+    // M1: validate the window BEFORE touching any source — a bad
+    // RETENTION_DETAIL_DAYS fails the step and blanks nothing.
+    retentionDetailDays(env);
     const totals = {};
     const sources = await dbAll(
         'SELECT name FROM data_sources WHERE source_type <> $1 ORDER BY name', [DEMO_SOURCE_TYPE]);

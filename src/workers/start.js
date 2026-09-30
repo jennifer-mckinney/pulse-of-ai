@@ -157,6 +157,14 @@ const timer = setInterval(schedule, RESCHEDULE_MS);
 const cycleTimer = setInterval(closeDueCycles, 30 * 1000);
 const redditTimer = setInterval(redditMaintenance, MAINTENANCE_MS);
 
+// M1: a bad retention window is reported at boot (the maintenance steps
+// that depend on it fail, and change nothing, until it is fixed).
+try {
+    require('../config/source-registry').retentionDetailDays();
+} catch (err) {
+    logError(`[retention] ${err.message}`);
+}
+
 if (POOL.short) {
     logError(`[pool] PG_POOL_MAX=${POOL.size} is below the ${POOL.required} connections this worker's concurrency can use; `
         + 'jobs will wait for connections (src/db/pool-size.js)');

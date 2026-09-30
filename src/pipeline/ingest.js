@@ -216,7 +216,7 @@ async function storeRawPost(rawPayloadIn, sourceId, { ingestMvId = null } = {}) 
             ingestMvId,
             JSON.stringify({
                 source: source ? source.name : null,
-                text_retention_hours: retentionHours(src),
+                text_retention_hours: safeRetentionHours(src),
                 text_retention_basis: src && src.retention ? 'platform terms' : 'detail window (spec §19)',
             }),
             COLLECTED_LEGAL_BASIS,
@@ -242,6 +242,11 @@ async function storeRawPost(rawPayloadIn, sourceId, { ingestMvId = null } = {}) 
  * @param {{ sentimentMvId, relevanceMvId, discourseMvId }} mvIds
  * @returns {Promise<{ sentiment: object, relevance: object, discourse: object }>}
  */
+/** The window stated on the collected row; null (never a guess) when the configured window is invalid (M1). */
+function safeRetentionHours(src) {
+    try { return retentionHours(src); } catch { return null; }
+}
+
 async function scorePost(postId, jobId, mvIds) {
     const [sentiment, relevance, discourse] = await Promise.all([
         saveSentiment(postId, jobId, mvIds.sentimentMvId),
