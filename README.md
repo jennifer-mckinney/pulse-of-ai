@@ -162,7 +162,11 @@ Re-running is safe. The images come from the build cache, running containers are
 | `postgres_test` | `5433` (`POSTGRES_TEST_PORT`) | Test database (not used by the running app) |
 | `redis` | `6379` (`REDIS_PORT`) | Valkey 8, the BullMQ queue backend (`valkey_data` volume). It speaks the Redis protocol, so the service name and the `REDIS_*` variables keep that name. Password required (`REDIS_PASSWORD`) |
 
-**Upgrading a stack that ran Redis 7.** The queue store is now Valkey 8 on a new `valkey_data` volume. Redis 7.4 writes RDB format 12, which Valkey 8 will not load, so the old `redis_data` volume is left unused rather than reused. Nothing needs migrating because the queue data is transient: the worker re-registers every schedule when it starts. Stop the stack cleanly, bring it back up, and once it is healthy remove the old volume with `docker volume rm <project>_redis_data`.
+**Upgrading a stack that ran Redis 7.** The queue store is now Valkey 8 on a new `valkey_data` volume. Redis 7.4 writes RDB format 12, which Valkey 8 will not load, so the old `redis_data` volume is left unused rather than reused. Schedules need no migrating: the worker re-registers every schedule when it starts. Jobs still queued at the switch are dropped, though, and a later collection does not fetch their items again (stored posts are deduplicated):
+
+1. **Drain first.** Switch collection off with the database kill switch for each collecting source (`npm run source:disable -- <slug> --reason "valkey upgrade"`; undo with `source:enable` afterwards), then wait until `GET /api/health` shows `worker.queues.ingest` and `worker.queues.embed` with 0 waiting, active and delayed.
+2. **Upgrade within 24 hours of the last collection.** Dropped scoring jobs are recovered only by the unscored-post sweep, which looks back 24 hours; their collection cycles close at the 15-minute hard cap. Dropped embed jobs are not recovered at all.
+3. Stop the stack cleanly (`docker stop` gives the worker 180 s to finish in-flight jobs), bring it back up, and once it is healthy remove the old volume with `docker volume rm <project>_redis_data`.
 
 Every published port (web and the databases and redis) binds to `127.0.0.1` by default (`PULSE_BIND_ADDR`). Setting `PULSE_BIND_ADDR=0.0.0.0` exposes all of them to your network, databases included. To run a second stack beside this one, give it its own project name and ports:
 
