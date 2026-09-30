@@ -22,6 +22,8 @@
 //                  (src/collectors/status.js). "Sources online" = online:
 //                  collecting AND succeeded within the last hour.
 //
+//   alerts_closed  { resolved, superseded } — closed alerts by kind (G1,
+//                  migration 036 alert_status view)
 //   redis          { reachable } — an authenticated PING answered (P9-7)
 //   worker         { alive, last_heartbeat, queues } — the worker's heartbeat
 //                  (src/workers/heartbeat.js); alive = a beat within its TTL;
@@ -147,6 +149,15 @@ router.get('/health', async (req, res) => {
              ORDER BY created_at DESC`,
         );
 
+        // PR #22 G1: closed alerts by kind — 'superseded' (closed because a
+        // later methodology would not raise them, with the owner's approval,
+        // migration 036) apart from genuinely 'resolved'.
+        const closed = await dbGet(
+            `SELECT COUNT(*) FILTER (WHERE status = 'resolved')::int   AS resolved,
+                    COUNT(*) FILTER (WHERE status = 'superseded')::int AS superseded
+             FROM alert_status`,
+        );
+
         // Data mode over the trailing hour — the same window the frontend
         // renders (public/js/data.js TRAILING_WINDOW_MS) — by the globe's
         // rule: the aggregated query's joins (sentiment_results, a location)
@@ -194,6 +205,7 @@ router.get('/health', async (req, res) => {
             db_connected:  dbConnected,
             last_job:      lastJob,
             active_alerts: activeAlerts,
+            alerts_closed: { resolved: closed.resolved, superseded: closed.superseded },
             data_mode:     deriveDataMode(shown.demo_posts, shown.posts),
             data_window:   {
                 hours:             1,

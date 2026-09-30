@@ -24,6 +24,7 @@ const TABLES = [
     'relevance_results',
     'sentiment_results',
     'decision_audit_log',
+    'alert_resolution_approvals',
     'alert_resolutions',
     'alert_events',
     'bias_assessments',

@@ -473,8 +473,12 @@ describe('migration 028 ↔ methodology registry (bias@1.3.0, P10-5)', () => {
     const SQL_028 = fs.readFileSync(
         path.join(__dirname, '../../../src/db/migrations/028_bias_min_sample.sql'), 'utf8');
 
-    test('028 ends with exactly the generated bias@1.3.0 row and removes nothing', () => {
-        expect(SQL_028.endsWith(generate(['bias@1.3.0']))).toBe(true);
+    test('028 registers exactly the generated bias@1.3.0 row BEFORE the resolutions that link to it, and removes nothing', () => {
+        // PR #22 principal #9: the resolutions set methodology_version_id on
+        // insert, so the version row must exist first.
+        const gen = generate(['bias@1.3.0']).trim();
+        expect(SQL_028).toContain(gen);
+        expect(SQL_028.indexOf(gen)).toBeLessThan(SQL_028.indexOf('WITH open_alerts'));
         expect(SQL_028).not.toMatch(/DO UPDATE|UPDATE methodology_versions|DELETE|DROP|TRUNCATE/);
         expect(SQL_028).toMatch(/CREATE TABLE IF NOT EXISTS alert_resolutions/);
     });

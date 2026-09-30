@@ -90,11 +90,14 @@ describe('migration 028_bias_min_sample.sql — stale alert resolution', () => {
         expect(byId[aSpread].resolved_at).not.toBeNull();
         expect(byId[aReal].resolved_at).toBeNull();           // still fails 1.3.0
         expect(byId[aOther].resolved_at).toBeNull();          // other types untouched
-        expect(byId[aSmall].details.resolution).toMatch(/^stale: see alert_resolutions [0-9a-f-]{36} \(migration 028, bias@1\.3\.0\)$/);
+        expect(byId[aSmall].details.resolution_ref).toMatch(/^alert_resolutions [0-9a-f-]{36} \(migration 028, bias@1\.3\.0\)$/);
         expect(byId[aSmall].details.jobId).toBe(small);       // original details kept
 
-        const res = await dbAll('SELECT alert_id, resolved_by, resolution, basis FROM alert_resolutions ORDER BY alert_id');
+        const res = await dbAll('SELECT alert_id, resolved_by, resolution, basis, methodology_version_id FROM alert_resolutions ORDER BY alert_id');
         expect(res).toHaveLength(3);
+        // PR #22 principal #9: linked to bias@1.3.0 ON INSERT (no later edit).
+        const v13 = await dbGet(`SELECT id FROM methodology_versions WHERE component = 'bias' AND version = '1.3.0'`);
+        for (const r of res) expect(r.methodology_version_id).toBe(v13.id);
         const bySmall = res.find(r => r.alert_id === aSmall);
         expect(bySmall.resolved_by).toBe('migration 028_bias_min_sample.sql');
         expect(bySmall.basis).toMatchObject({
@@ -114,5 +117,19 @@ describe('migration 028_bias_min_sample.sql — stale alert resolution', () => {
         expect(await dbAll('SELECT id, resolved_at, details FROM alert_events ORDER BY id')).toEqual(snapshot);
         expect((await dbAll('SELECT id FROM alert_resolutions'))).toHaveLength(3);
         expect(await dbGet(`SELECT COUNT(*)::int AS n FROM methodology_versions WHERE component = 'bias' AND version = '1.3.0'`)).toEqual({ n: 1 });
+    });
+
+    it('never overwrites a key of the original alert evidence (resolution_ref added only when absent)', async () => {
+        const small = await insertJob('completed');
+        await add(small, 'London', 3);
+        const id = (await dbRun(
+            `INSERT INTO alert_events (alert_type, severity, source_table, details)
+             VALUES ('location_concentration', 'critical', 'bias_assessments',
+                     jsonb_build_object('jobId', $1::text, 'resolution', 'original evidence', 'resolution_ref', 'x')) RETURNING id`,
+            [small])).id;
+        await dbTransaction(c => c.query(SQL_028));
+        const row = await dbGet('SELECT resolved_at, details FROM alert_events WHERE id = $1', [id]);
+        expect(row.resolved_at).not.toBeNull();
+        expect(row.details).toMatchObject({ resolution: 'original evidence', resolution_ref: 'x', jobId: small });
     });
 });
