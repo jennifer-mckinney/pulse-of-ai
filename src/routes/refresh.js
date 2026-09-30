@@ -37,7 +37,6 @@ const { Router } = require('express');
 const { dbGet, dbRun }  = require('../db/connection');
 const { SOURCES } = require('../config/source-registry');
 const { requireSameOrigin } = require('../middleware/same-origin');
-const { scrub } = require('../collectors/redact');
 
 const router = Router();
 
@@ -211,7 +210,8 @@ router.post('/refresh', requireSameOrigin, async (req, res) => {
         try {
             await enqueue(job.id);
         } catch (err) {
-            console.error(scrub(`[refresh] enqueue failed for job ${job.id}: ${err.message}`));
+            // Scrubbed and one line (PR #22 security L4) through the route logger.
+            logRouteError('refresh', `enqueue failed for job ${job.id}: ${err && err.message}`);
             await dbRun(
                 `UPDATE processing_jobs SET status = 'failed', error_details = 'collection queue unavailable', completed_at = NOW() WHERE id = $1`,
                 [job.id],

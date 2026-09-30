@@ -61,6 +61,34 @@ describe('route error logs are scrubbed', () => {
         expect(lines[0]).not.toContain('guardian-secret-7a6b5c4d');
     });
 
+    // PR #22 security L4: request data in an error message cannot forge log lines.
+    it('logRouteError escapes newlines and control characters (one error, one line)', () => {
+        let parseErr;
+        try { JSON.parse('x\n[health] FAKE all good\r\n'); } catch (e) { parseErr = e; }
+        const lines = [];
+        logRouteError('request', parseErr, { sink: l => lines.push(l) });
+        logRouteError('request', new Error('a\u0000b\u001bc\u007fd\u2028e\tf'), { sink: l => lines.push(l) });
+        expect(lines).toHaveLength(2);
+        for (const l of lines) expect(l).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/);
+        expect(lines[1]).toBe('[request] a\\u0000b\\u001bc\\u007fd\\u2028e\\tf');
+    });
+
+    it('a malformed JSON body with newlines is logged as ONE line', async () => {
+        const request = require('supertest');
+        const app = require('../../src/server');
+        const errors = jest.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+            const res = await request(app).post('/api/query').set('Content-Type', 'application/json')
+                .send('{"q":\n[health] FORGED line\n');
+            expect(res.status).toBe(400);
+            const logged = errors.mock.calls.map(c => c.join(' '));
+            expect(logged.length).toBeGreaterThan(0);
+            for (const l of logged) expect(l).not.toMatch(/[\n\r]/);
+        } finally {
+            errors.mockRestore();
+        }
+    });
+
     it('every route module logs errors only through logRouteError (no raw console.error of err.message)', () => {
         const fs = require('fs');
         const path = require('path');
