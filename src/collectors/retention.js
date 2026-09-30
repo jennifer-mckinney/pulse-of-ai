@@ -39,7 +39,7 @@
 
 'use strict';
 
-const { dbAll, dbGet, dbTransaction } = require('../db/connection');
+const { dbAll, dbTransaction } = require('../db/connection');
 const { getSource, retentionHours, retentionDetailDays } = require('../config/source-registry');
 const { DEMO_SOURCE_TYPE } = require('../config/data-mode');
 // P1-8: every payload key ingest declares as text (ingest@1.6.0
@@ -59,16 +59,14 @@ const DETAIL_LEGAL_BASIS = 'GDPR Article 5(1)(e) - Storage Limitation: post text
 const DEFAULT_BATCH = 500;
 const MAX_BATCH = 5000;
 
-/** Registry sources with a platform-terms retention window. */
+/**
+ * Registry sources with a platform-terms retention window. A test-time
+ * audit (tests/integration/reddit.retention.test.js lists them); nothing at
+ * runtime needs the list (PR #22 grumpy NIT 18).
+ */
 function retentionSources() {
     const { SOURCES } = require('../config/source-registry');
     return SOURCES.filter(s => s.retention && s.retention.maxAgeHours > 0);
-}
-
-/** The source's retention notice (for receipts), or null. */
-function retentionNotice(slug) {
-    const src = getSource(slug);
-    return src && src.retention ? src.retention.notice : null;
 }
 
 /** What replaces a post's text for a source (platform notice or the §19 notice). */
@@ -233,13 +231,8 @@ function retentionStatus(slug, { collectedAt, textRemovedAt, textRemovedReason }
     return { status: 'live', removes_at: removesAt ? removesAt.toISOString() : null, notice: src.retention.notice };
 }
 
-/** Last blanking record for the status surface. */
-async function lastBlanking() {
-    return dbGet(`SELECT performed_at, reason FROM data_retention_log WHERE action = $1 ORDER BY performed_at DESC LIMIT 1`, [BLANK_ACTION]);
-}
-
 module.exports = {
     BLANK_ACTION, DETAIL_ACTION, REMOVAL_NOTICE, DETAIL_NOTICE, RETAINED_NOTE, DETAIL_LEGAL_BASIS,
-    retentionSources, retentionNotice, removalNoticeFor, removeTextBatch, blankPlatformPosts, blankPosts,
-    blankExpired, postsWithText, retentionStatus, lastBlanking,
+    retentionSources, removalNoticeFor, removeTextBatch, blankPlatformPosts, blankPosts,
+    blankExpired, postsWithText, retentionStatus,
 };
