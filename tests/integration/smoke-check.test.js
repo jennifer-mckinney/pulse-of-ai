@@ -82,6 +82,8 @@ describe('scripts/smoke-check.js', () => {
     it('reports worker liveness: WARN without a worker, FAIL when a worker is expected', async () => {
         const health = require('../../src/routes/health');
         health._setRedisClientForTests({ ping: async () => 'PONG', get: async () => null });
+        // Queue depth is injected so no real BullMQ connection is opened.
+        health._setQueueCountsForTests(async () => ({}));
         try {
             await populateDemo();
             let lines = [];
@@ -97,8 +99,20 @@ describe('scripts/smoke-check.js', () => {
             lines = [];
             await run({ baseUrl, expectEmbeddings: false, expectWorker: true }, l => lines.push(l));
             expect(lines.join('\n')).toContain(`[PASS] worker heartbeat — redis reachable, last beat ${at}`);
+            expect(lines.join('\n')).toMatch(/\[PASS\] worker failed jobs — 0 failed jobs on \d+ queues/);
+
+            // A failed job on any queue fails the standup's smoke check.
+            health._setQueueCountsForTests(async () => ({ embed: { failed: 9 } }));
+            lines = [];
+            const failedCode = await run({ baseUrl, expectEmbeddings: false, expectWorker: true }, l => lines.push(l));
+            expect(failedCode).toBe(1);
+            expect(lines.join('\n')).toContain('[FAIL] worker failed jobs — embed: 9 failed');
+            lines = [];
+            await run({ baseUrl, expectEmbeddings: false }, l => lines.push(l));
+            expect(lines.join('\n')).toContain('[WARN] worker failed jobs — embed: 9 failed');
         } finally {
             health._setRedisClientForTests(null);
+            health._setQueueCountsForTests(null);
         }
     }, 60000);
 

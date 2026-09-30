@@ -255,7 +255,7 @@ describe('module export shape', () => {
 describe('healthState() — FR-24 traffic light', () => {
     test('no alerts on a healthy backend → green, nominal', () => {
         expect(utils.healthState({ status: 'healthy', active_alerts: [] }))
-            .toEqual({ state: 'green', label: 'model health: nominal', alerts: 0, critical: 0 });
+            .toEqual({ state: 'green', label: 'model health: nominal', alerts: 0, critical: 0, systemAlerts: [] });
     });
 
     test('warning-only alerts → yellow with the count', () => {
@@ -294,6 +294,28 @@ describe('healthState() — FR-24 traffic light', () => {
 
     test('unreachable health (null) → yellow outage, never a fake nominal', () => {
         expect(utils.healthState(null))
-            .toEqual({ state: 'yellow', label: 'model health: unavailable', alerts: 0, critical: 0 });
+            .toEqual({ state: 'yellow', label: 'model health: unavailable', alerts: 0, critical: 0, systemAlerts: [] });
+    });
+
+    // PR #22 principal #12: the watchdog's alerts name themselves on the chip.
+    test('a watchdog (system) alert → red, the chip names it', () => {
+        const s = utils.healthState({ status: 'healthy', active_alerts: [
+            { severity: 'critical', system: true, alert_type: 'watchdog_worker_down',
+                title: 'Worker down (heartbeat stale)', summary: 'no worker heartbeat', created_at: '2026-09-29T10:00:00Z' },
+        ] });
+        expect(s.state).toBe('red');
+        expect(s.label).toBe('SYSTEM ALERT: Worker down (heartbeat stale)');
+        expect(s.systemAlerts).toEqual([{ title: 'Worker down (heartbeat stale)', summary: 'no worker heartbeat',
+            since: '2026-09-29T10:00:00Z' }]);
+    });
+
+    test('a system alert among others → the label counts the rest', () => {
+        const s = utils.healthState({ status: 'healthy', active_alerts: [
+            { severity: 'warning' },
+            { severity: 'critical', system: true, alert_type: 'watchdog_db_unreachable' },
+            { severity: 'critical' },
+        ] });
+        expect(s.label).toBe('SYSTEM ALERT: watchdog_db_unreachable · +2 more');
+        expect(s.systemAlerts).toHaveLength(1);
     });
 });

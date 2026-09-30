@@ -37,6 +37,8 @@
 
 'use strict';
 
+const { logRouteError } = require('../middleware/log-error');
+
 const crypto           = require('crypto');
 const { Router }       = require('express');
 const { dbGet, dbAll } = require('../db/connection');
@@ -95,6 +97,7 @@ router.get('/audit/:post_id', async (req, res) => {
                 rp.external_id,
                 rp.provenance_fingerprint,
                 rp.ingest_mv_id,
+                rp.admission_mv_id,
                 rp.text_removed_at,
                 rp.text_removed_reason,
                 rp.raw_payload->>'url'          AS permalink,
@@ -281,6 +284,13 @@ router.get('/audit/:post_id', async (req, res) => {
             textRemovedReason: post.text_removed_reason,
         });
         if (retention) provenance.retention = retention;
+        // PR #22 G6: the admission-filter version the post was stored under.
+        const admissionMv = post.admission_mv_id ? await dbGet(
+            `SELECT version FROM methodology_versions WHERE id = $1 AND component = 'admission_filter'`, [post.admission_mv_id]) : null;
+        provenance.admission = admissionMv
+            ? { component: 'admission_filter', version: admissionMv.version, lineage: 'recorded' }
+            : { component: 'admission_filter', version: null,
+                lineage: demo ? 'not applicable: fictional demo content' : 'not recorded: stored before the admission filter was versioned (migration 042)' };
 
         return res.json({
             provenance,
@@ -307,7 +317,7 @@ router.get('/audit/:post_id', async (req, res) => {
         });
     /* istanbul ignore start -- Database failure; requires error injection testing infrastructure */
     } catch (err) {
-        console.error('[audit] Error:', err.message);
+        logRouteError('audit', err);
         return res.status(500).json({ error: 'Internal server error' });
     }
     /* istanbul ignore end */

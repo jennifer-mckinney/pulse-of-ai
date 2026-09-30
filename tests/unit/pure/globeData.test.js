@@ -535,3 +535,18 @@ describe('module export shape', () => {
         expect(data.DEMO_DATA[29].city).toBe('Melbourne');
     });
 });
+
+describe('normalizeCities() — D3 publisher-location layer', () => {
+    const row = (extra) => ({ city: 'London', lat: 51.5, lng: -0.12, positive: 2, neutral: 1, negative: 1, ...extra });
+
+    test('passes publisher_posts through, clamped to the total', () => {
+        expect(data.normalizeCities([row({ publisher_posts: 3 })])[0].publisher_posts).toBe(3);
+        expect(data.normalizeCities([row({ publisher_posts: 99 })])[0].publisher_posts).toBe(4);
+    });
+
+    test('an older API without the field (or junk) serves 0', () => {
+        expect(data.normalizeCities([row({})])[0].publisher_posts).toBe(0);
+        expect(data.normalizeCities([row({ publisher_posts: 'x' })])[0].publisher_posts).toBe(0);
+        expect(data.normalizeCities([row({ publisher_posts: -2 })])[0].publisher_posts).toBe(0);
+    });
+});

@@ -25,6 +25,72 @@
 
 'use strict';
 
+const { RELEVANCE_TERMS_1_2_0, describeRule } = require('./ai-lexicon');
+
+// bias@1.1.0's config, shared by reference with later bias versions that
+// extend it (bias@1.2.0 spreads it); never mutated.
+const BIAS_1_1_0_CONFIG = Object.freeze({
+        // Thresholds read by src/pipeline/bias.js (DB-driven, no code deploy to change)
+        location_concentration_max: 0.35,
+        platform_parity_max_diff:   0.30,
+        negative_dominance_max:     0.60,
+        // Frontend display names for stored assessment_type values.
+        // platform_sentiment_parity IS the demographic-parity check
+        // (outcome-rate gap across source categories — Barocas & Selbst
+        // 2016), so it carries the prototype's exact layer name and
+        // serves REAL value + τ under it.
+        layer_names: {
+            location_concentration:    'Location concentration',
+            platform_sentiment_parity: 'Demographic parity',
+            negative_dominance:        'Negative dominance',
+        },
+        // Methodology notes (P0-3) carried into each computed layer's
+        // `note` and rendered in the audit drawer, so the receipt never
+        // overstates what a check measures: the 'Demographic parity'
+        // layer compares SOURCE CATEGORIES, not people.
+        layer_notes: {
+            platform_sentiment_parity: 'parity measured across source categories (platform), not user demographics',
+        },
+        // Literature/spec citations rendered next to each layer (audit
+        // receipt fairness layers + bias alert history)
+        citations: {
+            location_concentration:    'Suresh & Guttag (2021)',
+            platform_sentiment_parity: 'Barocas & Selbst (2016)',
+            negative_dominance:        'Suresh & Guttag (2021)',
+        },
+        // Declared-but-not-yet-computed layers: surfaced as N/A on the
+        // audit receipt so coverage claims stay honest (never fabricated
+        // values — the prototype's own layer-3 pattern)
+        planned_layers: [
+            { id: 'equalized_odds',          name: 'Equalized odds',          citation: 'Hardt et al. (2016)',  note: 'Phase 3 — not yet enforced' },
+            { id: 'counterfactual_fairness', name: 'Counterfactual fairness', citation: 'Kusner et al. (2017)', note: 'Phase 3 — not yet enforced' },
+        ],
+        // Presentation order (audit drawer): the prototype's three named
+        // layers first — Demographic parity, Equalized odds,
+        // Counterfactual fairness — then every additional real check
+        // (location concentration, negative dominance) as extra rows.
+        layer_order: [
+            'platform_sentiment_parity',
+            'equalized_odds',
+            'counterfactual_fairness',
+        ],
+        legal_basis: 'EU AI Act Article 13 - Transparency and provision of information',
+    });
+
+// bias@1.2.0's config (decision D3): 1.1.0 plus the publisher exclusion.
+const BIAS_1_2_0_CONFIG = Object.freeze({
+    ...BIAS_1_1_0_CONFIG,
+    // Read by src/pipeline/bias.js checkLocationConcentration
+    location_basis_excluded: ['publisher'],
+    location_concentration_scope: 'posts located by their content (location_basis content, or no basis recorded); '
+        + 'posts placed at the publisher\'s home city (location_basis publisher) are excluded and counted in the evidence',
+    layer_notes: {
+        ...BIAS_1_1_0_CONFIG.layer_notes,
+        location_concentration: 'content-located posts only: posts placed at the publisher\'s home city are shown as a '
+            + 'separate publisher-location layer and excluded from this check (ADR 0001 D3)',
+    },
+});
+
 const METHODOLOGY_VERSIONS = [
     {
         component: 'sentiment',
@@ -81,53 +147,7 @@ const METHODOLOGY_VERSIONS = [
         // effective_from wins) and old receipts stay reproducible.
         version: '1.1.0',
         model_name: 'pulse-bias-monitor-v1',
-        config: {
-            // Thresholds read by src/pipeline/bias.js (DB-driven, no code deploy to change)
-            location_concentration_max: 0.35,
-            platform_parity_max_diff:   0.30,
-            negative_dominance_max:     0.60,
-            // Frontend display names for stored assessment_type values.
-            // platform_sentiment_parity IS the demographic-parity check
-            // (outcome-rate gap across source categories — Barocas & Selbst
-            // 2016), so it carries the prototype's exact layer name and
-            // serves REAL value + τ under it.
-            layer_names: {
-                location_concentration:    'Location concentration',
-                platform_sentiment_parity: 'Demographic parity',
-                negative_dominance:        'Negative dominance',
-            },
-            // Methodology notes (P0-3) carried into each computed layer's
-            // `note` and rendered in the audit drawer, so the receipt never
-            // overstates what a check measures: the 'Demographic parity'
-            // layer compares SOURCE CATEGORIES, not people.
-            layer_notes: {
-                platform_sentiment_parity: 'parity measured across source categories (platform), not user demographics',
-            },
-            // Literature/spec citations rendered next to each layer (audit
-            // receipt fairness layers + bias alert history)
-            citations: {
-                location_concentration:    'Suresh & Guttag (2021)',
-                platform_sentiment_parity: 'Barocas & Selbst (2016)',
-                negative_dominance:        'Suresh & Guttag (2021)',
-            },
-            // Declared-but-not-yet-computed layers: surfaced as N/A on the
-            // audit receipt so coverage claims stay honest (never fabricated
-            // values — the prototype's own layer-3 pattern)
-            planned_layers: [
-                { id: 'equalized_odds',          name: 'Equalized odds',          citation: 'Hardt et al. (2016)',  note: 'Phase 3 — not yet enforced' },
-                { id: 'counterfactual_fairness', name: 'Counterfactual fairness', citation: 'Kusner et al. (2017)', note: 'Phase 3 — not yet enforced' },
-            ],
-            // Presentation order (audit drawer): the prototype's three named
-            // layers first — Demographic parity, Equalized odds,
-            // Counterfactual fairness — then every additional real check
-            // (location concentration, negative dominance) as extra rows.
-            layer_order: [
-                'platform_sentiment_parity',
-                'equalized_odds',
-                'counterfactual_fairness',
-            ],
-            legal_basis: 'EU AI Act Article 13 - Transparency and provision of information',
-        },
+        config: BIAS_1_1_0_CONFIG,
         justification: 'Three fairness checks run automatically after every processing job: platform sentiment parity (the demographic-parity outcome gap across source categories — Barocas & Selbst 2016), location concentration (representation bias — Suresh & Guttag 2021), and negative dominance (selection bias toward controversy). Thresholds live in this config so they are auditable, versioned, and adjustable without a code change (AI Act §13). Equalized odds and counterfactual fairness are declared planned layers and reported as not-yet-enforced rather than omitted; the receipt presents the three literature-named fairness layers first, then the additional checks. The Demographic parity layer is annotated as parity measured across source categories (platform), not user demographics. Vocabulary: migration 008 folded legacy bias_assessments rows stored under the synonym demographic_parity onto the pipeline vocabulary platform_sentiment_parity (values, thresholds and violation flags untouched); any future vocabulary drift is resolved by read-time synonym mapping (src/config/bias-vocabulary.js), never by rewriting stored audit rows.',
     },
     {
@@ -388,6 +408,321 @@ const METHODOLOGY_VERSIONS = [
         },
         justification: 'ingest@1.5.0 adds Reddit (source #52): u/<name> and /u/<name> become u/[user], and a scheme-less reddit.com/u/ or /user/ link becomes [profile link]; Reddit collectors store only allowlisted submission fields (never author, author_fullname or any user field). Single-character @handles are redacted since 1.4.0. Decision D2 (2026-09-29): "both yet we need an identifier to be able to prove the audit traceability back to the source." Precise claim: identity fields are never stored; e-mail addresses, handles (including Reddit u/ names), phone numbers, sign-offs and profile links in text are redacted; free text may still contain names mentioned in content. Collectors build the stored payload from an allowlist of content fields and the ingest step removes any identity field that arrives. Before a post is stored, e-mail addresses become [email], @handles of one or more characters become @[user], phone numbers (E.164 and North American formats) become [phone], links to a person\'s profile become [profile link], "cc <Name>" becomes "cc [name]", and a trailing sign-off or a Wikipedia unsigned-comment note is removed. Each post carries a provenance fingerprint, a keyed HMAC of the source, the upstream id and the source URL, so anyone holding the original link can prove which item a post came from without the post storing anything that identifies a person; an upstream id that could identify someone is stored only as its fingerprint. Location stays at city level from a content-level field or, for editorial sources, the publisher\'s home city, with the basis recorded. Content is SHA-256 hashed as the immutable join key; duplicates are dropped per source and external id. Processing rests on legitimate interest (GDPR Art. 6(1)(f)) - aggregate discourse measurement over public posts with no profiling of identifiable individuals.',
     },
+    // bias@1.2.0 — decision D3 (ADR 0001, Jennifer 2026-09-29: "Separate
+    // layer, excluded from bias."): posts placed at their publisher's home
+    // city are excluded from the location-concentration check. Everything
+    // else is bias@1.1.0 unchanged (1.1.0 is never edited; migration 027).
+    {
+        component: 'bias',
+        version: '1.2.0',
+        model_name: 'pulse-bias-monitor-v1',
+        config: BIAS_1_2_0_CONFIG,
+        justification: 'bias@1.2.0 applies decision D3 (ADR 0001, Jennifer 2026-09-29, verbatim: "Separate layer, excluded from bias."). '
+            + 'A post from an editorial source with no content-level location is placed at the publisher\'s home city (BBC in London, NPR in '
+            + 'Washington, D.C.) and recorded with location_basis publisher. That city says where the outlet is, not where the '
+            + 'discussion happened, so it is not evidence of geographic concentration: the location-concentration check now counts '
+            + 'only posts located by their content (or with no basis recorded) and states how many publisher-located posts it '
+            + 'excluded. The globe shows publisher-located posts as a separate, labelled publisher-location layer. Platform '
+            + 'sentiment parity and negative dominance are unchanged, and every threshold, name, citation and planned layer is as '
+            + 'in bias@1.1.0: three fairness checks run after every processing job (platform sentiment parity across source '
+            + 'categories, Barocas & Selbst 2016; location concentration, Suresh & Guttag 2021; negative dominance), with '
+            + 'thresholds in this config so they are auditable and versioned (AI Act Article 13). Equalized odds and '
+            + 'counterfactual fairness remain declared planned layers reported as not yet enforced.',
+    },
+    // bias@1.3.0 — P10-5: a minimum located sample for location
+    // concentration (30 content-located posts, else "insufficient sample"
+    // and no alert). Otherwise bias@1.2.0 (migration 028).
+    {
+        component: 'bias',
+        version: '1.3.0',
+        model_name: 'pulse-bias-monitor-v1',
+        config: {
+            ...BIAS_1_2_0_CONFIG,
+            // Read by src/pipeline/bias.js checkLocationConcentration
+            location_min_sample: 30,
+            location_min_sample_rule: 'fewer than 30 content-located posts in the job: the assessment is recorded as '
+                + '"insufficient sample" with its share stated, no violation and no alert',
+            layer_notes: {
+                ...BIAS_1_2_0_CONFIG.layer_notes,
+                location_concentration: 'content-located posts only (publisher-located posts are a separate layer, ADR 0001 D3); '
+                    + 'needs at least 30 of them, else "insufficient sample" and no alert',
+            },
+        },
+        justification: 'bias@1.3.0 adds a minimum sample to the location-concentration check (PR #10 review P10-5). A share computed '
+            + 'over a handful of located posts measures the shape of one collection run, not the discourse: a scheduled run of one '
+            + 'editorial source had all its located posts in one city and read 1.000, raising critical alerts that said nothing '
+            + 'about the posts. The check now needs at least 30 content-located posts in the job; below that it records an '
+            + '"insufficient sample" assessment with the share still stated, and raises no violation and no alert. As in bias@1.2.0 '
+            + '(decision D3, "Separate layer, excluded from bias."), posts placed at the publisher\'s home city are excluded from '
+            + 'this check and counted in its evidence. Platform sentiment parity (Barocas & Selbst 2016) and negative dominance are '
+            + 'unchanged, every threshold, layer name, citation and planned layer is as in bias@1.1.0 (AI Act Article 13), and '
+            + 'equalized odds and counterfactual fairness remain declared planned layers reported as not yet enforced. Open '
+            + 'location-concentration alerts that this version would not raise are resolved by migration 028 with an audited '
+            + 'alert_resolutions record, never deleted.',
+    },
+    // relevance@1.2.0 — P10-13: word-boundary matching, case-sensitive "AI"
+    // (the collection filter's own rule, shared through
+    // src/config/ai-lexicon.js). relevance@1.1.0 is never edited and its
+    // scorer is kept for replay (migration 029).
+    {
+        component: 'relevance',
+        version: '1.2.0',
+        model_name: 'keyword-relevance-v2',
+        config: {
+            // Must equal src/config/ai-lexicon.js RELEVANCE_TERMS_1_2_0 (order included)
+            keywords: RELEVANCE_TERMS_1_2_0.map(t => t.term),
+            matching: Object.fromEntries(RELEVANCE_TERMS_1_2_0.map(t => [t.term, describeRule(t)])),
+            shared_with: 'src/collectors/ai-filter.js uses the same case-sensitive "AI" expression (src/config/ai-lexicon.js AI_ACRONYM_RE); '
+                + 'the filter\'s wider product and topic patterns scope collection only and are not relevance terms',
+            score_rule: 'unique matched terms / number of terms (21), capped at 1.0',
+            score_per_match: 1 / RELEVANCE_TERMS_1_2_0.length,
+            max_score: 1.0,
+            is_relevant_rule: 'score > 0 (at least one term matched)',
+            // Must equal src/pipeline/relevance.js EMBED_GATE_MIN_SCORE
+            embed_gate_min_score: 1 / RELEVANCE_TERMS_1_2_0.length,
+            embed_gate_rule: 'a post is embedded when its relevance score is at least 1/21 (one term matched)',
+        },
+        justification: 'relevance@1.2.0 fixes false matches found in review (PR #10, P10-13). Version 1.1.0 matched every lexicon '
+            + 'keyword as a case-insensitive substring, so "Robert" matched "bert", and a post that the collection filter admitted '
+            + 'only because it said "AI" scored 0, since the lexicon had no "AI" term. Version 1.2.0 keeps the 20 terms of 1.1.0 '
+            + 'and adds "AI" (21 terms). Every term now matches as whole words: "AI" (or "A.I.") only in upper case, the same rule '
+            + 'the collection filter uses (one shared expression, src/config/ai-lexicon.js); "BERT" only in upper case, since Bert '
+            + 'is a name; LLM and NLP as whole words in any case; "gpt" as a whole word with ChatGPT and a version suffix such as '
+            + 'GPT-4o allowed; every other term in any case with word boundaries, a space or hyphen between words and a plural '
+            + 's allowed. Score = unique matched terms divided by 21, capped at 1.0; a post is AI-relevant when at least one term '
+            + 'matches, and it is embedded at the same point (score >= 1/21). Collection is already scoped to each source\'s AI or '
+            + 'technology feed; this score measures how explicitly a post uses AI vocabulary. Decisions scored under 1.1.0 keep '
+            + 'their version and are replayed with the 1.1.0 rule.',
+    },
+];
+
+// ingest@1.6.0 — P10-2: the post text is stored once (raw_posts.content),
+// never duplicated in raw_payload, so retention genuinely removes it; every
+// collected post gets a 'collected' retention row; each source's text window
+// is registered. Otherwise ingest@1.5.0 unchanged (migration 031).
+(() => {
+    const prev = METHODOLOGY_VERSIONS.find(m => m.component === 'ingest' && m.version === '1.5.0');
+    METHODOLOGY_VERSIONS.push({
+        component: 'ingest',
+        version: '1.6.0',
+        model_name: prev.model_name,
+        config: {
+            ...prev.config,
+            // Must match src/pipeline/ingest.js PAYLOAD_TEXT_KEYS
+            payload_text_keys_not_stored: ['text', 'title', 'body', 'content', 'selftext'],
+            text_storage: 'the post text is stored once, in raw_posts.content; raw_payload keeps metadata only (url, published_at, '
+                + 'location_basis, route, licence, attribution)',
+            collected_log: 'every stored post writes a data_retention_log row, action collected, legal basis GDPR Article 6(1)(f), '
+                + 'in the same statement as the insert',
+            text_retention: {
+                rule: 'after its source\'s window the text is replaced by a removal notice (raw_posts.text_removed_at); scores and '
+                    + 'audit rows are kept (ADR 0001 ruling 9, "Blank text, keep audit rows")',
+                platform_terms_hours: { reddit: 48, guardian: 24, youtube: 720, tiktok: 720 },
+                default: 'RETENTION_DETAIL_DAYS (90) days, TECHNICAL_SPEC §19',
+                applied_by_analogy: ['guardian', 'youtube', 'tiktok'],
+            },
+        },
+        justification: 'ingest@1.6.0 makes retention genuine (PR #10 review P10-2). Until 1.5.0 the text and title were copied into '
+            + 'raw_payload next to raw_posts.content, so removing the content left the text in the payload. From 1.6.0 the text is '
+            + 'stored once, in raw_posts.content, and the payload keeps metadata only; every stored post also writes a collected '
+            + 'row to data_retention_log (legal basis GDPR Article 6(1)(f)) in the same statement as the insert (TECHNICAL_SPEC §8). '
+            + 'Each source has a text window: Reddit 48 hours (ADR 0001 ruling 9), the Guardian 24 hours (its terms), YouTube and '
+            + 'TikTok 30 days (their API terms), every other source the §19 detail window of 90 days. When the window ends the '
+            + 'text, and any legacy copy in the payload, is replaced by a removal notice and the url is dropped (Reddit keeps its '
+            + 'slug-less permalink); the scores, audit rows, content hash and provenance fingerprint are kept, applying Jennifer\'s '
+            + 'ruling 9 ("Blank text, keep audit rows") to the Guardian, YouTube and TikTok by analogy. Everything else is as in '
+            + 'ingest@1.5.0: identity fields are never stored; e-mail addresses, handles (including Reddit u/ names), phone '
+            + 'numbers, sign-offs and profile links in text are redacted; free text may still contain names mentioned in content; '
+            + 'each post carries a keyed provenance fingerprint; location stays at city level with its basis recorded; processing '
+            + 'rests on legitimate interest (GDPR Art. 6(1)(f)).',
+    });
+})();
+
+// ingest@1.7.0 — PR #22 owner decisions of 2026-09-29 (migration 055):
+// GUARDIAN, Jennifer verbatim "Use normal retention" (the Guardian's 24 h
+// blanking by analogy is withdrawn; it takes the §19 detail window), and G3
+// (a platform-terms blanking deletes the post's embedding in the same
+// transaction). Otherwise ingest@1.6.0 unchanged.
+(() => {
+    const prev = METHODOLOGY_VERSIONS.find(m => m.component === 'ingest' && m.version === '1.6.0');
+    METHODOLOGY_VERSIONS.push({
+        component: 'ingest',
+        version: '1.7.0',
+        model_name: prev.model_name,
+        config: {
+            ...prev.config,
+            text_retention: {
+                rule: 'after its source\'s window the text is replaced by a removal notice (raw_posts.text_removed_at); scores and '
+                    + 'audit rows are kept (ADR 0001 ruling 9, "Blank text, keep audit rows"); for a platform-terms window the '
+                    + 'post\'s embedding (post_embeddings) is deleted in the same transaction (PR #22 decision G3)',
+                // Must equal the registry's platform windows (source-registry.js retention blocks)
+                platform_terms_hours: { reddit: 48, youtube: 720, tiktok: 720 },
+                default: 'RETENTION_DETAIL_DAYS (90) days, TECHNICAL_SPEC §19',
+                applied_by_analogy: ['youtube', 'tiktok'],
+                embeddings_on_platform_blanking: 'deleted with the text (PR #22 decision G3, Jennifer McKinney 2026-09-29)',
+                rulings: {
+                    guardian: 'Jennifer McKinney, 2026-09-29, verbatim "Use normal retention": the Guardian takes the default §19 '
+                        + 'detail window; its 24-hour blanking by analogy (ingest@1.6.0) is withdrawn',
+                    g3: 'Jennifer McKinney, 2026-09-29: delete the embeddings when the text is blanked, for any source under '
+                        + 'platform-terms blanking; scores and audit rows stay (ruling 9)',
+                },
+            },
+        },
+        justification: 'ingest@1.7.0 records two owner decisions of 2026-09-29 from the PR #22 review. First, the Guardian: '
+            + 'Jennifer ruled, verbatim, "Use normal retention", so the 24-hour blanking that ingest@1.6.0 applied to the Guardian '
+            + 'by analogy with ruling 9 is withdrawn and Guardian text follows the §19 detail window (90 days) like every source '
+            + 'without a platform-terms window; posts already blanked under the old window stay blanked and their receipts say '
+            + 'so. Second, decision G3: when a platform-terms window (Reddit 48 hours, YouTube and TikTok 30 days) or an upstream '
+            + 'deletion blanks a post\'s text, the post\'s embedding is deleted in the same transaction, because it is derived '
+            + 'from the text; the scores, audit rows, content hash and provenance fingerprint are still kept (ruling 9). The '
+            + 'detail window leaves embeddings to monthly compaction. Everything else is as in ingest@1.6.0.',
+    });
+})();
+
+// bias@1.4.0 — Jennifer's live site (2026-09-29): parity and negative
+// dominance alerts from tiny per-category samples in 2–3 minute cycles. A
+// minimum sample for EVERY check (migration 032). Otherwise bias@1.3.0.
+(() => {
+    const prev = METHODOLOGY_VERSIONS.find(m => m.component === 'bias' && m.version === '1.3.0');
+    METHODOLOGY_VERSIONS.push({
+        component: 'bias',
+        version: '1.4.0',
+        model_name: prev.model_name,
+        config: {
+            ...prev.config,
+            // Read by src/pipeline/bias.js
+            parity_min_per_category: 10,
+            negative_min_sample: 30,
+            sample_rules: {
+                location_concentration: 'at least 30 content-located posts in the job (location_min_sample), publisher-located posts excluded',
+                platform_sentiment_parity: 'only categories with at least 10 posts are compared (parity_min_per_category); fewer than two such categories: insufficient sample',
+                negative_dominance: 'at least 30 posts in the job (negative_min_sample)',
+                below_minimum: '"insufficient sample": the value is stated, no violation, no alert',
+                basis: 'n >= 30 is the conventional minimum for treating a sample proportion as approximately normal (central limit '
+                    + 'theorem rule of thumb); n >= 10 per group is the conventional floor for comparing group means. Both are '
+                    + 'deliberately conservative floors, not significance tests.',
+            },
+            layer_notes: {
+                ...prev.config.layer_notes,
+                platform_sentiment_parity: 'parity measured across source categories (platform), not user demographics; only categories '
+                    + 'with at least 10 posts in the job are compared',
+                negative_dominance: 'needs at least 30 posts in the job, else "insufficient sample" and no alert',
+            },
+        },
+        justification: 'bias@1.4.0 gives every fairness check a minimum sample, after the live dashboard showed 39 active alerts from '
+            + 'collection cycles of a few posts: location concentration of 1.000 for single publisher cities and demographic-parity '
+            + 'watches between two categories of three or four posts each. Location concentration keeps bias@1.3.0\'s rule (at least '
+            + '30 content-located posts; publisher-located posts excluded, decision D3 "Separate layer, excluded from bias."). '
+            + 'Platform sentiment parity (the demographic-parity outcome gap across source categories, Barocas & Selbst 2016) now '
+            + 'compares only categories with at least 10 posts in the job; with fewer than two such categories it records '
+            + '"insufficient sample". Negative dominance needs at least 30 posts. Below a minimum the assessment is recorded with its '
+            + 'value, as "insufficient sample", with no violation and no alert. The floors are conventional (n >= 30 for a '
+            + 'proportion to be treated as approximately normal; n >= 10 per group for comparing means) and are floors, not '
+            + 'significance tests. Thresholds, names, citations (Suresh & Guttag 2021 for location and negative dominance) and '
+            + 'planned layers are as in bias@1.1.0 (AI Act Article 13). Open alerts that this version would not raise are '
+            + 'resolved by migration 032 with an audited alert_resolutions record linked to this version, never deleted.',
+    });
+})();
+
+// bias@1.5.0 — PR #22 decision G2 (Jennifer McKinney, 2026-09-29): the
+// per-cycle checks can rarely reach their minimum samples (principal #11),
+// so the SAME three checks ALSO run over a rolling 24 h window of scored
+// posts, daily (the maintenance `daily` task) and on demand
+// (`npm run bias:window`). Per-cycle checks, thresholds and minimums are
+// bias@1.4.0's, unchanged (src/pipeline/bias.js, src/pipeline/bias-window.js).
+(() => {
+    const prev = METHODOLOGY_VERSIONS.find(m => m.component === 'bias' && m.version === '1.4.0');
+    METHODOLOGY_VERSIONS.push({
+        component: 'bias',
+        version: '1.5.0',
+        model_name: prev.model_name,
+        config: {
+            ...prev.config,
+            // Read by src/pipeline/bias-window.js
+            rolling_window: {
+                hours: 24,
+                schedule: 'daily (maintenance task "daily") and on demand (npm run bias:window)',
+                scope: 'every post whose sentiment decision was recorded in the 24 hours before the run',
+                checks: ['location_concentration', 'platform_sentiment_parity', 'negative_dominance'],
+                rules: 'the per-cycle thresholds and minimum samples (sample_rules), applied to the window instead of one cycle',
+                per_cycle: 'the per-cycle checks still run after every collection cycle, unchanged',
+                decision: 'PR #22 G2, approved by Jennifer McKinney 2026-09-29 (ADR 0001)',
+            },
+            insufficient_sample_reporting: 'the share of "insufficient sample" assessments per check (per cycle over the last 24 hours '
+                + 'and 7 days; rolling window: the latest run and the last 7 days) is served by GET /api/bias/latest and GET /api/health',
+        },
+        justification: 'bias@1.5.0 adds a rolling 24-hour window to the fairness checks (PR #22 decision G2, approved by Jennifer '
+            + 'McKinney on 2026-09-29). The per-cycle checks run over the posts scored in one 2–3 minute collection cycle, which '
+            + 'rarely reaches bias@1.4.0\'s minimum samples (30 content-located posts, 10 posts per category, 30 posts), so the '
+            + 'monitor could report "insufficient sample" indefinitely. The same three checks (location concentration and '
+            + 'negative dominance, Suresh & Guttag 2021; platform sentiment parity, Barocas & Selbst 2016) now ALSO run once a '
+            + 'day and on demand over every post whose sentiment decision was recorded in the previous 24 hours, with the same '
+            + 'thresholds and minimum samples, so the minimums are reachable. Each window run is recorded in bias_window_runs '
+            + 'and its assessments in bias_window_assessments, linked to this version; a violation raises an alert like a '
+            + 'per-cycle one. The per-cycle checks are unchanged. The share of "insufficient sample" assessments per check is '
+            + 'reported by GET /api/bias/latest and GET /api/health, so a monitor that never reaches its minimum is visible. '
+            + 'Thresholds, names, citations and planned layers are as in bias@1.1.0 (AI Act Article 13).',
+    });
+})();
+
+// admission_filter@1.0.0 — PR #22 G6 (Jennifer, 2026-09-29): the collection
+// admission filter (src/collectors/ai-filter.js) decides which items are
+// stored, so it is a versioned methodology component. The config IS the
+// code's patterns (tests/unit/pure/admissionFilter.test.js); any change is a
+// new version. Every collected post records its version
+// (raw_posts.admission_mv_id, migration 042).
+(() => {
+    const { patternDescriptions, SEARCH_TERMS, ADMISSION_FILTER_VERSION } = require('../collectors/ai-filter');
+    METHODOLOGY_VERSIONS.push({
+        component: 'admission_filter',
+        version: ADMISSION_FILTER_VERSION,
+        model_name: 'ai-scope-filter-v1',
+        config: {
+            // Must equal src/collectors/ai-filter.js PATTERNS (order included)
+            patterns: patternDescriptions(),
+            match_rule: 'an item is admitted when ANY pattern matches its title + summary text',
+            scope_rule: {
+                filter: 'site-wide and technology feeds (registry route scope "filter"): only items the patterns match are stored',
+                ai: 'AI-specific feeds and searches (route scope "ai"): every item is stored; the patterns are not applied',
+            },
+            // Must equal src/collectors/ai-filter.js SEARCH_TERMS
+            search_terms: [...SEARCH_TERMS],
+            search_terms_rule: 'server-side search terms (Reddit subreddit discovery); every result is still filtered with the patterns',
+            shared_with: 'the "AI" pattern is src/config/ai-lexicon.js AI_ACRONYM_RE, the same expression relevance@1.2.0 scores',
+            not_relevance: 'admission scopes collection only; the relevance score (relevance@1.2.0) is a separate component',
+        },
+        justification: 'admission_filter@1.0.0 registers the collection admission filter as methodology (PR #22 review, decision G6, '
+            + 'Jennifer McKinney 2026-09-29). The filter decides which items of a site-wide or technology feed are stored at all, '
+            + 'which is a selection decision: it shapes every downstream measure. It was code-only until now; this version records '
+            + 'exactly the patterns that ran since relevance@1.2.0 (PR #10 P10-13): upper-case "AI" or "A.I." as a whole word, AGI, '
+            + 'LLM, NLP, GPT with a version suffix, and topic and product phrases (artificial intelligence, machine learning, deep '
+            + 'learning, neural networks, language models, generative AI, natural language processing, computer vision, named AI '
+            + 'products and labs, deepfakes, facial recognition, algorithmic, autonomous vehicles, agents or weapons, robots and '
+            + 'robotics). An item is stored when any pattern matches its title and summary. AI-specific feeds are stored whole. '
+            + 'Each collected post records the admission version it was stored under; a change to the patterns, the search terms '
+            + 'or the scope rule is a new version, never an edit of this row.',
+    });
+})();
+
+// ─── Errata (P10-16) ─────────────────────────────────────────────────────────
+// A released methodology row is never edited, even when it turns out not to
+// describe the code that ran. An erratum is a NEW row in
+// methodology_errata (migration 030; scripts/seed.js inserts the same rows)
+// attached to the row it corrects; GET /api/methodology serves it with that
+// version.
+const METHODOLOGY_ERRATA = [
+    {
+        component: 'relevance',
+        version: '1.0.0',
+        erratum_key: 'relevance-1.0.0-config-mismatch',
+        corrected_by: 'relevance@1.1.0',
+        erratum: 'The registered relevance@1.0.0 config does not describe the code that produced its decisions. It lists 18 '
+            + 'keywords, 0.1 per match and an AI-relevance threshold of 0.99; the code that ran scored every post against the '
+            + '20-keyword lexicon later registered as relevance@1.1.0 (case-insensitive substring match, score = unique matched '
+            + 'keywords / 20, AI-relevant when at least one keyword matched). Read decisions recorded under 1.0.0 against '
+            + 'relevance@1.1.0\'s config; `npm run replay` re-runs them with that rule. The 1.0.0 row is kept unedited as it '
+            + 'was registered. Found by the replay tool (ADR 0001, methodology alignment); recorded 2026-09-29 (PR #10 review P10-16).',
+    },
 ];
 
 /**
@@ -402,4 +737,4 @@ const CURRENT_VERSIONS = Object.freeze(METHODOLOGY_VERSIONS.reduce((acc, m) => {
     return acc;
 }, {}));
 
-module.exports = { METHODOLOGY_VERSIONS, CURRENT_VERSIONS };
+module.exports = { METHODOLOGY_VERSIONS, CURRENT_VERSIONS, METHODOLOGY_ERRATA };
