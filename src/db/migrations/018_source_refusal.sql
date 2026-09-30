@@ -6,7 +6,7 @@
 -- exponential cooldown (1 h, 2 h, 4 h, … capped at 24 h; one probe run when
 -- a cooldown ends), writes one critical alert_events row
 -- ('source_refused'), and clears the state on a successful probe or a
--- manual reset (env SOURCE_<SLUG>_RESET=<ISO date> at or after the refusal,
+-- manual reset (env SOURCE_<SLUG>_RESET=<ISO date> newer than the refusal,
 -- or `npm run source:reset -- <slug>`). GET /api/sources reports such a
 -- source as 'blocked_by_source'; it never counts as online.
 --
