@@ -18,11 +18,14 @@
 //             decision_audit_log row under the CURRENT methodology versions;
 //             a scoring failure queues an `ingest` retry for that post
 //   then, for the job:
-//     bias  — runBiasChecks() over the job's scored posts (when any)
+//     bias  — runBiasChecks() over the job's scored posts (when any), once
+//             no scoring of the job is outstanding: here when none is,
+//             else by closeCycles when the job's last reserved slot frees
 //     embed — one `embed` job per new post passing the relevance gate
 //             (relevance score >= 1/20, registered in relevance@1.1.0)
 //     job   — processing_jobs completed with the genuine posts_collected /
-//             posts_processed / sources_queried counts
+//             posts_processed (posts audited under the job, whoever scored
+//             them) / sources_queried counts
 //
 // Errors (F10-1): every error string is scrubbed (src/collectors/redact.js —
 // no env secret, raw or URL-encoded, and no credential query parameter
@@ -368,9 +371,23 @@ async function runCollection(o = {}) {
             ));
             summary.awaitingRetries = awaitingRetries;
         }
-        if (newPostIds.length > 0 && !o.cycle && !awaitingRetries) {
-            const bias = await runBiasChecks(jobId, mv.biasMvId);
-            summary.bias = { checksRun: bias.checksRun, violationsFound: bias.violationsFound };
+        // A one-shot job with no scoring outstanding is finalized HERE, the
+        // way closeCycles finalizes cycles and 'awaiting_retries' jobs: its
+        // posts_processed is the number of posts scored under it
+        // (decision_audit_log, cycle.jobPostsProcessed) and its bias checks
+        // run when that is > 0. Counting only the posts this run scored
+        // inline (newPostIds) lost every post scored by an ingest job that
+        // finished BEFORE the run ended (scoreVia 'queue': posts_processed 0,
+        // no per-job bias checks) and every inline-failure retry that did.
+        // A job the stale-job sweeper closed meanwhile is left as it is.
+        if (jobId && !o.cycle && !awaitingRetries) {
+            summary.postsProcessed = await cycle.jobPostsProcessed(jobId);
+            const open = summary.postsProcessed > 0 && await dbGet(
+                `SELECT id FROM processing_jobs WHERE id = $1 AND status = 'running'`, [jobId]);
+            if (open) {
+                const bias = await runBiasChecks(jobId, mv.biasMvId);
+                summary.bias = { checksRun: bias.checksRun, violationsFound: bias.violationsFound };
+            }
         }
         if (newPostIds.length > 0) {
             const gated = await dbAll(
