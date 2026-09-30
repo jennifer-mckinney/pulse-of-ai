@@ -10,32 +10,48 @@
 #                (mmdc), the forest theme and mmdc-config.json (natural
 #                width, useMaxWidth false), at scale 2, lowered to 1.5 or 1
 #                if either dimension would reach 8000 px (the Claude API
-#                image limit); the script fails if it still does.
+#                image limit); the script fails if it still does. The PNG
+#                carries the SHA-256 of the .mmd it was rendered from, in a
+#                tEXt chunk with the keyword mmd-sha256 (png_mmd_hash.py).
 #
 #   bash docs/diagrams/render.sh            regenerate every .html and .png
 #   bash docs/diagrams/render.sh a.mmd ...  only the given sources
 #   bash docs/diagrams/render.sh --check    verify CONTENT only, change nothing:
 #                                           every .html embeds its .mmd byte
 #                                           for byte; every .png exists, is
-#                                           under 8000 px, and matches a fresh
-#                                           re-render of its .mmd (same scale
-#                                           ladder, into a temp dir): the
+#                                           under 8000 px, carries the SHA-256
+#                                           of its CURRENT .mmd (a missing or
+#                                           different mmd-sha256 chunk fails
+#                                           as png-stale-mmd-hash: this is the
+#                                           guard for small edits), and matches
+#                                           a fresh re-render of its .mmd (same
+#                                           scale ladder, into a temp dir): the
 #                                           dimensions must be identical and
 #                                           the pixels identical or within
 #                                           PNG_TOLERANCE (default 0.0005:
 #                                           at most 0.05% of pixels may differ
 #                                           by more than 32 in a channel, which
-#                                           is anti-aliasing noise; a text or
-#                                           layout change moves far more). No
-#                                           file timestamps are used, so the
-#                                           check means the same on a fresh
-#                                           clone as in the editor's tree.
+#                                           absorbs anti-aliasing noise; a size
+#                                           or layout change is caught, but a
+#                                           one-word, one-number or one-node
+#                                           colour edit can stay under it, so
+#                                           the pixel check is for rendering
+#                                           drift only). No file timestamps
+#                                           are used, so the check means the
+#                                           same on a fresh clone as in the
+#                                           editor's tree.
+#   bash docs/diagrams/render.sh --check --hash-only
+#                                           the same without the re-render
+#                                           (HTML sync, size and mmd-sha256
+#                                           only; no Node or Chromium needed)
 #
-# Needs: bash, python3, and npx (Node) for mmdc. --check uses Pillow for the
-# tolerance comparison when it is installed; without it the decoded image
-# data must be identical. Re-renders depend on the fonts Chromium finds, so
-# run --check where the PNGs were rendered (same OS fonts). The first line of
-# each .mmd is "%% Title: <title>"; the second is "%% Summary: <one sentence>".
+# Needs: bash, python3, and npx (Node) for mmdc. --check needs Pillow for the
+# tolerance comparison: without it the decoded image data must be identical,
+# and re-renders are not bit-identical, so a clean tree fails. Re-renders
+# depend on the fonts Chromium finds, so run --check where the PNGs were
+# rendered (same OS fonts). The first line of each .mmd is
+# "%% Title: <title>"; the second is "%% Summary: <one sentence>".
+# Test: bash scripts/test/render-hash.test.sh (npm run test:diagrams).
 
 set -euo pipefail
 
@@ -44,15 +60,22 @@ MMDC_VERSION="11.12.0"
 MAX_PX=8000
 PNG_TOLERANCE="${PNG_TOLERANCE:-0.0005}"
 CHECK=0
+HASH_ONLY=0
 declare -a FILES=()
 
 for arg in "$@"; do
     case "$arg" in
         --check) CHECK=1 ;;
-        -h|--help) sed -n '2,39p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --hash-only) HASH_ONLY=1 ;;
+        -h|--help) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "${BASH_SOURCE[0]}"; exit 0 ;;
         *) FILES+=("$arg") ;;
     esac
 done
+
+if (( HASH_ONLY && ! CHECK )); then
+    echo "render.sh: --hash-only is a --check option" >&2
+    exit 2
+fi
 
 if [[ ${#FILES[@]} -eq 0 ]]; then
     while IFS= read -r f; do FILES+=("$f"); done < <(find "$HERE" -name '*.mmd' | sort)
@@ -136,6 +159,8 @@ render_png() {
         fi
         read -r w h < <(png_size "$png")
         if (( w < MAX_PX && h < MAX_PX )); then
+            # Record which .mmd this PNG was rendered from (--check compares it).
+            python3 "$HERE/png_mmd_hash.py" embed "$png" "$src"
             [[ -n "$quiet" ]] || echo "  ${png#"$HERE"/}  ${w}x${h} (scale $scale)"
             return 0
         fi
@@ -207,11 +232,14 @@ for src in "${FILES[@]}"; do
         else
             read -r w h < <(png_size "$png")
             (( w < MAX_PX && h < MAX_PX )) || problems+=" png-${w}x${h}-too-large"
-            fresh="$TMP/$(printf '%s' "${rel%.mmd}" | tr '/' '_').png"
-            if render_png "$src" "$fresh" quiet; then
-                verdict="$(compare_png "$png" "$fresh")" || problems+=" $verdict"
-            else
-                problems+=" rerender-failed"
+            verdict="$(python3 "$HERE/png_mmd_hash.py" check "$png" "$src")" || problems+=" $verdict"
+            if (( ! HASH_ONLY )); then
+                fresh="$TMP/$(printf '%s' "${rel%.mmd}" | tr '/' '_').png"
+                if render_png "$src" "$fresh" quiet; then
+                    verdict="$(compare_png "$png" "$fresh")" || problems+=" $verdict"
+                else
+                    problems+=" rerender-failed"
+                fi
             fi
         fi
         if [[ -n "$problems" ]]; then echo "FAIL $rel:$problems"; status=1; else echo "ok   $rel (${w}x${h})"; fi

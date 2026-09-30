@@ -33,7 +33,8 @@
     "collect:smoke": "node scripts/collect-smoke.js",
     "collect": "node scripts/collect.js",
     "terms:snapshot": "node scripts/terms-snapshot.js",
-    "bias:window": "node scripts/bias-window.js"
+    "bias:window": "node scripts/bias-window.js",
+    "test:diagrams": "bash scripts/test/render-hash.test.sh"
   },
   "keywords": [
     "ai",
