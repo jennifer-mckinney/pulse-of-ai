@@ -52,7 +52,7 @@ This audit trail is the moat. Competing on data volume or visualization polish i
 | **Policy makers** | Monitor bias incidents, track sentiment over time, cite evidence | Traffic-light model health indicator, bias alert history, evidence-based thresholds with academic sourcing (spec §9, §11) |
 | **General public** | Understand how the world feels about AI, without expertise | Guided storytelling experience over the globe; insights in plain language; free exploration with filters |
 | **Product owner / operator** | A system that is compliant, testable, and cheap to run | Self-hosted open-source stack, layered retention limiting storage growth, quality gates enforced in CI (spec §14, §19) |
-| **Regulators (indirect)** | Evidence that automated inference is governed | Immutable audit log, versioned methodologies with justifications, GDPR lifecycle logging, DPIA checklist for high-risk features (spec §8, §10, §20) |
+| **Regulators (indirect)** | Evidence that automated inference is governed | Immutable audit log, versioned methodologies with justifications, a retention log with the legal basis of every collection and text removal, DPIA checklist for high-risk features (spec §8, §10, §20) |
 
 ## 5. Business Objectives and Success Criteria
 
@@ -79,7 +79,7 @@ Objectives are taken directly from the specification's objectives table (spec §
 - Sentiment v1 (lexicon-based, establishing the audit pattern), keyword relevance scoring, aggregate bias monitoring with alerting (spec §9)
 - Public read API: health, aggregated posts by location, latest sentiment, audit trail, bias results, methodology, sources, on-demand refresh, structured query (spec §7)
 - Embedding pipeline and vector storage for semantic capabilities (spec §12, §13 Phase D)
-- Privacy-first collection: PII stripped at ingest, GDPR lifecycle logging (spec §8)
+- Privacy-first collection: PII stripped at ingest (spec §8); the retention log records a `collected` row per stored post and every text removal, compaction and demo purge, each with its legal basis (spec §8, §19); erasure-request handling is PLANNED — not implemented as of spec v1.2.0
 
 **Phase E — Storytelling frontend (delivered):**
 - The FuN.zip prototype frontend: a Canvas-2D globe with an 11-beat scroll-driven narrative of dynamically derived insights, ending in free exploration with sentiment and source-category filters; demo data always labelled (spec §11; PRD §4.3)
@@ -105,12 +105,12 @@ Objectives are taken directly from the specification's objectives table (spec §
 
 | Constraint | Implication |
 |---|---|
-| **GDPR compliance posture** | Target posture (planned — verified as the retention and lifecycle-logging phases land): data minimization at ingest (no PII stored); every data action logged with legal basis; right-to-erasure supported through the retention log; DPIA required before shipping cross-platform correlation, which is high-risk processing under GDPR Article 35 (spec §8, §20) |
+| **GDPR compliance posture** | Data minimization at ingest (no identity fields stored, identities in text redacted); every collection, text removal, compaction and demo purge logged with its legal basis (implemented, PR #22); right-to-erasure through the retention log (PLANNED — not implemented as of spec v1.2.0); DPIA required before shipping cross-platform correlation, which is high-risk processing under GDPR Article 35 (spec §8, §20) |
 | **EU AI Act readiness** | Documented, versioned methodology with plain-English justification for every automated inference; fairness thresholds sourced from academic literature and regulatory guidance (spec §3, §9, §10) |
 | **Privacy-first architecture** | Target posture (planned — verified when cross-platform correlation ships behind its DPIA gate): pseudonymization by design — correlation to use salted, non-reversible pseudonymous IDs without storing the underlying identity (spec §20); location capped at city granularity (spec §17) |
 | **Open-source, self-hosted ethos** | No data leaves the operator's infrastructure for inference or embedding; managed AI APIs were explicitly rejected on GDPR and lock-in grounds; the stack is composed of mature open-source components and can run on a single host (spec §5, §15) |
-| **Layered retention** | Post-level detail retained 3 months, then compacted into permanent monthly rollups with content nulled and embeddings deleted — bounding both privacy exposure and storage cost while preserving research-grade trends (spec §19) |
-| **Source economics** | Of the 52 registry sources, 31 collect without keys once the operator opts in; the rest wait for a free key, an approval or a paid licence and stay closed until it is configured, so no recurring data cost is incurred by default (spec §17; ADR 0001, Consequences) |
+| **Layered retention** | Post text removed at the end of its source's window (Reddit 48 h, YouTube and TikTok 30 days, otherwise 3 months), and months past the detail window compacted daily into permanent monthly rollups with the text replaced by a removal notice and embeddings deleted — bounding both privacy exposure and storage cost while preserving research-grade trends (spec §19) |
+| **Source economics** | Of the 52 registry sources, 23 collect without keys once the operator sets the contact URL, and 31 when the operator also records the permission-gated-feeds acknowledgement and a named approval (`GATE_APPROVED_BY`); the rest wait for a free key, an approval or a paid licence and stay closed until it is configured, and 4 are blocked, so no recurring data cost is incurred by default (spec §17; ADR 0001, Consequences) |
 | **Quality bar** | Nothing ships without passing tests, 80% line coverage, and the ethical quality gates (all thresholds documented, all decisions auditable, no PII in the database, bias assessment on every job) (spec §14) |
 
 ## 8. Risks

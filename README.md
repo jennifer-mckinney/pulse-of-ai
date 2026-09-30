@@ -30,7 +30,7 @@ Pulse of AI collects public, AI-related posts from a registry of 52 global onlin
 What works today, stated plainly:
 
 - **The registry has 52 sources** (`src/config/source-registry.js`, which matches the workbook of record `docs/requirements/Top_50_Global_Online_Sources.xlsx` (Rev. 4, exported as `docs/requirements/Top_52_Global_Online_Sources.rev4.csv`), ADR 0001). Each resolves at runtime to a gate status: `collecting`, `awaiting_key`, `awaiting_approval`, `awaiting_licence`, `blocked` or `disabled`.
-- **Live collection is off on a fresh clone.** Without `COLLECTOR_CONTACT_URL` every source is `disabled` except the 4 `blocked` ones, which stay `blocked` with or without the contact URL until an official permission is recorded (a kill switch reports them `disabled`), and the page runs on clearly labelled demo data. See [Turning on live collection](#turning-on-live-collection).
+- **Live collection is off on a fresh clone.** Without `COLLECTOR_CONTACT_URL` every source is `disabled` except the 4 `blocked` ones, which stay `blocked` with or without the contact URL until an official permission, the contact URL and a named approval (`GATE_APPROVED_BY`) are all recorded (a kill switch reports them `disabled`), and the page runs on clearly labelled demo data. See [Turning on live collection](#turning-on-live-collection).
 - **With the contact URL set, 23 sources collect with no keys.** With the contact URL, the operator acknowledgement for the 8 permission-gated news feeds and a named approval (`GATE_APPROVED_BY`, decision G5), **31 collect**. The other 21 wait for something only their operator can provide, and every one of them also needs the named approval to open:
 
   | Status | Count | Sources | What opens them |
@@ -251,13 +251,14 @@ E-mail is on when `SMTP_HOST`, `SMTP_FROM` and `SMTP_TO` are all set. Without th
 
 - **Browser** (`public/`, no build step, all assets self-hosted): UMD modules loaded in a fixed order. `globe.js` draws a Canvas-2D dot globe, `story.js` runs the eleven-part scroll story, `ui.js` provides explore mode, the source ribbon and the audit and health drawers, and `main.js` is the page shell.
 - **web** (`src/server.js`): Express serves the page and the API.
-- **worker** (`src/workers/start.js`): collection, cycle close and bias checks, scoring retries, embeddings and Reddit maintenance, over BullMQ queues in Redis.
+- **worker** (`src/workers/start.js`): collection, scoring (the `ingest` queue), cycle close and bias checks, source-health alerts, embeddings, the maintenance schedules (text retention, compaction, the rolling bias window, terms snapshots) and Reddit maintenance, over BullMQ queues in Valkey 8.
+- **watchdog** (`scripts/watchdog.js`, `src/watchdog/`): external alerting from its own container (see [Alerting](#alerting)).
 - **Collectors** (`src/collectors/`): one base class per access type (RSS/Atom, JSON API, bulk file) and an adapter per source route. Every HTTP request goes through one guarded HTTP client; bulk-file routes read operator-supplied files and Google Scholar reads its alert mailbox over IMAP.
-- **Pipeline** (`src/pipeline/`): sentiment (AFINN), relevance (a 20-term lexicon), discourse quality (a DQI heuristic) and job-level bias checks, each versioned in `methodology_versions`.
+- **Pipeline** (`src/pipeline/`): sentiment (AFINN), relevance (a 21-term lexicon matched as whole words), discourse quality (a DQI heuristic) and job-level bias checks, each versioned in `methodology_versions`.
 - **embeddings** (`python/embeddings_service.py`): FastAPI + sentence-transformers, `all-MiniLM-L6-v2` at a pinned revision, 384-dimension vectors stored with pgvector.
-- **PostgreSQL 16 + pgvector**: 26 migrations in `src/db/migrations/`.
+- **PostgreSQL 16 + pgvector**: 46 migrations in `src/db/migrations/` (001–060, with gaps), 34 tables.
 
-The full diagram set (twenty diagrams: deployment, trust boundaries, the collection cycle in three parts, data flows, three ERDs, class diagrams, sequences and state diagrams) is indexed in **[docs/diagrams/README.md](docs/diagrams/README.md)**, with each diagram's source files and the notes where the spec and the code differ.
+The full diagram set (twenty-one diagrams: deployment, trust boundaries, the collection cycle in three parts, data flows, four ERDs, class diagrams, sequences and state diagrams) is indexed in **[docs/diagrams/README.md](docs/diagrams/README.md)**, with each diagram's source files and the notes where the spec and the code differ.
 
 ---
 
@@ -267,31 +268,31 @@ All endpoints are under `/api`. The read-only endpoints send CORS headers; `POST
 
 | Method | Path | Returns |
 |---|---|---|
-| `GET` | `/api/health` | Status, DB connection, last job, unresolved alerts, `data_mode` and `data_window` for the trailing hour, source counts by status, Redis reachability and the worker heartbeat |
+| `GET` | `/api/health` | Status, DB connection, last job, unresolved alerts, `data_mode` and `data_window` for the trailing hour, source counts by status, Valkey reachability, the worker heartbeat and queue counts, maintenance, watchdog, bias-sample and correlation-gate status (cached 5 s) |
 | `GET` | `/api/posts/aggregated-by-location` | Sentiment counts per city with coordinates and data origin (`?platform=`, `?from=`, `?to=`) |
 | `GET` | `/api/sentiment/latest` | Sentiment summary and recent posts (`?limit=` up to 100, `?platform=`) |
 | `GET` | `/api/themes` | Up to 12 keyword themes with their sentiment split and top category |
 | `POST` | `/api/query` | Filtered scored posts with source attribution: the newest `limit` matches (up to 100) and the `total` match count; no offset (body: `platform`, `location`, `from`, `to`, `limit`) |
 | `GET` | `/api/audit/:post_id` | The receipt: provenance, post, every decision with four audience views, the ingestion step and the bias layers |
-| `GET` | `/api/bias/latest` | The latest job's bias assessments and violations |
+| `GET` | `/api/bias/latest` | The latest job's bias assessments and violations, and the share of "insufficient sample" assessments per check |
 | `GET` | `/api/bias/history` | Bias alert history for a window (`?hours=`, default 12, 1–48) with methodology lineage |
 | `GET` | `/api/methodology` | Every registered methodology version with its config and justification |
 | `GET` | `/api/sources` | The 52 registry sources with runtime status, terms, attribution and last-run classification (`?include_inactive=true` adds demo feeds and retired rows) |
 | `GET` | `/api/sources/timeseries` | Hourly sentiment volume per category (`?hours=`, default 12, 1–48) |
 | `POST` | `/api/refresh` | Asks the worker for one collection over every source: 202 with a `job_id`; 403 cross-site or without a valid `X-Refresh-Token` where one is required; 409 while one runs; 429 within 60 s of the last; 503 if the queue is down |
 
-`/api/themes`, `/api/posts/aggregated-by-location` and `/api/sources/timeseries` are cached in-process for 10 seconds. Route errors return `{ "error": "..." }` with no stack traces. Malformed JSON request bodies currently return Express's default 400 HTML error page, which includes a stack trace unless `NODE_ENV=production` (the containers set it; `npm run dev` does not); a fix is pending.
+`/api/themes`, `/api/posts/aggregated-by-location` and `/api/sources/timeseries` are cached in-process for 10 seconds. Route errors return `{ "error": "..." }` with no stack traces, and so does a malformed JSON request body (`400 { "error": "invalid JSON body" }`) in every environment.
 
 ---
 
 ## Development
 
-For host-side development, Node runs on your machine and only the databases and Redis run in Docker:
+For host-side development, Node runs on your machine and only the databases and Valkey (compose service `redis`) run in Docker:
 
 ```bash
 npm install
 cp .env.example .env        # then set POSTGRES_PASSWORD and REDIS_PASSWORD (openssl rand -hex 32)
-npm run docker:up           # postgres (POSTGRES_PORT, 5434) + postgres_test (5433) + redis (6379)
+npm run docker:up           # postgres (POSTGRES_PORT, 5434) + postgres_test (5433) + redis (Valkey, 6379)
 npm run migrate             # apply pending migrations
 npm run seed                # 52 registry sources + methodology versions (idempotent)
 npm run dev                 # Express on http://localhost:3000
@@ -304,7 +305,7 @@ python -m venv python/.venv && python/.venv/bin/pip install -r python/requiremen
 bash python/start.sh        # uvicorn on port 8000 (EMBEDDINGS_SERVICE_URL)
 ```
 
-Note that `npm run dev` listens on all interfaces today; binding it to 127.0.0.1 is in progress.
+`npm run dev` listens on 127.0.0.1 unless `HOST` or `PULSE_BIND_ADDR` names another address; bound beyond loopback, `POST /api/refresh` requires `X-Refresh-Token`.
 
 ### Commands
 
@@ -318,7 +319,8 @@ Note that `npm run dev` listens on all interfaces today; binding it to 127.0.0.1
 | `npm run source:disable -- <slug> --reason "<why>"` · `source:enable` · `source:reset` | Database kill switch; clear the refused state |
 | `npm run replay -- --post <id>` | Re-run a post's stored decisions and print PASS / DIVERGENCE / NOT RE-RUNNABLE per stage |
 | `npm run verify-provenance -- --post <id> --url <original URL> [--id <original id>]` | Prove a stored post came from a given upstream item (exit 0 MATCH, 1 NO MATCH) |
-| `npm run compact` | Delete demo posts past the retention window and compact old months into rollups (see the known gap in [docs/diagrams/README.md](docs/diagrams/README.md)) |
+| `npm run compact` | Delete demo posts past the retention window and compact old months into rollups now (the worker also does this daily) |
+| `npm run bias:window` | Run the bias checks over the rolling 24 h window now (the worker also does this daily) |
 | `npm run seed:e2e` | Load the deterministic fixture dataset the Playwright suite uses |
 
 ---
@@ -349,11 +351,11 @@ What the code does, stated precisely:
 - **Browser surface.** Every response carries a strict Content-Security-Policy (`default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'`), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` and `Referrer-Policy: no-referrer`. The frontend uses no CDN and builds the page with `textContent`, never `innerHTML`.
 - **Refresh is guarded against cross-site requests.** CORS is enabled only on the read-only endpoints. `POST /api/refresh` accepts only same-origin requests (by `Sec-Fetch-Site`, or else `Origin` / `Referer` matching the host), answers CORS preflights with 403, and requires an `X-Refresh-Token` (`REFRESH_TOKEN`) when the site is bound beyond loopback.
 - **Collectors cannot be pointed at internal hosts.** Every request and redirect hop must be https to a public address on the route's allowed hosts; DNS answers are checked and pinned; redirects are followed one hop at a time (at most 4); a request carrying credentials is never sent across origins; responses are size-capped.
-- **Secrets stay out of storage, logs and the API.** Every error the collectors and the worker store or log is scrubbed of credential-shaped URL parameters and of every secret env value (API route handlers log database error messages as they are). The public API serves only an error kind and HTTP status. Collector credentials reach only the worker container; the web container gets "set / empty" markers. Redis requires a password, and published ports bind to 127.0.0.1 by default.
-- **Personal data.** The precise claim (`ingest@1.5.0`): identity fields are never stored; e-mail addresses, handles (including Reddit u/ names), phone numbers, sign-offs and profile links in text are redacted; **free text may still contain names mentioned in the content**. Collectors store an allowlist of content fields, location is kept at city level (from the content, or the publisher's home city for editorial sources), and an upstream id that could identify someone is stored only as a keyed fingerprint.
+- **Secrets stay out of storage, logs and the API.** Every error the collectors and the worker store or log is scrubbed of credential-shaped URL parameters and of every secret env value, and so is every API route and database pool error line. The public API serves only an error kind and HTTP status. Collector credentials reach only the worker container; the web container gets "set / empty" markers. Valkey requires a password, and published ports bind to 127.0.0.1 by default.
+- **Personal data.** The precise claim (`ingest@1.7.0`): identity fields are never stored; e-mail addresses, handles (including Reddit u/ names), phone numbers, sign-offs and profile links in text are redacted; **free text may still contain names mentioned in the content**. Collectors store an allowlist of content fields, location is kept at city level (from the content, or the publisher's home city for editorial sources), and an upstream id that could identify someone is stored only as a keyed fingerprint.
 - **Politeness and terms.** Every request carries a User-Agent with the operator's contact URL; publisher feeds are checked against `robots.txt`; requests to a host are spaced; a 401, 403 or 451, a bot challenge or a robots refusal is never retried or worked around, and puts the source in a cooldown of 1 hour doubling up to 24 hours. Pulse of AI uses its sources on a non-commercial research basis and shows the attribution their terms require (ADR 0001 ruling 6).
 
-Accepted risks are recorded in ADR 0001: the 8 permission-gated feeds (opened only by each operator's acknowledgement), and Reddit's display of redacted text and its retention of scores and audit rows after the text is blanked.
+Accepted risks are recorded in ADR 0001: the 8 permission-gated feeds (opened only by each operator's acknowledgement and a named approval), and Reddit's display of redacted text and its retention of scores and audit rows after the text is blanked.
 
 ---
 
@@ -363,8 +365,8 @@ Accepted risks are recorded in ADR 0001: the 8 permission-gated feeds (opened on
 - **Methodology is versioned, never edited.** Each configuration (thresholds, keywords, weights, legal basis) is a row in `methodology_versions` with a plain-English justification, served by `GET /api/methodology`. A change ships as a new version and a new migration.
 - **The receipt.** `GET /api/audit/:post_id` returns the post's provenance, every decision and the ingestion step in four audience views (Public, Journalist, Regulator, Researcher), and the bias layers of the job that scored it, with methodology lineage marked recorded, inferred or current. The input hash is exposed only as an HMAC keyed with `AUDIT_HASH_KEY`.
 - **Reproducible.** `npm run replay -- --post <id>` re-runs every stored decision against the methodology version it references. `npm run verify-provenance` proves a post's origin from its original URL through a keyed provenance fingerprint (`PROVENANCE_KEY`, else `AUDIT_HASH_KEY`).
-- **Bias checks.** Once per collection cycle (and per refresh or standup job), three aggregate checks run over the scored posts: location concentration, platform sentiment parity and negative dominance. Violations raise alerts that turn the header health chip yellow or red and appear in the health drawer's alert history. No check infers traits of individual users.
-- **Retention is logged.** Reddit text blanking, the demo purge and compaction each write `data_retention_log` rows with their legal basis.
+- **Bias checks.** Once per collection cycle (and per refresh or standup job), and daily over a rolling 24 h window, three aggregate checks run over the scored posts: location concentration (content-located posts only; publisher-located posts are a separate globe layer), platform sentiment parity and negative dominance. Each needs a minimum sample; below it the check records "insufficient sample" and raises no alert, and the share of such checks is reported. Violations raise alerts that turn the header health chip yellow or red and appear in the health drawer's alert history. No check infers traits of individual users.
+- **Retention is logged.** Every stored post writes a `collected` row, and every text removal, compaction, run rollup and demo purge writes `data_retention_log` rows with their legal basis.
 
 ---
 
