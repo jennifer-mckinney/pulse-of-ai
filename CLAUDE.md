@@ -62,6 +62,7 @@ npm run teardown       # stop it (keeps volumes); `-- --purge` deletes volumes a
 - `NODE_ENV=test` makes `migrate.js` and `db/connection.js` target port 5433 (test DB)
 - Tests run serially (`maxWorkers: 1`) — shared test DB; parallel runs cause TRUNCATE race conditions
 - `globalSetup.js` drops, re-migrates (`--fresh`) and seeds the test DB once; `setup.js` truncates tables before each test file
+- The 5433 test DB is the default for a developer's own `npm test`; agents and automated runs use a throwaway compose project on non-default ports instead (see the Standup notes and "Agent Workflow Principles")
 
 ## Status
 Phase B (pipeline TDD) is implemented — `tests/unit/` covers sentiment, relevance, discourse, ingest, bias, correlation, embeddings, and the ingest/embed/correlate workers; `tests/integration/` covers all API routes. The plan file previously referenced here (`~/.claude/plans/composed-coalescing-duckling.md`) no longer exists.
