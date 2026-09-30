@@ -651,3 +651,61 @@ describe('migration 061 ↔ methodology registry (bias@1.6.0, parity stated valu
         expect(reg.model_name).toBe(prev.model_name);
     });
 });
+
+// Dependabot #29: sentence-transformers 2.7.0 -> 6.1.0 ships as
+// embedding@1.1.0 (migration 065), same model and revision, embedding@1.0.0
+// never edited. The library pins themselves are tied to the registry by
+// tests/unit/pure/embeddingLibraryPins.test.js.
+describe('migration 065 ↔ methodology registry (embedding@1.1.0, sentence-transformers 6.1.0)', () => {
+    const { generate } = require('../../../scripts/generate-methodology-migration');
+    const { CURRENT_VERSIONS } = require('../../../src/config/methodology-registry');
+    const SQL_065 = fs.readFileSync(
+        path.join(__dirname, '../../../src/db/migrations/065_embedding_sentence_transformers_6.sql'), 'utf8');
+    const rows = [...SQL_065.matchAll(ROW_011_RE)].map(m => ({
+        component: m[1], version: m[2], model_name: m[3],
+        config: JSON.parse(m[4]), justification: m[5],
+    }));
+
+    test('065 ends with exactly the generated embedding@1.1.0 row, is additive and edits nothing', () => {
+        expect(SQL_065.endsWith(generate(['embedding@1.1.0']))).toBe(true);
+        expect(rows.map(r => `${r.component}@${r.version}`)).toEqual(['embedding@1.1.0']);
+        expect((SQL_065.match(/INSERT INTO/g) || []).length).toBe(1);
+        expect(SQL_065).not.toMatch(/DO UPDATE|UPDATE [a-z_]+ SET|DELETE FROM|DROP |TRUNCATE|ALTER TABLE/);
+    });
+
+    test('agrees field for field with the registry entry', () => {
+        const reg = registry('embedding', '1.1.0');
+        expect(rows[0]).toEqual({
+            component: reg.component, version: reg.version, model_name: reg.model_name,
+            config: reg.config, justification: reg.justification,
+        });
+    });
+
+    test('embedding@1.1.0 is current; 1.0.0 is kept as released (012) and precedes it', () => {
+        expect(CURRENT_VERSIONS.embedding).toBe('1.1.0');
+        expect(latest('embedding').version).toBe('1.1.0');
+        const versions = METHODOLOGY_VERSIONS.filter(m => m.component === 'embedding').map(m => m.version);
+        expect(versions).toEqual(['1.0.0', '1.1.0']);
+        // 012 still inserts the 1.0.0 row exactly as the registry keeps it.
+        expect(parse012()[0].config).toEqual(registry('embedding', '1.0.0').config);
+        expect(registry('embedding', '1.0.0').config.library).toBe('sentence-transformers==2.7.0');
+    });
+
+    test('1.1.0 is 1.0.0 with the new library, its dependencies, the lock and the equivalence evidence', () => {
+        const reg = registry('embedding', '1.1.0');
+        const prev = registry('embedding', '1.0.0');
+        expect(reg.model_name).toBe(prev.model_name);
+        for (const k of Object.keys(prev.config)) {
+            if (k !== 'library') expect(reg.config[k]).toEqual(prev.config[k]);
+        }
+        expect(reg.config.library).toBe('sentence-transformers==6.1.0');
+        expect(Object.keys(reg.config).filter(k => !(k in prev.config)).sort())
+            .toEqual(['changelog', 'equivalence', 'library_dependencies', 'lock']);
+        expect(reg.config.equivalence).toMatchObject({ compared_with: expect.stringMatching(/^embedding@1\.0\.0/), texts: 12 });
+        expect(reg.config.equivalence.platforms).toEqual(expect.arrayContaining([
+            expect.stringMatching(/linux\/arm64/), expect.stringMatching(/linux\/amd64/),
+        ]));
+        expect(reg.justification).toMatch(/bit-identical/);
+        expect(reg.justification).toMatch(/embedding@1\.0\.0 row is kept unedited/);
+    });
+});

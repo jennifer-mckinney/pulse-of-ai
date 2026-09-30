@@ -29,11 +29,18 @@
 # torch: the CPU-only build from the PyTorch index — the default PyPI wheel
 # pulls ~2 GB of CUDA libraries this CPU service never loads.
 torch==2.12.1+cpu
-# Keep sentence-transformers in step with requirements.txt.
-sentence-transformers==2.7.0
-transformers==4.57.6
-huggingface_hub==0.36.2
-tokenizers==0.22.2
+# Keep sentence-transformers in step with requirements.txt AND with the
+# `library` of the current embedding methodology row
+# (src/config/methodology-registry.js; tests/unit/pure/embeddingLibraryPins.test.js
+# fails on any drift). A sentence-transformers bump is a methodology change:
+# embedding@1.1.0 (migration 065) registered 6.1.0 after the 2.7.0 -> 6.1.0
+# vectors compared bit-identical on linux/arm64 and linux/amd64.
+# transformers / huggingface_hub / tokenizers are pinned with it: 6.x needs
+# transformers 5 (<6) and huggingface_hub 1.x (<2).
+sentence-transformers==6.1.0
+transformers==5.18.0
+huggingface_hub==1.33.0
+tokenizers==0.23.2
 numpy==2.5.1
 fastapi==0.139.0
 uvicorn==0.50.0

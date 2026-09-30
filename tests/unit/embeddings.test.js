@@ -10,6 +10,7 @@
 const axios  = require('axios');
 const crypto = require('crypto');
 const { dbGet, dbRun } = require('../../src/db/connection');
+const { CURRENT_VERSIONS } = require('../../src/config/methodology-registry');
 const {
     generateEmbedding,
     saveEmbedding,
@@ -136,18 +137,32 @@ describe('saveEmbedding()', () => {
     });
 
     // P9-5: each vector records the embedding methodology version that
-    // produced it (methodology_versions embedding@<ver> holds model + revision).
-    it('stamps the registered embedding methodology version on the row', async () => {
+    // produced it (methodology_versions embedding@<ver> holds model + revision
+    // + library). Since migration 065 that is embedding@1.1.0
+    // (sentence-transformers 6.1.0); embedding@1.0.0 vectors keep their stamp.
+    it('stamps the CURRENT embedding methodology version (1.1.0) on the row', async () => {
         const srcId  = await insertSource();
         const postId = await insertRawPost(srcId, 'save-emb-5');
         await saveEmbedding(postId, fakeEmbedding());
         const row = await dbGet(
             'SELECT methodology_version FROM post_embeddings WHERE raw_post_id = $1', [postId]);
-        expect(row.methodology_version).toBe('1.0.0');
+        expect(row.methodology_version).toBe('1.1.0');
+        expect(row.methodology_version).toBe(CURRENT_VERSIONS.embedding);
+    });
+
+    it('re-embedding a 1.0.0 vector restamps it with the current version', async () => {
+        const srcId  = await insertSource();
+        const postId = await insertRawPost(srcId, 'save-emb-6');
+        await saveEmbedding(postId, fakeEmbedding(0.1));
+        await dbRun(`UPDATE post_embeddings SET methodology_version = '1.0.0' WHERE raw_post_id = $1`, [postId]);
+        await saveEmbedding(postId, fakeEmbedding(0.2));
+        const row = await dbGet(
+            'SELECT methodology_version FROM post_embeddings WHERE raw_post_id = $1', [postId]);
+        expect(row.methodology_version).toBe('1.1.0');
     });
 
     it('stamps NULL when the configured model/revision is not the registered one', () => {
-        expect(embeddingMethodologyVersion({})).toBe('1.0.0');
+        expect(embeddingMethodologyVersion({})).toBe('1.1.0');
         expect(embeddingMethodologyVersion({ EMBED_MODEL: 'other/model' })).toBeNull();
         expect(embeddingMethodologyVersion({ EMBED_MODEL_REVISION: 'main' })).toBeNull();
     });
