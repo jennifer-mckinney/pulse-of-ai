@@ -32,8 +32,18 @@ describe('refusal rules', () => {
         expect(c.reason).toMatch(/HTTP 403.*SOURCE_CATO_RESET=<date> or npm run source:reset -- cato; cooldown until 2026-09-29T12:30:00.000Z/);
         expect(R.refusalGate(row, 'cato', {}, Date.parse('2026-09-29T12:31:00Z')).state).toBe('probe');
         expect(R.refusalGate(row, 'cato', { SOURCE_CATO_RESET: '2026-09-29T11:00:00Z' }, now).state).toBe('cooldown');
-        expect(R.refusalGate(row, 'cato', { SOURCE_CATO_RESET: '2026-09-29T11:45:00Z' }, now).state).toBe('reset');
-        expect(R.refusalGate(row, 'cato', { SOURCE_CATO_RESET: 'not a date' }, now).state).toBe('cooldown');
+        const APPROVED = { GATE_APPROVED_BY: 'Ada Lovelace 2026-09-29' };
+        expect(R.refusalGate(row, 'cato', { ...APPROVED, SOURCE_CATO_RESET: '2026-09-29T11:45:00Z' }, now).state).toBe('reset');
+        expect(R.refusalGate(row, 'cato', { ...APPROVED, SOURCE_CATO_RESET: 'not a date' }, now).state).toBe('cooldown');
+        // PR #22 decision G5 / security L6: an env reset re-opens a refused
+        // source, so it needs a named approval; without one the refusal
+        // stands and the reason says why.
+        for (const bad of [{}, { GATE_APPROVED_BY: '' }, { GATE_APPROVED_BY: 'Name 2026-09-29' }, { GATE_APPROVED_BY: 'Ada 2026-02-30' }]) {
+            const held = R.refusalGate(row, 'cato', { ...bad, SOURCE_CATO_RESET: '2026-09-29T11:45:00Z' }, now);
+            expect(held.state).toBe('cooldown');
+            expect(held.reason).toMatch(/SOURCE_CATO_RESET is set but awaiting named approval \(GATE_APPROVED_BY "Name YYYY-MM-DD"\)/);
+        }
+        expect(R.refusalGate(row, 'cato', {}, now).reason).not.toMatch(/awaiting named approval/);
         expect(R.refusalGate({ ...row, access_denied_status: null, access_denied_kind: 'robots' }, 'cato', {}, now).reason).toMatch(/robots\.txt/);
     });
 

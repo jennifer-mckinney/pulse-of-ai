@@ -35,12 +35,14 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
+      # Valkey 8 (Redis protocol, BSD-3-Clause) — the same digest as the
+      # compose `redis` service; scripts/test/check-compose.sh fails on drift.
       redis:
-        image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499   # redis:7-alpine
+        image: valkey/valkey:8.1.10-alpine@sha256:081c2f5cb575efc901aa80ff9cdbd1ec6a301682fd35e1ebb4b0990a4a4a8507   # valkey/valkey:8.1.10-alpine
         ports:
           - 6379:6379
         options: >-
-          --health-cmd "redis-cli ping"
+          --health-cmd "valkey-cli ping"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -71,7 +73,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
           cache: npm
@@ -188,6 +190,8 @@ jobs:
         env:
           POSTGRES_PASSWORD: ci_password
           REDIS_PASSWORD: ci_password
+          # The worker's env_file is required (PR #22 grumpy L12); CI has no .env.
+          PULSE_ENV_FILE: /dev/null
         run: |
           docker compose config --quiet
           docker compose --profile full --profile demo config --quiet
@@ -276,7 +280,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Node.js 22
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -304,7 +308,7 @@ jobs:
 
       - name: Upload Playwright artifacts on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-results
           path: test-results/

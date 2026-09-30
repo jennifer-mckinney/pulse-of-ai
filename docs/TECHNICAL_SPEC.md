@@ -14,6 +14,8 @@
 - Layered retention: 3-month detail → monthly compaction → permanent topic rollups
 - User interaction + query-driven insight delivery (not passive-only)
 
+**PR #22 amendments (collection hardening; described in the sections they change):** the collection admission filter is versioned methodology (`admission_filter@1.0.0`, §10); bias@1.4.0 minimum samples and the bias@1.5.0 rolling 24 h window (§9, decision G2); the maintenance schedule (retention every 5 min, compaction and rollups daily, terms snapshots weekly), `processing_jobs` kept permanently and the new audit and state tables (§6, §19); the correlation DPIA gate (§20); Valkey 8 as the queue store (§5). The docs branch reconciles its v1.2.0 spec against master after PR #22 merges.
+
 ---
 
 ## Table of Contents
@@ -224,7 +226,8 @@ All thresholds below are stored in the `methodology_versions` table with their a
 | Embed service | Infinity (`infinity-embed`) | latest | Dynamic batching, 30-40% throughput gain over plain FastAPI |
 | Sentiment v1 | `sentiment` npm (AFINN) | 5.0.2 | Already installed, synchronous, no API calls |
 | Sentiment v2 | RoBERTa (Python, Phase 2) | — | 80%+ accuracy target; v1 establishes the audit pattern first |
-| Infrastructure | Docker Compose | — | PostgreSQL + test DB in one command |
+| Infrastructure | Docker Compose | 2.39+ | PostgreSQL + test DB + queue store in one command |
+| Job queue | BullMQ on Valkey 8 | 8.1 (pinned digest) | Redis-protocol queue store under BSD-3-Clause; new `valkey_data` volume (Redis 7.4 RDB files do not load) |
 | Node testing | Jest + supertest | — | Unit + integration, 80%+ coverage required |
 | Python testing | pytest | — | Embedding service tests |
 
@@ -270,6 +273,26 @@ alert_events                                                 │  │
 raw_posts.source_id ────────────────────────────────────────┘  │
 data_sources.id ────────────────────────────────────────────────┘
 ```
+
+### Schema additions of PRs #10 and #22 (migrations 025–042, 060)
+
+| Table / column | Migration | Purpose |
+|---|---|---|
+| `alert_resolutions` | 028 | Append-only record of every alert closure: who, why, evidence (`basis`), optional methodology version |
+| `alert_resolution_approvals`, view `alert_status` | 036 | The named approver of methodology supersessions (G1); `alert_status` tells `superseded` from `resolved` |
+| `methodology_errata` | 030 | Errata attached to released methodology rows, which are never edited |
+| `raw_posts.text_removed_at`, `text_removed_reason`; index `idx_raw_posts_text_live` | 025, 031 | Text retention by blanking; live-text lookups |
+| `source_collection_state.last_new_post_at`, `freshness_anchor_at` | 033, 037 | Source freshness (`source_stale`) from a fixed anchor |
+| `source_runs` (30 days raw) → `source_run_daily` | 034 | Run-table retention: daily rollups, raw rows removed after `SOURCE_RUNS_RAW_DAYS` |
+| `source_gate_events`, `source_terms_snapshots` | 035, 041 | Governance: gate changes with who and when; terms snapshots with normalised text and its hash |
+| unique partial index `uq_alerts_open_source` | 038 | At most one open alert per (type, source) |
+| `maintenance_state` | 039 | Last run, last success and last error per maintenance task (`/api/health`) |
+| `processing_jobs.last_progress_at` | 040 | Progress heartbeat of one-shot jobs (the stale-job sweeper uses it, not age) |
+| `raw_posts.admission_mv_id` | 042 | The admission-filter version a post was stored under |
+| `source_gate_events.approved_by`, `routes`, event `refusal_reset`; `correlation_gate_events` | 056 | Decision G5: the named approval (`GATE_APPROVED_BY`, "Name YYYY-MM-DD") behind each gate opening and operator change (a CHECK requires it as the actor of `enabled` / `disabled` / `refusal_reset`); every change of the correlation DPIA gate (principal #19) |
+| `bias_window_runs`, `bias_window_assessments` | 060 | The rolling 24 h bias checks (bias@1.5.0, G2): one run row per window, its assessments append-only |
+
+`alert_resolutions`, `alert_resolution_approvals`, `source_gate_events`, `correlation_gate_events`, `source_terms_snapshots` and `methodology_errata` are append-only: a trigger rejects UPDATE and DELETE (migrations 036 and 056); so is `bias_window_assessments` (migration 060). Migrations are numbered uniquely and applied in file-name order; gaps in the numbering are allowed.
 
 ### Migration 001 — Core Schema (`src/db/migrations/001_core_schema.sql`)
 
@@ -464,7 +487,7 @@ CREATE INDEX idx_embeddings_hnsw ON post_embeddings
 All responses: `Content-Type: application/json`. All errors follow: `{ "error": "descriptive message" }`. Stack traces, SQL errors, and file paths are never returned to clients.
 
 ### `GET /api/health`
-Returns system status, last job info, and active unresolved alerts.
+Returns system status, last job info, and active unresolved alerts. The response is cached in process for 5 s, keyed on the path alone (it fans out to the queue store and the database; PR #22 security L2). It also carries `bias_sample` (the insufficient-sample share per bias check, §9) and `correlation` (§20).
 
 **Response 200:**
 ```json
@@ -494,6 +517,8 @@ Returns system status, last job info, and active unresolved alerts.
 **Response 503:** DB unreachable — `{ "status": "degraded", "db_connected": false }`
 
 ---
+
+**Operational fields (PR #10 / #22).** Alongside the fields above, the response carries `alerts_closed` (`{ resolved, superseded }`), `redis` (`{ reachable }`), `worker` (`{ alive, last_heartbeat, queues }` with waiting / active / delayed / failed per BullMQ queue), `sources` (registry status counts), `maintenance` (`{ tasks: { retention, daily, terms }, retention_overdue }`, §19) and `correlation` (the DPIA gate, §20). Open `retention_overdue` (critical), `source_stale`, `source_failing`, `source_refused` and `terms_changed` alerts appear in `active_alerts`.
 
 ### `GET /api/posts/aggregated-by-location`
 Sentiment breakdown by city for Mapbox. Backed by real PostgreSQL GROUP BY query.
@@ -564,9 +589,9 @@ Requests a collection + processing run over the source registry. The web process
 ```json
 { "job_id": "uuid", "status": "queued", "triggered_by": "api" }
 ```
-**Response 409:** `{ "error": "A refresh collection is already running", "job_id": "uuid" }` while a refresh job is running (migration 019's partial unique index holds this across processes; a row still running after `REFRESH_STALE_MINUTES`, default 30, is marked failed as stale).
+**Response 409:** `{ "error": "A refresh collection is already running", "job_id": "uuid" }` while a refresh job is running (migration 019's partial unique index holds this across processes; a row that made no progress (`processing_jobs.last_progress_at`, else `started_at`) for `REFRESH_STALE_MINUTES`, default 30, is marked failed as stale; the refresh run itself has a deadline of 80 % of that bound).
 
-**Response 403 (token):** when `REFRESH_TOKEN` is set, the request must carry it as `X-Refresh-Token`; when the site is bound beyond loopback (`PULSE_BIND_ADDR` or `HOST` not a loopback address) a token is required and refresh is refused without one.
+**Response 403 (token):** when `REFRESH_TOKEN` is set, the request must carry it as `X-Refresh-Token`; when the site is bound beyond loopback (`PULSE_BIND_ADDR` or `HOST` not a loopback address, or the actual bound address a wildcard) or the request came through a reverse proxy (`Forwarded`, `X-Forwarded-*`, `X-Real-IP`), a token is required and refresh is refused without one. The compose-published address (`PULSE_CONTAINER_PUBLISHED_ADDR`) can only make this stricter; it excuses the wildcard listen only inside the compose web container (`PULSE_IN_CONTAINER=1` and `/.dockerenv`; PR #22 security M4).
 
 **Response 429:** `{ "error": "Rate limit exceeded: 1 refresh per minute (global)", "retry_after_seconds": n }` with `Retry-After`.
 
@@ -905,6 +930,14 @@ Threshold: |confidence_A - confidence_B| > 0.05 → flag for review
 | Equalized odds | group | |TPR_A - TPR_B| | > 0.08 | warning | Hardt et al. 2016 |
 | Counterfactual fairness | sample | |conf_A - conf_B| | > 0.05 | review flag | Russell et al. 2017 |
 
+**Location basis (bias@1.2.0, ADR 0001 decision D3 — "Separate layer, excluded from bias.").** Location concentration counts only posts located by their content (or with no recorded basis). Posts placed at the publisher's home city (`raw_payload.location_basis = 'publisher'`) are excluded, and the assessment's evidence records `excluded_location_bases` and `excluded_posts`. The globe shows them as a separate, labelled publisher-location layer (a dashed ring), with a legend key and tooltip wording.
+
+**Minimum sample (bias@1.3.0, P10-5).** Location concentration needs at least 30 content-located posts in the job; below that the assessment is recorded as "insufficient sample" (share stated, no violation, no alert) and the receipt shows the layer as n-a. Stale alerts are resolved through `alert_resolutions` (migration 028), never deleted.
+
+**A minimum sample for every check (bias@1.4.0, migration 032).** Platform sentiment parity compares only source categories with at least 10 posts in the job (fewer than two such categories: "insufficient sample"); negative dominance needs at least 30 posts; location concentration keeps bias@1.3.0's 30 content-located posts. Below a minimum the value is recorded with no violation and no alert. Open alerts this version would not raise were closed as `superseded` with Jennifer McKinney as the named approver (ADR 0001, decision G1), separate from genuinely `resolved` alerts. A job with no content-located posts, a single source category or no posts at all is below these minimums too, so it is recorded as "insufficient sample", never as a pass (PR #22 grumpy M5).
+
+**A rolling 24 h window (bias@1.5.0, migration 060; decision G2, Jennifer McKinney 2026-09-29).** A 2–3 minute cycle rarely reaches the minimums, so the same three checks, with the same thresholds and minimums, ALSO run over every post whose sentiment decision was recorded in the previous 24 hours: daily (the `bias_window` step of the maintenance `daily` task) and on demand (`npm run bias:window`). Each run is a `bias_window_runs` row (window, trigger, version, status, posts assessed, violations); its assessments are append-only `bias_window_assessments` rows; a violation opens an alert naming the window run (`details.windowRunId`). The per-cycle checks are unchanged. The share of "insufficient sample" assessments per check (per cycle over 24 h and 7 days; for the rolling window, the latest run and 7 days) is served as `insufficient_sample` by `GET /api/bias/latest` and as `bias_sample` by `GET /api/health`, so a monitor that never reaches its minimum is visible.
+
 ### Alert Flow
 ```
 bias_assessments.is_violation = TRUE
@@ -949,6 +982,10 @@ raw_posts.id
 | Regulator | "What algorithm made this decision?" | Model name, version, config JSONB, justification, date effective |
 | Internal audit | "Did methodology change between runs?" | methodology_versions.deprecated_at shows when and processing_jobs links each run to its version |
 | Researcher | "Can I reproduce this score?" | input fingerprint (keyed) + model_name + config + output — reproducibility trace. The API exposes `input_hash` as HMAC-SHA256(`AUDIT_HASH_KEY`, stored hash), never the raw content hash (prevents offline hash-confirmation of post content); consumers verify content in their own systems |
+
+### Admission filter as methodology (PR #22, decision G6)
+
+The collection admission filter (`src/collectors/ai-filter.js`) decides which items of a site-wide or technology feed are stored at all, so it is the versioned component `admission_filter` (1.0.0, migration 042). Its registered config is exactly the code's patterns, search terms and scope rule (a unit test fails on any difference); a change is a new version. Every collected post records the version it was admitted under (`raw_posts.admission_mv_id`), shown on the audit receipt as `provenance.admission`.
 
 ### Methodology Seeding
 Before any inference runs, `scripts/seed.js` inserts the initial methodology versions:
@@ -1498,11 +1535,16 @@ TIER 2: Monthly Compaction (3 months → indefinite)
   Granularity: Monthly aggregate per topic/category/location
   Purpose: Trend research, historical journalism, policy analysis
   Access: GET /api/rollups/:year/:month, POST /api/query (with note)
-  Raw posts: content field nulled, embeddings deleted, audit skeleton kept
+  Raw posts: text replaced by a removal notice (content is NOT NULL; text_removed_at set), embeddings deleted, audit skeleton kept
 
 TIER 3: Permanent Archival (automatic — no expiry)
-  Tables: methodology_versions, processing_jobs (metadata only),
-          bias_assessments (aggregates), alert_events
+  Tables: methodology_versions, methodology_errata,
+          processing_jobs (metadata only; EVERY row, failed ones
+          included — ADR 0001 decision G4), bias_assessments
+          (aggregates), alert_events, alert_resolutions,
+          alert_resolution_approvals, source_gate_events,
+          correlation_gate_events, source_terms_snapshots,
+          source_run_daily
   Granularity: Run-level and methodology-level
   Purpose: Audit compliance, reproducibility, GDPR accountability
   Access: GET /api/methodology, GET /api/audit/:post_id (audit skeleton)
@@ -1561,17 +1603,29 @@ CREATE TABLE compaction_log (
 );
 ```
 
+### Maintenance schedule (`src/workers/maintenance.worker.js`, PR #22)
+
+The worker registers three BullMQ job schedulers on the `maintenance` queue (shared across worker processes; concurrency 1):
+
+| Scheduler | Cadence | Steps |
+|---|---|---|
+| `retention` | `MAINTENANCE_EVERY_MS`, default 5 min | text retention for every source (below); stale one-shot jobs (no progress for `STALE_JOB_MINUTES`) marked failed |
+| `daily` | `MAINTENANCE_DAILY_EVERY_MS`, default 24 h | compaction (below); `source_runs` older than `SOURCE_RUNS_RAW_DAYS` (30) rolled into `source_run_daily`; the rolling 24 h bias checks (bias@1.5.0, §9) |
+| `terms` | `MAINTENANCE_TERMS_EVERY_MS`, default 7 days | a polite snapshot of every source's terms page; a changed normalised-text hash opens a `terms_changed` alert |
+
+A failing step does not stop the others, but it fails the job (BullMQ failed count) and is logged at error level. Every run writes its outcome to `maintenance_state`; `GET /api/health` reports `maintenance.tasks` (last run, last success, last error per task) and `maintenance.retention_overdue` (posts still holding text past their window). While any post of a source holds text more than `RETENTION_OVERDUE_GRACE_MINUTES` (60) past its window, the worker keeps one critical `retention_overdue` alert open for that source. The schedulers are re-registered on every reschedule, so a queue-store outage at boot is retried. A bad `RETENTION_DETAIL_DAYS` (not a whole number of days from 30 to 3650) fails the retention and compaction steps and changes nothing.
+
 ### Compaction Job Logic (`scripts/compact.js`)
-Runs on the 1st of each month. Compacts all posts older than 3 months:
+Runs in the daily maintenance task (and by hand, `npm run compact`). Compacts every whole month that ended before the detail window (`RETENTION_DETAIL_DAYS`, 90 days); the month holding the cutoff waits until it is whole. Months are found by walking the `collected_at` index month by month; compacted months (`compaction_log`) are skipped.
 
 ```
-1. Identify posts WHERE collected_at < NOW() - INTERVAL '3 months'
-2. Aggregate into monthly_topic_rollups (GROUP BY month, topic, source_category, location)
-3. Aggregate into monthly_source_rollups (GROUP BY month, source_id)
-4. Null out raw_posts.content (keep id, source_id, content_hash, location, collected_at)
-5. Delete post_embeddings rows for compacted posts
-6. Write data_retention_log: action='compacted', reason='3-month detail window expired'
-7. Write compaction_log entry
+1. Purge demo posts past the window (demo data is never rolled up)
+2. For each due month with real posts:
+   a. Aggregate into monthly_topic_rollups and monthly_source_rollups
+   b. Replace any remaining text with the removal notice (text_removed_at set), as retention does
+   c. Delete post_embeddings rows of the month
+   d. Write data_retention_log: action='compacted' with true counts
+   e. Write the compaction_log entry
 ```
 
 **What is preserved after compaction:**
@@ -1583,7 +1637,9 @@ Runs on the 1st of each month. Compacts all posts older than 3 months:
 
 **What is deleted after compaction:**
 - `post_embeddings` (large, re-computable if needed)
-- `raw_posts.content` field (nulled — privacy compliance)
+- the post text: `raw_posts.content` (NOT NULL) is replaced by a removal notice and `text_removed_at` is set (P10-2)
+
+**Text windows (P10-2, ingest@1.6.0).** The text is stored once, in `raw_posts.content`. The worker's repeatable `maintenance` job removes it when its source's window ends: Reddit 48 h, YouTube and TikTok 30 days (their terms), every other source `RETENTION_DETAIL_DAYS` (90) — the Guardian included (Jennifer, 2026-09-29: "Use normal retention"; ingest@1.7.0). A platform-terms blanking also deletes the post's embedding in the same transaction (PR #22 decision G3); scores and audit rows stay. Each batch writes one `data_retention_log` row listing the post ids it changed; every stored post has a `collected` row.
 
 **Demo data at the retention boundary (P9-3).** Posts whose source has
 `data_sources.source_type = 'demo'` (the fictional standup population from
@@ -1598,10 +1654,22 @@ and any `pseudonymous_users` profile those rows referenced that has no sighting
 or post left. The purge runs in bounded batches (`DEMO_PURGE_BATCH_SIZE`,
 default 500, max 5000), one transaction per batch, and writes one
 `data_retention_log` row per batch: `action = 'purged_demo'`, `raw_post_id`
-NULL, a JSON `reason` with the per-table counts, the time window and the
-cutoff, and a `legal_basis` stating that the data was fictional demo data. The
+NULL, a JSON `reason` with the per-table counts, the time window, the
+cutoff and the purged `post_ids`, and a `legal_basis` stating that the data was
+fictional demo data. The
 `source_type = 'demo'` filter is in the SQL of every delete, so posts from real
 sources and their audit trails are never deleted.
+
+**Embed jobs of removed posts.** After the purge commits, the pending
+(`wait`, `paused`, `prioritized`, `delayed`) embed jobs of the purged posts are
+removed from the queue (`src/queues/embed-cleanup.js`). An embed job that still
+runs for a purged post — one already taken by a worker — completes as a no-op
+with `{ skipped: true, reason: 'purged_demo' }`, matched through the purge
+row's `post_ids`; a post whose text was removed completes the same way with
+`reason: 'text_removed'`, and the removal notice is never embedded (the vector
+is stored only while the post exists with its text). A post that is missing
+with no purge record is a real error: the job fails with `Post not found`.
+The standup smoke check requires 0 failed jobs on every worker queue.
 
 ### API Behavior for Historical Queries
 When `POST /api/query` date range falls partly outside the detail window:
@@ -1616,6 +1684,10 @@ When `POST /api/query` date range falls partly outside the detail window:
 ---
 
 ## 20. Cross-Platform User Correlation
+
+### DPIA gate (PR #22)
+
+> **Implementation status: not implemented — signal design pending DPIA (PR #22 grumpy M7).** Collectors store no author (ADR 0001 D2), so the only signal on identity-free data is post-level (a post's topics plus its posting hour), which is not an identity signal. `src/pipeline/correlation-gate.js` reports `awaiting_dpia` (no `CORRELATION_DPIA_REF`), `disabled` (`CORRELATION_ENABLED` is not true), `misconfigured` (`CORRELATION_SALT` empty or a placeholder such as the `.env.example` value), `unverified` (web cannot see a salt set for the worker, and the worker has not reported) or, with every switch set, `not_implemented`; it never reports `enabled`. Nothing enqueues correlate jobs, the correlate worker refuses any job, and `correlateUser` throws, so no `pseudonymous_users` row can be written. `GET /api/health` reports `correlation: { enabled: false, status, reason, checked_by, checked_at }`. `CORRELATION_SALT` reaches the worker container only (PR #22 security L1); web gets the presence flag `CORRELATION_SALT_SET`, the worker publishes its gate status with its heartbeat, and `/api/health` serves that (`checked_by: "worker"`), or web's own `unverified` judgement (`checked_by: "web"`); and while the gate is closed the worker's connection pool does not budget for correlate jobs. Every change of the gate's status or DPIA reference is recorded in the append-only `correlation_gate_events` table (migration 056; principal #19), with who: the named approval in `GATE_APPROVED_BY` when set (decision G5). The design below is the target a DPIA must approve before any of it is built.
 
 ### Design Principles
 

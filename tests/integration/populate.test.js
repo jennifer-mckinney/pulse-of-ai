@@ -288,7 +288,12 @@ describe('scripts/populate.js — demo population through the real pipeline', ()
     it('reports live collection available when registry sources are collecting', () => {
         expect(populate.liveCollectionStatus({ COLLECTOR_CONTACT_URL: 'https://example.org/c' }))
             .toEqual({ available: true, collecting: 23, reason: null });
+        // PR #22 decision G5: the acknowledgement alone leaves the 8 feeds
+        // awaiting named approval; GATE_APPROVED_BY opens them.
         expect(populate.liveCollectionStatus({ COLLECTOR_CONTACT_URL: 'https://example.org/c', PERMISSION_GATED_FEEDS_ACCEPTED_BY: 'A 2026-09-29' }))
+            .toEqual({ available: true, collecting: 23, reason: null });
+        expect(populate.liveCollectionStatus({ COLLECTOR_CONTACT_URL: 'https://example.org/c', PERMISSION_GATED_FEEDS_ACCEPTED_BY: 'A 2026-09-29',
+            GATE_APPROVED_BY: 'Ada Lovelace 2026-09-29' }))
             .toEqual({ available: true, collecting: 31, reason: null });
         const off = populate.liveCollectionStatus({});
         expect(off.available).toBe(false);

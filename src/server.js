@@ -36,6 +36,7 @@ const methodologyRouter = require('./routes/methodology');
 const sourcesRouter     = require('./routes/sources');
 const queryRouter       = require('./routes/query');
 const themesRouter      = require('./routes/themes');
+const { logRouteError } = require('./middleware/log-error');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -97,12 +98,62 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, '../public/index.html'));
 });
 
-// ─── Start server only when run directly ─────────────────────────────────────
-if (require.main === module) {
-    app.listen(PORT, () => {
-        console.log(`Pulse of AI server running on http://localhost:${PORT}`);
-        console.log(`Dashboard available at http://localhost:${PORT}`);
+// ─── Error handler (security audit, 2026-09-29) ──────────────────────────────
+// Express's default handler answers a malformed JSON body (POST /api/query,
+// POST /api/refresh) with an HTML page carrying the stack trace and absolute
+// file paths whenever NODE_ENV is not production. Every error that reaches
+// here is answered as JSON with a generic message — never a stack, path or
+// upstream text, in any environment — and logged server-side, scrubbed.
+// eslint-disable-next-line no-unused-vars -- Express needs the 4-arity signature
+function jsonErrorHandler(err, req, res, next) {
+    const parseFailed = err && (err.type === 'entity.parse.failed' || (err instanceof SyntaxError && 'body' in err));
+    const status = parseFailed ? 400
+        : (err && Number.isInteger(err.status) && err.status >= 400 && err.status < 500 ? err.status : 500);
+    logRouteError(parseFailed ? 'request' : 'server', err);
+    if (res.headersSent) return next(err);
+    const error = parseFailed ? 'invalid JSON body'
+        : status === 413 ? 'request body too large'
+            : status < 500 ? 'bad request' : 'Internal server error';
+    return res.status(status).json({ error });
+}
+app.use(jsonErrorHandler);
+
+// ─── Listening address (dev bind gap) ────────────────────────────────────────
+// Bare `npm run dev` listened on every interface while refresh treated it
+// as loopback, so REFRESH_TOKEN was never required. The server now binds
+// 127.0.0.1 unless HOST or PULSE_BIND_ADDR says otherwise, and the refresh
+// guard reads the ACTUAL bound address (app.locals.boundAddress, set on
+// listen). In the compose web container the process listens on 0.0.0.0 behind
+// Docker's port publish; PULSE_CONTAINER_PUBLISHED_ADDR (set by compose to
+// the published PULSE_BIND_ADDR) is then what decides exposure.
+function listenHost(env = process.env) {
+    for (const k of ['HOST', 'PULSE_BIND_ADDR']) {
+        const v = typeof env[k] === 'string' ? env[k].trim() : '';
+        if (v) return v;
+    }
+    return '127.0.0.1';
+}
+
+/** Start listening; resolves the http.Server once bound. */
+function start({ port = PORT, host = listenHost(), log = console.log } = {}) {
+    return new Promise((resolve, reject) => {
+        const server = app.listen(port, host, () => {
+            const addr = server.address();
+            app.locals.boundAddress = addr && typeof addr === 'object' ? addr.address : host;
+            log(`Pulse of AI server listening on ${host}:${addr && addr.port}`);
+            resolve(server);
+        });
+        server.on('error', reject);
     });
 }
 
+// ─── Start server only when run directly ─────────────────────────────────────
+/* istanbul ignore next -- process entry point; start() is tested directly */
+if (require.main === module) {
+    start().catch((err) => { logRouteError('server', err); process.exit(1); });
+}
+
 module.exports = app;
+module.exports.start = start;
+module.exports.listenHost = listenHost;
+module.exports.jsonErrorHandler = jsonErrorHandler;

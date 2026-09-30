@@ -3,7 +3,9 @@
 // in file-name order and records each by file name. Two branches that both
 // add "012_*" would both apply, in an order decided by the rest of the name,
 // and the docs would name two different "migration 012"s. Every number is
-// therefore used once, and the numbers run 001..N with no gap.
+// therefore used once, and file names sort strictly increasing. Gaps are
+// allowed (PR #22: parallel branches reserve number ranges; migrate.js
+// applies in file-name order and records each file by name).
 
 'use strict';
 
@@ -19,9 +21,11 @@ test('every migration file is NNN_snake_case.sql', () => {
     for (const f of files) expect(f).toMatch(/^\d{3}_[a-z0-9_]+\.sql$/);
 });
 
-test('every migration number is used exactly once, 001..N without gaps', () => {
+test('every migration number is used exactly once, and file names sort strictly increasing (gaps allowed)', () => {
     const numbers = files.map(f => parseInt(f.slice(0, 3), 10));
-    expect(numbers).toEqual(numbers.map((_, i) => i + 1));
+    expect(new Set(numbers).size).toBe(numbers.length);
+    for (let i = 1; i < numbers.length; i++) expect(numbers[i]).toBeGreaterThan(numbers[i - 1]);
+    expect(numbers[0]).toBe(1);
 });
 
 test('the source-collection migrations follow embedding@1.0.0 (012)', () => {
@@ -52,6 +56,11 @@ describe('scripts/migrate.js listMigrationFiles (runtime guard)', () => {
     test('refuses a number used twice', () => {
         const d = dirWith(['001_a.sql', '002_b.sql', '002_c.sql']);
         expect(() => listMigrationFiles(d)).toThrow(/migration number 002 used twice/);
+    });
+
+    test('accepts a gap in the numbering; still refuses a duplicate', () => {
+        expect(listMigrationFiles(dirWith(['001_a.sql', '002_b.sql', '050_c.sql']))).toEqual(['001_a.sql', '002_b.sql', '050_c.sql']);
+        expect(() => listMigrationFiles(dirWith(['001_a.sql', '050_c.sql', '050_d.sql']))).toThrow(/migration number 050 used twice/);
     });
 
     test('ignores non-SQL files', () => {

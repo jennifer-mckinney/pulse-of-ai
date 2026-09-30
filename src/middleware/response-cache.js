@@ -37,12 +37,16 @@ function _clear() {
 /**
  * responseCache — middleware factory.
  * @param {number} ttlMs — how long a cached body stays fresh (default 10s)
+ * @param {{ key?: (req) => string }} [o] — the cache key (default: the full
+ *        URL). A route that takes no query parameters passes a fixed key, so
+ *        a varying query string cannot bypass the cache (PR #22 security
+ *        L2, /api/health).
  */
-function responseCache(ttlMs = 10000) {
+function responseCache(ttlMs = 10000, { key: keyOf = req => req.originalUrl } = {}) {
     return (req, res, next) => {
         if (testBypass || req.method !== 'GET') return next();
 
-        const key = req.originalUrl;
+        const key = keyOf(req);
         const hit = store.get(key);
         if (hit && hit.expires > Date.now()) {
             res.set('X-Response-Cache', 'hit');

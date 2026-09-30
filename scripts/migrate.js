@@ -121,7 +121,7 @@ async function main() {
     } catch (err) {
         await client.query('ROLLBACK');
         console.error('✗ Migration failed. Transaction rolled back.');
-        console.error(err.message);
+        console.error(require('../src/collectors/redact').scrub(String(err && err.message)));
         process.exit(1);
     } finally {
         client.release();
