@@ -23,8 +23,8 @@ const { dbAll } = require('../db/connection');
 // The triggers of every one-shot run that leaves a 'running' row: 'api'
 // (POST /api/refresh, src/routes/refresh.js), 'standup' (scripts/populate.js
 // through the runner), 'demo' (scripts/populate.js demo feed) and 'manual'
-// (scripts/collect.js). 'cron' rows are cycles (closeCycles); 'seed-demo'
-// rows are inserted completed. 'startup', listed only in migration 001's
+// (scripts/collect.js). 'cron' rows are cycles (closeCycles). No producer
+// inserts rows of any other trigger. 'startup', listed only in migration 001's
 // column comment, has no producer and no CHECK constraint admits or
 // requires it, so it is not swept.
 const SWEPT_TRIGGERS = Object.freeze(['api', 'standup', 'demo', 'manual']);
