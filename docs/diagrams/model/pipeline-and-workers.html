@@ -162,7 +162,8 @@ classDiagram
   Queues &lt;.. WorkerProcess : consumes
   scheduler ..&gt; Queues : upsertJobScheduler
   collectWorker ..&gt; ingest : via collectors/runner
-  collectWorker ..&gt; bias : via runner / cycle close
+  collectWorker ..&gt; bias : via runner (refresh jobs)
+  WorkerProcess ..&gt; bias : closeDueCycles → cycle close
   ingestWorker --&gt; ingest : scorePost
   ingestWorker --&gt; relevance : passesEmbedGate
   ingestWorker --&gt; methodology

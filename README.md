@@ -28,8 +28,8 @@ Pulse of AI collects public, AI-related posts from a registry of 52 global onlin
 
 What works today, stated plainly:
 
-- **The registry has 52 sources** (`src/config/source-registry.js`, the workbook of record `docs/requirements/Top_52_Global_Online_Sources.rev4.csv`, ADR 0001). Each resolves at runtime to a gate status: `collecting`, `awaiting_key`, `awaiting_approval`, `awaiting_licence`, `blocked` or `disabled`.
-- **Live collection is off on a fresh clone.** Without `COLLECTOR_CONTACT_URL` every source is `disabled` (4 are `blocked` whatever you set) and the page runs on clearly labelled demo data. See [Turning on live collection](#turning-on-live-collection).
+- **The registry has 52 sources** (`src/config/source-registry.js`, which matches the workbook of record `docs/requirements/Top_50_Global_Online_Sources.xlsx` (Rev. 4, exported as `docs/requirements/Top_52_Global_Online_Sources.rev4.csv`), ADR 0001). Each resolves at runtime to a gate status: `collecting`, `awaiting_key`, `awaiting_approval`, `awaiting_licence`, `blocked` or `disabled`.
+- **Live collection is off on a fresh clone.** Without `COLLECTOR_CONTACT_URL` every source is `disabled` except the 4 `blocked` ones, which stay `blocked` with or without the contact URL until an official permission is recorded (a kill switch reports them `disabled`), and the page runs on clearly labelled demo data. See [Turning on live collection](#turning-on-live-collection).
 - **With the contact URL set, 23 sources collect with no keys.** With the contact URL and the operator acknowledgement for the 8 permission-gated news feeds, **31 collect**. The other 21 wait for something only their operator can provide:
 
   | Status | Count | Sources | What opens them |
@@ -39,7 +39,7 @@ What works today, stated plainly:
   | awaiting_licence | 5 | X, CNN, AP, Reuters, IEEE Xplore | a paid licence |
   | blocked | 4 | WeChat, Telegram, ResearchGate, Cato | no compliant access today; each has a collector that refuses to run without an official permission |
 
-- **Reddit (#52) is built but awaiting approval.** It uses only the approved Reddit Data API and stays closed until Reddit approves the app and all four `REDDIT_*` variables are set. Reddit post text is blanked 48 hours after collection, or as soon as the post is deleted upstream, while its scores and audit rows are kept (ADR 0001 rulings 8 and 9).
+- **Reddit (#52) is built but awaiting approval.** It uses only the approved Reddit Data API and stays closed until Reddit approves the app and all four `REDDIT_*` variables are set. Reddit post text is blanked 48 hours after collection, or sooner when the 6-hourly re-check finds the post deleted or removed upstream, while its scores and audit rows are kept (ADR 0001 rulings 8 and 9).
 - **Demo data is always labelled.** When the trailing hour has no live posts, fictional demo posts go through the real pipeline and the page says DEMO (details in [Live and demo data](#live-and-demo-data)).
 - **In progress** (a follow-up PR, marked *wip* in the diagrams): collection handing scoring to the ingest queue, per-source retention and scheduled compaction, source gate-event and terms-snapshot tables, excluding publisher-located posts from the bias checks, a minimum sample for the bias checks, staleness alerts in `/api/health`, `relevance@1.2.0`, `env_file` in compose, and binding the dev server to 127.0.0.1.
 
@@ -132,7 +132,7 @@ COLLECTOR_CONTACT_URL=https://github.com/<you>/pulse-of-ai
 PERMISSION_GATED_FEEDS_ACCEPTED_BY="<your name> <YYYY-MM-DD>"
 ```
 
-Run interactively, `npm run standup` asks for both; `--yes` never asks. With the contact URL alone, 23 sources collect; with both, 31. `.env.example` lists every source key, where to get it, and each source's kill switch.
+Run interactively, `npm run standup` asks for both; `--yes` never asks. With the contact URL alone, 23 sources collect; with both, 31. `.env.example` lists every source key and where to get it, and documents the per-source kill switch `SOURCE_<SLUG>_ENABLED=false` (slugs are in `src/config/source-registry.js`).
 
 After changing `.env`, recreate the containers (`docker compose up -d worker web`; `docker restart` does not re-read `.env`). To stop a source at once without touching env:
 
@@ -168,7 +168,7 @@ The health drawer counts demo feeds separately from the 52 registry sources.
 - **Browser** (`public/`, no build step, all assets self-hosted): UMD modules loaded in a fixed order. `globe.js` draws a Canvas-2D dot globe, `story.js` runs the eleven-part scroll story, `ui.js` provides explore mode, the source ribbon and the audit and health drawers, and `main.js` is the page shell.
 - **web** (`src/server.js`): Express serves the page and the API.
 - **worker** (`src/workers/start.js`): collection, cycle close and bias checks, scoring retries, embeddings and Reddit maintenance, over BullMQ queues in Redis.
-- **Collectors** (`src/collectors/`): one base class per access type (RSS/Atom, JSON API, bulk file) and an adapter per source route, all through one guarded HTTP client.
+- **Collectors** (`src/collectors/`): one base class per access type (RSS/Atom, JSON API, bulk file) and an adapter per source route. Every HTTP request goes through one guarded HTTP client; bulk-file routes read operator-supplied files and Google Scholar reads its alert mailbox over IMAP.
 - **Pipeline** (`src/pipeline/`): sentiment (AFINN), relevance (a 20-term lexicon), discourse quality (a DQI heuristic) and job-level bias checks, each versioned in `methodology_versions`.
 - **embeddings** (`python/embeddings_service.py`): FastAPI + sentence-transformers, `all-MiniLM-L6-v2` at a pinned revision, 384-dimension vectors stored with pgvector.
 - **PostgreSQL 16 + pgvector**: 26 migrations in `src/db/migrations/`.
@@ -187,7 +187,7 @@ All endpoints are under `/api`. The read-only endpoints send CORS headers; `POST
 | `GET` | `/api/posts/aggregated-by-location` | Sentiment counts per city with coordinates and data origin (`?platform=`, `?from=`, `?to=`) |
 | `GET` | `/api/sentiment/latest` | Sentiment summary and recent posts (`?limit=` up to 100, `?platform=`) |
 | `GET` | `/api/themes` | Up to 12 keyword themes with their sentiment split and top category |
-| `POST` | `/api/query` | Filtered, paginated scored posts with source attribution (body: `platform`, `location`, `from`, `to`, `limit` up to 100) |
+| `POST` | `/api/query` | Filtered scored posts with source attribution: the newest `limit` matches (up to 100) and the `total` match count; no offset (body: `platform`, `location`, `from`, `to`, `limit`) |
 | `GET` | `/api/audit/:post_id` | The receipt: provenance, post, every decision with four audience views, the ingestion step and the bias layers |
 | `GET` | `/api/bias/latest` | The latest job's bias assessments and violations |
 | `GET` | `/api/bias/history` | Bias alert history for a window (`?hours=`, default 12, 1–48) with methodology lineage |
@@ -196,7 +196,7 @@ All endpoints are under `/api`. The read-only endpoints send CORS headers; `POST
 | `GET` | `/api/sources/timeseries` | Hourly sentiment volume per category (`?hours=`, default 12, 1–48) |
 | `POST` | `/api/refresh` | Asks the worker for one collection over every source: 202 with a `job_id`; 403 cross-site or without a valid `X-Refresh-Token` where one is required; 409 while one runs; 429 within 60 s of the last; 503 if the queue is down |
 
-`/api/themes`, `/api/posts/aggregated-by-location` and `/api/sources/timeseries` are cached in-process for 10 seconds. Errors return `{ "error": "..." }` with no stack traces.
+`/api/themes`, `/api/posts/aggregated-by-location` and `/api/sources/timeseries` are cached in-process for 10 seconds. Route errors return `{ "error": "..." }` with no stack traces. Malformed JSON request bodies currently return Express's default 400 HTML error page, which includes a stack trace unless `NODE_ENV=production` (the containers set it; `npm run dev` does not); a fix is pending.
 
 ---
 
@@ -243,7 +243,7 @@ Note that `npm run dev` listens on all interfaces today; binding it to 127.0.0.1
 
 ```bash
 npm run verify             # the full gate: jest with coverage (≥ 80% lines), plus pytest and black when python/.venv exists
-npm run test:unit          # unit tests, no database
+npm run test:unit          # unit tests (needs the test database: npm run docker:up; test:pure needs none)
 npm run test:pure          # pure tests (collectors on recorded fixtures, frontend logic, config)
 npm run test:int           # integration tests against the test database (needs npm run docker:up)
 npm run test:cov           # coverage report
@@ -265,7 +265,7 @@ What the code does, stated precisely:
 - **Browser surface.** Every response carries a strict Content-Security-Policy (`default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'`), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` and `Referrer-Policy: no-referrer`. The frontend uses no CDN and builds the page with `textContent`, never `innerHTML`.
 - **Refresh is guarded against cross-site requests.** CORS is enabled only on the read-only endpoints. `POST /api/refresh` accepts only same-origin requests (by `Sec-Fetch-Site`, or else `Origin` / `Referer` matching the host), answers CORS preflights with 403, and requires an `X-Refresh-Token` (`REFRESH_TOKEN`) when the site is bound beyond loopback.
 - **Collectors cannot be pointed at internal hosts.** Every request and redirect hop must be https to a public address on the route's allowed hosts; DNS answers are checked and pinned; redirects are followed one hop at a time (at most 4); a request carrying credentials is never sent across origins; responses are size-capped.
-- **Secrets stay out of storage, logs and the API.** Every stored or logged error is scrubbed of credential-shaped URL parameters and of every secret env value. The public API serves only an error kind and HTTP status. Collector credentials reach only the worker container; the web container gets "set / empty" markers. Redis requires a password, and published ports bind to 127.0.0.1 by default.
+- **Secrets stay out of storage, logs and the API.** Every error the collectors and the worker store or log is scrubbed of credential-shaped URL parameters and of every secret env value (API route handlers log database error messages as they are). The public API serves only an error kind and HTTP status. Collector credentials reach only the worker container; the web container gets "set / empty" markers. Redis requires a password, and published ports bind to 127.0.0.1 by default.
 - **Personal data.** The precise claim (`ingest@1.5.0`): identity fields are never stored; e-mail addresses, handles (including Reddit u/ names), phone numbers, sign-offs and profile links in text are redacted; **free text may still contain names mentioned in the content**. Collectors store an allowlist of content fields, location is kept at city level (from the content, or the publisher's home city for editorial sources), and an upstream id that could identify someone is stored only as a keyed fingerprint.
 - **Politeness and terms.** Every request carries a User-Agent with the operator's contact URL; publisher feeds are checked against `robots.txt`; requests to a host are spaced; a 401, 403 or 451, a bot challenge or a robots refusal is never retried or worked around, and puts the source in a cooldown of 1 hour doubling up to 24 hours. Pulse of AI uses its sources on a non-commercial research basis and shows the attribution their terms require (ADR 0001 ruling 6).
 
@@ -289,7 +289,7 @@ Accepted risks are recorded in ADR 0001: the 8 permission-gated feeds (opened on
 | Document | What it is |
 |---|---|
 | [docs/TECHNICAL_SPEC.md](docs/TECHNICAL_SPEC.md) | Technical specification, the requirements source of truth (where it differs from the code, see the spec drift notes in [docs/diagrams/README.md](docs/diagrams/README.md)) |
-| [docs/requirements/PRD.md](docs/requirements/PRD.md) | Product requirements (§4.3: the storytelling frontend follows the FuN.zip design-handoff prototype) |
+| [docs/requirements/PRD.md](docs/requirements/PRD.md) | Product requirements. §4.3 still describes the superseded globe.gl design; the shipped storytelling frontend follows the FuN.zip design-handoff prototype (11 beats, Canvas-2D globe) |
 | [docs/requirements/BRD.md](docs/requirements/BRD.md) | Business requirements |
 | [docs/adr/0001-source-registry-and-collection.md](docs/adr/0001-source-registry-and-collection.md) | ADR 0001: the source registry, collection, rulings 1–9 and decisions D1–D2 |
 | [docs/requirements/Top_52_Global_Online_Sources.rev4.csv](docs/requirements/Top_52_Global_Online_Sources.rev4.csv) | The source workbook of record, exported |

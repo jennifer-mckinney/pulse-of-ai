@@ -112,7 +112,7 @@ flowchart LR
 
   subgraph LEGEND["Status legend"]
     direction TB
-    L1["done: on master&lt;br/&gt;(PR #9 standup, PR #10 collectors)"]:::done
+    L1["done: on master (PR #9 standup, PR #10 collectors)&lt;br/&gt;or ships in this PR (legal notice: legal.config.js, about panel)"]:::done
     L2["wip: PR #10 Part 2, in flight"]:::wip
   end
 
@@ -127,13 +127,15 @@ flowchart LR
   Q1 --&gt; K2
   Q2 --&gt; K2
   K2 -- "HTTPS via HttpClient: User-Agent with&lt;br/&gt;contact URL, robots.txt, allowed hosts,&lt;br/&gt;SSRF guard, size caps" --&gt; XH
-  K2 -- "raw_posts, scores, audit rows, source_runs" --&gt; D2
+  K2 -- "raw_posts, scores, audit rows" --&gt; D2
+  K2 -- "source_runs, collection state, processing_jobs" --&gt; D1
   K2 -- "embed jobs, ingest retries" --&gt; Q3
   Q3 --&gt; K4
   K4 -- "POST /embeddings" --&gt; E1
   K4 -- "post_embeddings" --&gt; D3
   K3 -- "bias_assessments, alert_events" --&gt; D3
-  K5 -- "blank Reddit text, log" --&gt; D4
+  K5 -- "blank Reddit text (raw_posts)" --&gt; D2
+  K5 -- "data_retention_log, reddit_* state" --&gt; D4
   K6 --&gt; Q4
   M1 -- "migrations + seed" --&gt; D0
   M2 -- "demo posts through the real scorers" --&gt; D2

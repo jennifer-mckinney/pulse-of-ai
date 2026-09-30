@@ -36,7 +36,7 @@ flowchart LR
     direction TB
     M1["standup: populate --once&lt;br/&gt;(populate container, collector settings only)&lt;br/&gt;one real collection job, triggered_by standup;&lt;br/&gt;no credentials, so keyless and ack-gated routes only"]:::done
     M2{"trailing hour holds&lt;br/&gt;live posts?"}:::done
-    M3["demo batch (skipped when the hour&lt;br/&gt;already holds --size demo posts, unless --force)"]:::done
+    M3["demo batch (skipped only when the hour already&lt;br/&gt;holds --size demo posts, no live posts and collection&lt;br/&gt;is unavailable; --force always writes one)"]:::done
     M4["populate --loop (profile demo)&lt;br/&gt;every DEMO_FEED_INTERVAL_MS (150 s):&lt;br/&gt;DEMO_FEED_BATCH posts (default 16,&lt;br/&gt;two per category) only while the hour has no live posts"]:::done
     M5["fictional posts: text starts with [Demo],&lt;br/&gt;raw_payload demo: true, fictional: true,&lt;br/&gt;under data_sources demo_#lt;category#gt;&lt;br/&gt;(source_type demo, active false)"]:::done
     M6["normalisePost → raw_posts (collected_at = now)&lt;br/&gt;→ saveSentiment / saveRelevance / saveDQI&lt;br/&gt;with audit rows → runBiasChecks&lt;br/&gt;→ embed jobs; processing_jobs triggered_by demo"]:::done
@@ -65,7 +65,7 @@ flowchart LR
   subgraph COMPACT["npm run compact · scripts/compact.js (run by hand)"]
     direction TB
     P1["demo purge first: demo posts older than&lt;br/&gt;RETENTION_DETAIL_DAYS (90) deleted in batches&lt;br/&gt;(DEMO_PURGE_BATCH_SIZE, 500) with their score,&lt;br/&gt;audit, embedding and sighting rows;&lt;br/&gt;data_retention_log action purged_demo"]:::done
-    P2["compaction: each month older than 90 days&lt;br/&gt;not yet in compaction_log →&lt;br/&gt;monthly_topic_rollups + monthly_source_rollups&lt;br/&gt;(demo posts excluded)"]:::done
+    P2["compaction: each calendar month holding a post&lt;br/&gt;older than RETENTION_DETAIL_DAYS (90), whole month,&lt;br/&gt;not yet in compaction_log →&lt;br/&gt;monthly_topic_rollups + monthly_source_rollups&lt;br/&gt;(demo posts excluded)"]:::done
     P3["delete post_embeddings of the month"]:::done
     P4["null raw_posts.content: blocked today,&lt;br/&gt;the column is NOT NULL (migration 001);&lt;br/&gt;compaction cannot complete on a real month"]:::done
     P5["data_retention_log action compacted,&lt;br/&gt;one compaction_log row per month"]:::done
@@ -79,7 +79,7 @@ flowchart LR
   end
 
   subgraph LEGEND["Status legend"]
-    L1["done: on master"]:::done
+    L1["done: on master or ships in this PR"]:::done
     L2["wip: PR #10 Part 2, in flight"]:::wip
   end
 

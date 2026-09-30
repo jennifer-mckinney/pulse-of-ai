@@ -4,7 +4,7 @@
 stateDiagram-v2
   direction LR
 
-  [*] --> overview : page load, data loaded (live, demo, mixed or none)
+  [*] --> overview : page load (data mode then live, demo, mixed, none or fallback)
 
   state "0 · overview<br/>intro, REFRESH CYCLE 2–3 MIN" as overview
   state "1 · volume<br/>CHAPTER 01 · VOLUME LEADERS" as volume
@@ -53,9 +53,15 @@ stateDiagram-v2
   }
 
   note right of negativity
-    CH03 and CH04 show a featured post whose
-    "Why does it say that?" button opens the
-    same audit drawer (pulse:trace)
+    With live data, CH03 and CH04 show a featured post
+    whose "Why does it say that?" button opens the
+    same audit drawer (PulseUI.openAudit, or the
+    pulse:trace event if ui.js has not loaded)
+  end note
+
+  note right of summary
+    legend: all done (every beat here is on master
+    or ships in this PR)
   end note
 
   classDef done fill:#e8f5e9,stroke:#2e7d32,color:#1b3d1f

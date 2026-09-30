@@ -48,12 +48,12 @@ flowchart LR
     direction TB
     P1["bias minimum sample"]:::wip
     P2["publisher-location posts<br/>excluded from bias"]:::wip
-    P3["staleness alerts + heartbeat<br/>staleness in /api/health"]:::wip
+    P3["staleness alerts<br/>in /api/health"]:::wip
     P4["source_gate_events"]:::wip
   end
 
   subgraph LEGEND["Status legend"]
-    L1["done: on master"]:::done
+    L1["done: on master or ships in this PR"]:::done
     L2["wip: PR #10 Part 2, in flight"]:::wip
   end
 

@@ -11,9 +11,9 @@ flowchart LR
 
   subgraph WEBB["Boundary 1 · web (public surface)"]
     direction TB
-    C1["every response: CSP default-src 'self', script-src 'self',<br/>style-src 'self', object-src 'none', frame-ancestors 'none';<br/>X-Content-Type-Options nosniff, X-Frame-Options DENY,<br/>Referrer-Policy no-referrer"]:::done
+    C1["every response: CSP default-src 'self', script-src 'self',<br/>style-src 'self', object-src 'none', base-uri 'self',<br/>frame-ancestors 'none';<br/>X-Content-Type-Options nosniff, X-Frame-Options DENY,<br/>Referrer-Policy no-referrer"]:::done
     C2["CORS only on the read-only router;<br/>POST /api/refresh mounted first, without CORS,<br/>OPTIONS answered 403"]:::done
-    C3["refresh CSRF guard: Sec-Fetch-Site same-origin or none,<br/>else Origin / Referer host = Host, else 403;<br/>X-Refresh-Token required beyond loopback;<br/>409 in flight, 60 s global debounce"]:::done
+    C3["refresh CSRF guard: Sec-Fetch-Site must be same-origin or none;<br/>if the header is absent, Origin (else Referer) host = Host;<br/>anything else 403;<br/>X-Refresh-Token required beyond loopback;<br/>409 in flight, 60 s global debounce"]:::done
     C4["input validation: UUID post ids, integer hours,<br/>canonical categories, dates, limit ≤ 100;<br/>500s return a generic message only"]:::done
     C5["audit input_hash served as HMAC(AUDIT_HASH_KEY),<br/>omitted without a key; /api/sources serves error_kind<br/>and http_status, never error text or env values"]:::done
     C6["frontend: textContent only, no innerHTML;<br/>all assets self-hosted, no CDN"]:::done
@@ -42,7 +42,7 @@ flowchart LR
   DB[("PostgreSQL · Redis")]:::done
 
   subgraph LEGEND["Status legend"]
-    L1["done: on master"]:::done
+    L1["done: on master or ships in this PR"]:::done
   end
 
   U1 -- "GET / and /api/*" --> C1
