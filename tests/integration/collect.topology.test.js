@@ -93,13 +93,13 @@ describe('pool sizing (src/db/pool-size.js)', () => {
 
     it('budgets every process against max_connections and refuses an over-budget deployment', async () => {
         const { connectionBudget, checkPoolBudget } = require('../../src/db/pool-size');
-        expect(connectionBudget({}, 41)).toEqual({ replicas: 1, workerPool: 41, web: 10, oneShot: 10, total: 61 });
-        expect(connectionBudget({ WORKER_REPLICAS: '2', PG_POOL_MAX: '20' }, 41).total).toBe(2 * 41 + 20 + 10);
+        expect(connectionBudget({}, 41)).toEqual({ replicas: 1, workerPool: 41, web: 10, watchdog: 2, oneShot: 10, total: 63 });
+        expect(connectionBudget({ WORKER_REPLICAS: '2', PG_POOL_MAX: '20' }, 41).total).toBe(2 * 41 + 20 + 2 + 10);
         const pg = (max, reserved) => async sql => (/max_connections/.test(sql) ? { max_connections: String(max) } : { superuser_reserved_connections: String(reserved) });
-        expect(await checkPoolBudget({ env: {}, workerPool: 41, get: pg(100, 3) })).toMatchObject({ ok: true, total: 61, available: 97 });
+        expect(await checkPoolBudget({ env: {}, workerPool: 41, get: pg(100, 3) })).toMatchObject({ ok: true, total: 63, available: 97 });
         const over = await checkPoolBudget({ env: { WORKER_REPLICAS: '2' }, workerPool: 41, get: pg(100, 3) });
-        expect(over).toMatchObject({ ok: false, total: 102, available: 97 });
-        expect(over.message).toMatch(/connection budget exceeded: 2 worker\(s\) × 41 \+ web 10 \+ one-shot reserve 10 = 102/);
+        expect(over).toMatchObject({ ok: false, total: 104, available: 97 });
+        expect(over.message).toMatch(/connection budget exceeded: 2 worker\(s\) × 41 \+ web 10 \+ watchdog 2 \+ one-shot reserve 10 = 104/);
     });
 
     it('reads the real server settings (test database)', async () => {
