@@ -19,7 +19,7 @@
 //   24 h without a refusal  probation is over: the count decays to 0 (at the
 //                           next successful run, or a later refusal counts
 //                           as refusal 1 again)
-//   manual reset            env SOURCE_<SLUG>_RESET=<ISO date> newer than
+//   manual reset            env SOURCE_<SLUG>_RESET=<ISO date> at or after
 //                           the (last) refusal, with its named approval, or
 //                           `npm run source:reset -- <slug>` — clears
 //                           everything, count and probation too, in the
@@ -87,7 +87,7 @@ function envReset(slug, env, deniedAt) {
 function refusalGate(row, slug, env = process.env, now = Date.now()) {
     if (!row) return { state: 'none' };
     if (!row.access_denied_at) {
-        // Grumpy #3 (option b): an approved SOURCE_<SLUG>_RESET newer than
+        // Grumpy #3 (option b): an approved SOURCE_<SLUG>_RESET at or after
         // the last refusal also clears a PROBATION (the count), exactly as
         // it clears the refused state.
         const onProbation = (row.refusal_count || 0) > 0 && !probationOver(row, now);
