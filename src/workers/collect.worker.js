@@ -45,17 +45,27 @@ async function processCollectJob(job, opts = {}) {
  * @param {{ data: { jobId: string } }} job
  * @param {object} [opts]  runner options (tests inject transport / queues / slugs)
  */
+/** 80 % of REFRESH_STALE_MINUTES (default 30 → 24 min), at least 1 min. */
+function refreshDeadlineMs(env = process.env) {
+    const n = parseInt(env.REFRESH_STALE_MINUTES || '', 10);
+    const staleMin = Number.isFinite(n) && n > 0 ? n : 30;
+    return Math.max(60000, Math.floor(staleMin * 60000 * 0.8));
+}
+
 async function processRefreshJob(job, opts = {}) {
     const { jobId } = job.data || {};
     if (!jobId) throw new Error('refresh job without a processing job id');
     const { dbGet } = require('../db/connection');
     const row = await dbGet('SELECT status FROM processing_jobs WHERE id = $1', [jobId]);
     if (!row || row.status !== 'running') return { jobId, skipped: true, status: row ? row.status : null };
-    const s = await runCollection({ scoreVia: 'queue', ...opts, jobId, triggeredBy: 'api' });
+    // PR #22 P1-4: a refresh run has a deadline shorter than the staleness
+    // bound, so it ends (no new source starts, in-flight requests abort)
+    // before the sweeper or the route could call it stale.
+    const s = await runCollection({ scoreVia: 'queue', deadlineMs: refreshDeadlineMs(), ...opts, jobId, triggeredBy: 'api' });
     return {
         jobId: s.jobId, sourcesQueried: s.sourcesQueried, collected: s.postsCollected,
         processed: s.postsProcessed, queuedForScoring: s.queuedForScoring || 0, embedQueued: s.embedQueued, errors: s.errors.length,
     };
 }
 
-module.exports = { processCollectJob, processRefreshJob };
+module.exports = { processCollectJob, processRefreshJob, refreshDeadlineMs };

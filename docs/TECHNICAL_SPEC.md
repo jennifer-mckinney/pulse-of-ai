@@ -564,7 +564,7 @@ Requests a collection + processing run over the source registry. The web process
 ```json
 { "job_id": "uuid", "status": "queued", "triggered_by": "api" }
 ```
-**Response 409:** `{ "error": "A refresh collection is already running", "job_id": "uuid" }` while a refresh job is running (migration 019's partial unique index holds this across processes; a row still running after `REFRESH_STALE_MINUTES`, default 30, is marked failed as stale).
+**Response 409:** `{ "error": "A refresh collection is already running", "job_id": "uuid" }` while a refresh job is running (migration 019's partial unique index holds this across processes; a row that made no progress (`processing_jobs.last_progress_at`, else `started_at`) for `REFRESH_STALE_MINUTES`, default 30, is marked failed as stale; the refresh run itself has a deadline of 80 % of that bound).
 
 **Response 403 (token):** when `REFRESH_TOKEN` is set, the request must carry it as `X-Refresh-Token`; when the site is bound beyond loopback (`PULSE_BIND_ADDR` or `HOST` not a loopback address) a token is required and refresh is refused without one.
 

@@ -5,8 +5,13 @@
 // the other one-shot runs — standup / demo population and manual
 // `npm run collect` — or refresh rows when nobody calls refresh again. The
 // maintenance job (src/workers/maintenance.worker.js) marks every such row
-// still 'running' after STALE_JOB_MINUTES (default 30, or
-// REFRESH_STALE_MINUTES for api rows) as failed, with the reason. Cron
+// 'running' that made NO PROGRESS for STALE_JOB_MINUTES (default 30, or
+// REFRESH_STALE_MINUTES for api rows) as failed, with the reason. PR #22
+// P1-4: progress is the runner's heartbeat, processing_jobs.last_progress_at
+// (migration 040), touched before and after every source — never the job's
+// age, so a long live run is not closed. The runner's own transitions are
+// guarded (WHERE status = 'running'), so a swept job is never flipped back
+// to 'completed'. Cron
 // cycles are not touched: closeCycles owns them (hard age cap). A job whose
 // run holds reserved scoring slots is 'awaiting_retries', not 'running', and
 // is finalized by closeCycles too.
@@ -26,11 +31,11 @@ async function sweepStaleJobs({ env = process.env } = {}) {
         `UPDATE processing_jobs
          SET status = 'failed', completed_at = NOW(),
              error_details = COALESCE(error_details || E'\\n', '')
-                 || 'stale: still running after ' || (CASE WHEN triggered_by = 'api' THEN $2::int ELSE $1::int END)::text
+                 || 'stale: no progress for ' || (CASE WHEN triggered_by = 'api' THEN $2::int ELSE $1::int END)::text
                  || ' minutes (the process that ran it stopped); closed by the stale-job sweeper'
          WHERE status = 'running'
            AND triggered_by = ANY($3::text[])
-           AND started_at < NOW() - make_interval(mins => CASE WHEN triggered_by = 'api' THEN $2::int ELSE $1::int END)
+           AND COALESCE(last_progress_at, started_at) < NOW() - make_interval(mins => CASE WHEN triggered_by = 'api' THEN $2::int ELSE $1::int END)
          RETURNING id, triggered_by`,
         [staleMin, apiMin, SWEPT_TRIGGERS],
     );

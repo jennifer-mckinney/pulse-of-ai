@@ -121,13 +121,29 @@ async function runCollection(o = {}) {
             summary.jobId = jobId;
         } else if (!jobId) {
             const job = await dbGet(
-                `INSERT INTO processing_jobs (triggered_by, status, sources_queried) VALUES ($1, 'running', $2) RETURNING id`,
+                `INSERT INTO processing_jobs (triggered_by, status, sources_queried, last_progress_at)
+                 VALUES ($1, 'running', $2, NOW()) RETURNING id`,
                 [o.triggeredBy || 'cron', slugs.length],
             );
             jobId = job.id;
             summary.jobId = jobId;
         }
         return jobId;
+    };
+    // PR #22 P1-4: the progress heartbeat of a one-shot job (cycle jobs are
+    // closed by closeCycles, not the sweeper). False once the job is no
+    // longer 'running' (the stale-job sweeper closed it): the run then starts
+    // no further source and never writes the row again.
+    let swept = false;
+    const touch = async () => {
+        if (!jobId || o.cycle || swept) return !swept;
+        const r = await dbGet(
+            `UPDATE processing_jobs SET last_progress_at = NOW() WHERE id = $1 AND status = 'running' RETURNING id`, [jobId]);
+        if (!r) {
+            swept = true;
+            log(`[collect] job ${jobId} is no longer running (closed by the stale-job sweeper); no further source starts`);
+        }
+        return !swept;
     };
 
     const summary = {
@@ -147,6 +163,10 @@ async function runCollection(o = {}) {
             const row = { slug, category: src.category, status: st.status, outcome: 'skipped', fetched: 0, kept: 0, new: 0, error: null };
             summary.sources.push(row);
             if (st.status !== 'collecting') { row.reason = st.reason; continue; }
+            if (!(await touch())) {
+                row.reason = 'the job was closed as stale before this source started';
+                continue;
+            }
             if (signal && signal.aborted) {
                 row.reason = 'collection deadline reached before this source started';
                 log(`[collect] ${slug}: skipped — ${row.reason}`);
@@ -315,6 +335,7 @@ async function runCollection(o = {}) {
                 errorKind: row.errorKind, httpStatus: row.httpStatus, startedAt,
             });
             log(`[collect] ${slug}: ${row.outcome} fetched ${row.fetched}, kept ${row.kept}, new ${row.new}${row.error ? ` — ${row.error}` : ''}`);
+            await touch();
         }
 
         summary.postsProcessed = newPostIds.length;
@@ -328,7 +349,7 @@ async function runCollection(o = {}) {
             awaitingRetries = !!(await dbGet(
                 `UPDATE processing_jobs
                  SET status = 'awaiting_retries', posts_collected = $2, sources_queried = $3, error_details = $4
-                 WHERE id = $1 AND inflight_runs > 0 RETURNING id`,
+                 WHERE id = $1 AND inflight_runs > 0 AND status = 'running' RETURNING id`,
                 [jobId, summary.postsCollected, queried,
                     summary.errors.length ? summary.errors.join('\n').slice(0, 4000) : null],
             ));
@@ -358,21 +379,28 @@ async function runCollection(o = {}) {
             // The cycle job stays open; closeCycles() runs its bias checks
             // (counts are added when the run leaves the cycle, below).
         } else if (jobId && !awaitingRetries) {
-            await dbRun(
+            // PR #22 P1-4: guarded — a job the sweeper closed stays failed
+            // with its reason (a Tier-3 permanent record is never rewritten).
+            const done = await dbGet(
                 `UPDATE processing_jobs
                  SET status = 'completed', posts_collected = $2, posts_processed = $3,
                      sources_queried = $4, error_details = $5, completed_at = NOW()
-                 WHERE id = $1`,
+                 WHERE id = $1 AND status = 'running' RETURNING id`,
                 [jobId, summary.postsCollected, summary.postsProcessed, queried,
                     summary.errors.length ? summary.errors.join('\n').slice(0, 4000) : null],
             );
+            if (!done) {
+                summary.swept = true;
+                log(`[collect] job ${jobId} was closed by the stale-job sweeper; its record is left as it is`);
+            }
         }
         summary.sourcesQueried = queried;
         return summary;
     } catch (err) {
         if (jobId && !o.cycle) {
             await dbRun(
-                `UPDATE processing_jobs SET status = 'failed', error_details = $2, completed_at = NOW() WHERE id = $1`,
+                `UPDATE processing_jobs SET status = 'failed', error_details = $2, completed_at = NOW()
+                 WHERE id = $1 AND status = 'running'`,
                 [jobId, scrub(err.message, env)],
             ).catch(() => {});
         }

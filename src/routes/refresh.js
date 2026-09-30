@@ -129,9 +129,9 @@ router.post('/refresh', requireSameOrigin, async (req, res) => {
         await dbRun(
             `UPDATE processing_jobs
              SET status = 'failed', completed_at = NOW(),
-                 error_details = 'stale: the refresh job did not complete within ' || $1 || ' minutes'
+                 error_details = 'stale: the refresh job made no progress for ' || $1 || ' minutes'
              WHERE triggered_by = 'api' AND status = 'running'
-               AND started_at < NOW() - make_interval(mins => $1::int)`,
+               AND COALESCE(last_progress_at, started_at) < NOW() - make_interval(mins => $1::int)`,
             [stalenessMinutes()],
         );
         const inflight = await dbGet(

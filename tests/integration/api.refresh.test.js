@@ -77,7 +77,7 @@ describe('POST /api/refresh', () => {
         const res = await refresh();
         expect(res.status).toBe(202);
         const row = await dbGet('SELECT status, error_details FROM processing_jobs WHERE id = $1', [stale.id]);
-        expect(row).toEqual({ status: 'failed', error_details: 'stale: the refresh job did not complete within 30 minutes' });
+        expect(row).toEqual({ status: 'failed', error_details: 'stale: the refresh job made no progress for 30 minutes' });
     });
 
     it('an enqueue failure fails the job, answers 503 and does not spend the budget', async () => {

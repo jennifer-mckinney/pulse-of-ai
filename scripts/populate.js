@@ -358,8 +358,8 @@ async function runDemoBatch({ size, embed, seed, enqueue = enqueueEmbeddings }) 
     const stamp = `${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
 
     const job = await db.dbGet(
-        `INSERT INTO processing_jobs (triggered_by, status, sources_queried)
-         VALUES ('demo', 'running', $1)
+        `INSERT INTO processing_jobs (triggered_by, status, sources_queried, last_progress_at)
+         VALUES ('demo', 'running', $1, NOW())
          RETURNING id`,
         [sources.length],
     );
@@ -417,7 +417,7 @@ async function runDemoBatch({ size, embed, seed, enqueue = enqueueEmbeddings }) 
             `UPDATE processing_jobs
              SET status = 'completed', posts_collected = $1, posts_processed = $1,
                  completed_at = NOW()
-             WHERE id = $2`,
+             WHERE id = $2 AND status = 'running'`,
             [postIds.length, job.id],
         );
 
@@ -430,7 +430,7 @@ async function runDemoBatch({ size, embed, seed, enqueue = enqueueEmbeddings }) 
     } catch (err) {
         await db.dbRun(
             `UPDATE processing_jobs SET status = 'failed', error_details = $1, completed_at = NOW()
-             WHERE id = $2`,
+             WHERE id = $2 AND status = 'running'`,
             [err.message, job.id],
         ).catch(() => {});
         throw err;
