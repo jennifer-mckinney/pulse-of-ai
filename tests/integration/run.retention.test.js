@@ -1,12 +1,14 @@
 // tests/integration/run.retention.test.js
 // P10-9: source_runs keeps 30 days raw, then daily rollups (source_run_daily,
-// migration 034); empty finished processing_jobs older than 30 days are
-// removed while every job an audit or bias row references is kept.
+// migration 034). PR #22 decision G4 (Jennifer, 2026-09-29): EVERY
+// processing_jobs row is kept permanently, failed ones included (spec §19
+// Tier 3) — nothing in maintenance removes a job.
 
 'use strict';
 
 const db = require('../../src/db/connection');
-const { rollupSourceRuns, purgeEmptyJobs } = require('../../src/collectors/run-retention');
+const runRetention = require('../../src/collectors/run-retention');
+const { rollupSourceRuns } = runRetention;
 const { insertSource, insertMethodologyVersions, insertPostWithFullPipeline } = require('./helpers');
 
 const DAY = 86400000;
@@ -48,23 +50,19 @@ describe('source_runs: 30 days raw, then daily rollups', () => {
     });
 });
 
-describe('processing_jobs: empty old jobs only', () => {
-    it('removes finished empty jobs past 30 days; keeps running, recent and referenced jobs', async () => {
-        const empty = await job(40);
-        const failedEmpty = await job(40, 'failed');
+describe('processing_jobs: kept permanently (G4)', () => {
+    it('no maintenance step removes a job — empty, failed and old jobs all stay after the run-table rollup', async () => {
+        const empty = await job(400);
+        const failedEmpty = await job(400, 'failed');
         const recent = await job(3);
-        const running = await job(40, 'running');
-        const scored = await job(40);
-        const mv = await insertMethodologyVersions();
-        await insertPostWithFullPipeline(src, scored, mv, { externalId: 'kept' });
-        const withRun = await job(40);
-        await run(1, { jobId: withRun });
-
-        expect(await purgeEmptyJobs({ env: {} })).toEqual({ removed: 2 });
+        await run(40, { jobId: empty });
+        await rollupSourceRuns({ env: {} });
         const left = (await db.dbAll('SELECT id FROM processing_jobs')).map(r => r.id).sort();
-        expect(left).toEqual([recent, running, scored, withRun].sort());
-        expect(left).not.toContain(empty);
-        expect(left).not.toContain(failedEmpty);
-        expect((await db.dbAll(`SELECT action FROM data_retention_log`)).map(r => r.action)).toEqual(['purged_empty_jobs']);
+        expect(left).toEqual([empty, failedEmpty, recent].sort());
+        expect(runRetention.purgeEmptyJobs).toBeUndefined();
+        const { defaultSteps } = require('../../src/workers/maintenance.worker');
+        const names = defaultSteps({ log: () => {} }).map(([n]) => n);
+        expect(names.length).toBeGreaterThan(0);
+        expect(names).not.toContain('processing_jobs');
     });
 });

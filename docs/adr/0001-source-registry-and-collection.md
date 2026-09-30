@@ -150,7 +150,7 @@ Research: `docs/research/2026-09-29-reddit-access.md`. Recorded verbatim.
 
 ### Run-table retention (P10-9)
 - `source_runs` keeps 30 days of raw rows (`SOURCE_RUNS_RAW_DAYS`); older rows are added to `source_run_daily` (migration 034: one row per day and source with run, outcome, item, new-post, request and error-kind counts) and removed, by the maintenance job, one transaction and one summary `data_retention_log` row per batch. Monthly partitioning was not done: converting an existing table is not additive (rewrite and swap); the 30-day window bounds the table instead.
-- `processing_jobs`: finished jobs older than 30 days (`PROCESSING_JOBS_KEEP_DAYS`) that no audit, bias or run row references are removed; every job that scored a post or ran a bias check is kept (spec §19 Tier 3). Tests: `tests/integration/run.retention.test.js`.
+- `processing_jobs`: **kept permanently, every row, failed ones included** (spec §19 Tier 3). The empty-job purge first built for P10-9 was removed by Jennifer's decision G4 (2026-09-29; see "Decisions of 2026-09-29 (PR #22 review)"). Tests: `tests/integration/run.retention.test.js`.
 
 ### Error responses, scrubbed logs and the dev bind gap (security audit)
 - `src/server.js` ends with a JSON error handler: a malformed JSON body (POST /api/query, POST /api/refresh) gets `400 {"error":"invalid JSON body"}`, any other error a generic JSON 500 — never Express's HTML page with a stack trace and absolute paths, in any environment. Every route-level error log goes through the secret scrubber (`src/middleware/log-error.js`).

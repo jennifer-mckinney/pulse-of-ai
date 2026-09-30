@@ -1,5 +1,5 @@
 // src/collectors/run-retention.js
-// Retention for the operational run tables (P10-9, G10-12), run by the
+// Retention for the operational run table source_runs (P10-9, G10-12), run by the
 // worker's repeatable maintenance job (src/workers/maintenance.worker.js).
 //
 //   source_runs      raw rows are kept SOURCE_RUNS_RAW_DAYS (30) days; older
@@ -7,12 +7,9 @@
 //                    day and source: runs, outcomes, items, new posts,
 //                    requests, error kinds — migration 034) and then removed,
 //                    in bounded batches, each batch in one transaction.
-//   processing_jobs  a job older than PROCESSING_JOBS_KEEP_DAYS (30) that is
-//                    finished (not running / closing / awaiting retries) and
-//                    that NOTHING references — no decision_audit_log,
-//                    bias_assessments or source_runs row — is removed: it is
-//                    an empty job. Every job that scored a post or ran a
-//                    bias check is kept permanently (spec §19 Tier 3).
+//   processing_jobs  NEVER removed: every job, failed ones included, is kept
+//                    permanently (spec §19 Tier 3; PR #22 decision G4,
+//                    Jennifer 2026-09-29). Only source_runs is rolled up.
 //
 // Each removing batch writes one data_retention_log summary row
 // (raw_post_id NULL) with the true counts.
@@ -23,10 +20,8 @@ const { dbTransaction } = require('../db/connection');
 const { retentionWindowDays } = require('../config/source-registry');
 
 const DEFAULT_RAW_DAYS = 30;
-const DEFAULT_JOB_DAYS = 30;
 const BATCH = 5000;
 
-const days = (v, d) => { const n = parseInt(v || '', 10); return Number.isFinite(n) && n > 0 ? n : d; };
 
 /** @returns {Promise<{ rolledUp: number, batches: number }>} */
 async function rollupSourceRuns({ env = process.env, batch = BATCH } = {}) {
@@ -83,40 +78,4 @@ async function rollupSourceRuns({ env = process.env, batch = BATCH } = {}) {
     return { rolledUp, batches };
 }
 
-/** @returns {Promise<{ removed: number }>} */
-async function purgeEmptyJobs({ env = process.env, batch = BATCH } = {}) {
-    const keep = days(env.PROCESSING_JOBS_KEEP_DAYS, DEFAULT_JOB_DAYS);
-    let removed = 0;
-    for (;;) {
-        const n = await dbTransaction(async (client) => {
-            const r = await client.query(
-                `DELETE FROM processing_jobs p
-                 WHERE p.id IN (
-                     SELECT j.id FROM processing_jobs j
-                     WHERE j.status IN ('completed', 'failed')
-                       AND j.started_at < NOW() - make_interval(days => $1)
-                       AND NOT EXISTS (SELECT 1 FROM decision_audit_log d WHERE d.job_id = j.id)
-                       AND NOT EXISTS (SELECT 1 FROM bias_assessments b WHERE b.job_id = j.id)
-                       AND NOT EXISTS (SELECT 1 FROM source_runs s WHERE s.job_id = j.id)
-                     ORDER BY j.started_at LIMIT $2
-                     FOR UPDATE SKIP LOCKED)`,
-                [keep, batch],
-            );
-            if (r.rowCount) {
-                await client.query(
-                    `INSERT INTO data_retention_log (raw_post_id, action, reason, legal_basis, performed_by)
-                     VALUES (NULL, 'purged_empty_jobs', $1, $2, 'src/collectors/run-retention.js')`,
-                    [JSON.stringify({ summary: `${r.rowCount} empty processing_jobs row(s) older than ${keep} days removed.`, rows: r.rowCount, keep_days: keep }),
-                        'Operational records with no scored post, bias check or run attached (no personal data; PR #10 review P10-9). '
-                        + 'Jobs that scored posts or ran bias checks are kept permanently (spec §19 Tier 3).'],
-                );
-            }
-            return r.rowCount;
-        });
-        removed += n;
-        if (n < batch) break;
-    }
-    return { removed };
-}
-
-module.exports = { rollupSourceRuns, purgeEmptyJobs, DEFAULT_RAW_DAYS, DEFAULT_JOB_DAYS };
+module.exports = { rollupSourceRuns, DEFAULT_RAW_DAYS };
