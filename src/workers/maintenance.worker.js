@@ -20,7 +20,12 @@
 //   processing_jobs are never removed (spec §19 Tier 3, decision G4).
 //
 // Each step is independent: a failing step is reported in the result and
-// logged (scrubbed) and the others still run. BullMQ's job scheduler makes
+// logged (scrubbed, error level) and the others still run. PR #22 P0-1 /
+// grumpy #6: a run with ANY failed step then FAILS the job (BullMQ's failed
+// count, visible in /api/health), and every run records its outcome in
+// maintenance_state (migration 039): /api/health reports the last
+// successful run per task and the watchdog alerts when it is overdue.
+// BullMQ's job scheduler makes
 // the schedule shared across worker processes (one job per tick), and the
 // worker runs the queue at concurrency 1.
 
@@ -30,6 +35,7 @@ const { blankExpired } = require('../collectors/retention');
 const { scrub } = require('../collectors/redact');
 const { rollupSourceRuns } = require('../collectors/run-retention');
 const { sweepStaleJobs } = require('../collectors/stale-jobs');
+const { dbRun } = require('../db/connection');
 
 const DEFAULT_MAINTENANCE_EVERY_MS = 5 * 60 * 1000;
 const DEFAULT_DAILY_EVERY_MS = 24 * 60 * 60 * 1000;
@@ -75,21 +81,54 @@ function taskOf(job) {
     return TASKS[t] ? t : 'retention';
 }
 
+/** Upsert the task's row in maintenance_state (migration 039). */
+async function recordMaintenanceRun(task, out) {
+    const failed = Object.entries(out).filter(([, s]) => !s.ok);
+    const error = failed.length ? failed.map(([n, s]) => `${n}: ${s.error}`).join('; ') : null;
+    const steps = Object.fromEntries(Object.entries(out).map(([n, s]) => [n, s.ok ? { ok: true } : { ok: false, error: s.error }]));
+    await dbRun(
+        `INSERT INTO maintenance_state (task, last_run_at, last_ok_at, last_failed_at, last_error, last_steps)
+         VALUES ($1, NOW(), CASE WHEN $2::text IS NULL THEN NOW() END, CASE WHEN $2::text IS NOT NULL THEN NOW() END, $2, $3::jsonb)
+         ON CONFLICT (task) DO UPDATE SET
+             last_run_at = EXCLUDED.last_run_at,
+             last_ok_at = COALESCE(EXCLUDED.last_ok_at, maintenance_state.last_ok_at),
+             last_failed_at = COALESCE(EXCLUDED.last_failed_at, maintenance_state.last_failed_at),
+             last_error = EXCLUDED.last_error,
+             last_steps = EXCLUDED.last_steps`,
+        [task, error, JSON.stringify(steps)],
+    );
+}
+
+/** Thrown when any step of a run failed: the job is recorded as failed. */
+class MaintenanceStepsFailed extends Error {
+    constructor(task, out) {
+        const failed = Object.entries(out).filter(([, s]) => !s.ok).map(([n, s]) => `${n} (${s.error})`);
+        super(`maintenance ${task}: ${failed.length} step(s) failed: ${failed.join('; ')}`);
+        this.name = 'MaintenanceStepsFailed';
+        this.steps = out;
+    }
+}
+
 /**
+ * Runs every step; records the outcome; THROWS MaintenanceStepsFailed when
+ * any step failed (after all of them ran and the outcome was recorded).
  * @param {object} [job]  the BullMQ job ({ data: { task } })
- * @param {{ steps?: Array<[string, Function]>, log?: Function }} [o]
+ * @param {{ steps?: Array<[string, Function]>, log?: Function, logError?: Function, record?: Function }} [o]
  * @returns {Promise<Record<string, { ok: boolean, result?: unknown, error?: string }>>}
  */
-async function processMaintenanceJob(job, { steps, log = () => {} } = {}) {
+async function processMaintenanceJob(job, { steps, log = () => {}, logError = log, record = recordMaintenanceRun } = {}) {
+    const task = taskOf(job);
     const out = {};
-    for (const [name, run] of steps || defaultSteps({ log, task: taskOf(job) })) {
+    for (const [name, run] of steps || defaultSteps({ log, task })) {
         try {
             out[name] = { ok: true, result: await run() };
         } catch (err) {
             out[name] = { ok: false, error: scrub(err && err.message) };
-            log(`[maintenance] ${name} failed: ${out[name].error}`);
+            logError(`[maintenance] ${task}/${name} failed: ${out[name].error}`);
         }
     }
+    await record(task, out);
+    if (Object.values(out).some(s => !s.ok)) throw new MaintenanceStepsFailed(task, out);
     return out;
 }
 
@@ -104,5 +143,6 @@ async function scheduleMaintenance(queue, env = process.env) {
 
 module.exports = {
     processMaintenanceJob, scheduleMaintenance, maintenanceEveryMs, dailyEveryMs, defaultSteps, taskOf, TASKS,
+    recordMaintenanceRun, MaintenanceStepsFailed,
     DEFAULT_MAINTENANCE_EVERY_MS, DEFAULT_DAILY_EVERY_MS, MAINTENANCE_SCHEDULER_ID, DAILY_SCHEDULER_ID,
 };

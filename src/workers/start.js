@@ -46,6 +46,7 @@ const { scheduleAllSources } = require('./collector.scheduler');
 const { collectWindowMs } = require('../config/source-registry');
 const { closeCycles } = require('../collectors/cycle');
 const { evaluateSourceHealth } = require('../collectors/source-health');
+const { evaluateRetentionOverdue } = require('../collectors/retention-overdue');
 const { runRedditMaintenance, MAINTENANCE_MS } = require('../collectors/reddit/maintenance');
 const { nonReentrant } = require('./guard');
 
@@ -70,7 +71,7 @@ const workers = [
     new Worker('embed',     processEmbedJob,     { connection, concurrency: EMBED_CONCURRENCY }),
     new Worker('correlate', processCorrelateJob, { connection, concurrency: CORRELATE_CONCURRENCY }),
     // P10-2: text retention + compaction (repeatable, one at a time).
-    new Worker('maintenance', job => processMaintenanceJob(job, { log }), { connection, concurrency: 1 }),
+    new Worker('maintenance', job => processMaintenanceJob(job, { log, logError }), { connection, concurrency: 1 }),
 ];
 
 workers.forEach(w => {
@@ -103,6 +104,14 @@ async function schedule() {
     } catch (err) {
         logError(`[scheduler] scheduling failed: ${err.message}`);
     }
+    // PR #22 grumpy #6: (re-)register the maintenance schedulers on every
+    // reschedule (upsertJobScheduler is idempotent), so a Redis blip at boot
+    // does not stop retention until the next restart.
+    try {
+        await scheduleMaintenance(maintenanceQueue);
+    } catch (err) {
+        logError(`[maintenance] scheduling failed (retried in ${Math.round(RESCHEDULE_MS / 1000)}s): ${err.message}`);
+    }
 }
 
 // Close collection cycles past their window: bias checks once over every
@@ -126,6 +135,15 @@ async function closeDueCyclesOnce() {
         for (const a of h.resolved) log(`[source-health] ${a.slug}: ${a.type} resolved`);
     } catch (err) {
         logError(`[source-health] evaluation failed: ${err.message}`);
+    }
+    // PR #22 P0-1: a critical retention_overdue alert per source while any
+    // post holds text past its window (+ grace); resolved once it is gone.
+    try {
+        const r = await evaluateRetentionOverdue();
+        for (const slug of r.opened) logError(`[retention] ${slug}: retention_overdue opened (text past its window)`);
+        for (const slug of r.resolved) log(`[retention] ${slug}: retention_overdue resolved`);
+    } catch (err) {
+        logError(`[retention] overdue check failed: ${err.message}`);
     }
     // G10-4: re-queue posts from the last 24 h that were never scored.
     try {
@@ -156,7 +174,6 @@ async function redditMaintenance() {
 
 schedule();
 redditMaintenance();
-scheduleMaintenance(maintenanceQueue).catch(err => logError(`[maintenance] scheduling failed: ${err.message}`));
 const timer = setInterval(schedule, RESCHEDULE_MS);
 const cycleTimer = setInterval(closeDueCycles, 30 * 1000);
 const redditTimer = setInterval(redditMaintenance, MAINTENANCE_MS);

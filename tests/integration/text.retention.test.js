@@ -176,15 +176,16 @@ describe('monthly compaction (spec §19) with the NOT NULL content column', () =
 });
 
 describe('the repeatable maintenance job', () => {
-    it('runs every step in order and isolates a failing one (scrubbed error)', async () => {
+    it('runs every step in order, isolates a failing one (scrubbed error), then FAILS the job (P0-1)', async () => {
         const order = [];
-        const out = await processMaintenanceJob({}, { steps: [
+        const err = await processMaintenanceJob({}, { steps: [
             ['a', async () => { order.push('a'); return 1; }],
             ['b', async () => { order.push('b'); throw new Error('boom'); }],
             ['c', async () => { order.push('c'); return 3; }],
-        ] });
+        ] }).catch(e => e);
         expect(order).toEqual(['a', 'b', 'c']);
-        expect(out).toEqual({ a: { ok: true, result: 1 }, b: { ok: false, error: 'boom' }, c: { ok: true, result: 3 } });
+        expect(err.name).toBe('MaintenanceStepsFailed');
+        expect(err.steps).toEqual({ a: { ok: true, result: 1 }, b: { ok: false, error: 'boom' }, c: { ok: true, result: 3 } });
     });
 
     // PR #22 principal #7: retention every 5 minutes; compaction and the

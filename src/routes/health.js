@@ -24,6 +24,13 @@
 //
 //   alerts_closed  { resolved, superseded } — closed alerts by kind (G1,
 //                  migration 036 alert_status view)
+//   maintenance    { tasks: { retention|daily: { last_run_at, last_ok_at,
+//                    last_failed_at, last_error } | null },
+//                    retention_overdue: { posts, sources: [{ slug, posts,
+//                    oldest_collected_at }] } | { error } } — PR #22 P0-1:
+//                  the last successful maintenance run per task
+//                  (maintenance_state, migration 039) and text held past
+//                  its window (src/collectors/retention-overdue.js)
 //   redis          { reachable } — an authenticated PING answered (P9-7)
 //   worker         { alive, last_heartbeat, queues } — the worker's heartbeat
 //                  (src/workers/heartbeat.js); alive = a beat within its TTL;
@@ -51,6 +58,8 @@ const { createRedisClient } = require('../queues/connection');
 const { readHeartbeat } = require('../workers/heartbeat');
 const { correlationStatus } = require('../pipeline/correlation-gate');
 const { sourceRows, summarize } = require('../collectors/status');
+const { overdueBySource } = require('../collectors/retention-overdue');
+const { scrub } = require('../collectors/redact');
 
 const router = Router();
 
@@ -101,6 +110,25 @@ function withTimeout(promise, ms) {
         promise,
         new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('timeout')), ms); }),
     ]).finally(() => clearTimeout(timer));
+}
+
+/** PR #22 P0-1: last run per maintenance task + retention lag. */
+async function maintenanceStatus() {
+    const rows = await dbAll(
+        `SELECT task, last_run_at, last_ok_at, last_failed_at, last_error FROM maintenance_state`);
+    const tasks = { retention: null, daily: null };
+    for (const r of rows) tasks[r.task] = { last_run_at: r.last_run_at, last_ok_at: r.last_ok_at,
+        last_failed_at: r.last_failed_at, last_error: r.last_error };
+    let overdue;
+    try {
+        const list = await overdueBySource();
+        overdue = { posts: list.reduce((n, r) => n + r.posts, 0),
+            sources: list.map(r => ({ slug: r.slug, posts: r.posts, oldest_collected_at: r.oldest_collected_at })) };
+    } catch (err) {
+        // A misconfigured window (M1): reported, never a fake zero.
+        overdue = { error: scrub(err.message) };
+    }
+    return { tasks, retention_overdue: overdue };
 }
 
 /** { redis: { reachable }, worker: { alive, last_heartbeat } } — never throws. */
@@ -199,6 +227,7 @@ router.get('/health', async (req, res) => {
         );
 
         const sources = summarize(await sourceRows());
+        const maintenance = await maintenanceStatus();
 
         return res.json({
             status:        dbConnected ? 'healthy' : 'degraded',
@@ -218,6 +247,7 @@ router.get('/health', async (req, res) => {
             demo_feeds:     sourceCounts.demo_feeds,
             ...(await queueStatus()),
             sources,
+            maintenance,
             // Spec §20 DPIA gate: correlation is off (explicitly) until a
             // completed DPIA is recorded and the operator enables it.
             correlation: (({ enabled, status, reason }) => ({ enabled, status, reason }))(correlationStatus()),

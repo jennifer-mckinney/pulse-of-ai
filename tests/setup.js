@@ -15,6 +15,7 @@ const TABLES = [
     'reddit_maintenance',
     'user_platform_sightings',
     'pseudonymous_users',
+    'maintenance_state',
     'compaction_log',
     'monthly_source_rollups',
     'monthly_topic_rollups',
