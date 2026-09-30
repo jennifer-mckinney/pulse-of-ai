@@ -12,13 +12,13 @@ psycopg2-binary>=2.9.13
 # through PostgreSQL's pgvector extension from the Node side.
 
 # HTTP server for python/embeddings_service.py (the production embedder)
-fastapi>=0.110.0
-uvicorn>=0.27.0
+fastapi>=0.141.1
+uvicorn>=0.54.0
 
 # Testing
 pytest>=9.1.1
 pytest-asyncio>=1.4.0
-httpx>=0.26.0         # async HTTP client for test requests
+httpx>=0.28.1         # async HTTP client for test requests
 
 # Code quality
 black>=26.5.1         # code formatter (run: black python/)
