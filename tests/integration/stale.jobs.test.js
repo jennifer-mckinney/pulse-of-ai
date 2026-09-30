@@ -6,7 +6,7 @@
 'use strict';
 
 const { dbAll, dbGet, dbRun } = require('../../src/db/connection');
-const { sweepStaleJobs } = require('../../src/collectors/stale-jobs');
+const { sweepStaleJobs, SWEPT_TRIGGERS } = require('../../src/collectors/stale-jobs');
 const { runCollection } = require('../../src/collectors/runner');
 const { seedSources, seedMethodology } = require('../../scripts/seed');
 const { refreshDeadlineMs } = require('../../src/workers/collect.worker');
@@ -22,17 +22,22 @@ it('fails stale one-shot jobs with the reason; leaves cron cycles, fresh and fin
     const demo = await job('demo', 45);
     const api = await job('api', 45);
     const freshStandup = await job('standup', 5);
-    const startup = await job('startup', 45);
     const cron = await job('cron', 45);
     const done = await job('manual', 45, 'completed');
 
     const r = await sweepStaleJobs({ env: {} });
-    expect(r.failed.map(x => x.id).sort()).toEqual([standup, manual, demo, api, startup].sort());
+    expect(r.failed.map(x => x.id).sort()).toEqual([standup, manual, demo, api].sort());
     const rows = Object.fromEntries((await dbAll('SELECT id, status, error_details FROM processing_jobs')).map(x => [x.id, x]));
     expect(rows[standup]).toMatchObject({ status: 'failed', error_details: expect.stringMatching(/stale: no progress for 30 minutes/) });
     for (const id of [freshStandup, cron]) expect(rows[id].status).toBe('running');
     expect(rows[done].status).toBe('completed');
     expect((await sweepStaleJobs({ env: {} })).failed).toEqual([]);   // idempotent
+});
+
+// The swept triggers are exactly the one-shot producers of 'running' rows
+// ('startup' had none and was removed as dead code).
+it('sweeps exactly the one-shot run triggers', () => {
+    expect([...SWEPT_TRIGGERS].sort()).toEqual(['api', 'demo', 'manual', 'standup']);
 });
 
 it('leaves a fresh api (refresh) row alone', async () => {

@@ -112,7 +112,7 @@ describe('replayPost — a pipeline-seeded post reproduces', () => {
 });
 
 describe('replayDecision — divergence is reported, never smoothed over', () => {
-    it('a fabricated stored output (seed-demo style) is a DIVERGENCE with per-field diffs', () => {
+    it('a fabricated stored output (a hand-inserted result row) is a DIVERGENCE with per-field diffs', () => {
         const d = seededDecision('sentiment');
         d.model_name = 'afinn-sentiment-v5.0.2';
         d.output = { score: 4, comparative: 0.28, indicator: 'positive' };

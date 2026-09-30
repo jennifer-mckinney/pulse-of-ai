@@ -7,11 +7,12 @@ Exposes an OpenAI-compatible POST /embeddings endpoint using sentence-transforme
 src/pipeline/embeddings.js.
 
 PRODUCTION:
-    For maximum throughput, run via Infinity for dynamic batching + ctranslate2:
-        infinity_emb start \\
-            --model-name-or-path sentence-transformers/all-MiniLM-L6-v2 \\
-            --batch-size 64 --model-warmup true
-    This file provides an equivalent fallback for environments without Infinity.
+    This service IS the production embedder: compose service `embeddings`
+    (python/Dockerfile) runs it with the pinned model revision.
+    Infinity (infinity-emb, dynamic batching + ctranslate2) is a planned
+    Phase-2 alternative, not adopted (python/requirements.txt). It speaks the
+    same OpenAI-compatible API, so it could replace this service without a
+    Node.js change.
 
 DEVELOPMENT:
     uvicorn python.embeddings_service:app --port 8000

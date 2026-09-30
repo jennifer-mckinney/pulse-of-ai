@@ -17,6 +17,10 @@
 // bias@1.5.0 (PR #22 decision G2): the same checks also run over a rolling
 // 24 h window (src/pipeline/bias-window.js); a check's TARGET is then a
 // window scope and its rows go to bias_window_assessments (see scopeOf).
+//
+// bias@1.6.0 (audit drift D-2): an "insufficient sample" parity row states
+// its computed gap (config parity_insufficient_value), like the other two
+// checks already did; earlier versions are reproduced as they ran (0).
 
 'use strict';
 
@@ -302,6 +306,27 @@ async function checkLocationConcentration(target, biasMvId) {
 // ─── checkPlatformSentimentParity ─────────────────────────────────────────────
 
 /**
+ * The largest absolute difference in average comparative sentiment between
+ * any two categories, and that pair ("a vs b"); 0 / null with fewer than two.
+ * @param {Array<{ category: string, avg_comparative: number|string }>} rows
+ * @returns {{ maxDiff: number, worstPair: string|null }}
+ */
+function maxPairwiseGap(rows) {
+    let maxDiff  = 0;
+    let worstPair = null;
+    for (let i = 0; i < rows.length; i++) {
+        for (let j = i + 1; j < rows.length; j++) {
+            const diff = Math.abs(rows[i].avg_comparative - rows[j].avg_comparative);
+            if (diff > maxDiff) {
+                maxDiff   = diff;
+                worstPair = `${rows[i].category} vs ${rows[j].category}`;
+            }
+        }
+    }
+    return { maxDiff, worstPair };
+}
+
+/**
  * Detect cross-platform sentiment bias: flags when the maximum difference in
  * average sentiment comparative between any two source categories exceeds
  * `platform_parity_max_diff`.
@@ -340,20 +365,31 @@ async function checkPlatformSentimentParity(target, biasMvId) {
         ? config.parity_min_per_category : 0;
     const rows = allRows.filter(r => r.n >= minPer);
     if (minPer > 0 && rows.length < 2) {
+        // bias@1.6.0 (audit drift D-2): "insufficient sample" states its
+        // computed value, as sample_rules.below_minimum registers — the
+        // largest pairwise gap across ALL the job's categories, small ones
+        // included (0 with fewer than two). bias@1.4.0 / 1.5.0 recorded 0
+        // (no parity_insufficient_value key); they are reproduced as they
+        // ran, and an erratum on each says so.
+        const stated = config.parity_insufficient_value === 'max_diff_all_categories' ? maxPairwiseGap(allRows) : null;
+        const metricValue = stated ? stated.maxDiff : 0;
         await writeBiasAssessment({
             scope,
             assessmentType: 'platform_sentiment_parity',
             groupField:     'platform',
             groupValue:     INSUFFICIENT_SAMPLE,
             metricName:     'max_comparative_diff',
-            metricValue:    0,
+            metricValue,
             threshold,
             isViolation:    false,
             severity:       null,
-            evidence:       { rows: allRows, insufficient_sample: true, min_per_category: minPer, compared: rows.map(r => r.category) },
+            evidence:       {
+                rows: allRows, insufficient_sample: true, min_per_category: minPer, compared: rows.map(r => r.category),
+                ...(stated ? { value_basis: 'all_categories', maxDiff: stated.maxDiff, worst_pair: stated.worstPair } : {}),
+            },
             biasMvId,
         });
-        return { isViolation: false, metricValue: 0, groupValue: INSUFFICIENT_SAMPLE, insufficientSample: true };
+        return { isViolation: false, metricValue, groupValue: INSUFFICIENT_SAMPLE, insufficientSample: true };
     }
 
     // Parity requires at least two distinct platforms to compare
@@ -375,17 +411,7 @@ async function checkPlatformSentimentParity(target, biasMvId) {
     }
 
     // Find the maximum pairwise difference across all platform combinations
-    let maxDiff  = 0;
-    let worstPair = null;
-    for (let i = 0; i < rows.length; i++) {
-        for (let j = i + 1; j < rows.length; j++) {
-            const diff = Math.abs(rows[i].avg_comparative - rows[j].avg_comparative);
-            if (diff > maxDiff) {
-                maxDiff   = diff;
-                worstPair = `${rows[i].category} vs ${rows[j].category}`;
-            }
-        }
-    }
+    const { maxDiff, worstPair } = maxPairwiseGap(rows);
 
     const isViolation = maxDiff > threshold;
     const severity    = isViolation ? 'warning' : null;

@@ -1,18 +1,21 @@
 // src/pipeline/embeddings.js
 // Text embedding pipeline: generate → store in post_embeddings.
 //
-// External dependency: Infinity embedding service (OpenAI-compatible API).
+// External dependency: the embeddings service (python/embeddings_service.py,
+// FastAPI + sentence-transformers; compose service `embeddings`), which
+// speaks an OpenAI-compatible API — so an Infinity server, the planned
+// Phase-2 alternative (python/requirements.txt), could replace it unchanged.
 //   POST /embeddings  { input: [text], model: "..." }
 //   Returns: { data: [{ index: 0, embedding: float[] }] }
 //
 // Entry points:
-//   generateEmbedding(text)        — calls Infinity; returns float array
+//   generateEmbedding(text)        — calls the service; returns float array
 //   saveEmbedding(postId, vec)     — upserts post_embeddings row; returns row UUID
 //   embedPost(postId)              — full pipeline: fetch content → generate → save
 //                                    (a no-op with a reason for a post purged or
 //                                    blanked by retention — never its notice)
 //
-// The Infinity service is checked via EMBEDDINGS_SERVICE_URL env var.
+// The service is reached at the EMBEDDINGS_SERVICE_URL env var.
 // In test environments, axios.post is mocked — no real HTTP call is made.
 
 'use strict';
@@ -51,7 +54,7 @@ const EMBEDDING_DIMENSIONS = 384;
 // ─── generateEmbedding ────────────────────────────────────────────────────────
 
 /**
- * Send text to the Infinity embedding service and return the float array.
+ * Send text to the embeddings service and return the float array.
  * Uses the OpenAI-compatible POST /embeddings endpoint.
  *
  * @param {string} text  Content to embed
