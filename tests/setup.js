@@ -25,6 +25,8 @@ const TABLES = [
     'relevance_results',
     'sentiment_results',
     'decision_audit_log',
+    'watchdog_notifications',
+    'watchdog_state',
     'alert_resolution_approvals',
     'alert_resolutions',
     'alert_events',
