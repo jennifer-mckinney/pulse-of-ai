@@ -32,9 +32,11 @@
 
 'use strict';
 
-// "AI" / "A.I." upper case only, not followed by a lower-case letter.
+// "AI" / "A.I." upper case only, as a WHOLE word: not followed by any
+// letter or digit, so AIDS, AIG, AIM, AIR and AI2 never match (PR #22
+// grumpy H3; relevance@1.2.0 registered "case-sensitive whole word").
 // Shared object: ai-filter.js PATTERNS uses this exact expression.
-const AI_ACRONYM_RE = /\bA\.?I\.?(?![a-z])/;
+const AI_ACRONYM_RE = /\b(?:A\.I\.?|AI)(?![A-Za-z0-9])/;
 const LLM_RE = /\bLLMs?\b/i;
 const NLP_RE = /\bNLP\b/i;
 const GPT_RE = /\b(?:chat)?gpt(?:-?\d+(?:\.\d+)?o?)?s?\b/i;
