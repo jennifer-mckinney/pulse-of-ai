@@ -102,7 +102,7 @@ Every inferred decision — sentiment score, relevance rating, topic classificat
 
 **Key architectural principles:**
 - Global coverage — the 52 registry sources across 8 categories, all geographies
-- Immutable raw data — collected posts are not edited, with one documented exception: text retention, which replaces a post's text with a removal notice when its source's window ends (Reddit 48 h under ADR 0001 ruling 9, YouTube and TikTok 30 days, every other source the detail window) and at compaction (§19)
+- Immutable raw data — collected posts are not edited, with one documented exception: text retention, which replaces a post's text with a removal notice when its source's window ends (Reddit 48 h under ADR 0001 ruling 9, YouTube and TikTok 30 days, every other source the detail window), when the 6-hourly Reddit re-check finds a post removed upstream, and at compaction (§19)
 - Auditable inferences — every score is traceable to its methodology version
 - Versioned methodology — algorithms change over time; we track which version produced which decision
 - Privacy-first collection — identity fields are never stored and identities in text are redacted (§8); every post carries a keyed provenance fingerprint instead of an identity
@@ -148,7 +148,7 @@ Public discourse about AI is happening at scale across platforms, but:
 | AI relevance filtering 99% | `relevance@1.2.0`: 21-term lexicon matched as whole words, score = matched fraction; the collection admission filter (`admission_filter@1.0.0`) decides what is stored. Embedding hybrid: **PLANNED — not implemented as of v1.2.0** | §7, §10 |
 | Discourse quality scoring | `discourse@1.1.0-DQI`: 5 heuristic dimensions. Semantic cluster improvements: **PLANNED** | §18 |
 | Geographic visualization (global) | Canvas-2D dot globe (`public/js/globe.js`) fed by real GROUP BY queries from PostgreSQL; ranked city list when canvas is unavailable | §7, §11 |
-| Bias & harm monitoring | 3 aggregate checks (location concentration, platform sentiment parity, negative dominance) per job or cycle and over a rolling 24 h window (`bias@1.5.0`), with minimum samples; `bias_assessments` and `bias_window_assessments`, alerts | §9 |
+| Bias & harm monitoring | 3 aggregate checks (location concentration, platform sentiment parity, negative dominance) per job or cycle and over a rolling 24 h window (`bias@1.6.0`), with minimum samples; `bias_assessments` and `bias_window_assessments`, alerts | §9 |
 | <3s page load | No framework, no build step, self-hosted static assets, indexed queries, 10 s response cache on the hot read endpoints | §14 |
 | Story-ready in <2min | Globe and overview beat render on page load; the page re-polls on the refresh cycle | §11 |
 | WCAG 2.1 compliance | Colour never the only cue, keyboard and pointer events, reduced-motion honoured | §11 |
@@ -164,15 +164,15 @@ Every implemented threshold is stored in the `methodology_versions` table with a
 |---|---|---|---|
 | Sentiment accuracy target | ≥ 99% (validated against labeled set) | `sentiment@1.0.0` config `accuracy_target: 0.99` | Registered; benchmark validation PLANNED |
 | Demographic inference accuracy | ≥ 99% (Phase 2, labeled test set required) | — | **PLANNED — not implemented as of v1.2.0** |
-| AI relevance | at least one of 21 lexicon terms (score > 0); embed gate score ≥ 1/21 | `relevance@1.2.0` config | Implemented. The v1.1 "≥ 0.99 precision" target is registered in the superseded `relevance@1.0.0` row only |
+| AI relevance | at least one of 21 lexicon terms (score > 0); embed gate score ≥ 1/21 | `relevance@1.2.0` config | Implemented. The v1.1 "≥ 99% precision" target is not registered: the superseded `relevance@1.0.0` row registers `ai_relevance_threshold` 0.99, a score threshold, not a precision target, and no later relevance row carries either |
 | Discourse quality score (DQI) | 0.0–1.0, unweighted mean of 5 dimensions | `discourse@1.1.0-DQI` config | Implemented |
-| Location concentration alert | > 35% of content-located posts in one city (warning); > 80% critical; at least 30 content-located posts | `bias@1.5.0` config `location_concentration_max: 0.35`, `location_min_sample: 30`; critical level in code | Implemented |
+| Location concentration alert | > 35% of content-located posts in one city (warning); > 80% critical; at least 30 content-located posts | `bias@1.6.0` config `location_concentration_max: 0.35`, `location_min_sample: 30`; critical level in code | Implemented |
 | Source concentration alert | > 40% from single source | — | **PLANNED — not implemented as of v1.2.0** |
-| Negative sentiment dominance | > 60%; at least 30 posts | `bias@1.5.0` config `negative_dominance_max: 0.60`, `negative_min_sample: 30` | Implemented |
-| Platform sentiment parity | max pairwise difference of mean comparative across source categories > 0.30; only categories with at least 10 posts | `bias@1.5.0` config `platform_parity_max_diff: 0.30`, `parity_min_per_category: 10` | Implemented |
+| Negative sentiment dominance | > 60%; at least 30 posts | `bias@1.6.0` config `negative_dominance_max: 0.60`, `negative_min_sample: 30` | Implemented |
+| Platform sentiment parity | max pairwise difference of mean comparative across source categories > 0.30; only categories with at least 10 posts | `bias@1.6.0` config `platform_parity_max_diff: 0.30`, `parity_min_per_category: 10` | Implemented |
 | Demographic parity difference (user demographics) | > 0.10 | — | **PLANNED — not implemented as of v1.2.0** |
-| Equalized odds difference | > 0.08 | — (name and citation listed in `bias@1.5.0` `planned_layers` for display, as in every bias version since 1.1.0; no threshold stored) | **PLANNED — not implemented as of v1.2.0** |
-| Counterfactual fairness | > 0.05 | — (name and citation listed in `bias@1.5.0` `planned_layers` for display, as in every bias version since 1.1.0; no threshold stored) | **PLANNED — not implemented as of v1.2.0** |
+| Equalized odds difference | > 0.08 | — (name and citation listed in `bias@1.6.0` `planned_layers` for display, as in every bias version since 1.1.0; no threshold stored) | **PLANNED — not implemented as of v1.2.0** |
+| Counterfactual fairness | > 0.05 | — (name and citation listed in `bias@1.6.0` `planned_layers` for display, as in every bias version since 1.1.0; no threshold stored) | **PLANNED — not implemented as of v1.2.0** |
 | Cross-platform correlation confidence | ≥ 0.85 before assigning a pseudonymous ID | — (PR #22 removed the `CORRELATION_MIN_CONFIDENCE` constant with the scoring code) | **PLANNED — not implemented as of v1.2.0**: `correlateUser()` throws until a DPIA approves a signal design (§20) |
 
 ### From `pulse-of-ai-model-health-dashboard.pdf`
@@ -219,9 +219,9 @@ The diagram set in `docs/diagrams/` (entry point `docs/diagrams/architecture.*`)
 │               new post; npm run collect / standup: inline.      │
 │               sentiment, relevance, discourse, each with a      │
 │               decision_audit_log row                            │
-│   4. bias   — per job (refresh, standup) or once per collection │
-│               cycle close (scheduled runs); daily over a        │
-│               rolling 24 h window (bias@1.5.0) — §9             │
+│   4. bias   — per job (refresh, standup, manual) or once per    │
+│               collection cycle close (scheduled runs); daily    │
+│               over a rolling 24 h window (bias@1.6.0) — §9      │
 │   5. embed  — one `embed` job per post with relevance ≥ 1/21    │
 │  embed queue · correlate queue (refuses every job: DPIA gate)   │
 │  maintenance queue: retention every 5 min; compaction, run      │
@@ -240,7 +240,7 @@ The diagram set in `docs/diagrams/` (entry point `docs/diagrams/architecture.*`)
        ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │  VALKEY 8 — BullMQ queues, job schedulers, worker heartbeat     │
-│  POSTGRESQL 16 + pgvector — 34 tables from 46 migrations (§6)   │
+│  POSTGRESQL 16 + pgvector — 34 tables from 49 migrations (§6)   │
 │   raw_posts · decision_audit_log · *_results · post_embeddings  │
 │   (VECTOR(384), HNSW) · methodology_versions · bias_assessments │
 │   · bias_window_* · alert_events · alert_resolutions ·          │
@@ -295,12 +295,12 @@ The diagram set in `docs/diagrams/` (entry point `docs/diagrams/architecture.*`)
 | Primary DB | PostgreSQL | 16 (`pgvector/pgvector:pg16`, pinned by digest) | JSONB, partial and expression indexes, extensions |
 | Vector search | pgvector | bundled in the image | Integrated with PostgreSQL, no separate service |
 | Queues | BullMQ on Valkey 8 | `valkey/valkey:8.1.10-alpine` (pinned by digest) | Redis-protocol queue store under BSD-3-Clause: producer/consumer separation, per-source job schedulers, independent retries, worker heartbeat. It replaced Redis 7 in PR #22 on a new `valkey_data` volume (Redis 7.4 RDB files do not load in Valkey 8); the compose service and the `REDIS_*` variables keep the Redis name |
-| Embeddings | sentence-transformers `all-MiniLM-L6-v2` | 2.7.0, pinned Hugging Face revision `1110a243…` (`embedding@1.0.0`) | Local, 384-dim, 22M params |
+| Embeddings | sentence-transformers `all-MiniLM-L6-v2` | 6.1.0 (transformers 5.18.0, torch 2.12.1+cpu), pinned Hugging Face revision `1110a243…` (`embedding@1.1.0`; 2.7.0 was `embedding@1.0.0`, bit-identical vectors) | Local, 384-dim, 22M params |
 | Embed service | FastAPI + sentence-transformers (`python/embeddings_service.py`) | — | Simple, testable (pytest), OpenAI-compatible `POST /embeddings` |
 | Embed service (production option) | Infinity (`infinity-emb`) | — | **PLANNED — not implemented as of v1.2.0.** Dynamic batching; same request shape, so it can replace the FastAPI service without Node changes |
 | Sentiment v1 | `sentiment` npm (AFINN) | 5.0.2 | Synchronous, no API calls |
 | Sentiment v2 | RoBERTa (Python, Phase 2) | — | **PLANNED — not implemented as of v1.2.0.** 99% accuracy target; v1 establishes the audit pattern first |
-| Infrastructure | Docker Compose 2.39+, project name `pulse-of-ai` | — | postgres, postgres_test, redis (Valkey), migrate, web, worker, embeddings, watchdog (profile `full`), populate (profile `demo`) |
+| Infrastructure | Docker Compose 2.39+, project name `pulse-of-ai` | — | postgres, postgres_test, redis (Valkey) by default; migrate, web, worker, embeddings and watchdog under profile `full`; populate under profile `demo` |
 | Node testing | Jest + supertest; Playwright for e2e | — | Unit + integration, 80%+ coverage required |
 | Python testing | pytest | — | Embedding service tests |
 
@@ -322,15 +322,15 @@ The diagram set in `docs/diagrams/` (entry point `docs/diagrams/architecture.*`)
 
 ## 6. Database Design
 
-### Schema Overview (34 tables across 46 migrations)
+### Schema Overview (34 tables across 49 migrations)
 
-`scripts/migrate.js` applies the 46 files of `src/db/migrations/` (001–060; the numbering has gaps) in file-name order and records each in `schema_migrations` (its own bookkeeping table, not counted below). No migration drops a table or a column (056 replaces two CHECK constraints on `source_gate_events`). The ERDs in `docs/diagrams/data/` draw every column.
+`scripts/migrate.js` applies the 49 files of `src/db/migrations/` (001–065; the numbering has gaps) in file-name order and records each in `schema_migrations` (its own bookkeeping table, not counted below). No migration drops a table or a column (056 replaces the event CHECK constraint of `source_gate_events` and adds a named-approval CHECK, NOT VALID). The ERDs in `docs/diagrams/data/` draw every column.
 
 | # | Table | Created by | Purpose |
 |---|---|---|---|
 | 1 | `data_sources` | 001 (+013, +020) | One row per registry source (52) plus demo feeds and retired pre-registry rows |
 | 2 | `raw_posts` | 001 (+006, +017, +022, +025, +031, +042) | Collected posts: redacted text (blanked at the end of its window), allowlisted payload, content hash, provenance fingerprint, ingest and admission versions |
-| 3 | `processing_jobs` | 001 (+019, +021, +040) | One row per job that processed posts (refresh, cycle, standup, manual, demo); never removed (G4) |
+| 3 | `processing_jobs` | 001 (+019, +021, +034, +040) | One row per job that processed posts (refresh, cycle, standup, manual, demo); never removed (G4) |
 | 4 | `methodology_versions` | 001 | Every algorithm version, registered before it runs |
 | 5 | `decision_audit_log` | 002 | Immutable per-decision audit record |
 | 6 | `sentiment_results` | 002 | Derived sentiment per post |
@@ -345,8 +345,8 @@ The diagram set in `docs/diagrams/` (entry point `docs/diagrams/architecture.*`)
 | 15 | `compaction_log` | 005 | One row per compacted month (§19) |
 | 16 | `pseudonymous_users` | 006 | Correlation profiles (§20; never written: not implemented) |
 | 17 | `user_platform_sightings` | 006 | Correlation sightings (§20; never written: not implemented) |
-| 18 | `source_collection_state` | 013 (+016, +018, +023, +033, +037) | Per-source cursor, HTTP cache, last run, refusal state, freshness |
-| 19 | `source_runs` | 013 (+016) | One row per source run that did something; raw rows kept 30 days (034) |
+| 18 | `source_collection_state` | 013 (+016, +018, +023, +033, +037, +062) | Per-source cursor, HTTP cache, last run, refusal state and probation, freshness |
+| 19 | `source_runs` | 013 (+016, +034, +062) | One row per source run that did something; raw rows kept 30 days (034) |
 | 20 | `reddit_subreddit_rankings` | 025 | Daily top-7 subreddit selection snapshots (§17) |
 | 21 | `reddit_api_budget` | 025 | The single shared Reddit request budget |
 | 22 | `reddit_maintenance` | 025 | Last run of the Reddit discovery and re-check jobs |
@@ -360,10 +360,10 @@ The diagram set in `docs/diagrams/` (entry point `docs/diagrams/architecture.*`)
 | 30 | `watchdog_state` | 050 | The watchdog's last poll and e-mail status (one row) |
 | 31 | `watchdog_notifications` | 050 | Every watchdog e-mail decision (append-only) |
 | 32 | `correlation_gate_events` | 056 | Every change of the correlation DPIA gate (append-only) |
-| 33 | `bias_window_runs` | 060 | One row per rolling 24 h bias run (bias@1.5.0) |
+| 33 | `bias_window_runs` | 060 | One row per rolling 24 h bias run (introduced by bias@1.5.0; runs the current bias version) |
 | 34 | `bias_window_assessments` | 060 | The rolling window's assessments (append-only) |
 
-**Migration index.** DDL: 001 core, 002 audit, 003 bias, 004 vectors, 005 retention, 006 correlation, 010 bias lineage column, 012 `post_embeddings.methodology_version` (+ `embedding@1.0.0`), 013 source collection, 016 classified collector errors, 017 provenance fingerprint (+ `ingest@1.3.0`, `audit_narration@1.3.0`), 018 refused state, 019 one refresh in flight (partial unique index), 020 database kill switch, 021 cycle in-flight runs, 022 `raw_posts.ingest_mv_id`, 023 unchanged-run counter, 025 Reddit. Data only: 007 canonical category taxonomy, 008 bias vocabulary conformance, 009 `bias@1.1.0` / `ingest@1.0.0` / `audit_narration@1.1.0`, 011 `audit_narration@1.2.0`, 014 `relevance@1.1.0` / `discourse@1.1.0-DQI` / `ingest@1.1.0` (and the released `sentiment@1.0.0`, `relevance@1.0.0`, `discourse@1.0.0-DQI` rows, ON CONFLICT DO NOTHING, so each 1.0.0 row predates its successor on a fresh database), 015 `ingest@1.2.0`, 024 `ingest@1.4.0`, 026 `ingest@1.5.0`. PR #22 (027–060; DDL and data together unless noted): 027 `bias@1.2.0` (data), 028 `alert_resolutions` + `bias@1.3.0`, 029 `relevance@1.2.0` (data), 030 `methodology_errata` (+ the `relevance@1.0.0` erratum), 031 live-text index + `ingest@1.6.0`, 032 `alert_resolutions.methodology_version_id` + `bias@1.4.0`, 033 source freshness, 034 run retention, 035 source governance, 036 alert supersession and append-only triggers, 037 freshness anchor, 038 one open alert per source and type, 039 `maintenance_state`, 040 job progress, 041 terms text, 042 `raw_posts.admission_mv_id` + `admission_filter@1.0.0`, 050 watchdog, 055 `ingest@1.7.0` (data), 056 named gate approval + `correlation_gate_events`, 060 rolling bias window + `bias@1.5.0`. Released migrations are never edited; a new methodology version ships as a new migration, field-for-field equal to `src/config/methodology-registry.js` (`tests/unit/pure/methodologyRegistry.test.js`).
+**Migration index.** DDL: 001 core, 002 audit, 003 bias, 004 vectors, 005 retention, 006 correlation, 010 bias lineage column, 012 `post_embeddings.methodology_version` (+ `embedding@1.0.0`), 013 source collection, 016 classified collector errors, 017 provenance fingerprint (+ `ingest@1.3.0`, `audit_narration@1.3.0`), 018 refused state, 019 one refresh in flight (partial unique index), 020 database kill switch, 021 cycle in-flight runs, 022 `raw_posts.ingest_mv_id`, 023 unchanged-run counter, 025 Reddit. Data only: 007 canonical category taxonomy, 008 bias vocabulary conformance, 009 `bias@1.1.0` / `ingest@1.0.0` / `audit_narration@1.1.0`, 011 `audit_narration@1.2.0`, 014 `relevance@1.1.0` / `discourse@1.1.0-DQI` / `ingest@1.1.0` (and the released `sentiment@1.0.0`, `relevance@1.0.0`, `discourse@1.0.0-DQI` rows, ON CONFLICT DO NOTHING, so each 1.0.0 row predates its successor on a fresh database), 015 `ingest@1.2.0`, 024 `ingest@1.4.0`, 026 `ingest@1.5.0`. PR #22 (027–060; DDL and data together unless noted): 027 `bias@1.2.0` (data), 028 `alert_resolutions` + `bias@1.3.0`, 029 `relevance@1.2.0` (data), 030 `methodology_errata` (+ the `relevance@1.0.0` erratum), 031 live-text index + `ingest@1.6.0`, 032 `bias@1.4.0` (+ an idempotent re-add of `alert_resolutions.methodology_version_id`, which 028 creates), 033 source freshness, 034 run retention, 035 source governance, 036 alert supersession and append-only triggers, 037 freshness anchor, 038 one open alert per source and type, 039 `maintenance_state`, 040 job progress, 041 terms text, 042 `raw_posts.admission_mv_id` + `admission_filter@1.0.0`, 050 watchdog, 055 `ingest@1.7.0` (data), 056 named gate approval + `correlation_gate_events`, 060 rolling bias window + `bias@1.5.0`. After PR #22: 061 `bias@1.6.0` + the bias 1.4.0 / 1.5.0 errata (data, PR #24), 062 refusal probation columns (PR #33), 065 `embedding@1.1.0` (data, PR #34). Released migrations are never edited; a new methodology version ships as a new migration, field-for-field equal to `src/config/methodology-registry.js` (`tests/unit/pure/methodologyRegistry.test.js`).
 
 ```
 data_sources ─┬─ raw_posts ─┬─ decision_audit_log ── methodology_versions
@@ -373,15 +373,15 @@ data_sources ─┬─ raw_posts ─┬─ decision_audit_log ── methodology
               │             ├─ post_embeddings (VECTOR(384))
               │             └─ pseudonymous_users (pseudo_user_id, nullable)
               ├─ source_collection_state (1:1) · source_runs ── processing_jobs
-              ├─ monthly_source_rollups · user_platform_sightings
+              ├─ monthly_source_rollups · user_platform_sightings ── pseudonymous_users
 processing_jobs ─┬─ decision_audit_log.job_id
                  └─ bias_assessments ── methodology_versions (lineage, 010)
 bias_window_runs ── bias_window_assessments ── methodology_versions
-alert_events ── alert_resolutions ── alert_resolution_approvals
-data_sources ── source_gate_events · source_run_daily
-methodology_versions ── methodology_errata; raw_posts.admission_mv_id
+alert_events ── alert_resolutions ── alert_resolution_approvals; alert_events ── watchdog_notifications
+data_sources ── source_gate_events · source_run_daily · source_terms_snapshots
+methodology_versions ── methodology_errata; raw_posts.admission_mv_id · raw_posts.ingest_mv_id · alert_resolutions.methodology_version_id
 data_retention_log · compaction_log · monthly_topic_rollups
-source_terms_snapshots · maintenance_state · watchdog_state · watchdog_notifications
+maintenance_state · watchdog_state
 correlation_gate_events · reddit_subreddit_rankings · reddit_api_budget · reddit_maintenance
 ```
 
@@ -404,9 +404,9 @@ Tables 23–34 above, and the columns and indexes later migrations added to earl
 | `raw_posts.admission_mv_id` | 042 | The admission-filter version a post was stored under |
 | `watchdog_state`, `watchdog_notifications`; unique partial index `uq_alerts_open_watchdog` | 050 | The watchdog (§14): its last poll and e-mail status (one row), every e-mail decision (append-only), at most one open alert per watchdog condition |
 | `source_gate_events.approved_by`, `routes`, event `refusal_reset`; `correlation_gate_events` | 056 | Decision G5: the named approval (`GATE_APPROVED_BY`, "Name YYYY-MM-DD") behind each gate opening and operator change (a CHECK requires it as the actor of `enabled` / `disabled` / `refusal_reset`); every change of the correlation DPIA gate (principal #19) |
-| `bias_window_runs`, `bias_window_assessments` | 060 | The rolling 24 h bias checks (bias@1.5.0, G2): one run row per window, its assessments append-only |
+| `bias_window_runs`, `bias_window_assessments` | 060 | The rolling 24 h bias checks (introduced by bias@1.5.0, G2; they run the current bias version): one run row per window, its assessments append-only |
 
-`alert_resolutions`, `alert_resolution_approvals`, `source_gate_events`, `source_terms_snapshots` and `methodology_errata` are append-only: a trigger rejects UPDATE and DELETE (migration 036); so are `watchdog_notifications` (050), `correlation_gate_events` (056) and `bias_window_assessments` (060). Migrations are numbered uniquely and applied in file-name order; gaps in the numbering are allowed (043–049, 051–054 and 057–059 are unused).
+`alert_resolutions`, `alert_resolution_approvals`, `source_gate_events`, `source_terms_snapshots` and `methodology_errata` are append-only: a trigger rejects UPDATE and DELETE (migration 036); so are `watchdog_notifications` (050), `correlation_gate_events` (056) and `bias_window_assessments` (060). Migrations are numbered uniquely and applied in file-name order; gaps in the numbering are allowed (043–049, 051–054, 057–059 and 063–064 are unused).
 
 ### Migrations 001–004 — core, audit, bias and vector tables (final shape)
 
@@ -419,7 +419,8 @@ CREATE TABLE data_sources (                                  -- 001
     id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     name            TEXT NOT NULL UNIQUE,     -- registry slug, e.g. 'bbc_news', 'reddit'
     display_name    TEXT NOT NULL,            -- workbook name, e.g. 'BBC News'
-    source_type     TEXT NOT NULL,            -- 'rss' | 'api' | 'bulk' (the collect.<type> queue) | 'demo'
+    source_type     TEXT NOT NULL,            -- 'rss' | 'api' | 'bulk' (the collect.<type> queue) | 'demo';
+                                              -- retired pre-registry rows keep 001's 'reddit' / 'scrape'
     category        TEXT NOT NULL,            -- 8-slug canon (007): social | news | academic | policy |
                                               -- nonprofit | developer | forums | blog
     config          JSONB,                    -- non-secret route settings only
@@ -435,8 +436,8 @@ CREATE TABLE data_sources (                                  -- 001
 CREATE TABLE raw_posts (                                     -- 001
     id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     source_id       UUID NOT NULL REFERENCES data_sources(id),
-    external_id     TEXT NOT NULL,            -- identity-free upstream id, or '<route>:fp:<hmac>'
-                                              -- when the upstream id is identity-bearing (§8)
+    external_id     TEXT NOT NULL,            -- '<route>:<upstream id>' for a safe id, else '<route>:fp:<hmac>'
+                                              -- ('<route>:<sha256>' when no provenance key is set; §8)
     content         TEXT NOT NULL,            -- redacted text; replaced by a removal notice at the end of its window (§19)
     raw_payload     JSONB,                    -- allowlisted content fields only
     content_hash    TEXT NOT NULL,            -- SHA-256(normalized content): join key, not the dedup key
@@ -457,7 +458,7 @@ CREATE INDEX idx_raw_posts_text_live ON raw_posts (source_id, collected_at) WHER
 CREATE TABLE processing_jobs (                               -- 001
     id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     triggered_by    TEXT NOT NULL,            -- written: 'cron' (collection cycle), 'api' (refresh),
-                                              -- 'standup', 'manual', 'demo', 'seed-demo';
+                                              -- 'standup', 'manual', 'demo';
                                               -- 'startup' (001 comment) is never written
     status          TEXT NOT NULL DEFAULT 'running',
                                               -- 'running' | 'closing' | 'awaiting_retries' |
@@ -489,7 +490,7 @@ CREATE TABLE methodology_versions (                          -- 001
     UNIQUE(component, version)
 );
 
-CREATE TABLE decision_audit_log (                            -- 002; INSERT only
+CREATE TABLE decision_audit_log (                            -- 002; INSERT only (the demo purge deletes demo rows, §19)
     id                      UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     raw_post_id             UUID NOT NULL REFERENCES raw_posts(id),
     job_id                  UUID NOT NULL REFERENCES processing_jobs(id),
@@ -539,7 +540,7 @@ CREATE TABLE discourse_results (                             -- 002
 CREATE TABLE data_retention_log (                            -- 002
     id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     raw_post_id     UUID,                     -- no FK (survives deletion)
-    action          TEXT NOT NULL,            -- written: 'collected' (every stored post), 'blanked_platform_terms',
+    action          TEXT NOT NULL,            -- written: 'collected' (every post stored through src/pipeline/ingest.js; the populate demo batch writes none), 'blanked_platform_terms',
                                               -- 'text_removed_detail_window', 'compacted', 'purged_demo',
                                               -- 'rolled_up_source_runs'; 'anonymized', 'deleted',
                                               -- 'erasure_requested' (002 comment) are never written — see §8
@@ -556,8 +557,8 @@ CREATE TABLE bias_assessments (                              -- 003
                                               -- 'negative_dominance' (008 folds the legacy synonym
                                               -- 'demographic_parity' onto 'platform_sentiment_parity')
     group_field     TEXT NOT NULL,            -- 'location' | 'platform' | 'global'
-    group_value     TEXT NOT NULL,            -- the dominant city / category pair / 'all'; 'insufficient sample'
-                                              -- below a minimum (bias@1.3.0+); 'none' under older versions
+    group_value     TEXT NOT NULL,            -- the dominant city / 'category vs category' pair ('unknown' when no pair differs) / 'all';
+                                              -- 'insufficient sample' below a minimum (bias@1.3.0+); 'none' or the single category under older versions
     metric_name     TEXT NOT NULL,            -- 'share_of_total' | 'max_comparative_diff' | 'negative_share'
                                               -- (pipeline values; the e2e fixture scripts/test/seed-e2e.js also writes
                                               -- assessment_type 'source_concentration', group_field 'source_category',
@@ -586,7 +587,7 @@ CREATE TABLE alert_events (                                  -- 003
     acknowledged_at TIMESTAMPTZ,
     acknowledged_by TEXT,
     resolved_at     TIMESTAMPTZ,              -- set, with an alert_resolutions row (028), when the condition clears
-                                              -- or a methodology version supersedes it (036)
+                                              -- or a methodology version supersedes it (036); 038 also closed duplicate open alerts once
     created_at      TIMESTAMPTZ DEFAULT NOW()
 );
 -- 038: at most one open alert per (type, source); 050: one open alert per watchdog condition
@@ -609,9 +610,9 @@ CREATE INDEX idx_embeddings_hnsw ON post_embeddings
     USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 400);
 ```
 
-Indexes not shown above are listed in the migrations and drawn in the ERDs.
+Indexes not shown above are listed in the migrations (`src/db/migrations/`); the ERDs draw columns and keys, not indexes.
 
-### Migrations 013–040 — source collection tables (final shape)
+### Migrations 013–062 — source collection tables (final shape)
 
 ```sql
 CREATE TABLE source_collection_state (                       -- 013
@@ -626,7 +627,7 @@ CREATE TABLE source_collection_state (                       -- 013
     last_error_at        TIMESTAMPTZ,
     consecutive_failures INTEGER NOT NULL DEFAULT 0,
     updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    last_error_kind      TEXT,                -- 016: the only error information the API serves
+    last_error_kind      TEXT,                -- 016: served by /api/sources with last_http_status and last_error_at (classification only, never error text)
     last_http_status     INTEGER,             -- 016
     access_denied_at     TIMESTAMPTZ,         -- 018: refused state (§17)
     access_denied_status INTEGER,             -- 018
@@ -636,13 +637,16 @@ CREATE TABLE source_collection_state (                       -- 013
     unchanged_runs       BIGINT NOT NULL DEFAULT 0,   -- 023: runs that changed nothing are counted, not inserted
     last_unchanged_at    TIMESTAMPTZ,         -- 023
     last_new_post_at     TIMESTAMPTZ,         -- 033: freshness (source_stale)
-    freshness_anchor_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()  -- 037: fixed anchor when no new post yet
+    freshness_anchor_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),  -- 037: fixed anchor when no new post yet
+    probation_until      TIMESTAMPTZ,         -- 062: 24 h after a successful probe; refusal_count is kept until it passes
+    access_denied_headers JSONB,              -- 062: allow-listed, scrubbed headers of the latest refusal
+    last_refused_at      TIMESTAMPTZ          -- 062: survives probation; cleared when the count decays or is reset
 );
 
 CREATE TABLE source_runs (                                   -- 013
     id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     source_id     UUID NOT NULL REFERENCES data_sources(id),
-    job_id        UUID REFERENCES processing_jobs(id),  -- NULL for a scheduled, manual or standup run that stored nothing; a refresh run records its pre-created job
+    job_id        UUID REFERENCES processing_jobs(id),  -- NULL until the invocation stores its first new post (scheduled, manual and standup runs create or join their job then); a refresh run records its pre-created job
     gate_status   TEXT NOT NULL,              -- written: 'collecting' (only collecting sources are fetched); awaiting_* | blocked | disabled (013 comment) are never written
     outcome       TEXT NOT NULL,              -- written: 'ok' | 'error'; 'skipped' (013 comment) is never written
     items_fetched INTEGER NOT NULL DEFAULT 0,
@@ -652,7 +656,8 @@ CREATE TABLE source_runs (                                   -- 013
     started_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     finished_at   TIMESTAMPTZ,
     error_kind    TEXT,                       -- 016
-    http_status   INTEGER                     -- 016
+    http_status   INTEGER,                    -- 016
+    response_headers JSONB                    -- 062: allow-listed refusal headers; NULL on every other run
 );
 ```
 
