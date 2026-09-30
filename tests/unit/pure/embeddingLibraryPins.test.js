@@ -12,7 +12,8 @@
 //   - python/requirements.txt           (dev/test toolchain, CI Python 3.11)
 //   - python/requirements-service.in    (top-level pins of the image)
 //   - python/requirements-service.txt   (the hash lock the image installs)
-// must all pin exactly the registered versions.
+// must all pin exactly the registered versions, and CI's Python 3.11 job
+// (.github/workflows/ci.yml TORCH_VERSION) installs the registered torch.
 
 'use strict';
 
@@ -83,6 +84,12 @@ describe('embedding methodology library ↔ requirement pins', () => {
             expect(PINS.serviceIn.get(norm(dep))).toBe(version);
             expect(PINS.serviceLock.get(norm(dep))).toBe(version);
         });
+
+    test('CI\'s Python 3.11 job installs the registered torch build (ci.yml TORCH_VERSION)', () => {
+        const m = read('.github/workflows/ci.yml').match(/^\s*TORCH_VERSION:\s*(\S+)\s*$/m);
+        expect(m).not.toBeNull();
+        expect(m[1]).toBe(current.config.library_dependencies.torch);
+    });
 
     test('the registered dependencies cover every library the vectors depend on', () => {
         expect(Object.keys(current.config.library_dependencies).sort())
