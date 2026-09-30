@@ -117,7 +117,7 @@ describe('the refused state (F10-5)', () => {
         expect(row.probation_until).not.toBeNull();
     });
 
-    it('an env reset newer than the refusal clears it and the source is asked again; an older one does not', async () => {
+    it('an env reset at or after the refusal clears it and the source is asked again; an older one does not', async () => {
         await collect([DENIED]);
         await nextPoll('hacker_news');
         const old = { ...TEST_ENV, SOURCE_HACKER_NEWS_RESET: '2000-01-01' };
@@ -500,7 +500,7 @@ describe('probationOver pins PRIOR_COUNT_SQL (grumpy #4)', () => {
 // Grumpy #3 (option b): the env reset clears a PROBATION too, with the same
 // named approval and 'refusal_reset' gate event as a reset of the refused state.
 describe('env reset during probation (grumpy #3)', () => {
-    it('an approved SOURCE_<SLUG>_RESET newer than the last refusal clears the count; unapproved or older does not', async () => {
+    it('an approved SOURCE_<SLUG>_RESET at or after the last refusal clears the count; unapproved or older does not', async () => {
         await collect([DENIED]);
         await probeThenRefuseQuick();                    // refusal 2
         await nextPoll('hacker_news');

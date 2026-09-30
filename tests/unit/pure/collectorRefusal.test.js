@@ -22,7 +22,7 @@ describe('refusal rules', () => {
         expect(R.refusalOf(null)).toBeNull();
     });
 
-    test('gate: none, cooldown, probe, env reset (only when newer than the refusal)', () => {
+    test('gate: none, cooldown, probe, env reset (only when at or after the refusal)', () => {
         const now = Date.parse('2026-09-29T12:00:00Z');
         const row = { access_denied_at: '2026-09-29T11:30:00Z', refused_until: '2026-09-29T12:30:00Z', access_denied_status: 403, refusal_count: 1 };
         expect(R.refusalGate(null, 'x', {}, now)).toEqual({ state: 'none' });
@@ -77,7 +77,7 @@ describe('refusal rules', () => {
             expect(R.probationOver({ access_denied_at: null, refusal_count: 2, probation_until: null }, now)).toBe(true);
         });
 
-        test('gate: an approved env reset newer than the LAST refusal clears a probation (grumpy #3, option b)', () => {
+        test('gate: an approved env reset at or after the LAST refusal clears a probation (grumpy #3, option b)', () => {
             const APPROVED = { GATE_APPROVED_BY: 'Ada Lovelace 2026-09-29' };
             const row = { access_denied_at: null, refusal_count: 2, probation_until: at(20), last_refused_at: at(-5) };
             expect(R.refusalGate(row, 'pew', {}, now)).toEqual({ state: 'none' });
