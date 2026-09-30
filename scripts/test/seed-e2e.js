@@ -163,7 +163,7 @@ async function main() {
 main()
     .then(() => closePool())
     .catch(async (err) => {
-        console.error('seed-e2e: FAILED —', err.message);
+        console.error(require('../../src/collectors/redact').scrub(`seed-e2e: FAILED — ${err.message}`));
         await closePool();
         process.exit(1);
     });

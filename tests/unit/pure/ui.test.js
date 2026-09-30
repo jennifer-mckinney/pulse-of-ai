@@ -169,6 +169,15 @@ describe('bar geometry', () => {
         expect(P.tooltipBarWidth(0.2, 0.4)).toBeCloseTo(45);
         expect(P.tooltipBarWidth(0.2, 0)).toBe(0);
     });
+    test('publisherTipText (D3): names the publisher-location layer, null without one', () => {
+        expect(P.publisherTipText({ total: 5, publisher_posts: 0 })).toBeNull();
+        expect(P.publisherTipText({ total: 5 })).toBeNull();
+        expect(P.publisherTipText({ total: 5, publisher_posts: 2 })).toBe(
+            'publisher location: 2 of 5 posts placed at the publisher\'s home city, '
+            + 'not where the discussion happened (excluded from location bias)');
+        expect(P.publisherTipText({ total: 3, publisher_posts: 3 })).toMatch(/^publisher location: all 3 posts placed/);
+        expect(P.publisherTipText({ total: 1, publisher_posts: 1 })).toMatch(/^publisher location: the only post placed/);
+    });
 });
 
 // ── Audit mapping ───────────────────────────────────────────────────────────
@@ -514,6 +523,49 @@ describe('healthBanner / sourcesStat / methodologyModel', () => {
         const b = P.healthBanner(null);
         expect(b.state).toBe('yellow');
         expect(b.title).toBe('Model health unavailable');
+    });
+    // PR #22 principal #12: the watchdog's alert leads the banner.
+    test('a watchdog (system) alert → emphasized red banner naming it, with its summary', () => {
+        const b = P.healthBanner({ active_alerts: [
+            { severity: 'warning' },
+            { severity: 'critical', system: true, title: 'Worker down (heartbeat stale)',
+                summary: 'no worker heartbeat in Valkey', created_at: '2026-09-29T10:05:00Z' },
+        ] });
+        expect(b.state).toBe('red');
+        expect(b.system).toBe(true);
+        expect(b.title).toBe('Red — SYSTEM ALERT: Worker down (heartbeat stale)');
+        expect(b.sub).toContain('Worker down (heartbeat stale): no worker heartbeat in Valkey (since 10:05 UTC)');
+        expect(b.sub).toContain('plus 1 other active alert.');
+    });
+    test('watchdogModel: reporting, open conditions, e-mail status', () => {
+        const m = P.watchdogModel({ watchdog: {
+            reporting: true, last_poll_at: '2026-09-29T10:06:00Z', poll_interval_s: 120,
+            open: [{ condition: 'worker_down', title: 'Worker down (heartbeat stale)' }],
+            email: { configured: false, status: 'email alerting not configured', last_sent_at: null, last_error: null },
+            config_errors: ['WATCHDOG_POLL_INTERVAL_S="x" is not a whole number from 15 to 3600; using 120'],
+        } });
+        expect(m.rows).toEqual([
+            { k: 'watchdog', v: 'reporting · last poll 10:06 UTC · every 120 s', warn: false },
+            { k: 'open conditions', v: 'Worker down (heartbeat stale)', warn: true },
+            { k: 'e-mail alerts', v: 'email alerting not configured', warn: true },
+            { k: 'config', v: 'WATCHDOG_POLL_INTERVAL_S="x" is not a whole number from 15 to 3600; using 120', warn: true },
+        ]);
+    });
+    test('watchdogModel: a silent or never-run watchdog is flagged; no block → null', () => {
+        expect(P.watchdogModel({ watchdog: { reporting: false, last_poll_at: null, open: [], email: {} } }).rows[0])
+            .toEqual({ k: 'watchdog', v: 'has not reported — is the watchdog service running?', warn: true });
+        const stale = P.watchdogModel({ watchdog: { reporting: false, last_poll_at: '2026-09-29T09:00:00Z', open: [],
+            email: { configured: true, status: 'configured: 1 recipient(s) via smtp.example.org:587 (STARTTLS required)',
+                last_sent_at: '2026-09-29T08:00:00Z', last_error: null } } });
+        expect(stale.rows[0].v).toMatch(/^NOT REPORTING since 09:00 UTC/);
+        expect(stale.rows[1]).toEqual({ k: 'open conditions', v: 'none', warn: false });
+        expect(stale.rows[2].warn).toBe(false);
+        expect(stale.rows[3]).toEqual({ k: 'last e-mail', v: '08:00 UTC', warn: false });
+        const failing = P.watchdogModel({ watchdog: { reporting: true, last_poll_at: '2026-09-29T09:00:00Z',
+            email: { configured: true, status: 'configured', last_error: 'connect ECONNREFUSED' } } });
+        expect(failing.rows).toContainEqual({ k: 'last e-mail error', v: 'connect ECONNREFUSED', warn: true });
+        expect(P.watchdogModel({ status: 'healthy' })).toBeNull();
+        expect(P.watchdogModel(null)).toBeNull();
     });
     test('sourcesStat: online counts only registry sources that collected in the last hour', () => {
         expect(P.sourcesStat([

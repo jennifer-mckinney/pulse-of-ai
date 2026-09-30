@@ -116,6 +116,16 @@ describe('buildLayers — per-job fairness layers for the audit receipt', () => 
         },
     ];
 
+    it('P10-5: an "insufficient sample" location row is n-a (never a pass), with the stated reason', () => {
+        const layers = buildLayers([{
+            assessment_type: 'location_concentration', group_value: 'insufficient sample',
+            metric_value: 1, threshold: 0.35, is_violation: false, severity: null,
+        }], { ...BIAS_CONFIG, location_min_sample: 30 });
+        const loc = layers.find(l => l.assessment_type === 'location_concentration');
+        expect(loc).toMatchObject({ status: 'n-a', value: 1 });
+        expect(loc.note).toBe('insufficient sample: fewer than 30 content-located posts in this job, so no alert');
+    });
+
     it('maps computed assessments to pass/fail layers with value, τ, and citation', () => {
         const layers = buildLayers(ASSESSMENTS, BIAS_CONFIG);
         const loc = layers.find(l => l.assessment_type === 'location_concentration');

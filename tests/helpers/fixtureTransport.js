@@ -67,6 +67,8 @@ function fixtureTransport(routes) {
 const TEST_ENV = Object.freeze({
     COLLECTOR_CONTACT_URL: 'https://example.org/pulse-contact',
     PERMISSION_GATED_FEEDS_ACCEPTED_BY: 'Test Operator 2026-09-29',
+    // PR #22 decision G5: gated routes open only under a named approval.
+    GATE_APPROVED_BY: 'Test Operator 2026-09-29',
 });
 
 module.exports = { fixtureTransport, readFixture, sameUrl, RECORDED_AT, TEST_ENV, FIXTURE_ROOT: ROOT };

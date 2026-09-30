@@ -96,7 +96,7 @@ describe('src/queues/index.js', () => {
     });
 
     describe('queue topology', () => {
-        it('creates exactly the seven pipeline queues; collect queues use the DB source_type vocabulary', () => {
+        it('creates exactly the eight pipeline queues (maintenance: P10-2); collect queues use the DB source_type vocabulary', () => {
             const { Queue } = loadRegistry();
             const names = Queue.mock.calls.map(([name]) => name).sort();
             expect(names).toEqual([
@@ -107,6 +107,7 @@ describe('src/queues/index.js', () => {
                 'correlate',
                 'embed',
                 'ingest',
+                'maintenance',
             ]);
             const { SOURCE_TYPES } = require('../../src/config/source-registry');
             expect(names.filter(n => n.startsWith('collect.') && n !== 'collect.refresh').map(n => n.slice(8)).sort()).toEqual([...SOURCE_TYPES].sort());
@@ -127,7 +128,7 @@ describe('src/queues/index.js', () => {
 
         it('reuses the single shared connection object for every queue', () => {
             const { Queue, registry } = loadRegistry();
-            expect(Queue.mock.calls).toHaveLength(7);  // guard: loop below must not be vacuous
+            expect(Queue.mock.calls).toHaveLength(8);  // guard: loop below must not be vacuous
             for (const [, opts] of Queue.mock.calls) {
                 expect(opts.connection).toBe(registry.connection);  // identity, not equality
             }
