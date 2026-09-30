@@ -740,7 +740,7 @@ System status for the header chip and the health drawer (`src/routes/health.js`)
   "demo_feeds": 3,
   "redis":  { "reachable": true },
   "worker": { "alive": true, "last_heartbeat": "2026-09-29T10:04:55Z",
-              "queues": { "ingest": { "waiting": 0, "active": 1, "delayed": 0, "failed": 0 } } },
+              "queues": { "ingest": { "waiting": 0, "active": 1, "delayed": 0, "failed": 0 }, "…": "the same counts for collect.rss, collect.api, collect.bulk, collect.refresh, embed, correlate and maintenance" } },
   "sources": {
     "registry": 52, "seeded": 52, "collecting": 31, "online": 27,
     "by_status": { "collecting": 31, "awaiting_key": 4, "awaiting_approval": 8, "awaiting_licence": 5,
@@ -844,7 +844,7 @@ Requests a collection + processing run over the source registry (an operator act
 ```
 **Response 409:** `{ "error": "A refresh collection is already running", "job_id": "uuid" }` while a refresh job is running (migration 019's partial unique index holds this across processes; a row that made no progress (`processing_jobs.last_progress_at`, else `started_at`) for `REFRESH_STALE_MINUTES`, default 30, is marked failed as stale; the refresh run itself has a deadline of 80 % of that bound).
 
-**Response 403 (token):** when `REFRESH_TOKEN` is set, the request must carry it as `X-Refresh-Token`; when the site is bound beyond loopback (`PULSE_BIND_ADDR` or `HOST` not a loopback address, or the actual bound address a wildcard) or the request came through a reverse proxy (`Forwarded`, `X-Forwarded-*`, `X-Real-IP`), a token is required and refresh is refused without one. The compose-published address (`PULSE_CONTAINER_PUBLISHED_ADDR`) can only make this stricter; it excuses the wildcard listen only inside the compose web container (`PULSE_IN_CONTAINER=1` and `/.dockerenv`; PR #22 security M4).
+**Response 403 (token):** when `REFRESH_TOKEN` is set, the request must carry it as `X-Refresh-Token`; when the site is bound beyond loopback (`PULSE_BIND_ADDR` or `HOST` not a loopback address, or the actual bound address a wildcard) or the request came through a reverse proxy (`Forwarded`, `X-Forwarded-For`, `X-Forwarded-Host` or `X-Real-IP` present), a token is required and refresh is refused without one. The compose-published address (`PULSE_CONTAINER_PUBLISHED_ADDR`) can only make this stricter; it excuses the wildcard listen only inside the compose web container (`PULSE_IN_CONTAINER=1` and `/.dockerenv`; PR #22 security M4).
 
 **Response 429:** `{ "error": "Rate limit exceeded: 1 refresh per minute (global)", "retry_after_seconds": n }` with `Retry-After`.
 
@@ -906,7 +906,7 @@ The explainability endpoint (`src/routes/audit.js`): the receipt for one post. T
     "version": "1.5.0",
     "lineage": "recorded",
     "lineage_fallback": false,
-    "layers": ["…one entry per fairness layer: value, τ, citation, pass | fail | n/a (n/a with the reason for an insufficient sample)…"]
+    "layers": ["…one entry per fairness layer: value, τ, citation, status pass | fail | n-a (n-a, with the reason in its note, for an insufficient sample or a planned layer)…"]
   }
 }
 ```
@@ -985,7 +985,7 @@ The health drawer's "alert history · last 12 h" (`src/routes/bias.js`). Every q
 ---
 
 ### `GET /api/methodology`
-Every non-deprecated methodology version, ordered by `component` and then `effective_from` descending (`src/routes/methodology.js`). The rows are those of `src/config/methodology-registry.js`; the version each pipeline stage runs is `CURRENT_VERSIONS` there (sentiment 1.0.0, relevance 1.2.0, discourse 1.1.0-DQI, bias 1.5.0, ingest 1.7.0, audit_narration 1.3.0, embedding 1.0.0, admission_filter 1.0.0), never "latest by timestamp". Each row carries its `errata` (`methodology_errata`, migration 030: `[{ erratum, corrected_by, recorded_at }]`, empty for most rows).
+Every non-deprecated methodology version, ordered by `component` and then `effective_from` descending (`src/routes/methodology.js`). The rows are those of `src/config/methodology-registry.js`; the version each pipeline stage runs is `CURRENT_VERSIONS` there (sentiment 1.0.0, relevance 1.2.0, discourse 1.1.0-DQI, bias 1.6.0, ingest 1.7.0, audit_narration 1.3.0, embedding 1.1.0, admission_filter 1.0.0), never "latest by timestamp". Each row carries its `errata` (`methodology_errata`, migration 030: `[{ erratum, corrected_by, recorded_at }]`, empty for most rows).
 
 **Response 200** (two of the rows):
 ```json
@@ -1050,7 +1050,7 @@ The source registry of record with each source's runtime status (`src/routes/sou
     "missing_env": [], "open_routes": ["technology-rss"], "licence_refs_on_file": {},
     "kill_switch_env": "SOURCE_NPR_ENABLED",
     "online": true,
-    "access_denied_at": null, "refused_until": null, "refusal_count": 0, "reset_env": "SOURCE_NPR_RESET",
+    "access_denied_at": null, "refused_until": null, "refusal_count": 0, "probation_until": null, "reset_env": "SOURCE_NPR_RESET",
     "last_attempt_at": "…", "last_success_at": "…", "last_item_count": 20,
     "last_error_kind": null, "last_http_status": null, "last_error_at": null, "consecutive_failures": 0,
     "terms_url": "…", "terms_note": "…", "attribution": "NPR", "license": null, "blocked": null, "ruling": null,
@@ -1059,9 +1059,9 @@ The source registry of record with each source's runtime status (`src/routes/sou
 ]
 ```
 - `status` is one of the runtime statuses of §17 (`collecting`, `awaiting_key`, `awaiting_approval`, `awaiting_licence`, `blocked`, `disabled`, `blocked_by_source`).
-- `missing_env` holds env var **names** only, never values. Errors are served only as `last_error_kind` + `last_http_status`, never as text.
+- `missing_env` holds env var **names** only, never values. Errors are served only as a classification (`last_error_kind`, `last_http_status`, `last_error_at`, `consecutive_failures`, and the refused state `access_denied_at`, `refused_until`, `refusal_count`, `probation_until`), never as text.
 - The Reddit row adds `retention` (`{ max_age_hours: 48, recheck_hours: 6, notice }`) and `selection` (the subreddit selection rule, the current list with basis `provisional` | `ranking`, and the latest ranking snapshot).
-- Non-registry rows carry only the first block plus `registry: false`.
+- Non-registry rows carry only the first block plus `registry: false`; a retired row also carries `retired_note`.
 
 ---
 
@@ -1151,7 +1151,7 @@ Strip: any identity field that still arrives (PII_FIELDS: author, username,
 Redact in text: e-mails, @handles, Reddit u/ names, phones, profile links,
                 cc names, sign-offs, Wikipedia unsigned notes (ingest@1.7.0)
 Fingerprint: provenance HMAC; identity-bearing upstream ids stored only as
-             '<route>:fp:<hmac>'
+             '<route>:fp:<hmac>' ('<route>:<sha256>' without a key)
 Location: city level only (content-level city, else the publisher's home
           city for editorial sources; basis recorded)
         │
@@ -1163,10 +1163,10 @@ INSERT INTO raw_posts … ON CONFLICT (source_id, external_id) DO NOTHING
   (deduplication per source and upstream id; the post records
    ingest_mv_id and admission_mv_id, the versions it was stored under;
    the text is stored once, in content: raw_payload keeps metadata only)
-  + in the same statement, a data_retention_log row, action 'collected
+  + in the same statement, a data_retention_log row, action 'collected'
 ```
 
-**Collected log (ingest@1.6.0 and later):** every stored post writes a `data_retention_log` row (`action = 'collected'`, legal basis GDPR Article 6(1)(f); demo posts record the demo basis) in the same statement as the insert, with the source's text-retention window in `reason` (`src/pipeline/ingest.js`). The retention log also records `blanked_platform_terms`, `text_removed_detail_window`, `compacted`, `purged_demo` and `rolled_up_source_runs` (§19). The legal basis is also registered in each `ingest@` methodology row and restated on the receipt's ingestion step.
+**Collected log (ingest@1.6.0 and later):** every post stored through `src/pipeline/ingest.js` writes a `data_retention_log` row (`action = 'collected'`, legal basis GDPR Article 6(1)(f); a demo post stored there records the demo basis) in the same statement as the insert, with the source's text-retention window in `reason`. The demo batch of `scripts/populate.js` inserts its fictional posts directly and writes no `collected` row. The retention log also records `blanked_platform_terms`, `text_removed_detail_window`, `compacted`, `purged_demo` and `rolled_up_source_runs` (§19). The legal basis is also registered in each `ingest@` methodology row and restated on the receipt's ingestion step.
 
 **The claim (`ingest@1.7.0` `privacy_claim`, decision D2 of ADR 0001), exactly:** identity fields are never stored; e-mail addresses, handles (including Reddit u/ names), phone numbers, sign-offs and profile links in text are redacted; free text may still contain names mentioned in content. (ingest@1.5.0 and 1.6.0 register the same sentence; 1.3.0 and 1.4.0 register it without "(including Reddit u/ names)".)
 
@@ -1175,13 +1175,13 @@ INSERT INTO raw_posts … ON CONFLICT (source_id, external_id) DO NOTHING
 - IP addresses or location beyond city-level metadata
 - Profile information of any kind, including profile or user-namespace links as a post's link (`src/collectors/identity.js` isIdentityUrl)
 - Post metadata that enables user re-identification (karma score, account age, etc.)
-- An upstream id that could identify a person (a profile link, a URL with a query string, an id with `@`, `%`, `&`, `=` or `#`), or the Telegram chat id: only its keyed fingerprint is stored
+- An upstream id that could identify a person or that is not a plain id (anything outside letters, digits and `_ . : / ~ + -`, or longer than 200 characters: so a URL with a query string, an id with `@`, `%`, `&`, `=`, `#` or a space), a profile link, or the Telegram chat id: only its keyed fingerprint is stored (without `PROVENANCE_KEY` / `AUDIT_HASH_KEY`, an unkeyed SHA-256)
 
 **What is redacted in the text before storage** (`src/collectors/identity.js` redactText): e-mail addresses → `[email]`; @handles of one or more characters → `@[user]` (ingest@1.4.0); Reddit `u/<name>` and `/u/<name>` → `u/[user]` and a scheme-less `reddit.com/u/` or `/user/` link → `[profile link]` (ingest@1.5.0, migration 026); phone numbers (E.164 and NANP) → `[phone]`; profile and identity links → `[profile link]`; `cc <Name>` → `cc [name]`; a trailing sign-off (`— Jane Doe`) and Wikipedia's "Preceding unsigned comment added by …" note are removed. All patterns are bounded and linear.
 
 **What free text may still contain:** names of people mentioned in the content itself (for example "Sam Altman said…", or a name inside a GitHub issue body). The text is not otherwise de-identified.
 
-**Provenance without identity (D2):** each collected post stores `raw_posts.provenance_fingerprint` = HMAC-SHA256(`PROVENANCE_KEY` or `AUDIT_HASH_KEY`, `source_slug + ":" + raw upstream id + ":" + canonical source URL`), next to `source_id`, the content hash and the identity-free external id; the canonical permalink is kept when it is not an identity link. The audit receipt (`GET /api/audit/:post_id` → `provenance`) shows the source, the published time, the permalink or the fingerprint, and "verifiable: provide the original URL or id to reproduce the fingerprint". `npm run verify-provenance -- --post <id> --url <original> [--id <original id>]` recomputes the fingerprint and prints `RESULT: MATCH` (exit 0) or `NO MATCH` (exit 1); exit 3 means the post has no fingerprint or no key is set. Without `PROVENANCE_KEY` or `AUDIT_HASH_KEY`, an identity-bearing upstream id is stored as `<route>:<unkeyed sha256>` and no fingerprint is recorded.
+**Provenance without identity (D2):** each collected post stores `raw_posts.provenance_fingerprint` = HMAC-SHA256(`PROVENANCE_KEY` or `AUDIT_HASH_KEY`, `source_slug + ":" + raw upstream id + ":" + canonical source URL`), next to `source_id`, the content hash and the identity-free external id; the canonical permalink is kept when it is not an identity link. The audit receipt (`GET /api/audit/:post_id` → `provenance`) shows the source, the published time, the permalink or the fingerprint, and "verifiable: provide the original URL or id to reproduce the fingerprint". `npm run verify-provenance -- --post <id> --url <original> [--id <original id>]` recomputes the fingerprint and prints `RESULT: MATCH` (exit 0) or `NO MATCH` (exit 1); exit 2 is a usage error, an unknown post or a database failure; exit 3 means the post has no fingerprint or no key is set. Without `PROVENANCE_KEY` or `AUDIT_HASH_KEY`, an identity-bearing upstream id is stored as `<route>:<unkeyed sha256>` and no fingerprint is recorded.
 
 ### Input Sanitization (Route Layer)
 All route inputs are validated before reaching the DB layer:
@@ -1224,15 +1224,15 @@ Every response, static assets included, carries `Content-Security-Policy: defaul
 - **Dev server:** `npm run dev` listens on 127.0.0.1 unless `HOST` or `PULSE_BIND_ADDR` names another address (`listenHost`, `src/server.js`); bound beyond loopback, `POST /api/refresh` requires a token (§7). `python/start.sh` still runs the embeddings service on `0.0.0.0` on the host.
 
 ### Collector network guard (SSRF)
-Every collector request and every redirect hop goes through `src/collectors/netguard.js`: https only (no downgrade), no single-label host (the compose service names), no `*.localhost` / `*.local` / `*.internal`, and every resolved address must be public (loopback, link-local, RFC 1918, CGNAT, ULA, 0.0.0.0/8, multicast and their IPv4-mapped / NAT64 forms are refused). The socket connects to the address the guard resolved, so DNS cannot change between check and connect. A request that carries a credential header or a body is refused any cross-origin redirect.
+Every collector request and every redirect hop goes through `src/collectors/netguard.js`: https only (no downgrade), no single-label host (the compose service names), no `*.localhost` / `*.local` / `*.internal` / `*.localdomain` / `*.home.arpa`, and every resolved address must be public (loopback, link-local, RFC 1918, CGNAT, ULA, 0.0.0.0/8, 192.0.0.0/24, 198.18.0.0/15 benchmarking, multicast, 240.0.0.0/4 reserved and broadcast, and their IPv4-mapped / NAT64 forms are refused; a host that is not an IP after resolution is refused too). The socket connects to the address the guard resolved, so DNS cannot change between check and connect. A request that carries a credential header or a body is refused any cross-origin redirect.
 
 ---
 
 ## 9. Bias Monitoring System
 
-### What Runs (`bias@1.5.0`, `src/pipeline/bias.js`, `src/pipeline/bias-window.js`)
+### What Runs (`bias@1.6.0`, `src/pipeline/bias.js`, `src/pipeline/bias-window.js`)
 
-Three aggregate checks. None of them infers a trait of a person; they measure the shape of the collected discourse. Thresholds and minimum samples are read from the `bias` methodology row the job resolved (`CURRENT_VERSIONS.bias` = 1.5.0), and every run records that row's id in `bias_assessments.methodology_version_id` (lineage, migration 010). The version history (1.2.0 to 1.5.0) is at the end of this section.
+Three aggregate checks. None of them infers a trait of a person; they measure the shape of the collected discourse. Thresholds and minimum samples are read from the `bias` methodology row the job resolved (`CURRENT_VERSIONS.bias` = 1.6.0), and every run records that row's id: a job or cycle in `bias_assessments.methodology_version_id` (lineage, migration 010), a rolling-window run in `bias_window_runs` and `bias_window_assessments.methodology_version_id` (migration 060). The version history (1.2.0 to 1.6.0) is at the end of this section.
 
 | Check (`assessment_type` = alert type) | Field | Formula over the job's sentiment-scored posts | Violation | Severity | Citation (config) |
 |---|---|---|---|---|---|
@@ -1241,15 +1241,15 @@ Three aggregate checks. None of them infers a trait of a person; they measure th
 | `negative_dominance` | `global` | negative posts / all posts (`negative_share`); at least 30 posts (`negative_min_sample`) | > 0.60 (`negative_dominance_max`) | `warning` | Suresh & Guttag (2021) |
 
 - Every check writes one `bias_assessments` row on every run, violation or not, with its evidence. Below its minimum sample the row is recorded with `group_value` 'insufficient sample', the value stated, no violation and no alert: an "insufficient sample" is never a pass.
-- A violation also writes an `alert_events` row: `alert_type` = the check name, `severity` as above, `source_table = 'bias_assessments'`. There is no `bias_violation` alert type in the pipeline (only the e2e fixture writes one).
+- A violation also writes an `alert_events` row: `alert_type` = the check name, `severity` as above, `source_table = 'bias_assessments'` (`'bias_window_assessments'` with `details.windowRunId` for a rolling-window run). There is no `bias_violation` alert type in the pipeline (only the e2e fixture writes one).
 - "Demographic parity" here is the outcome gap across **source categories**, not across user demographics (`layer_notes` in the config). The critical level (0.80) is a code constant, not a config value.
 
 ### When It Runs
 - **Scheduled collection:** every source runs on its own schedule, so scheduled runs share one `processing_jobs` row per collection window (`triggered_by 'cron'`). When the window has passed plus a 60 s grace and no run is still in flight (`inflight_runs = 0`), or past the hard age cap, one worker claims the cycle (`status 'closing'`) and runs the three checks **once** over all of the cycle's posts, then completes it (`src/collectors/cycle.js`). A job left `awaiting_retries` is checked once its scoring retries are done.
 - **The standup's collection and `npm run collect`** run every source in one job, score inline and run the checks at the end of that job when it scored new posts (`src/collectors/runner.js`). **The demo population** runs them at the end of its batch job, always (`scripts/populate.js`).
-- **`POST /api/refresh`** runs every source in one job but scores through the `ingest` queue. When the collection ends with scoring jobs still outstanding, the job waits as `awaiting_retries` and the cycle closer runs the checks once they have scored (`src/collectors/cycle.js`). When every scoring job has already finished, the job completes with `posts_processed` 0 and no job-level checks; its posts are still covered by the rolling window below. (Recorded as an open question for the owner: the code does not run job-level checks in that case.)
+- **`POST /api/refresh`** runs every source in one job but scores through the `ingest` queue. When the collection ends with scoring jobs still outstanding, the job waits as `awaiting_retries` and the cycle closer runs the checks once they have scored (`src/collectors/cycle.js`). When every scoring job has already finished, the runner finalizes the job itself the same way: `posts_processed` is counted from `decision_audit_log` and the checks run once when it is above 0 (PR #24, `cycle.jobPostsProcessed`).
 - A scheduled cycle that scored no posts, and an inline collection job that scored no new post, run no checks.
-- **Rolling 24 h window (bias@1.5.0):** the same three checks over every post whose sentiment decision was recorded in the previous 24 hours, daily (the maintenance `daily` task, §19) and on demand (`npm run bias:window`), whatever the cycles did (`src/pipeline/bias-window.js`). Details at the end of this section.
+- **Rolling 24 h window (introduced by bias@1.5.0; runs the current bias version):** the same three checks over every post whose sentiment decision was recorded in the previous 24 hours, daily (the maintenance `daily` task, §19) and on demand (`npm run bias:window`), whatever the cycles did (`src/pipeline/bias-window.js`). Details at the end of this section.
 
 ### Source health alerts (`source_refused`, `source_stale`, `source_failing`)
 Not bias checks, but they share the alert path (`src/collectors/source-health.js`, run with every cycle close). A source that refuses access puts itself in the refused state (§17) and opens one **critical** `source_refused` alert per refusal episode (`src/collectors/state.js`). A collecting source with no new post for longer than its registry's `expectedNewWithinHours` (measured from `last_new_post_at`, else the fixed `freshness_anchor_at`, migrations 033 and 037) opens a `source_stale` **warning**; three or more consecutive failed runs open a `source_failing` **warning**. Each has `source_table = 'data_sources'` and `source_id` = the source, at most one open per type and source (migration 038), and is resolved with an `alert_resolutions` row as soon as its condition clears or the source stops collecting.
@@ -1279,7 +1279,7 @@ Health drawer → GET /api/bias/history (12 h window, lineage-resolved layer
 An alert is closed by writing an `alert_resolutions` row (who, why, evidence; append-only, migration 028) when its condition clears, or as `superseded` by a later methodology version with a named approver (migration 036, decision G1); it is never deleted. `GET /api/bias/latest` remains for API consumers; the page does not call it. The audit receipt shows the fairness layers of the post's own job (`bias` block, §7).
 
 ### Not yet implemented
-- **PLANNED — not implemented as of v1.2.0:** the v1.1 three-layer stack below. Every bias version from 1.1.0 to 1.5.0 lists equalized odds and counterfactual fairness as `planned_layers` ("Phase 3 — not yet enforced"), which the receipt shows as not applicable. (The minimum samples, audited alert resolution and decision D3, listed here as in flight in the v1.2.0 draft, landed with PR #22 as bias@1.2.0 to 1.4.0; see below.)
+- **PLANNED — not implemented as of v1.2.0:** the v1.1 three-layer stack below. Every bias version from 1.1.0 to 1.6.0 lists equalized odds and counterfactual fairness as `planned_layers` ("Phase 3 — not yet enforced"), which the receipt shows as not applicable. (The minimum samples, audited alert resolution and decision D3, listed here as in flight in the v1.2.0 draft, landed with PR #22 as bias@1.2.0 to 1.4.0; see below.)
 
 #### v1.1 three-layer stack (PLANNED — not implemented as of v1.2.0)
 
@@ -1320,8 +1320,8 @@ Threshold: |confidence_A - confidence_B| > 0.05 → flag for review
 
 | Metric | Field | Formula | v1.1 threshold | Severity | Source | Status on `master` |
 |---|---|---|---|---|---|---|
-| Location concentration | location | max(posts_per_loc / total) | > 0.60 | warning | Evidence-based thresholds doc | **Superseded:** implemented at > 0.35, critical above 0.80 (`bias@1.1.0` to `bias@1.5.0`) |
-| Negative dominance | global | negative / total | > 0.70 | warning | Evidence-based thresholds doc | **Superseded:** implemented at > 0.60 (`bias@1.1.0` to `bias@1.5.0`) |
+| Location concentration | location | max(posts_per_loc / total) | > 0.60 | warning | Evidence-based thresholds doc | **Superseded:** implemented at > 0.35, critical above 0.80 (`bias@1.1.0` to `bias@1.6.0`) |
+| Negative dominance | global | negative / total | > 0.70 | warning | Evidence-based thresholds doc | **Superseded:** implemented at > 0.60 (`bias@1.1.0` to `bias@1.6.0`) |
 | Platform parity | platform | \|avg_comp_A − avg_comp_B\| | > 0.30 | warning | Research literature | Implemented as specified (max pairwise, across source categories) |
 | Demographic parity diff | group | \|P(pos\|A) − P(pos\|B)\| | > 0.10 | warning, > 0.20 critical | AI Act fairness guidance | **PLANNED — not implemented as of v1.2.0** |
 | Equalized odds | group | \|TPR_A − TPR_B\| | > 0.08 | warning | Hardt et al. 2016 | **PLANNED — not implemented as of v1.2.0** |
@@ -1335,6 +1335,8 @@ Threshold: |confidence_A - confidence_B| > 0.05 → flag for review
 **A minimum sample for every check (bias@1.4.0, migration 032).** Platform sentiment parity compares only source categories with at least 10 posts in the job (fewer than two such categories: "insufficient sample"); negative dominance needs at least 30 posts; location concentration keeps bias@1.3.0's 30 content-located posts. Below a minimum the value is recorded with no violation and no alert. Open alerts this version would not raise were closed as `superseded` with Jennifer McKinney as the named approver (ADR 0001, decision G1), separate from genuinely `resolved` alerts. A job with no content-located posts, a single source category or no posts at all is below these minimums too, so it is recorded as "insufficient sample", never as a pass (PR #22 grumpy M5).
 
 **A rolling 24 h window (bias@1.5.0, migration 060; decision G2, Jennifer McKinney 2026-09-29).** A 2–3 minute cycle rarely reaches the minimums, so the same three checks, with the same thresholds and minimums, ALSO run over every post whose sentiment decision was recorded in the previous 24 hours: daily (the `bias_window` step of the maintenance `daily` task, §19) and on demand (`npm run bias:window`). Each run is a `bias_window_runs` row (window, trigger, version, status, posts assessed, violations); its assessments are append-only `bias_window_assessments` rows; a violation opens an alert naming the window run (`details.windowRunId`). The per-cycle checks are unchanged. The share of "insufficient sample" assessments per check (per cycle over 24 h and 7 days; for the rolling window, the latest run and 7 days) is served as `insufficient_sample` by `GET /api/bias/latest` and as `bias_sample` by `GET /api/health`, so a monitor that never reaches its minimum is visible.
+
+**The parity value below its minimum (bias@1.6.0, migration 061; PR #24).** An "insufficient sample" platform-parity row now records the largest pairwise gap in mean comparative sentiment across all the job's categories (0 with fewer than two), still with no violation and no alert (`parity_insufficient_value`). bias@1.4.0 and 1.5.0 recorded 0 there; each carries an erratum (`methodology_errata`). Everything else is bias@1.5.0.
 
 ---
 
@@ -1382,7 +1384,7 @@ The v1.1 "Internal audit" question ("Did methodology change between runs?") is a
 The collection admission filter (`src/collectors/ai-filter.js`) decides which items of a site-wide or technology feed are stored at all, so it is the versioned component `admission_filter` (1.0.0, migration 042). Its registered config is exactly the code's patterns, search terms and scope rule (a unit test fails on any difference); a change is a new version. Every collected post records the version it was admitted under (`raw_posts.admission_mv_id`), shown on the audit receipt as `provenance.admission`.
 
 ### Methodology Registration and Seeding
-`src/config/methodology-registry.js` is the single source of truth for every `methodology_versions` row. `scripts/seed.js` inserts every row (`ON CONFLICT (component, version) DO NOTHING`); migrations 009, 011, 012, 014, 015, 017, 024, 026, 027, 028, 029, 031, 032, 042, 055 and 060 insert the same rows so a database that is only migrated serves identical receipts, and `tests/unit/pure/methodologyRegistry.test.js` asserts field-for-field equality. A released row is never edited: a config or wording change ships as a new version row and a new migration, and a correction to a released row is recorded as an erratum (`methodology_errata`, migration 030).
+`src/config/methodology-registry.js` is the single source of truth for every `methodology_versions` row. `scripts/seed.js` inserts every row (`ON CONFLICT (component, version) DO NOTHING`); migrations 009, 011, 012, 014, 015, 017, 024, 026, 027, 028, 029, 031, 032, 042, 055, 060, 061 and 065 insert the same rows so a database that is only migrated serves identical receipts, and `tests/unit/pure/methodologyRegistry.test.js` asserts field-for-field equality. A released row is never edited: a config or wording change ships as a new version row and a new migration, and a correction to a released row is recorded as an erratum (`methodology_errata`, migration 030).
 
 ```javascript
 // src/config/methodology-registry.js — the first row
@@ -1400,7 +1402,7 @@ The collection admission filter (`src/collectors/ai-filter.js`) decides which it
 }
 ```
 
-Registered components on `master` (24 rows): sentiment (**1.0.0**), relevance (1.0.0, 1.1.0, **1.2.0**), discourse (1.0.0-DQI, **1.1.0-DQI**), bias (1.1.0 to **1.5.0**), ingest (1.0.0 to **1.7.0**), audit_narration (1.1.0 to **1.3.0**), embedding (**1.0.0**), admission_filter (**1.0.0**); bold = the version the code runs (`CURRENT_VERSIONS`). A `demographic` component is **PLANNED — not implemented as of v1.2.0**.
+Registered components on `master` (26 rows): sentiment (**1.0.0**), relevance (1.0.0, 1.1.0, **1.2.0**), discourse (1.0.0-DQI, **1.1.0-DQI**), bias (1.1.0 to **1.6.0**), ingest (1.0.0 to **1.7.0**), audit_narration (1.1.0 to **1.3.0**), embedding (1.0.0, **1.1.0**), admission_filter (**1.0.0**); bold = the version the code runs (`CURRENT_VERSIONS`). A `demographic` component is **PLANNED — not implemented as of v1.2.0**.
 
 ---
 
