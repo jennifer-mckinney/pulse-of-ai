@@ -98,6 +98,15 @@ const embedQueue = new Queue('embed', {
 // Workers write to pseudonymous_users + user_platform_sightings (DB-bound, GDPR-sensitive).
 const correlateQueue = new Queue('correlate', { connection, defaultJobOptions: BASE_JOB_OPTIONS });
 
+// P10-2 / P10-9 / P10-18: the worker's repeatable maintenance jobs (text
+// retention + stale-job sweep every MAINTENANCE_EVERY_MS; compaction +
+// run-table rollup every MAINTENANCE_DAILY_EVERY_MS). One attempt: the next
+// tick is the retry.
+const maintenanceQueue = new Queue('maintenance', {
+    connection,
+    defaultJobOptions: { attempts: 1, removeOnComplete: { count: 100 }, removeOnFail: { count: 500 } },
+});
+
 // ─── Exports ──────────────────────────────────────────────────────────────────
 
 module.exports = {
@@ -113,4 +122,5 @@ module.exports = {
     ingestQueue,
     embedQueue,
     correlateQueue,
+    maintenanceQueue,
 };

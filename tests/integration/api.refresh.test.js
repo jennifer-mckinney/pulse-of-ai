@@ -77,7 +77,7 @@ describe('POST /api/refresh', () => {
         const res = await refresh();
         expect(res.status).toBe(202);
         const row = await dbGet('SELECT status, error_details FROM processing_jobs WHERE id = $1', [stale.id]);
-        expect(row).toEqual({ status: 'failed', error_details: 'stale: the refresh job did not complete within 30 minutes' });
+        expect(row).toEqual({ status: 'failed', error_details: 'stale: the refresh job made no progress for 30 minutes' });
     });
 
     it('an enqueue failure fails the job, answers 503 and does not spend the budget', async () => {
@@ -118,6 +118,24 @@ describe('POST /api/refresh', () => {
             expect((await refresh()).status).toBe(202);
         });
 
+        // PR #22 security M4: a reverse proxy in front of a loopback bind
+        // makes the site reachable beyond this machine.
+        it('loopback without a token but through a proxy (X-Forwarded-For): refused (403), no job', async () => {
+            setEnv({ PULSE_BIND_ADDR: '127.0.0.1', REFRESH_TOKEN: undefined, HOST: undefined });
+            const res = await refresh().set('X-Forwarded-For', '203.0.113.9');
+            expect(res.status).toBe(403);
+            expect(res.body.error).toMatch(/through a proxy and no REFRESH_TOKEN/);
+            expect(enqueued).toHaveLength(0);
+        });
+
+        it('a loopback PULSE_CONTAINER_PUBLISHED_ADDR does not excuse HOST=0.0.0.0 outside the container', async () => {
+            setEnv({ PULSE_BIND_ADDR: undefined, REFRESH_TOKEN: undefined, HOST: '0.0.0.0',
+                PULSE_CONTAINER_PUBLISHED_ADDR: '127.0.0.1', PULSE_IN_CONTAINER: '1' });
+            const res = await refresh();
+            expect(res.status).toBe(403);
+            expect(res.body.error).toMatch(/bound beyond loopback and no REFRESH_TOKEN/);
+        });
+
         it('boundBeyondLoopback reads PULSE_BIND_ADDR and HOST', () => {
             expect(boundBeyondLoopback({})).toBe(false);
             expect(boundBeyondLoopback({ PULSE_BIND_ADDR: '127.0.0.1' })).toBe(false);
@@ -154,12 +172,20 @@ describe('POST /api/refresh', () => {
         // The debounce is a single in-process timestamp, deliberately not
         // keyed on req.ip: rotating IPs or spoofed forwarding headers must
         // not buy extra collection cycles. Distinct X-Forwarded-For values
-        // therefore share the same window.
-        await refresh().set('X-Forwarded-For', '203.0.113.1');
-        const res = await refresh().set('X-Forwarded-For', '198.51.100.7');
+        // therefore share the same window. (A proxied request needs the
+        // token since PR #22 security M4, so this runs with one.)
+        const prev = process.env.REFRESH_TOKEN;
+        process.env.REFRESH_TOKEN = 'proxy-test-token';
+        try {
+            const first = await refresh().set('X-Forwarded-For', '203.0.113.1').set('X-Refresh-Token', 'proxy-test-token');
+            expect(first.status).toBe(202);
+            const res = await refresh().set('X-Forwarded-For', '198.51.100.7').set('X-Refresh-Token', 'proxy-test-token');
 
-        expect(res.status).toBe(429);
-        expect(res.body.error).toMatch(/global/i);
+            expect(res.status).toBe(429);
+            expect(res.body.error).toMatch(/global/i);
+        } finally {
+            if (prev === undefined) delete process.env.REFRESH_TOKEN; else process.env.REFRESH_TOKEN = prev;
+        }
     });
 
     it('returns the job_id as a valid UUID', async () => {
@@ -218,15 +244,22 @@ describe('POST /api/refresh', () => {
     function useFixtures(slugs) {
         _setEnqueue(async (jobId) => {
             enqueued.push(jobId);
+            // P10-12: the refresh job queues scoring to `ingest` jobs; this
+            // stand-in worker runs them, then the cycle close finalizes the
+            // job (counts from the audit log, bias once).
+            const scoring = [];
             await processRefreshJob({ data: { jobId } }, {
                 slugs, env: TEST_ENV, now: () => Date.parse(RECORDED_AT),
-                queues: { enqueueEmbeds: async () => {}, enqueueIngestRetry: async () => {} },
+                queues: { enqueueEmbeds: async () => {}, enqueueIngestRetry: async () => {}, enqueueIngest: async d => scoring.push(d) },
                 transport: fixtureTransport([
                     ['https://feeds.bbci.co.uk/robots.txt', 'recorded/bbc-robots.txt'],
                     ['https://feeds.bbci.co.uk/news/technology/rss.xml', 'recorded/bbc-technology.xml'],
                     [/hn\.algolia\.com/, 'recorded/hn-algolia.json'],
                 ]),
             }).catch(() => {});   // runCollection marks the job failed itself
+            const { processIngestJob } = require('../../src/workers/ingest.worker');
+            for (const d of scoring) await processIngestJob({ data: d });
+            await require('../../src/collectors/cycle').closeCycles(150000);
         });
     }
 

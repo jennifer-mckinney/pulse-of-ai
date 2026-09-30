@@ -54,7 +54,8 @@ new_case() {
 # depend on it (stack_cmd).
 HERMETIC_UNSET=(COMPOSE_PROJECT_NAME WEB_PORT POSTGRES_PORT POSTGRES_TEST_PORT REDIS_PORT
     PULSE_BIND_ADDR POSTGRES_PASSWORD REDIS_PASSWORD AUDIT_HASH_KEY CORRELATION_SALT
-    COLLECTOR_CONTACT_URL PERMISSION_GATED_FEEDS_ACCEPTED_BY npm_lifecycle_event)
+    COLLECTOR_CONTACT_URL PERMISSION_GATED_FEEDS_ACCEPTED_BY GATE_APPROVED_BY npm_lifecycle_event
+    WATCHDOG_POLL_INTERVAL_S)
 HERMETIC_ENV_U=()
 for v in "${HERMETIC_UNSET[@]}"; do HERMETIC_ENV_U+=(-u "$v"); done
 
@@ -404,6 +405,21 @@ out=$(lib_run "$d" 'COLLECTOR_CONTACT_URL=https://shell.example/; collector_oper
 assert_eq "D1 shell env: contact URL from the shell turns collection on" "live=1" "$(printf '%s\n' "$out" | tail -n 1)"
 assert_eq "D1 shell env: nothing written" "" "$(cat "$d/.env")"
 
+# PR #22 decision G5: the feeds (and every gated source) wait for a named
+# approval; standup says so, never asks for it and never writes it.
+d=$(new_case); printf 'COLLECTOR_CONTACT_URL=https://keep.example/\nPERMISSION_GATED_FEEDS_ACCEPTED_BY=Kept 2026-01-01\n' > "$d/.env"
+before=$(cat "$d/.env")
+out=$(lib_run "$d" 'collector_operator_setup 1' < /dev/null 2>&1)
+assert_eq "G5 no approval: says awaiting named approval" "yes" \
+    "$( { cat "$d/stderr" 2>/dev/null; printf '%s' "$out"; } | grep -q 'awaiting named approval (GATE_APPROVED_BY is not set)' && echo yes || echo no)"
+assert_eq "G5 no approval: never claims the feeds are open" "no" \
+    "$( { cat "$d/stderr" 2>/dev/null; printf '%s' "$out"; } | grep -q 'permission-gated news feeds open' && echo yes || echo no)"
+assert_eq "G5 no approval: env file unchanged" "$before" "$(cat "$d/.env")"
+d=$(new_case); printf 'COLLECTOR_CONTACT_URL=https://keep.example/\nPERMISSION_GATED_FEEDS_ACCEPTED_BY=Kept 2026-01-01\nGATE_APPROVED_BY=Kept Person 2026-01-01\n' > "$d/.env"
+out=$(lib_run "$d" 'collector_operator_setup 1' < /dev/null 2>&1)
+assert_eq "G5 approval set: feeds open" "yes" \
+    "$( { cat "$d/stderr" 2>/dev/null; printf '%s' "$out"; } | grep -q 'feeds open (acknowledgement and named approval recorded)' && echo yes || echo no)"
+
 # Quotes, backslashes and '#' round-trip through set_env_value.
 d=$(new_case); : > "$d/.env"
 lib_run "$d" 'set_env_value PERMISSION_GATED_FEEDS_ACCEPTED_BY "A \"B\" \\ #c 2026-09-29"' >/dev/null
@@ -483,6 +499,30 @@ if command -v jq >/dev/null 2>&1; then
 else
     printf 'skip check-compose version cases (jq not installed)\n'
 fi
+
+# ─── Standup summary: the watchdog poll interval that compose will use ──────
+# env-file VALUE|expected text (the watchdog's rule: whole number 15..3600,
+# anything else → the 120 s default).
+for c in "|2 min" "15|15 s" "120|2 min" "90|90 s" "600|10 min" "3600|1 h" \
+         "0015|15 s" " 45 |45 s" "\"30\"|30 s" "45 # fast|45 s" \
+         "14|2 min" "3601|2 min" "0|2 min" "000|2 min" "x|2 min" "1e3|2 min" \
+         "-30|2 min" "99999999999999999999|2 min"; do
+    v=${c%%|*}; want=${c#*|}
+    d=$(new_case); printf 'WATCHDOG_POLL_INTERVAL_S=%s\n' "$v" > "$d/.env"
+    assert_eq "watchdog interval: env file '$v' → '$want'" "$want" \
+        "$(lib_run "$d" 'set -euo pipefail; watchdog_poll_interval_text')"
+done
+d=$(new_case)
+assert_eq "watchdog interval: no env file → default" "2 min" \
+    "$(lib_run "$d" 'set -euo pipefail; watchdog_poll_interval_text')"
+d=$(new_case); printf 'WATCHDOG_POLL_INTERVAL_S=15\n' > "$d/.env"
+assert_eq "watchdog interval: shell env wins over the env file (as in compose)" "5 min" \
+    "$(lib_run "$d" 'export WATCHDOG_POLL_INTERVAL_S=300; set -euo pipefail; watchdog_poll_interval_text')"
+d=$(new_case); printf 'WATCHDOG_POLL_INTERVAL_S=15\n' > "$d/.env"
+assert_eq "watchdog interval: an empty shell value still wins (compose: default)" "2 min" \
+    "$(lib_run "$d" 'export WATCHDOG_POLL_INTERVAL_S=; set -euo pipefail; watchdog_poll_interval_text')"
+assert_eq "standup summary reads the effective interval (no hard-coded 2 min)" "yes" \
+    "$(grep -q 'polls /api/health every \$(watchdog_poll_interval_text)' "$SCRIPTS_DIR/standup.sh" && ! grep -q 'every 2 min' "$SCRIPTS_DIR/standup.sh" && echo yes || echo no)"
 
 #@@CASES@@
 

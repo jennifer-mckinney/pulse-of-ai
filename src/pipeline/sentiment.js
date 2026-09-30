@@ -14,6 +14,8 @@
 
 'use strict';
 
+const { loadScorablePost } = require('./scorable');
+
 const crypto    = require('crypto');
 const Sentiment = require('sentiment');
 const { dbGet, dbRun, dbTransaction } = require('../db/connection');
@@ -82,13 +84,8 @@ function computeSentiment(text) {
  */
 async function saveSentiment(postId, jobId, mvId) {
     // Fetch the post content to score
-    const post = await dbGet(
-        'SELECT content FROM raw_posts WHERE id = $1',
-        [postId],
-    );
-    if (!post || !post.content) {
-        throw new Error(`saveSentiment: post ${postId} not found or content already nulled`);
-    }
+    // H1: never score a post whose text retention removed (the notice).
+    const post = await loadScorablePost(postId, 'saveSentiment');
 
     // Idempotency check — return existing row if already scored
     const existing = await dbGet(

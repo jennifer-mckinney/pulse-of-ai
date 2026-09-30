@@ -233,20 +233,22 @@ describe('migration 014 ↔ methodology registry (alignment)', () => {
 
     test('the code implements the CURRENT versions', () => {
         expect(CURRENT_VERSIONS).toEqual(expect.objectContaining({
-            sentiment: '1.0.0', relevance: '1.1.0', discourse: '1.1.0-DQI', ingest: '1.5.0',
+            sentiment: '1.0.0', relevance: '1.2.0', discourse: '1.1.0-DQI', ingest: '1.7.0',
         }));
     });
 
-    test('relevance@1.1.0 is the code: lexicon, score rule, model and embed gate', () => {
+    test('relevance@1.1.0 is its code (kept for replay since 1.2.0): lexicon, score rule, model and embed gate', () => {
         const reg = registry('relevance', '1.1.0');
-        expect(reg.config.keywords).toEqual(relevanceCode.KEYWORD_LIST);
-        expect(reg.config.score_per_match).toBe(1 / relevanceCode.KEYWORD_LIST.length);
-        expect(reg.config.embed_gate_min_score).toBe(relevanceCode.EMBED_GATE_MIN_SCORE);
-        expect(reg.model_name).toBe(relevanceCode.MODEL_NAME);
+        const v11 = relevanceCode.VERSIONS['1.1.0'];
+        expect(reg.config.keywords).toEqual(v11.lexicon);
+        expect(reg.config.keywords).toEqual(relevanceCode.KEYWORD_LIST_1_1_0);
+        expect(reg.config.score_per_match).toBe(1 / v11.lexicon.length);
+        expect(reg.config.embed_gate_min_score).toBe(1 / 20);
+        expect(reg.model_name).toBe(v11.model);
         // Replay reports no config drift against the aligned row.
-        expect(STAGES.relevance.configDrift(reg.config)).toEqual([]);
+        expect(STAGES.relevance.configDrift(reg.config, '1.1.0')).toEqual([]);
         // …and it did against the 1.0.0 row (the drift that motivated 014).
-        expect(STAGES.relevance.configDrift(registry('relevance', '1.0.0').config)).not.toEqual([]);
+        expect(STAGES.relevance.configDrift(registry('relevance', '1.0.0').config, '1.0.0')).not.toEqual([]);
     });
 
     test('the embed gate is reachable: one keyword match passes, none does not', () => {
@@ -254,7 +256,8 @@ describe('migration 014 ↔ methodology registry (alignment)', () => {
         expect(one.matchedKeywords).toEqual(['machine learning']);
         expect(relevanceCode.passesEmbedGate(one.score)).toBe(true);
         expect(relevanceCode.passesEmbedGate(relevanceCode.computeRelevance('Weather today.').score)).toBe(false);
-        expect(relevanceCode.passesEmbedGate('0.05')).toBe(true);   // NUMERIC string from pg
+        expect(relevanceCode.passesEmbedGate('0.05')).toBe(true);   // NUMERIC string from pg (a 1.1.0 score)
+        expect(relevanceCode.passesEmbedGate(String(1 / 21))).toBe(true);
         expect(relevanceCode.passesEmbedGate(null)).toBe(false);
     });
 
@@ -424,15 +427,188 @@ describe('migration 026 ↔ methodology registry (ingest@1.5.0, Reddit u/ names)
         expect(SQL_026).not.toMatch(/DO UPDATE|UPDATE methodology_versions|DELETE|DROP/);
     });
 
-    test('ingest@1.5.0 is current and redacts Reddit user names; 1.4.0 is unchanged', () => {
+    test('ingest@1.5.0 redacts Reddit user names (superseded by 1.6.0, never edited); 1.4.0 is unchanged', () => {
         const reg = registry('ingest', '1.5.0');
         const prev = registry('ingest', '1.4.0');
-        expect(latest('ingest').version).toBe('1.5.0');
+        expect(latest('ingest').version).toBe('1.7.0');
         expect(reg.config.text_redaction.reddit_user_handles).toMatch(/u\/\[user\]/);
         expect(prev.config.text_redaction.reddit_user_handles).toBeUndefined();
         expect(reg.config.pii_fields_removed).toEqual(prev.config.pii_fields_removed);
         expect(redactIdentities('thanks u/spez, /u/Jane_Doe and reddit.com/user/bob'))
             .toBe('thanks u/[user], u/[user] and [profile link]');
         expect(redactIdentities('r/MachineLearning and menu/u/x stay')).toBe('r/MachineLearning and menu/u/x stay');
+    });
+});
+
+describe('migration 027 ↔ methodology registry (bias@1.2.0, decision D3)', () => {
+    const { generate } = require('../../../scripts/generate-methodology-migration');
+    const SQL_027 = fs.readFileSync(
+        path.join(__dirname, '../../../src/db/migrations/027_bias_publisher_location.sql'), 'utf8');
+
+    test('027 is exactly the generated bias@1.2.0 row, idempotent, and edits nothing', () => {
+        expect(SQL_027.endsWith(generate(['bias@1.2.0']))).toBe(true);
+        expect((SQL_027.match(/INSERT INTO/g) || []).length).toBe(1);
+        expect(SQL_027).not.toMatch(/DO UPDATE|UPDATE methodology_versions|DELETE|DROP/);
+        expect(SQL_027).toMatch(/"Separate layer, excluded from bias\."/);
+    });
+
+    test('bias@1.2.0 excludes publisher-located posts and otherwise equals 1.1.0 (never edited)', () => {
+        const reg = registry('bias', '1.2.0');
+        const prev = registry('bias', '1.1.0');
+        expect(reg.config.location_basis_excluded).toEqual(['publisher']);
+        expect(prev.config.location_basis_excluded).toBeUndefined();
+        for (const k of ['location_concentration_max', 'platform_parity_max_diff', 'negative_dominance_max',
+            'layer_names', 'citations', 'planned_layers', 'layer_order', 'legal_basis']) {
+            expect(reg.config[k]).toEqual(prev.config[k]);
+        }
+        expect(reg.config.layer_notes.platform_sentiment_parity).toBe(prev.config.layer_notes.platform_sentiment_parity);
+        expect(reg.config.layer_notes.location_concentration).toMatch(/publisher-location layer/);
+        expect(prev.config.layer_notes.location_concentration).toBeUndefined();
+        expect(reg.justification).toMatch(/"Separate layer, excluded from bias\."/);
+    });
+});
+
+describe('migration 028 ↔ methodology registry (bias@1.3.0, P10-5)', () => {
+    const { generate } = require('../../../scripts/generate-methodology-migration');
+    const SQL_028 = fs.readFileSync(
+        path.join(__dirname, '../../../src/db/migrations/028_bias_min_sample.sql'), 'utf8');
+
+    test('028 registers exactly the generated bias@1.3.0 row BEFORE the resolutions that link to it, and removes nothing', () => {
+        // PR #22 principal #9: the resolutions set methodology_version_id on
+        // insert, so the version row must exist first.
+        const gen = generate(['bias@1.3.0']).trim();
+        expect(SQL_028).toContain(gen);
+        expect(SQL_028.indexOf(gen)).toBeLessThan(SQL_028.indexOf('WITH open_alerts'));
+        expect(SQL_028).not.toMatch(/DO UPDATE|UPDATE methodology_versions|DELETE|DROP|TRUNCATE/);
+        expect(SQL_028).toMatch(/CREATE TABLE IF NOT EXISTS alert_resolutions/);
+    });
+
+    test('the SQL re-evaluation uses the registered minimum sample and threshold', () => {
+        const reg = registry('bias', '1.3.0');
+        expect(reg.config.location_min_sample).toBe(30);
+        expect(SQL_028).toMatch(new RegExp(`content_located < ${reg.config.location_min_sample}\\b`));
+        expect(SQL_028).toMatch(new RegExp(`<= ${reg.config.location_concentration_max}\\b`));
+        expect(reg.config.location_basis_excluded).toEqual(['publisher']);
+    });
+
+    test('bias@1.3.0 (superseded by 1.4.0, never edited); 1.2.0 carries no minimum', () => {
+        expect(['1.3.0', '1.4.0', '1.5.0']).toContain(latest('bias').version);
+        expect(registry('bias', '1.2.0').config.location_min_sample).toBeUndefined();
+        const reg = registry('bias', '1.3.0');
+        const prev = registry('bias', '1.2.0');
+        for (const k of Object.keys(prev.config)) if (k !== 'layer_notes') expect(reg.config[k]).toEqual(prev.config[k]);
+    });
+});
+
+describe('migration 029 ↔ methodology registry (relevance@1.2.0, P10-13)', () => {
+    const { generate } = require('../../../scripts/generate-methodology-migration');
+    const SQL_029 = fs.readFileSync(
+        path.join(__dirname, '../../../src/db/migrations/029_relevance_word_boundaries.sql'), 'utf8');
+
+    test('029 is exactly the generated relevance@1.2.0 row, idempotent, and edits nothing', () => {
+        expect(SQL_029.endsWith(generate(['relevance@1.2.0']))).toBe(true);
+        expect((SQL_029.match(/INSERT INTO/g) || []).length).toBe(1);
+        expect(SQL_029).not.toMatch(/DO UPDATE|UPDATE methodology_versions|DELETE|DROP/);
+    });
+
+    test('relevance@1.2.0 is current; 1.1.0 is unchanged', () => {
+        expect(latest('relevance').version).toBe('1.2.0');
+        expect(registry('relevance', '1.1.0').config.keywords).toHaveLength(20);
+        expect(registry('relevance', '1.2.0').config.keywords).toHaveLength(21);
+    });
+});
+
+describe('migration 031 ↔ methodology registry (ingest@1.6.0, P10-2)', () => {
+    const { generate } = require('../../../scripts/generate-methodology-migration');
+    const { PAYLOAD_TEXT_KEYS, PII_FIELDS } = require('../../../src/pipeline/ingest');
+    const SQL_031 = fs.readFileSync(path.join(__dirname, '../../../src/db/migrations/031_text_retention.sql'), 'utf8');
+
+    test('031 adds the retention index and ends with exactly the generated ingest@1.6.0 row', () => {
+        expect(SQL_031.endsWith(generate(['ingest@1.6.0']))).toBe(true);
+        expect(SQL_031).toMatch(/CREATE INDEX IF NOT EXISTS idx_raw_posts_text_live/);
+        expect(SQL_031).not.toMatch(/DO UPDATE|UPDATE |DELETE|DROP/);
+    });
+
+    test('ingest@1.6.0 registers the payload keys the code no longer stores and every text window', () => {
+        const reg = registry('ingest', '1.6.0');
+        expect(reg.config.payload_text_keys_not_stored).toEqual([...PAYLOAD_TEXT_KEYS]);
+        expect(reg.config.pii_fields_removed).toEqual(PII_FIELDS);
+        // Released row: the windows in force when it was registered (the
+        // Guardian's 24 h was withdrawn by ingest@1.7.0, migration 055).
+        expect(reg.config.text_retention.platform_terms_hours).toEqual({ reddit: 48, guardian: 24, youtube: 720, tiktok: 720 });
+        expect(reg.config.privacy_claim).toBe(registry('ingest', '1.5.0').config.privacy_claim);
+    });
+});
+
+describe('migration 055 ↔ methodology registry (ingest@1.7.0: GUARDIAN ruling and G3)', () => {
+    const { generate } = require('../../../scripts/generate-methodology-migration');
+    const SQL_055 = fs.readFileSync(path.join(__dirname, '../../../src/db/migrations/055_ingest_retention_rulings.sql'), 'utf8');
+
+    test('055 is exactly the generated ingest@1.7.0 row after its header, and changes no data', () => {
+        expect(SQL_055.endsWith(generate(['ingest@1.7.0']))).toBe(true);
+        const body = SQL_055.split('\n').filter(l => !l.startsWith('--')).join('\n');
+        expect(body).not.toMatch(/DO UPDATE|UPDATE |DELETE|DROP/);
+    });
+
+    test('ingest@1.7.0 registers the current platform windows, the Guardian ruling verbatim and G3', () => {
+        const reg = registry('ingest', '1.7.0');
+        const { SOURCES, retentionHours } = require('../../../src/config/source-registry');
+        const platform = Object.fromEntries(SOURCES.filter(s => s.retention).map(s => [s.slug, retentionHours(s)]));
+        expect(reg.config.text_retention.platform_terms_hours).toEqual(platform);
+        expect(platform).not.toHaveProperty('guardian');
+        expect(reg.config.text_retention.rulings.guardian).toMatch(/Jennifer McKinney, 2026-09-29, verbatim "Use normal retention"/);
+        expect(reg.config.text_retention.embeddings_on_platform_blanking).toMatch(/deleted with the text.*G3/);
+        expect(reg.config.text_retention.applied_by_analogy).toEqual(['youtube', 'tiktok']);
+        const prev = registry('ingest', '1.6.0');
+        for (const k of Object.keys(prev.config).filter(k => k !== 'text_retention')) expect([k, reg.config[k]]).toEqual([k, prev.config[k]]);
+        expect(reg.model_name).toBe(prev.model_name);
+    });
+});
+
+describe('migration 032 ↔ methodology registry (bias@1.4.0, minimum samples)', () => {
+    const { generate } = require('../../../scripts/generate-methodology-migration');
+    const SQL_032 = fs.readFileSync(path.join(__dirname, '../../../src/db/migrations/032_bias_sample_rules.sql'), 'utf8');
+
+    test('032 contains exactly the generated bias@1.4.0 row and deletes nothing', () => {
+        expect(SQL_032).toContain(generate(['bias@1.4.0']));
+        expect((SQL_032.match(/INSERT INTO methodology_versions/g) || []).length).toBe(1);
+        expect(SQL_032).not.toMatch(/DO UPDATE|UPDATE methodology_versions|DELETE|DROP|TRUNCATE/);
+    });
+
+    test('bias@1.4.0 (superseded by 1.5.0, never edited); every check has a minimum; the SQL uses the registered numbers', () => {
+        const reg = registry('bias', '1.4.0');
+        expect(['1.4.0', '1.5.0']).toContain(latest('bias').version);
+        expect(reg.config).toMatchObject({ location_min_sample: 30, parity_min_per_category: 10, negative_min_sample: 30 });
+        expect(reg.config.sample_rules.basis).toMatch(/n >= 30/);
+        expect(SQL_032).toMatch(/p\.n >= 10\b/);
+        expect(SQL_032).toMatch(/l\.sample < 30\b/);
+        expect(SQL_032).toMatch(/n\.sample < 30\b/);
+        expect(registry('bias', '1.3.0').config.parity_min_per_category).toBeUndefined();
+    });
+});
+
+// PR #22 decision G2: the rolling 24 h window (bias@1.5.0, migration 060).
+describe('migration 060 ↔ methodology registry (bias@1.5.0, rolling window)', () => {
+    const { generate } = require('../../../scripts/generate-methodology-migration');
+    const SQL_060 = fs.readFileSync(path.join(__dirname, '../../../src/db/migrations/060_bias_rolling_window.sql'), 'utf8');
+
+    test('060 ends with exactly the generated bias@1.5.0 row, is additive and deletes nothing', () => {
+        expect(SQL_060.endsWith(generate(['bias@1.5.0']))).toBe(true);
+        expect((SQL_060.match(/INSERT INTO methodology_versions/g) || []).length).toBe(1);
+        expect(SQL_060).not.toMatch(/DO UPDATE|UPDATE [a-z_]+ SET|DELETE FROM|DROP TABLE|TRUNCATE/);
+        expect(SQL_060).toMatch(/CREATE TABLE IF NOT EXISTS bias_window_runs/);
+        expect(SQL_060).toMatch(/CREATE TABLE IF NOT EXISTS bias_window_assessments/);
+        expect(SQL_060).toMatch(/bias_window_assessments_append_only BEFORE UPDATE OR DELETE/);
+    });
+
+    test('bias@1.5.0 is current: bias@1.4.0 plus the 24 h window; every per-cycle rule unchanged', () => {
+        expect(latest('bias').version).toBe('1.5.0');
+        const reg = registry('bias', '1.5.0');
+        const prev = registry('bias', '1.4.0');
+        for (const k of Object.keys(prev.config)) expect(reg.config[k]).toEqual(prev.config[k]);
+        expect(reg.config.rolling_window).toMatchObject({ hours: 24 });
+        expect(reg.config.rolling_window.decision).toMatch(/G2.*Jennifer McKinney 2026-09-29/);
+        expect(reg.justification).toMatch(/rolling 24-hour window/);
+        expect(reg.model_name).toBe(prev.model_name);
     });
 });
