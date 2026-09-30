@@ -492,7 +492,7 @@ describe('migration 028 ↔ methodology registry (bias@1.3.0, P10-5)', () => {
     });
 
     test('bias@1.3.0 (superseded by 1.4.0, never edited); 1.2.0 carries no minimum', () => {
-        expect(['1.3.0', '1.4.0', '1.5.0']).toContain(latest('bias').version);
+        expect(['1.3.0', '1.4.0', '1.5.0', '1.6.0']).toContain(latest('bias').version);
         expect(registry('bias', '1.2.0').config.location_min_sample).toBeUndefined();
         const reg = registry('bias', '1.3.0');
         const prev = registry('bias', '1.2.0');
@@ -577,7 +577,7 @@ describe('migration 032 ↔ methodology registry (bias@1.4.0, minimum samples)',
 
     test('bias@1.4.0 (superseded by 1.5.0, never edited); every check has a minimum; the SQL uses the registered numbers', () => {
         const reg = registry('bias', '1.4.0');
-        expect(['1.4.0', '1.5.0']).toContain(latest('bias').version);
+        expect(['1.4.0', '1.5.0', '1.6.0']).toContain(latest('bias').version);
         expect(reg.config).toMatchObject({ location_min_sample: 30, parity_min_per_category: 10, negative_min_sample: 30 });
         expect(reg.config.sample_rules.basis).toMatch(/n >= 30/);
         expect(SQL_032).toMatch(/p\.n >= 10\b/);
@@ -601,14 +601,53 @@ describe('migration 060 ↔ methodology registry (bias@1.5.0, rolling window)', 
         expect(SQL_060).toMatch(/bias_window_assessments_append_only BEFORE UPDATE OR DELETE/);
     });
 
-    test('bias@1.5.0 is current: bias@1.4.0 plus the 24 h window; every per-cycle rule unchanged', () => {
-        expect(latest('bias').version).toBe('1.5.0');
+    test('bias@1.5.0 (superseded by 1.6.0, never edited): bias@1.4.0 plus the 24 h window; every per-cycle rule unchanged', () => {
+        expect(['1.5.0', '1.6.0']).toContain(latest('bias').version);
         const reg = registry('bias', '1.5.0');
         const prev = registry('bias', '1.4.0');
         for (const k of Object.keys(prev.config)) expect(reg.config[k]).toEqual(prev.config[k]);
         expect(reg.config.rolling_window).toMatchObject({ hours: 24 });
         expect(reg.config.rolling_window.decision).toMatch(/G2.*Jennifer McKinney 2026-09-29/);
         expect(reg.justification).toMatch(/rolling 24-hour window/);
+        expect(reg.model_name).toBe(prev.model_name);
+    });
+});
+
+// Audit drift D-2: bias@1.6.0 states the parity "insufficient sample" value
+// (migration 061), with an erratum on bias@1.4.0 and bias@1.5.0.
+describe('migration 061 ↔ methodology registry (bias@1.6.0, parity stated value)', () => {
+    const { generate } = require('../../../scripts/generate-methodology-migration');
+    const { METHODOLOGY_ERRATA } = require('../../../src/config/methodology-registry');
+    const SQL_061 = fs.readFileSync(path.join(__dirname, '../../../src/db/migrations/061_bias_parity_stated_value.sql'), 'utf8');
+
+    test('061 ends with exactly the generated bias@1.6.0 row, is additive and edits nothing', () => {
+        expect(SQL_061.endsWith(generate(['bias@1.6.0']))).toBe(true);
+        expect((SQL_061.match(/INSERT INTO methodology_versions/g) || []).length).toBe(1);
+        expect(SQL_061).not.toMatch(/DO UPDATE|UPDATE [a-z_]+ SET|DELETE FROM|DROP |TRUNCATE/);
+    });
+
+    test('061 carries the bias@1.4.0 and bias@1.5.0 errata field for field', () => {
+        const errata = METHODOLOGY_ERRATA.filter(e => e.corrected_by === 'bias@1.6.0');
+        expect(errata.map(e => `${e.component}@${e.version}`)).toEqual(['bias@1.4.0', 'bias@1.5.0']);
+        expect((SQL_061.match(/INSERT INTO methodology_errata/g) || []).length).toBe(2);
+        for (const e of errata) {
+            expect(SQL_061).toContain(`'${e.erratum_key}', '${e.corrected_by}', $err$${e.erratum}$err$`);
+            expect(SQL_061).toContain(`mv.component = '${e.component}' AND mv.version = '${e.version}'`);
+        }
+    });
+
+    test('bias@1.6.0 is current: bias@1.5.0 plus the stated parity value; every other rule unchanged', () => {
+        expect(latest('bias').version).toBe('1.6.0');
+        const reg = registry('bias', '1.6.0');
+        const prev = registry('bias', '1.5.0');
+        for (const k of Object.keys(prev.config)) if (k !== 'sample_rules') expect(reg.config[k]).toEqual(prev.config[k]);
+        for (const k of Object.keys(prev.config.sample_rules)) {
+            if (k !== 'platform_sentiment_parity') expect(reg.config.sample_rules[k]).toEqual(prev.config.sample_rules[k]);
+        }
+        expect(reg.config.parity_insufficient_value).toBe('max_diff_all_categories');
+        expect(prev.config.parity_insufficient_value).toBeUndefined();
+        expect(reg.config.sample_rules.platform_sentiment_parity).toMatch(/largest pairwise gap/);
+        expect(reg.config.changelog).toHaveLength(1);
         expect(reg.model_name).toBe(prev.model_name);
     });
 });
