@@ -105,6 +105,40 @@ effective() {
     printf '%s' "${file_val:-$default}"
 }
 
+# Human-readable watchdog poll interval for standup's summary, e.g. "15 s",
+# "2 min", "1 h". Reads WATCHDOG_POLL_INTERVAL_S the way compose interpolates
+# it for the watchdog container: a variable SET in the shell wins even when
+# empty (compose gives the process environment precedence over the env file),
+# otherwise the env file's value. It then applies the watchdog's own rule (src/watchdog/config.js INT_SETTINGS):
+# a whole number from 15 to 3600, anything else falls back to the 120 s
+# default. Bash 3.2 safe; never fails under set -euo pipefail.
+watchdog_poll_interval_text() {
+    local raw secs=120
+    if [[ -n "${WATCHDOG_POLL_INTERVAL_S+set}" ]]; then
+        raw=$WATCHDOG_POLL_INTERVAL_S
+    else
+        raw=$(env_file_value WATCHDOG_POLL_INTERVAL_S)
+    fi
+    raw="${raw#"${raw%%[![:space:]]*}"}"          # trim like the JS .trim()
+    raw="${raw%"${raw##*[![:space:]]}"}"
+    # Digits only; strip leading zeros so bash never reads them as octal, and
+    # cap the length before arithmetic so a huge value cannot overflow.
+    if [[ "$raw" =~ ^[0-9]+$ ]]; then
+        raw="${raw#"${raw%%[!0]*}"}"
+        [[ -n "$raw" ]] || raw=0
+        if (( ${#raw} <= 4 )) && (( raw >= 15 && raw <= 3600 )); then
+            secs=$raw
+        fi
+    fi
+    if (( secs % 3600 == 0 )); then
+        printf '%d h' $((secs / 3600))
+    elif (( secs % 60 == 0 )); then
+        printf '%d min' $((secs / 60))
+    else
+        printf '%d s' "$secs"
+    fi
+}
+
 # ─── Env file creation / merge (scripts/standup.sh) ──────────────────────────
 # Keys whose value standup GENERATES (openssl rand -hex 32) instead of
 # copying the .env.example placeholder. Values are never printed.

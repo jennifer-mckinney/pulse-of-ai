@@ -54,7 +54,8 @@ new_case() {
 # depend on it (stack_cmd).
 HERMETIC_UNSET=(COMPOSE_PROJECT_NAME WEB_PORT POSTGRES_PORT POSTGRES_TEST_PORT REDIS_PORT
     PULSE_BIND_ADDR POSTGRES_PASSWORD REDIS_PASSWORD AUDIT_HASH_KEY CORRELATION_SALT
-    COLLECTOR_CONTACT_URL PERMISSION_GATED_FEEDS_ACCEPTED_BY GATE_APPROVED_BY npm_lifecycle_event)
+    COLLECTOR_CONTACT_URL PERMISSION_GATED_FEEDS_ACCEPTED_BY GATE_APPROVED_BY npm_lifecycle_event
+    WATCHDOG_POLL_INTERVAL_S)
 HERMETIC_ENV_U=()
 for v in "${HERMETIC_UNSET[@]}"; do HERMETIC_ENV_U+=(-u "$v"); done
 
@@ -498,6 +499,30 @@ if command -v jq >/dev/null 2>&1; then
 else
     printf 'skip check-compose version cases (jq not installed)\n'
 fi
+
+# ─── Standup summary: the watchdog poll interval that compose will use ──────
+# env-file VALUE|expected text (the watchdog's rule: whole number 15..3600,
+# anything else → the 120 s default).
+for c in "|2 min" "15|15 s" "120|2 min" "90|90 s" "600|10 min" "3600|1 h" \
+         "0015|15 s" " 45 |45 s" "\"30\"|30 s" "45 # fast|45 s" \
+         "14|2 min" "3601|2 min" "0|2 min" "000|2 min" "x|2 min" "1e3|2 min" \
+         "-30|2 min" "99999999999999999999|2 min"; do
+    v=${c%%|*}; want=${c#*|}
+    d=$(new_case); printf 'WATCHDOG_POLL_INTERVAL_S=%s\n' "$v" > "$d/.env"
+    assert_eq "watchdog interval: env file '$v' → '$want'" "$want" \
+        "$(lib_run "$d" 'set -euo pipefail; watchdog_poll_interval_text')"
+done
+d=$(new_case)
+assert_eq "watchdog interval: no env file → default" "2 min" \
+    "$(lib_run "$d" 'set -euo pipefail; watchdog_poll_interval_text')"
+d=$(new_case); printf 'WATCHDOG_POLL_INTERVAL_S=15\n' > "$d/.env"
+assert_eq "watchdog interval: shell env wins over the env file (as in compose)" "5 min" \
+    "$(lib_run "$d" 'export WATCHDOG_POLL_INTERVAL_S=300; set -euo pipefail; watchdog_poll_interval_text')"
+d=$(new_case); printf 'WATCHDOG_POLL_INTERVAL_S=15\n' > "$d/.env"
+assert_eq "watchdog interval: an empty shell value still wins (compose: default)" "2 min" \
+    "$(lib_run "$d" 'export WATCHDOG_POLL_INTERVAL_S=; set -euo pipefail; watchdog_poll_interval_text')"
+assert_eq "standup summary reads the effective interval (no hard-coded 2 min)" "yes" \
+    "$(grep -q 'polls /api/health every \$(watchdog_poll_interval_text)' "$SCRIPTS_DIR/standup.sh" && ! grep -q 'every 2 min' "$SCRIPTS_DIR/standup.sh" && echo yes || echo no)"
 
 #@@CASES@@
 

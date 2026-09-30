@@ -308,7 +308,7 @@ ${_G}${_B}Pulse of AI is up${_N}  (project '$STACK_PROJECT', $(elapsed "$T_START
   and GET /api/sources); DEMO / MIXED = the fictional fallback is (or was
   recently) filling the hour.
   Live collection: $( (( STACK_LIVE_COLLECTION )) && echo "ON (COLLECTOR_CONTACT_URL set)" || echo "OFF — no COLLECTOR_CONTACT_URL, so DEMO data only. Set it in $STACK_ENV_FILE and re-run (ADR 0001 D1).")
-  Alerting:    the watchdog service polls /api/health every 2 min (critical
+  Alerting:    the watchdog service polls /api/health every $(watchdog_poll_interval_text) (critical
                alerts on the health chip); e-mail $( [[ -n "$(env_file_value SMTP_HOST)" && -n "$(env_file_value SMTP_FROM)" && -n "$(env_file_value SMTP_TO)" ]] && echo "to $(env_file_value SMTP_TO)" || echo "not configured (dashboard only; set SMTP_* in $STACK_ENV_FILE, README \"Alerting\")")
 
 Next steps
