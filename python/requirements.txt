@@ -20,5 +20,5 @@ pytest-asyncio>=1.4.0
 httpx>=0.26.0         # async HTTP client for test requests
 
 # Code quality
-black>=24.0.0         # code formatter (run: black python/)
+black>=26.5.1         # code formatter (run: black python/)
 flake8>=7.4.1         # linter
