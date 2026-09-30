@@ -145,7 +145,7 @@ The script checks Docker, the Compose version, the daemon and `curl` first, and 
 5. Populates data (see below) and starts the `populate` feed.
 6. Runs a smoke check. It looks at the API, the page, and the page's own data calls (globe, themes, bias, ribbon, drill-down). It counts posts, audit decisions, bias assessments and embeddings, opens one receipt and checks its four audience views and bias lineage, and runs `npm run replay` on that post, which must PASS. It ends with a population summary.
 
-`GET /api/health` also reports `redis.reachable` and `worker.alive` / `worker.last_heartbeat`, and every container's logs rotate (json-file, 5 × 10 MB).
+`GET /api/health` also reports `redis.reachable` and `worker.alive` / `worker.last_heartbeat`, and every container's logs rotate (json-file, 5 × 10 MB). The `watchdog` service polls it and alerts when something is wrong (see [Alerting](#alerting-watchdog-dashboard-e-mail)).
 
 Re-running is safe. The images come from the build cache, running containers are kept, and a second population batch is skipped while the trailing hour is still full. If an earlier run had no embeddings (the model could not be downloaded), a re-run with the embeddings service healthy queues embed jobs for every trailing-hour demo post that has none and waits for them (up to 180 s) before the smoke check.
 
@@ -156,6 +156,7 @@ Re-running is safe. The images come from the build cache, running containers are
 | `web` | `3000` (`WEB_PORT`) | Express API and the static frontend (`public/`) |
 | `worker` | none | Collection scheduler + `collect.{rss,api,bulk}` consumers (live data from the 52-source registry), ingest retries, embed, correlate (`src/workers/start.js`). The only role holding collector credentials: it loads the env file (`PULSE_ENV_FILE`, default `.env`) whole through Compose `env_file`, while web gets only a "set" marker per credential. Healthy while its Redis heartbeat is fresh; `docker stop` gives it 180 s to finish in-flight jobs |
 | `embeddings` | none (compose network only: `embeddings:8000`) | `/embeddings` and `/health`, unauthenticated, so never published; standup checks it with `compose exec`. The model downloads once into the `hf_cache` volume |
+| `watchdog` | none | External alerting (see [Alerting](#alerting-watchdog-dashboard-e-mail)). Polls `/api/health` every 2 minutes from its own container, so it still alerts when the worker is dead; writes critical alerts to the database and e-mails them. Holds only the database password and the SMTP settings; the only role that gets `SMTP_PASSWORD` |
 | `populate` | none | Demo fallback. Adds fictional posts every 150 s only while the trailing hour has no live posts (profile `demo`) |
 | `migrate` | none | One-shot job: migrations and seed |
 | `postgres` | `5434` in `.env` (`POSTGRES_PORT`) | PostgreSQL 16 + pgvector (`postgres_data` volume) |
@@ -209,6 +210,44 @@ A source whose key, licence or approval arrives later is not scheduled blind (PR
 ### Embeddings
 
 The first start downloads the ~90 MB `all-MiniLM-L6-v2` model into the `hf_cache` volume. Later starts and rebuilds reuse it. If the download fails (you're offline, behind a proxy, or Hugging Face is unreachable), standup says so clearly and carries on without embeddings: posts are still scored and audited, but vector search stays empty. Fix the network and run `npm run standup` again.
+
+### Alerting (watchdog, dashboard, e-mail)
+
+Every other alert (freshness, retention, bias) is evaluated inside the worker, so a dead worker would stop them all. The `watchdog` service (`scripts/watchdog.js`, `src/watchdog/`) runs in its own container in the `full` profile. Every `WATCHDOG_POLL_INTERVAL_S` (default 120 s, first poll 60 s after start) it reads `GET /api/health`, probes PostgreSQL itself, and raises a **critical** alert for each of these conditions:
+
+| Condition | Raised when |
+|---|---|
+| Web API unreachable | `/api/health` does not answer (refused, timeout, 5xx) |
+| Database unreachable | the watchdog's own `SELECT 1` fails, or health reports `db_connected: false` |
+| Valkey unreachable | health reports `redis.reachable: false` |
+| Worker down | Valkey answers but the worker heartbeat is missing or older than 90 s |
+| Maintenance failing or overdue | a maintenance task's latest run failed, or its last success is older than 30 min (retention), 26 h (daily) or 8 days (terms) |
+| Text retention overdue | text is stored past its retention window, or the window setting is invalid |
+| Collection failing | sources are enabled but none collected successfully in the last hour |
+| Queue backlog abnormal | a queue holds more than 5000 waiting + delayed jobs |
+| Failed jobs abnormal | more than 25 queue jobs failed in the last hour, or more than 3 collection cycles |
+
+What happens when a condition appears:
+
+- **Dashboard.** One critical alert row per condition (the database allows only one open), shown as a red **SYSTEM ALERT** on the header health chip and at the top of the health drawer, with its summary. The drawer's SYSTEM WATCHDOG section says whether the watchdog is reporting and whether e-mail is on. When the condition clears, the alert is resolved with an audited `alert_resolutions` record.
+- **E-mail.** One message when the condition opens and one when it clears, never one per poll. At most `WATCHDOG_EMAIL_MAX_PER_HOUR` (12) messages an hour; a failed send is retried on the next polls. Every decision is logged in `watchdog_notifications`.
+- **The watchdog never crash-loops.** The API or the database being down is itself a condition; it keeps polling and clears the alert when they return. A condition that opened and cleared while the database was down is recorded afterwards as an already-resolved alert.
+
+**Configuring e-mail.** Add the SMTP settings to `.env` (see `.env.example`, "Alerting"), then recreate the watchdog with `docker compose --profile full up -d watchdog`:
+
+```bash
+SMTP_HOST=smtp.example.org
+SMTP_PORT=587            # empty: 587, or 465 with SMTP_SECURE=true
+SMTP_SECURE=false        # true = TLS from the first byte (465)
+SMTP_REQUIRE_TLS=true    # with SMTP_SECURE=false, STARTTLS is required unless this is false
+SMTP_USER=alerts@example.org
+SMTP_PASSWORD=           # edit .env with an editor; never type it on a command line (shell history)
+SMTP_FROM="Pulse of AI <alerts@example.org>"
+SMTP_TO=you@example.org,oncall@example.org
+WATCHDOG_DASHBOARD_URL=http://localhost:3000   # optional link in the e-mails
+```
+
+E-mail is on when `SMTP_HOST`, `SMTP_FROM` and `SMTP_TO` are all set. Without them the watchdog alerts on the dashboard only, and `/api/health` (`watchdog.email.status`) and the health drawer say **"email alerting not configured"**. Incomplete or invalid settings are named there too. The SMTP password reaches the `watchdog` container only: web never gets it, and the worker, which loads `.env` whole, has it blanked (`scripts/test/check-compose.sh` enforces both). Test your settings by stopping the worker for a few minutes (`docker compose --profile full stop worker`, then `start worker`): you should get a CRITICAL and then a CLEARED e-mail. The thresholds are in `.env.example`; `docker compose --profile full logs watchdog` shows every poll.
 
 ### Tear it down
 
@@ -323,6 +362,8 @@ Copy `.env.example` to `.env` and fill in the values below.
 | `REDIS_PASSWORD` | Yes (Docker) | Valkey `requirepass`; BullMQ, the worker and `/api/health` authenticate with it. Standup generates it |
 | `DEMO_FEED_INTERVAL_MS` | No | Standup demo feed: ms between fictional batches (default `150000`) |
 | `DEMO_FEED_BATCH` | No | Standup demo feed: posts per batch (default: two per category, `16`) |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_REQUIRE_TLS`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_TO` | No | Watchdog e-mail alerts (see [Alerting](#alerting-watchdog-dashboard-e-mail)); empty = dashboard only, "email alerting not configured". `SMTP_PASSWORD` reaches the watchdog container only |
+| `WATCHDOG_*` | No | Watchdog poll interval and thresholds (`.env.example`, "Alerting") |
 
 Generate secrets:
 
@@ -368,7 +409,7 @@ All endpoints are prefixed `/api`.
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/health` | System health, active alerts, data freshness |
+| `GET` | `/api/health` | System health, active alerts (watchdog alerts flagged `system`), data freshness, the watchdog's status (`watchdog`, including e-mail) |
 | `GET` | `/api/config` | Public config (Mapbox token) for the frontend |
 | `GET` | `/api/posts` | Paginated post list with sentiment |
 | `GET` | `/api/sentiment` | Aggregated sentiment by geography / source |

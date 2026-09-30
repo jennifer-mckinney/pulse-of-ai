@@ -374,6 +374,10 @@ services:
         required: false
     environment:
       <<: [*app-env, *collector-settings]
+      # The SMTP password is the WATCHDOG's alone (PR #22 principal #12): the
+      # env file above carries it, so it is blanked here (environment wins
+      # over env_file). scripts/test/check-compose.sh enforces it.
+      SMTP_PASSWORD: ""
     # Healthy = the worker's heartbeat file is fresh (P9-7). It is written
     # every 15 s only after the heartbeat reached Redis, so a stuck worker or
     # one that lost Redis turns unhealthy (src/workers/heartbeat.js).
@@ -419,6 +423,59 @@ services:
     # burn its CPU through /embeddings. standup checks it via compose exec.
     volumes:
       - hf_cache:/home/app/.cache/huggingface
+
+  # External watchdog (PR #22 principal #12, Jennifer's decision "watchdog +
+  # dashboard + email"). Every other alert is evaluated INSIDE the worker, so
+  # this runs in its own container from the same image: every
+  # WATCHDOG_POLL_INTERVAL_S (default 120) it polls web's /api/health and
+  # probes the database, and on worker down, retention overdue, maintenance
+  # failing, collection failing, abnormal queues / failed jobs, or the DB,
+  # Valkey or web API unreachable it writes ONE critical alert per condition
+  # (dashboard health chip + banner) and e-mails SMTP_TO once when it opens
+  # and once when it clears (src/watchdog/, README "Alerting").
+  # Least privilege: the database only (to record alerts) and the SMTP
+  # settings — no Redis password, no audit / correlation key, no collector
+  # credential. It is the ONLY role that receives SMTP_PASSWORD. It depends
+  # on neither web nor worker: either being down is what it reports.
+  watchdog:
+    <<: *app
+    command: ["node", "scripts/watchdog.js"]
+    environment:
+      NODE_ENV: production
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-pulse_of_ai}
+      POSTGRES_USER: ${POSTGRES_USER:-pulse_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      PG_POOL_MAX: "2"
+      WATCHDOG_HEALTH_URL: http://web:3000/api/health
+      WATCHDOG_DASHBOARD_URL: ${WATCHDOG_DASHBOARD_URL:-}
+      WATCHDOG_POLL_INTERVAL_S: ${WATCHDOG_POLL_INTERVAL_S:-}
+      WATCHDOG_INITIAL_DELAY_S: ${WATCHDOG_INITIAL_DELAY_S:-}
+      WATCHDOG_HTTP_TIMEOUT_MS: ${WATCHDOG_HTTP_TIMEOUT_MS:-}
+      WATCHDOG_MAX_QUEUE_DEPTH: ${WATCHDOG_MAX_QUEUE_DEPTH:-}
+      WATCHDOG_MAX_QUEUE_FAILED_PER_HOUR: ${WATCHDOG_MAX_QUEUE_FAILED_PER_HOUR:-}
+      WATCHDOG_MAX_FAILED_CYCLES_PER_HOUR: ${WATCHDOG_MAX_FAILED_CYCLES_PER_HOUR:-}
+      WATCHDOG_RETENTION_MAX_AGE_MIN: ${WATCHDOG_RETENTION_MAX_AGE_MIN:-}
+      WATCHDOG_DAILY_MAX_AGE_H: ${WATCHDOG_DAILY_MAX_AGE_H:-}
+      WATCHDOG_TERMS_MAX_AGE_H: ${WATCHDOG_TERMS_MAX_AGE_H:-}
+      WATCHDOG_EMAIL_MAX_PER_HOUR: ${WATCHDOG_EMAIL_MAX_PER_HOUR:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-}
+      SMTP_SECURE: ${SMTP_SECURE:-}
+      SMTP_REQUIRE_TLS: ${SMTP_REQUIRE_TLS:-}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_TO: ${SMTP_TO:-}
+    # No healthcheck: its liveness is reported by /api/health
+    # (watchdog.reporting, from its last poll) and shown in the health drawer.
+    healthcheck:
+      disable: true
+    stop_grace_period: 20s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
 
   # Demo FALLBACK loop (profile "demo"). The worker collects live data from
   # the 52-source registry; this loop writes a FICTIONAL demo batch through

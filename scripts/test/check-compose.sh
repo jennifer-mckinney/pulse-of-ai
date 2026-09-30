@@ -15,7 +15,11 @@
 #   F9-2  collector credential VALUES are set on `worker` only; web gets a
 #         presence marker ("set") per credential, migrate and populate get
 #         none; the base secrets (DB, Redis, AUDIT_HASH_KEY,
-#         CORRELATION_SALT) go to every role
+#         CORRELATION_SALT) go to every role but the watchdog
+#   #12   (PR #22 principal #12) SMTP_PASSWORD reaches the watchdog only —
+#         the worker blanks its env-file copy, web gets no value or marker —
+#         and the watchdog holds only the DB password and SMTP settings,
+#         publishes no port and loads no env file
 #   F9-8  the unauthenticated embeddings API publishes no host port
 #   Q     the queue store is valkey/valkey 8.x (same digest in compose and CI)
 #   F9-6  every pulled image (compose services, Dockerfile bases, CI service
@@ -87,6 +91,9 @@ CRED_PROBE=(YOUTUBE_API_KEY GITHUB_TOKEN TIKTOK_RESEARCH_CLIENT_SECRET SCHOLAR_A
     NCBI_EMAIL CNN_FEED_URL JSTOR_DATASET_PATH REUTERS_CONNECT_CLIENT_ID)
 probe_env=()
 for k in "${CRED_PROBE[@]}"; do probe_env+=("$k=probe-secret-$k"); done
+# PR #22 principal #12: the SMTP password is probed too; it must reach the
+# watchdog ONLY (checked below), not the worker that loads the env file.
+probe_env+=("SMTP_PASSWORD=probe-secret-SMTP_PASSWORD")
 # P10-18: the worker gets credentials from its env_file (PULSE_ENV_FILE), so
 # the probes are written to a throwaway env file as well as the process env
 # (the latter drives web's ${NAME:+set} presence markers).
@@ -103,9 +110,34 @@ leaks=$(jq -r --argjson base "$BASE_SECRETS" --arg re "$CRED_RE" '.services | to
     | select(.key != "worker") | .key as $s
     | (.value.environment // {}) | to_entries[]
     | select(.key | test($re)) | select(.key as $k | $base | index($k) | not)
+    | select(($s != "watchdog") or (.key != "SMTP_PASSWORD"))
     | select(($s != "web") or ((.value // "") != "" and .value != "set"))
     | "\($s) receives collector credential \(.key)"' <<< "$cfg_probe")
 check "collector credential values are passed to worker only" "$leaks"
+
+# ─── Principal #12: the watchdog's secret split ──────────────────────────────
+# SMTP_PASSWORD reaches the watchdog and nothing else: the worker loads the
+# env file whole, so compose must blank it there; web gets neither the value
+# nor a presence marker (the watchdog reports e-mail status via the DB). The
+# watchdog itself gets the database password and the SMTP settings only — no
+# Redis password, audit / correlation / provenance key, refresh token or
+# collector credential — and publishes no port.
+smtp_split=$(jq -r '.services | to_entries[] | .key as $s | (.value.environment // {}) as $e
+    | if $s == "watchdog" then
+          (if ($e.SMTP_PASSWORD // "") != "probe-secret-SMTP_PASSWORD" then "watchdog lacks SMTP_PASSWORD" else empty end)
+      elif ($e.SMTP_PASSWORD // "") != "" then "\($s) receives SMTP_PASSWORD (\($e.SMTP_PASSWORD | if . == "set" then "presence marker" else "value" end))"
+      else empty end' <<< "$cfg_probe")
+check "SMTP_PASSWORD reaches the watchdog only (worker blanks its env-file copy)" "$smtp_split"
+wd_extra=$(jq -r --arg re "$CRED_RE" '(.services.watchdog // {}) as $w
+    | if ($w | length) == 0 then "no watchdog service in the full profile" else
+      (($w.environment // {}) | to_entries[] | select(.key | test($re))
+        | select(.key != "POSTGRES_PASSWORD" and .key != "SMTP_PASSWORD")
+        | "watchdog receives \(.key)"),
+      (($w.ports // [])[] | "watchdog publishes \(.published)->\(.target)"),
+      (if ($w.env_file // null) != null then "watchdog loads an env_file" else empty end),
+      (if ($w.profiles // []) | index("full") | not then "watchdog is not in the full profile" else empty end)
+      end' <<< "$cfg_probe")
+check "the watchdog holds only the DB password and SMTP settings, publishes no port" "$wd_extra"
 probe_json=$(printf '%s\n' "${CRED_PROBE[@]}" | jq -R . | jq -s .)
 missing_values=$(jq -r --argjson probe "$probe_json" '(.services.worker.environment // {}) as $w
     | $probe[] | select(. as $k | ($w[$k] // "") != "probe-secret-\($k)")
