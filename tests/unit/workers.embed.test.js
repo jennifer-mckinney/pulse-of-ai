@@ -42,7 +42,7 @@ describe('processEmbedJob()', () => {
 });
 
 describe('correlation trigger after the embedding (spec §20, DPIA-gated)', () => {
-    const OPEN = { CORRELATION_DPIA_REF: 'DPIA-1', CORRELATION_ENABLED: 'true', CORRELATION_SALT: 'salt' };
+    const OPEN = { CORRELATION_DPIA_REF: 'DPIA-1', CORRELATION_ENABLED: 'true', CORRELATION_SALT: 'embed-test-deployment-salt-01' };
 
     it('never enqueues a correlate job while the gate is closed', async () => {
         embedPost.mockResolvedValue({ postId: 'p', embeddingId: 'e', dimensions: 384 });

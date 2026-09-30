@@ -6,6 +6,10 @@
 
 'use strict';
 
+// A real (non-placeholder) per-deployment salt for these tests; the CI's
+// placeholder (64 zeros) is refused by design (spec §20, fail closed).
+process.env.CORRELATION_SALT = 'unit-test-deployment-salt-7f3a9c';
+
 const { dbGet, dbRun, dbAll } = require('../../src/db/connection');
 const {
     generatePseudoId,
@@ -68,27 +72,27 @@ describe('generatePseudoId()', () => {
 
 describe('computeSignalHash()', () => {
     it('returns a 64-character hex string (SHA-256)', () => {
-        const hash = computeSignalHash({ style: 'analytical', topics: ['ai'] }, 'salt');
+        const hash = computeSignalHash({ style: 'analytical', topics: ['ai'] }, 'salt-deployment-0001');
         expect(hash).toMatch(/^[0-9a-f]{64}$/);
     });
 
     it('is deterministic: same signals + salt always produces the same hash', () => {
         const signals = { style: 'formal', topicAffinity: ['ml', 'ethics'] };
-        const a = computeSignalHash(signals, 'test-salt');
-        const b = computeSignalHash(signals, 'test-salt');
+        const a = computeSignalHash(signals, 'test-salt-deployment-01');
+        const b = computeSignalHash(signals, 'test-salt-deployment-01');
         expect(a).toBe(b);
     });
 
     it('produces a different hash when the salt changes', () => {
         const signals = { style: 'formal' };
-        const a = computeSignalHash(signals, 'salt-a');
-        const b = computeSignalHash(signals, 'salt-b');
+        const a = computeSignalHash(signals, 'salt-a-deployment-000');
+        const b = computeSignalHash(signals, 'salt-b-deployment-000');
         expect(a).not.toBe(b);
     });
 
     it('produces a different hash when signals change', () => {
-        const a = computeSignalHash({ style: 'formal' }, 'salt');
-        const b = computeSignalHash({ style: 'casual' }, 'salt');
+        const a = computeSignalHash({ style: 'formal' }, 'salt-deployment-0001');
+        const b = computeSignalHash({ style: 'casual' }, 'salt-deployment-0001');
         expect(a).not.toBe(b);
     });
 });
@@ -109,7 +113,7 @@ describe('correlateUser()', () => {
 
     it('creates a pseudonymous_users row when a new user is correlated', async () => {
         const srcId = await insertSource('corr-src-new');
-        const hash  = computeSignalHash({ style: 'analytical' }, 'salt-a');
+        const hash  = computeSignalHash({ style: 'analytical' }, 'salt-a-deployment-000');
 
         const result = await correlateUser({
             sourceId:      srcId,
@@ -129,7 +133,7 @@ describe('correlateUser()', () => {
 
     it('returns isNew=true for a genuinely new correlation', async () => {
         const srcId = await insertSource('corr-src-isnew');
-        const hash  = computeSignalHash({ style: 'academic' }, 'salt-b');
+        const hash  = computeSignalHash({ style: 'academic' }, 'salt-b-deployment-000');
 
         const result = await correlateUser({
             sourceId:      srcId,
@@ -143,7 +147,7 @@ describe('correlateUser()', () => {
 
     it('creates a user_platform_sightings row for each correlation', async () => {
         const srcId = await insertSource('corr-src-sight');
-        const hash  = computeSignalHash({ style: 'casual' }, 'salt-c');
+        const hash  = computeSignalHash({ style: 'casual' }, 'salt-c-deployment-000');
 
         const result = await correlateUser({
             sourceId:      srcId,
@@ -163,7 +167,7 @@ describe('correlateUser()', () => {
 
     it('stores the pseudo_id in adjective-animal format', async () => {
         const srcId = await insertSource('corr-src-format');
-        const hash  = computeSignalHash({ style: 'technical' }, 'salt-d');
+        const hash  = computeSignalHash({ style: 'technical' }, 'salt-d-deployment-000');
 
         const result = await correlateUser({
             sourceId:      srcId,
@@ -178,7 +182,7 @@ describe('correlateUser()', () => {
     it('increments platform_count on a repeat sighting', async () => {
         const srcId  = await insertSource('corr-src-repeat');
         const src2Id = await insertSource('corr-src-repeat-2', 'news');
-        const hash   = computeSignalHash({ style: 'verbose' }, 'salt-e');
+        const hash   = computeSignalHash({ style: 'verbose' }, 'salt-e-deployment-000');
 
         // First sighting
         const first = await correlateUser({
@@ -208,7 +212,7 @@ describe('correlateUser()', () => {
 
     it('accumulates multiple sightings for the same user', async () => {
         const srcId = await insertSource('corr-src-multi');
-        const hash  = computeSignalHash({ style: 'concise' }, 'salt-f');
+        const hash  = computeSignalHash({ style: 'concise' }, 'salt-f-deployment-000');
 
         const first = await correlateUser({
             sourceId:      srcId,
@@ -233,7 +237,7 @@ describe('correlateUser()', () => {
 
     it('accepts exactly the minimum confidence threshold', async () => {
         const srcId = await insertSource('corr-src-exact');
-        const hash  = computeSignalHash({ style: 'neutral' }, 'salt-g');
+        const hash  = computeSignalHash({ style: 'neutral' }, 'salt-g-deployment-000');
 
         const result = await correlateUser({
             sourceId:      srcId,
@@ -245,3 +249,31 @@ describe('correlateUser()', () => {
         expect(result).not.toBeNull();
     });
 });
+
+describe('fail closed without a per-deployment salt (spec §20)', () => {
+    const { isUsableSalt, correlationStatus } = require('../../src/pipeline/correlation-gate');
+    const OPEN = { CORRELATION_DPIA_REF: 'DPIA-1', CORRELATION_ENABLED: 'true' };
+
+    it('unset or placeholder salts are not salts: correlation is misconfigured (off) and no pseudonym is computed', async () => {
+        for (const salt of [undefined, '', '0'.repeat(64), 'changeme', 'pulse-of-ai-default-salt', 'short', '<your-salt>', '${CORRELATION_SALT}']) {
+            expect([salt, isUsableSalt(salt)]).toEqual([salt, false]);
+            expect(correlationStatus({ ...OPEN, CORRELATION_SALT: salt }).status).toBe('misconfigured');
+            expect(() => computeSignalHash({ a: 1 }, salt)).toThrow(/per-deployment salt/);
+        }
+        const prior = process.env.CORRELATION_SALT;
+        process.env.CORRELATION_SALT = '0'.repeat(64);
+        try {
+            await expect(correlateUser({ sourceId: '00000000-0000-4000-8000-000000000001', signalHash: 'h', confidence: 0.99 }))
+                .rejects.toThrow(/unset or a placeholder/);
+        } finally { process.env.CORRELATION_SALT = prior; }
+    });
+
+    it('a set salt gives deployment-specific signals: the same signals differ across deployments', () => {
+        const s1 = 'deployment-one-salt-a1b2c3d4';
+        const s2 = 'deployment-two-salt-e5f6a7b8';
+        expect(isUsableSalt(s1)).toBe(true);
+        expect(computeSignalHash({ topics: ['llm'] }, s1)).not.toBe(computeSignalHash({ topics: ['llm'] }, s2));
+        expect(correlationStatus({ ...OPEN, CORRELATION_SALT: s1 })).toMatchObject({ enabled: true });
+    });
+});
+

@@ -20,6 +20,8 @@
 
 'use strict';
 
+const { isUsableSalt } = require('./correlation-gate');
+
 const crypto = require('crypto');
 const { adjectives, animals, uniqueNamesGenerator } = require('unique-names-generator');
 const { dbGet, dbRun } = require('../db/connection');
@@ -78,7 +80,7 @@ function generatePseudoId(seed) {
 function computeSignalHash(signals, salt) {
     // Keyed (HMAC-SHA256 with the deployment salt), so the stored signal
     // cannot be confirmed from a guessed signal without the salt.
-    if (typeof salt !== 'string' || salt === '') throw new Error('computeSignalHash needs the deployment salt');
+    if (!isUsableSalt(salt)) throw new Error('computeSignalHash needs the per-deployment salt (unset or placeholder)');
     return crypto.createHmac('sha256', salt).update(JSON.stringify(signals)).digest('hex');
 }
 
@@ -112,7 +114,9 @@ async function correlateUser({ sourceId, signalHash, topicAffinity = [], confide
     // Derive pseudo_id deterministically from signal hash + deployment salt
     // Spec §20: salted per deployment — never a default salt.
     const salt    = process.env.CORRELATION_SALT;
-    if (!salt) throw new Error('CORRELATION_SALT is not set: correlation needs the per-deployment salt (spec §20)');
+    if (!isUsableSalt(salt)) {
+        throw new Error('CORRELATION_SALT is unset or a placeholder: no pseudonym is computed without the per-deployment salt (spec §20)');
+    }
     const pseudoId = generatePseudoId(signalHash + salt);
 
     // Check if this pseudo_id already exists (same behavioral fingerprint)

@@ -36,7 +36,7 @@ beforeEach(() => {
 });
 
 // The DPIA gate is open for these tests (spec §20); gate-closed refusal is below.
-const OPEN = { CORRELATION_DPIA_REF: 'DPIA-2026-01', CORRELATION_ENABLED: 'true', CORRELATION_SALT: 's' };
+const OPEN = { CORRELATION_DPIA_REF: 'DPIA-2026-01', CORRELATION_ENABLED: 'true', CORRELATION_SALT: 'correlate-test-deployment-salt' };
 
 describe('processCorrelateJob()', () => {
     it('calls correlateUser with sourceId, signalHash, topicAffinity, confidence', async () => {
