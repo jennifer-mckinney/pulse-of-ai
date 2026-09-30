@@ -32,7 +32,11 @@ test('audit drawer: audiences, bias layers, timer freeze, close restores view', 
         { timeout: 15000 });
 
     // Timeline loaded: ingest → sentiment → relevance → bias ⇒ ≥ 3 steps.
+    // The kicker renders before the timeline fetch resolves, so wait for the
+    // third step (auto-retrying) instead of counting once — a one-shot
+    // count() raced the fetch and read 0 on a fresh database.
     const steps = drawer.locator('.steps .step');
+    await expect(steps.nth(2)).toBeAttached({ timeout: 15000 });
     expect(await steps.count()).toBeGreaterThanOrEqual(3);
 
     // Audience tabs — all four present, defaulting to Public.
@@ -92,8 +96,10 @@ test('audit drawer: audiences, bias layers, timer freeze, close restores view', 
     expect(layerVals.some((t) => t.includes('τ')), 'τ threshold values').toBe(true);
     // P0-3: the computed Demographic parity row states what it measures
     // (source categories, not people) — the versioned bias config's note.
+    // bias@1.4.0 (migration 032) adds its minimum-sample rule to that note.
     await expect(layers.first().locator('.layer-note'))
-        .toHaveText('parity measured across source categories (platform), not user demographics');
+        .toHaveText('parity measured across source categories (platform), not user demographics; '
+            + 'only categories with at least 10 posts in the job are compared');
 
     // Timer froze at the FIRST receipt (US-1) and stays frozen.
     await expect(page.locator('#insight-label')).toHaveText('first receipt ✓');

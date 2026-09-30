@@ -14,9 +14,17 @@
 #         IP is the loopback address (nothing listens on 0.0.0.0)
 #   F9-2  collector credential VALUES are set on `worker` only; web gets a
 #         presence marker ("set") per credential, migrate and populate get
-#         none; the base secrets (DB, Redis, AUDIT_HASH_KEY,
-#         CORRELATION_SALT) go to every role
+#         none; the base secrets (DB, Redis, AUDIT_HASH_KEY) go to every role
+#         but the watchdog
+#   L1    CORRELATION_SALT's VALUE is set on `worker` only (PR #22 security
+#         L1); web gets the presence flag CORRELATION_SALT_SET, the other
+#         roles nothing
+#   #12   (PR #22 principal #12) SMTP_PASSWORD reaches the watchdog only —
+#         the worker blanks its env-file copy, web gets no value or marker —
+#         and the watchdog holds only the DB password and SMTP settings,
+#         publishes no port and loads no env file
 #   F9-8  the unauthenticated embeddings API publishes no host port
+#   Q     the queue store is valkey/valkey 8.x (same digest in compose and CI)
 #   F9-6  every pulled image (compose services, Dockerfile bases, CI service
 #         containers) is pinned by @sha256 digest
 #   P9-7  every service rotates json-file logs; the worker has a healthcheck
@@ -46,7 +54,7 @@ fi
 # values for the required secrets (never real ones).
 cfg=$(env -i PATH="$PATH" HOME="$HOME" ${DOCKER_HOST:+DOCKER_HOST="$DOCKER_HOST"} \
     ${DOCKER_CONTEXT:+DOCKER_CONTEXT="$DOCKER_CONTEXT"} \
-    POSTGRES_PASSWORD=compose-check REDIS_PASSWORD=compose-check \
+    POSTGRES_PASSWORD=compose-check REDIS_PASSWORD=compose-check PULSE_ENV_FILE=/dev/null \
     docker compose --project-directory "$ROOT" -f "$ROOT/docker-compose.yml" \
         --env-file /dev/null -p compose-check --profile full --profile demo \
         config --format json)
@@ -80,15 +88,25 @@ check "by default every published port binds 127.0.0.1" "$not_lo"
 # ${NAME:+set} in x-collector-presence) so it can report source status, and
 # migrate / populate get nothing. A second resolution with dummy credentials
 # (CRED_PROBE) proves the marker, not the value, reaches web.
-BASE_SECRETS='["POSTGRES_PASSWORD","REDIS_PASSWORD","AUDIT_HASH_KEY","CORRELATION_SALT","PROVENANCE_KEY","REFRESH_TOKEN"]'
+BASE_SECRETS='["POSTGRES_PASSWORD","REDIS_PASSWORD","AUDIT_HASH_KEY","PROVENANCE_KEY","REFRESH_TOKEN"]'
 CRED_RE='(_TOKEN|_SECRET|_API_KEY|_KEY|_PASSWORD|_CLIENT_SECRET|_CLIENT_ID|_EMAIL|_IMAP_USER|_IMAP_HOST|_FEED_URL|_PATH|_DIR)$'
 CRED_PROBE=(YOUTUBE_API_KEY GITHUB_TOKEN TIKTOK_RESEARCH_CLIENT_SECRET SCHOLAR_ALERTS_IMAP_PASSWORD
     NCBI_EMAIL CNN_FEED_URL JSTOR_DATASET_PATH REUTERS_CONNECT_CLIENT_ID)
 probe_env=()
 for k in "${CRED_PROBE[@]}"; do probe_env+=("$k=probe-secret-$k"); done
+# PR #22 principal #12: the SMTP password is probed too; it must reach the
+# watchdog ONLY (checked below), not the worker that loads the env file.
+probe_env+=("SMTP_PASSWORD=probe-secret-SMTP_PASSWORD")
+# P10-18: the worker gets credentials from its env_file (PULSE_ENV_FILE), so
+# the probes are written to a throwaway env file as well as the process env
+# (the latter drives web's ${NAME:+set} presence markers).
+probe_file=$(mktemp "${TMPDIR:-/tmp}/compose-check-env.XXXXXX")
+trap 'rm -f "$probe_file"' EXIT
+printf '%s\n' "${probe_env[@]}" > "$probe_file"
 cfg_probe=$(env -i PATH="$PATH" HOME="$HOME" ${DOCKER_HOST:+DOCKER_HOST="$DOCKER_HOST"} \
     ${DOCKER_CONTEXT:+DOCKER_CONTEXT="$DOCKER_CONTEXT"} \
-    POSTGRES_PASSWORD=compose-check REDIS_PASSWORD=compose-check "${probe_env[@]}" \
+    POSTGRES_PASSWORD=compose-check REDIS_PASSWORD=compose-check CORRELATION_SALT=probe-salt-value \
+    PULSE_ENV_FILE="$probe_file" "${probe_env[@]}" \
     docker compose --project-directory "$ROOT" -f "$ROOT/docker-compose.yml" \
         --env-file /dev/null -p compose-check --profile full --profile demo \
         config --format json)
@@ -96,14 +114,46 @@ leaks=$(jq -r --argjson base "$BASE_SECRETS" --arg re "$CRED_RE" '.services | to
     | select(.key != "worker") | .key as $s
     | (.value.environment // {}) | to_entries[]
     | select(.key | test($re)) | select(.key as $k | $base | index($k) | not)
+    | select(($s != "watchdog") or (.key != "SMTP_PASSWORD"))
     | select(($s != "web") or ((.value // "") != "" and .value != "set"))
     | "\($s) receives collector credential \(.key)"' <<< "$cfg_probe")
 check "collector credential values are passed to worker only" "$leaks"
+
+# ─── Principal #12: the watchdog's secret split ──────────────────────────────
+# SMTP_PASSWORD reaches the watchdog and nothing else: the worker loads the
+# env file whole, so compose must blank it there; web gets neither the value
+# nor a presence marker (the watchdog reports e-mail status via the DB). The
+# watchdog itself gets the database password and the SMTP settings only — no
+# Redis password, audit / correlation / provenance key, refresh token or
+# collector credential — and publishes no port.
+smtp_split=$(jq -r '.services | to_entries[] | .key as $s | (.value.environment // {}) as $e
+    | if $s == "watchdog" then
+          (if ($e.SMTP_PASSWORD // "") != "probe-secret-SMTP_PASSWORD" then "watchdog lacks SMTP_PASSWORD" else empty end)
+      elif ($e.SMTP_PASSWORD // "") != "" then "\($s) receives SMTP_PASSWORD (\($e.SMTP_PASSWORD | if . == "set" then "presence marker" else "value" end))"
+      else empty end' <<< "$cfg_probe")
+check "SMTP_PASSWORD reaches the watchdog only (worker blanks its env-file copy)" "$smtp_split"
+wd_extra=$(jq -r --arg re "$CRED_RE" '(.services.watchdog // {}) as $w
+    | if ($w | length) == 0 then "no watchdog service in the full profile" else
+      (($w.environment // {}) | to_entries[] | select(.key | test($re))
+        | select(.key != "POSTGRES_PASSWORD" and .key != "SMTP_PASSWORD")
+        | "watchdog receives \(.key)"),
+      (($w.ports // [])[] | "watchdog publishes \(.published)->\(.target)"),
+      (if ($w.env_file // null) != null then "watchdog loads an env_file" else empty end),
+      (if ($w.profiles // []) | index("full") | not then "watchdog is not in the full profile" else empty end)
+      end' <<< "$cfg_probe")
+check "the watchdog holds only the DB password and SMTP settings, publishes no port" "$wd_extra"
 probe_json=$(printf '%s\n' "${CRED_PROBE[@]}" | jq -R . | jq -s .)
 missing_values=$(jq -r --argjson probe "$probe_json" '(.services.worker.environment // {}) as $w
     | $probe[] | select(. as $k | ($w[$k] // "") != "probe-secret-\($k)")
-    | "worker lacks the value of \(.) (x-collector-env)"' <<< "$cfg_probe")
-check "worker receives the collector credentials (x-collector-env)" "$missing_values"
+    | "worker lacks the value of \(.) (its env_file)"' <<< "$cfg_probe")
+check "worker receives the collector credentials (env_file, P10-18)" "$missing_values"
+# PR #22 grumpy L12: the worker's env_file is required (the resolved config
+# inlines env_file values, so the source file is read).
+env_optional=$(awk '/^  worker:/{w=1} w&&/^  [a-z_]+:$/&&!/^  worker:/{w=0} w&&/required:/{print}' "$ROOT/docker-compose.yml" \
+    | { grep -v 'required: true' || true; } | sed 's/^ */worker env_file: /')
+env_required=$(awk '/^  worker:/{w=1} w&&/^  [a-z_]+:$/&&!/^  worker:/{w=0} w&&/required: true/{print}' "$ROOT/docker-compose.yml")
+[[ -z "$env_required" ]] && env_optional="${env_optional:-worker env_file has no required: true}"
+check "the worker's env_file is required (a missing file fails loudly)" "$env_optional"
 nomark=$(jq -r --argjson probe "$probe_json" '(.services.web.environment // {}) as $w
     | $probe[] | select(. as $k | ($w[$k] // "") != "set")
     | "web lacks the presence marker for \(.) (x-collector-presence)"' <<< "$cfg_probe")
@@ -112,6 +162,22 @@ unset_mark=$(jq -r --argjson probe "$probe_json" '(.services.web.environment // 
     | $probe[] | select(. as $k | ($w[$k] // "") != "")
     | "web marks \(.) as set while it is unset"' <<< "$cfg")
 check "an unset credential has no presence marker on web" "$unset_mark"
+
+# ─── L1: the correlation salt reaches the worker only ────────────────────────
+salt_leaks=$(jq -r '.services | to_entries[] | select(.key != "worker") | .key as $s
+    | (.value.environment // {}) | to_entries[]
+    | select(.key == "CORRELATION_SALT" or ((.value // "") | tostring | contains("probe-salt-value")))
+    | "\($s) receives the correlation salt (\(.key))"' <<< "$cfg_probe")
+check "CORRELATION_SALT's value is passed to worker only (security L1)" "$salt_leaks"
+salt_worker=$(jq -r '(.services.worker.environment.CORRELATION_SALT // "") as $v
+    | if $v == "probe-salt-value" then empty else "worker lacks CORRELATION_SALT (got \"\($v)\")" end' <<< "$cfg_probe")
+check "worker receives CORRELATION_SALT" "$salt_worker"
+salt_flag=$(jq -r '(.services.web.environment.CORRELATION_SALT_SET // "") as $v
+    | if $v == "set" then empty else "web lacks the CORRELATION_SALT_SET presence flag (got \"\($v)\")" end' <<< "$cfg_probe")
+check "web receives only the CORRELATION_SALT_SET presence flag" "$salt_flag"
+salt_flag_unset=$(jq -r '(.services.web.environment.CORRELATION_SALT_SET // "") as $v
+    | if $v == "" then empty else "web flags the salt as set while it is unset (\"\($v)\")" end' <<< "$cfg")
+check "an unset salt has no presence flag on web" "$salt_flag_unset"
 
 # ─── F9-8: the embeddings API is never published ─────────────────────────────
 emb_ports=$(jq -r '(.services.embeddings.ports // [])[]
@@ -149,6 +215,16 @@ check "Dockerfile base images are pinned by @sha256 digest" "$unpinned_df"
 unpinned_ci=$(grep -nE '^[[:space:]]+image:' "$ROOT/.github/workflows/ci.yml" \
     | grep -vE '@sha256:[0-9a-f]{64}' | sed 's/^/ci.yml:/' || true)
 check "CI service images are pinned by @sha256 digest" "$unpinned_ci"
+# The queue store is Valkey (BSD-3-Clause), not the source-available Redis
+# image, and CI tests against the exact image compose runs.
+queue_img=$(jq -r '.services.redis.image // ""' <<< "$cfg")
+ci_queue_img=$(awk '/^      redis:/ { f = 1; next } f && /image:/ { print $2; exit }' "$ROOT/.github/workflows/ci.yml")
+check "the queue store is the pinned valkey/valkey 8.x image, in compose and CI alike" "$(
+    [[ "$queue_img" =~ ^valkey/valkey:8\.[0-9.]+-alpine@sha256:[0-9a-f]{64}$ ]] \
+        || echo "compose redis service image is '$queue_img', not valkey/valkey:8.x-alpine@sha256"
+    [[ "$ci_queue_img" == "$queue_img" ]] \
+        || echo "CI redis service image '$ci_queue_img' differs from compose '$queue_img'"
+    grep -nE 'image:[[:space:]]*(docker\.io/)?(library/)?redis[:@]' "$ROOT/docker-compose.yml" "$ROOT/.github/workflows/ci.yml" || true)"
 
 # F9-6: the embeddings image installs a hash-locked requirement set.
 req="$ROOT/python/requirements-service.txt"

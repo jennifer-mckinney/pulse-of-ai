@@ -225,7 +225,8 @@ describe('JSON APIs (recorded)', () => {
             [/list=recentchanges/, { body: '{"query":{"recentchanges":[{"title":"Talk:Artificial intelligence"}]}}' }],
             [/discussiontoolspageinfo/, 'recorded/wiki-talk-ai.json'],
         ];
-        const r = await run('wikipedia', 'ai-talk-pages', routes);
+        const env = { ...TEST_ENV, AUDIT_HASH_KEY: 'test-provenance-key-0123456789' };
+        const r = await run('wikipedia', 'ai-talk-pages', routes, { env });
         expect(r.fetched).toBeGreaterThan(0);
         expect(r.cursor.set.length).toBeGreaterThan(0);
         for (const p of r.payloads) {
@@ -233,8 +234,17 @@ describe('JSON APIs (recorded)', () => {
             expect(p.text).not.toMatch(/\(UTC\)|ExampleEditor/);
             expect(p.attribution).toMatch(/CC BY-SA/);
         }
-        const again = await run('wikipedia', 'ai-talk-pages', routes, { cursor: r.cursor });
+        const again = await run('wikipedia', 'ai-talk-pages', routes, { cursor: r.cursor, env });
         expect(again.transport.calls.filter(c => /categorymembers/.test(c.url))).toHaveLength(0);
+    });
+
+    // PR #22 security L7: comment ids embed usernames; never an unkeyed hash.
+    test('Wikipedia talk pages without a provenance key: no request at all, a warning, nothing stored', async () => {
+        const env = { ...TEST_ENV, AUDIT_HASH_KEY: '', PROVENANCE_KEY: '' };
+        const r = await run('wikipedia', 'ai-talk-pages', [[/./, { body: '{}' }]], { env });
+        expect(r.transport.calls).toHaveLength(0);
+        expect(r.payloads).toEqual([]);
+        expect(r.warnings.map(w => w.text)).toEqual([expect.stringMatching(/need PROVENANCE_KEY or AUDIT_HASH_KEY/)]);
     });
 });
 
@@ -259,7 +269,7 @@ describe('buildCollectors (registry-wide)', () => {
     test('with every credential set: every source builds, paid tiers replace free feeds', () => {
         const env = { ...TEST_ENV };
         for (const k of registryEnvVars()) {
-            if (/COLLECTORS_ENABLED|COLLECTORS_DISABLED/.test(k)) continue;
+            if (/COLLECTORS_ENABLED|COLLECTORS_DISABLED|GATE_APPROVED_BY/.test(k)) continue;   // G5 approval kept from TEST_ENV
             // Endpoint URLs must be https on a public host (F10-11); WeChat's
             // feed must sit on its authorized host (G10-17).
             // Reddit's User-Agent must follow Reddit's own format.

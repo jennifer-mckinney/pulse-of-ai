@@ -736,6 +736,13 @@
             els.legend.appendChild(pos);
             els.legend.appendChild(el('span', 'legend-sep', 'size = volume/hr'));
         }
+        // D3 (ADR 0001, "Separate layer, excluded from bias."): the
+        // publisher-location layer's key, in both flavors — a dashed ring
+        // marks posts placed at their publisher's home city.
+        const pub = el('span', 'legend-pub', 'publisher location');
+        pub.title = 'Dashed ring: posts placed at the publisher\'s home city (e.g. BBC in London), '
+            + 'not where the discussion happened. Excluded from the location bias check.';
+        els.legend.appendChild(pub);
     }
 
     // ── Next-steps card (persists into explore until picked/dismissed) ──────

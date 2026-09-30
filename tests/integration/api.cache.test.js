@@ -99,4 +99,57 @@ describe('response cache (F3)', () => {
         expect(again.status).toBe(400);
         expect(again.headers['x-response-cache']).not.toBe('hit');
     });
+
+    // PR #22 security L2: /api/health fans out to Redis and Postgres; a 5 s
+    // cache keyed on the path alone bounds unauthenticated load.
+    describe('/api/health (security L2)', () => {
+        const health = require('../../src/routes/health');
+        beforeEach(() => health._setQueueCountsForTests(async () => ({})));
+        afterEach(() => { health._setRedisClientForTests(null); health._setQueueCountsForTests(null); });
+
+        it('caches for 5 s: the second call does not touch Redis or the database', async () => {
+            expect(health.HEALTH_CACHE_TTL_MS).toBeGreaterThanOrEqual(5000);
+            expect(health.HEALTH_CACHE_TTL_MS).toBeLessThanOrEqual(10000);
+            const ping = jest.fn(async () => 'PONG');
+            health._setRedisClientForTests({ ping, get: async () => null });
+            const first = await request(app).get('/api/health');
+            expect(first.headers['x-response-cache']).toBe('miss');
+            const job = await insertJob('completed', { postsProcessed: 9 });
+            const second = await request(app).get('/api/health');
+            expect(second.headers['x-response-cache']).toBe('hit');
+            expect(second.body).toEqual(first.body);
+            expect(second.body.last_job).toBeNull();          // the write inside the TTL is not visible
+            expect(ping).toHaveBeenCalledTimes(1);
+            _clear();
+            const third = await request(app).get('/api/health');
+            expect(third.body.last_job.id).toBe(job);
+        });
+
+        it('a varying query string cannot bypass the cache', async () => {
+            const ping = jest.fn(async () => 'PONG');
+            health._setRedisClientForTests({ ping, get: async () => null });
+            await request(app).get('/api/health');
+            for (let i = 0; i < 5; i++) {
+                const r = await request(app).get(`/api/health?bust=${i}`);
+                expect(r.headers['x-response-cache']).toBe('hit');
+            }
+            expect(ping).toHaveBeenCalledTimes(1);
+        });
+
+        it('expires after the TTL', async () => {
+            const realNow = Date.now;
+            const ping = jest.fn(async () => 'PONG');
+            health._setRedisClientForTests({ ping, get: async () => null });
+            try {
+                await request(app).get('/api/health');
+                const t = realNow();
+                Date.now = () => t + health.HEALTH_CACHE_TTL_MS + 1;
+                const r = await request(app).get('/api/health');
+                expect(r.headers['x-response-cache']).toBe('miss');
+                expect(ping).toHaveBeenCalledTimes(2);
+            } finally {
+                Date.now = realNow;
+            }
+        });
+    });
 });

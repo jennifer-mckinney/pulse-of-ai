@@ -15,6 +15,10 @@
 //     landing between the reads (G9-2)
 //   - worker heartbeat: /api/health reports Redis reachable and the worker
 //     alive (P9-7) — WARN by default, FAIL with --expect-worker (standup)
+//   - worker failed jobs: every BullMQ queue in /api/health's worker.queues
+//     has 0 failed jobs (a legitimately purged or blanked post completes as
+//     a no-op, so any failure is a real error) — WARN by default, FAIL with
+//     --expect-worker; unreadable counts are never read as 0
 //   - GET / serves the story page (index.html + its main.js bundle)
 //   - the page's own API calls return DATA, not just 200: aggregated cities
 //     in the trailing hour (with coordinates), themes, latest bias job,
@@ -143,6 +147,23 @@ async function checkDataMode({ readAggregated, readHealthMode, attempts = 3, del
     return last;
 }
 
+/**
+ * 0 failed jobs on every queue of /api/health's worker.queues. Counts that
+ * could not be read (null) are not a pass.
+ * @param {Record<string, { failed: number }>|null} queues
+ * @returns {{ ok: boolean, detail: string }}
+ */
+function failedJobsVerdict(queues) {
+    if (!queues || typeof queues !== 'object') {
+        return { ok: false, detail: 'queue counts unavailable from /api/health (redis unreachable or the read timed out)' };
+    }
+    const failed = Object.entries(queues)
+        .map(([name, c]) => [name, Number(c && c.failed) || 0])
+        .filter(([, n]) => n > 0);
+    if (failed.length === 0) return { ok: true, detail: `0 failed jobs on ${Object.keys(queues).length} queues` };
+    return { ok: false, detail: failed.map(([name, n]) => `${name}: ${n} failed`).join(', ') };
+}
+
 async function counts() {
     const one = async (sql) => (await db.dbGet(sql)).n;
     return {
@@ -217,6 +238,28 @@ async function run(opts, out) {
             ? `redis reachable, worker not alive (last beat ${w.last_heartbeat || 'never'})`
             : 'redis NOT reachable from web';
         (opts.expectWorker ? r.fail : r.warn)('worker heartbeat', detail);
+    });
+
+    await check(r, 'worker failed jobs', async () => {
+        const { body } = await getJson(base, '/api/health');
+        const queues = body && body.worker ? body.worker.queues : null;
+        const verdict = failedJobsVerdict(queues);
+        (verdict.ok ? r.pass : (opts.expectWorker ? r.fail : r.warn))('worker failed jobs', verdict.detail);
+    });
+
+    // PR #22 principal #12: the external watchdog. WARN only — its first
+    // poll comes WATCHDOG_INITIAL_DELAY_S after it starts, and host-side
+    // `npm run dev` runs no watchdog at all.
+    await check(r, 'watchdog', async () => {
+        const { body } = await getJson(base, '/api/health');
+        const wd = body && body.watchdog;
+        if (!wd) { r.warn('watchdog', '/api/health has no watchdog block'); return; }
+        const email = (wd.email && wd.email.status) || 'unknown';
+        if (wd.reporting) {
+            r.pass('watchdog', `reporting (last poll ${wd.last_poll_at}); ${(wd.open || []).length} open condition(s); e-mail ${email}`);
+        } else {
+            r.warn('watchdog', `not reporting yet (last poll ${wd.last_poll_at || 'never'}); e-mail ${email}`);
+        }
     });
 
     // ── Source registry + per-source collection status ─────────────────────
@@ -404,12 +447,12 @@ if (require.main === module) {
     try {
         opts = parseArgs(process.argv.slice(2));
     } catch (err) {
-        process.stderr.write(`smoke-check: ${err.message}\n`);
+        process.stderr.write(require('../src/collectors/redact').scrub(`smoke-check: ${err.message}`) + '\n');
         process.exit(2);
     }
     run(opts, line => process.stdout.write(line + '\n'))
         .catch((err) => {
-            process.stderr.write(`smoke-check: FAILED — ${err.message}\n`);
+            process.stderr.write(require('../src/collectors/redact').scrub(`smoke-check: FAILED — ${err.message}`) + '\n');
             return 1;
         })
         .then(async (code) => {
@@ -418,4 +461,4 @@ if (require.main === module) {
         });
 }
 
-module.exports = { parseArgs, run, modeOfAggregatedRows, checkDataMode };
+module.exports = { parseArgs, run, modeOfAggregatedRows, checkDataMode, failedJobsVerdict };

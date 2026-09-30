@@ -27,6 +27,7 @@ const OPEN_ENV = {
     COLLECTOR_CONTACT_URL: 'https://example.org/contact',
     REDDIT_CLIENT_ID: 'id', REDDIT_CLIENT_SECRET: 'secret',
     REDDIT_USER_AGENT: 'server:pulse-of-ai:v1.0.0 (by /u/example_user)', REDDIT_API_APPROVAL_REF: 'RBP-1',
+    GATE_APPROVED_BY: 'Test Operator 2026-09-29',   // PR #22 decision G5
 };
 
 let ids;
@@ -73,7 +74,9 @@ describe('48-hour retention: text blanked, scores and audit rows kept (ruling 9)
         const before = { old: await snapshotRows(old), fresh: await snapshotRows(fresh), hn: await snapshotRows(hn) };
 
         const totals = await retention.blankExpired();
-        expect(totals).toEqual({ reddit: 1 });
+        // Every real source is visited (P10-2); only the Reddit post changed.
+        expect(totals.reddit).toBe(1);
+        expect(Object.values(totals).reduce((a, b) => a + b, 0)).toBe(1);
 
         const after = await snapshotRows(old);
         expect(after.post.content).toBe('[removed: Reddit Data API Terms retention]');
@@ -97,7 +100,7 @@ describe('48-hour retention: text blanked, scores and audit rows kept (ruling 9)
         expect(JSON.parse(log[0].reason)).toEqual(expect.objectContaining({ source: 'reddit', post_ids: [old], rule: '48-hour retention' }));
 
         // Idempotent: nothing left to blank, no new log row.
-        expect(await retention.blankExpired()).toEqual({ reddit: 0 });
+        expect(Object.values(await retention.blankExpired()).reduce((a, b) => a + b, 0)).toBe(0);
         expect(await db.dbAll('SELECT id FROM data_retention_log')).toHaveLength(1);
     });
 
@@ -109,7 +112,59 @@ describe('48-hour retention: text blanked, scores and audit rows kept (ruling 9)
         expect(blanked).toEqual([r]);
         expect(await snapshotRows(hn)).toEqual(hnBefore);
         await expect(retention.blankPosts('hacker_news', [hn], { reason: 'x' })).rejects.toThrow(/no platform-terms retention/);
-        expect(retention.retentionSources().map(s => s.slug)).toEqual(['reddit']);
+        // P10-2: YouTube and TikTok (30 days) have platform windows too; the
+        // Guardian's was withdrawn ("Use normal retention", 2026-09-29).
+        expect(retention.retentionSources().map(s => s.slug).sort()).toEqual(['reddit', 'tiktok', 'youtube']);
+    });
+});
+
+// PR #22 decision G3 (Jennifer, 2026-09-29): the embedding is derived from
+// the text, so platform-terms blanking deletes it in the same transaction;
+// scores and audit rows stay (ruling 9). The §19 detail window leaves
+// embeddings to monthly compaction.
+describe('G3: platform-terms blanking deletes the post embedding, keeps scores and audit rows', () => {
+    const embeddings = async (id) => (await db.dbGet('SELECT COUNT(*)::int AS n FROM post_embeddings WHERE raw_post_id = $1', [id])).n;
+    const embed = (id) => db.dbRun('INSERT INTO post_embeddings (raw_post_id) VALUES ($1)', [id]);
+
+    it('48 h window: the blanked post loses its embedding, the fresh one and other sources keep theirs', async () => {
+        const old = await redditPost('t3_emb01', 49);
+        const fresh = await redditPost('t3_emb02', 1);
+        const hn = await insertPostWithFullPipeline(ids.hacker_news, jobId, mv, { externalId: 'hn:emb', collectedAt: new Date(Date.now() - 100 * HOUR) });
+        for (const id of [old, fresh, hn]) await embed(id);
+        const before = await snapshotRows(old);
+
+        await retention.blankExpired();
+        expect(await embeddings(old)).toBe(0);
+        expect(await embeddings(fresh)).toBe(1);
+        expect(await embeddings(hn)).toBe(1);
+        const after = await snapshotRows(old);
+        for (const k of ['audit', 'sentiment', 'relevance', 'discourse']) expect([k, after[k]]).toEqual([k, before[k]]);
+        const log = JSON.parse((await db.dbGet(`SELECT reason FROM data_retention_log WHERE action = 'blanked_platform_terms'`)).reason);
+        expect(log).toMatchObject({ post_ids: [old], embeddings_deleted: 1, retained: expect.stringMatching(/embedding.*deleted.*G3/) });
+    });
+
+    it('upstream deletion (blankPosts) deletes the embedding in the same transaction; a failed blank keeps it', async () => {
+        const r = await redditPost('t3_emb03', 1);
+        await embed(r);
+        // The whole batch rolls back when the log insert fails: text AND embedding stay.
+        await expect(db.dbTransaction(async (client) => {
+            await retention.blankPlatformPosts(client, 'reddit', [r], { reason: 'x', rule: 'x', performedBy: 'test' });
+            throw new Error('abort');
+        })).rejects.toThrow('abort');
+        expect(await embeddings(r)).toBe(1);
+        expect((await db.dbGet('SELECT text_removed_at FROM raw_posts WHERE id = $1', [r])).text_removed_at).toBeNull();
+
+        expect(await retention.blankPosts('reddit', [r], { reason: 'deleted upstream' })).toEqual([r]);
+        expect(await embeddings(r)).toBe(0);
+    });
+
+    it('the detail window (§19) blanks text but leaves the embedding to compaction', async () => {
+        const hn = await insertPostWithFullPipeline(ids.hacker_news, jobId, mv, { externalId: 'hn:old', collectedAt: new Date(Date.now() - 91 * 24 * HOUR) });
+        await embed(hn);
+        expect((await retention.blankExpired()).hacker_news).toBe(1);
+        expect(await embeddings(hn)).toBe(1);
+        const log = JSON.parse((await db.dbGet(`SELECT reason FROM data_retention_log WHERE action = 'text_removed_detail_window'`)).reason);
+        expect(log).not.toHaveProperty('embeddings_deleted');
     });
 });
 
@@ -201,7 +256,7 @@ describe('receipts and replay of a blanked Reddit post', () => {
         const text = out.join('\n');
         expect(code).toBe(3);
         expect(text).toContain('[NOT RE-RUNNABLE] sentiment');
-        expect(text).toMatch(/post text removed under platform terms \(48-hour retention window ended\).*content hash no longer matches.*retained by owner decision/);
+        expect(text).toMatch(/post text removed under the retention rules \(48-hour retention window ended\).*content hash no longer matches.*retained by owner decision/);
         expect(text).not.toContain('[DIVERGENCE]');
     });
 });
@@ -223,11 +278,17 @@ describe('the shared request budget (DbBudget)', () => {
 });
 
 describe('maintenance: retention always, API jobs only behind the open gate', () => {
-    it('with the gate closed it still blanks expired text and makes no API call', async () => {
-        await redditPost('t3_m01', 60);
+    it('with the gate closed it makes no API call; the 48 h text retention runs in the maintenance job whatever the gate', async () => {
+        const id = await redditPost('t3_m01', 60);
         const r = await maintenance.runRedditMaintenance({ env: {} , api: { info: () => { throw new Error('must not call'); } } });
-        expect(r.blanked).toEqual({ reddit: 1 });
+        expect(r.blanked).toBeUndefined();
         expect(r.api).toMatch(/^skipped: /);
+        // P10-2: the worker's repeatable maintenance job owns retention.
+        const { processMaintenanceJob } = require('../../src/workers/maintenance.worker');
+        const out = await processMaintenanceJob({}, { steps: [['retention', () => retention.blankExpired()]] });
+        expect(out.retention.ok).toBe(true);
+        expect(out.retention.result.reddit).toBe(1);
+        expect((await db.dbGet('SELECT text_removed_at FROM raw_posts WHERE id = $1', [id])).text_removed_at).not.toBeNull();
     });
 
     it('with the gate open: re-check and discovery run once when due, the snapshot replaces the provisional list', async () => {

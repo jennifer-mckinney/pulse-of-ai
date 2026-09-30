@@ -1,17 +1,21 @@
 // tests/unit/correlation.test.js
 // TDD tests for src/pipeline/correlation.js
 //
-// Covers: pseudo ID generation, signal hashing, user creation, sighting tracking,
-// confidence threshold enforcement, and idempotency.
+// Covers: pseudo ID generation, signal hashing, and correlateUser's refusal
+// (not implemented: signal design pending DPIA, PR #22 grumpy M7).
 
 'use strict';
 
-const { dbGet, dbRun, dbAll } = require('../../src/db/connection');
+// A real (non-placeholder) per-deployment salt for these tests; the CI's
+// placeholder (64 zeros) is refused by design (spec §20, fail closed).
+process.env.CORRELATION_SALT = 'unit-test-deployment-salt-7f3a9c';
+
+const { dbGet, dbRun } = require('../../src/db/connection');
 const {
     generatePseudoId,
     computeSignalHash,
     correlateUser,
-    CORRELATION_MIN_CONFIDENCE,
+    CorrelationNotImplementedError,
 } = require('../../src/pipeline/correlation');
 
 // ─── Test helpers ──────────────────────────────────────────────────────────────
@@ -68,180 +72,74 @@ describe('generatePseudoId()', () => {
 
 describe('computeSignalHash()', () => {
     it('returns a 64-character hex string (SHA-256)', () => {
-        const hash = computeSignalHash({ style: 'analytical', topics: ['ai'] }, 'salt');
+        const hash = computeSignalHash({ style: 'analytical', topics: ['ai'] }, 'salt-deployment-0001');
         expect(hash).toMatch(/^[0-9a-f]{64}$/);
     });
 
     it('is deterministic: same signals + salt always produces the same hash', () => {
         const signals = { style: 'formal', topicAffinity: ['ml', 'ethics'] };
-        const a = computeSignalHash(signals, 'test-salt');
-        const b = computeSignalHash(signals, 'test-salt');
+        const a = computeSignalHash(signals, 'test-salt-deployment-01');
+        const b = computeSignalHash(signals, 'test-salt-deployment-01');
         expect(a).toBe(b);
     });
 
     it('produces a different hash when the salt changes', () => {
         const signals = { style: 'formal' };
-        const a = computeSignalHash(signals, 'salt-a');
-        const b = computeSignalHash(signals, 'salt-b');
+        const a = computeSignalHash(signals, 'salt-a-deployment-000');
+        const b = computeSignalHash(signals, 'salt-b-deployment-000');
         expect(a).not.toBe(b);
     });
 
     it('produces a different hash when signals change', () => {
-        const a = computeSignalHash({ style: 'formal' }, 'salt');
-        const b = computeSignalHash({ style: 'casual' }, 'salt');
+        const a = computeSignalHash({ style: 'formal' }, 'salt-deployment-0001');
+        const b = computeSignalHash({ style: 'casual' }, 'salt-deployment-0001');
         expect(a).not.toBe(b);
     });
 });
 
 // ─── correlateUser() ─────────────────────────────────────────────────────────
+// PR #22 grumpy M7: not implemented — no identity signal exists, so no
+// profile may be created from ANY input, including a confidence at or above
+// the spec's threshold. Real module, real test DB: nothing is written.
 
-describe('correlateUser()', () => {
-    it('returns null when confidence is below the minimum threshold', async () => {
-        const srcId = await insertSource('corr-src-low');
-        const result = await correlateUser({
-            sourceId:      srcId,
-            signalHash:    'abc123',
-            topicAffinity: [],
-            confidence:    CORRELATION_MIN_CONFIDENCE - 0.01,
-        });
-        expect(result).toBeNull();
+describe('correlateUser() — not implemented: signal design pending DPIA (M7)', () => {
+    const count = async (t) => (await dbGet(`SELECT COUNT(*)::int AS n FROM ${t}`)).n;
+
+    it.each([0, 0.5, 0.85, 0.99, 1])('refuses confidence %p and writes nothing', async (confidence) => {
+        const srcId = await insertSource('corr-src-refused');
+        const signalHash = computeSignalHash({ topics: ['llm'], hour: 9 }, 'salt-refused-deployment-01');
+        const err = await correlateUser({ sourceId: srcId, signalHash, topicAffinity: ['llm'], confidence }).catch(e => e);
+        expect(err).toBeInstanceOf(CorrelationNotImplementedError);
+        expect(err.message).toMatch(/^not implemented: signal design pending DPIA/);
+        expect(await count('pseudonymous_users')).toBe(0);
+        expect(await count('user_platform_sightings')).toBe(0);
     });
 
-    it('creates a pseudonymous_users row when a new user is correlated', async () => {
-        const srcId = await insertSource('corr-src-new');
-        const hash  = computeSignalHash({ style: 'analytical' }, 'salt-a');
-
-        const result = await correlateUser({
-            sourceId:      srcId,
-            signalHash:    hash,
-            topicAffinity: ['ai', 'ethics'],
-            confidence:    0.90,
-        });
-
-        expect(result).not.toBeNull();
-        const user = await dbGet(
-            'SELECT * FROM pseudonymous_users WHERE id = $1',
-            [result.pseudoUserId],
-        );
-        expect(user).toBeDefined();
-        expect(user.correlation_confidence).toBeCloseTo(0.90, 2);
-    });
-
-    it('returns isNew=true for a genuinely new correlation', async () => {
-        const srcId = await insertSource('corr-src-isnew');
-        const hash  = computeSignalHash({ style: 'academic' }, 'salt-b');
-
-        const result = await correlateUser({
-            sourceId:      srcId,
-            signalHash:    hash,
-            topicAffinity: [],
-            confidence:    CORRELATION_MIN_CONFIDENCE,
-        });
-
-        expect(result.isNew).toBe(true);
-    });
-
-    it('creates a user_platform_sightings row for each correlation', async () => {
-        const srcId = await insertSource('corr-src-sight');
-        const hash  = computeSignalHash({ style: 'casual' }, 'salt-c');
-
-        const result = await correlateUser({
-            sourceId:      srcId,
-            signalHash:    hash,
-            topicAffinity: [],
-            confidence:    0.92,
-        });
-
-        const sighting = await dbGet(
-            'SELECT * FROM user_platform_sightings WHERE pseudo_user_id = $1',
-            [result.pseudoUserId],
-        );
-        expect(sighting).toBeDefined();
-        expect(sighting.source_id).toBe(srcId);
-        expect(sighting.confidence).toBeCloseTo(0.92, 2);
-    });
-
-    it('stores the pseudo_id in adjective-animal format', async () => {
-        const srcId = await insertSource('corr-src-format');
-        const hash  = computeSignalHash({ style: 'technical' }, 'salt-d');
-
-        const result = await correlateUser({
-            sourceId:      srcId,
-            signalHash:    hash,
-            topicAffinity: [],
-            confidence:    0.88,
-        });
-
-        expect(result.pseudoId).toMatch(/^[a-z]+-[a-z]+$/);
-    });
-
-    it('increments platform_count on a repeat sighting', async () => {
-        const srcId  = await insertSource('corr-src-repeat');
-        const src2Id = await insertSource('corr-src-repeat-2', 'news');
-        const hash   = computeSignalHash({ style: 'verbose' }, 'salt-e');
-
-        // First sighting
-        const first = await correlateUser({
-            sourceId:      srcId,
-            signalHash:    hash,
-            topicAffinity: [],
-            confidence:    CORRELATION_MIN_CONFIDENCE,
-        });
-
-        // Second sighting — same signal from a different source
-        const second = await correlateUser({
-            sourceId:      src2Id,
-            signalHash:    hash,
-            topicAffinity: [],
-            confidence:    0.91,
-        });
-
-        expect(second.isNew).toBe(false);
-        expect(second.pseudoUserId).toBe(first.pseudoUserId);
-
-        const user = await dbGet(
-            'SELECT platform_count FROM pseudonymous_users WHERE id = $1',
-            [first.pseudoUserId],
-        );
-        expect(user.platform_count).toBe(2);
-    });
-
-    it('accumulates multiple sightings for the same user', async () => {
-        const srcId = await insertSource('corr-src-multi');
-        const hash  = computeSignalHash({ style: 'concise' }, 'salt-f');
-
-        const first = await correlateUser({
-            sourceId:      srcId,
-            signalHash:    hash,
-            topicAffinity: [],
-            confidence:    CORRELATION_MIN_CONFIDENCE,
-        });
-
-        await correlateUser({
-            sourceId:      srcId,
-            signalHash:    hash,
-            topicAffinity: [],
-            confidence:    CORRELATION_MIN_CONFIDENCE,
-        });
-
-        const sightings = await dbAll(
-            'SELECT * FROM user_platform_sightings WHERE pseudo_user_id = $1',
-            [first.pseudoUserId],
-        );
-        expect(sightings.length).toBeGreaterThanOrEqual(2);
-    });
-
-    it('accepts exactly the minimum confidence threshold', async () => {
-        const srcId = await insertSource('corr-src-exact');
-        const hash  = computeSignalHash({ style: 'neutral' }, 'salt-g');
-
-        const result = await correlateUser({
-            sourceId:      srcId,
-            signalHash:    hash,
-            topicAffinity: [],
-            confidence:    CORRELATION_MIN_CONFIDENCE, // exactly at threshold
-        });
-
-        expect(result).not.toBeNull();
+    it('exports no confidence threshold or profile writer to call around the refusal', () => {
+        const mod = require('../../src/pipeline/correlation');
+        expect(Object.keys(mod).sort()).toEqual(['CorrelationNotImplementedError', 'computeSignalHash', 'correlateUser', 'generatePseudoId']);
     });
 });
+
+describe('fail closed without a per-deployment salt (spec §20)', () => {
+    const { isUsableSalt, correlationStatus } = require('../../src/pipeline/correlation-gate');
+    const OPEN = { CORRELATION_DPIA_REF: 'DPIA-1', CORRELATION_ENABLED: 'true' };
+
+    it('unset or placeholder salts are not salts: correlation is misconfigured (off) and no pseudonym is computed', async () => {
+        for (const salt of [undefined, '', '0'.repeat(64), 'changeme', 'pulse-of-ai-default-salt', 'short', '<your-salt>', '${CORRELATION_SALT}']) {
+            expect([salt, isUsableSalt(salt)]).toEqual([salt, false]);
+            expect(correlationStatus({ ...OPEN, CORRELATION_SALT: salt }).status).toBe('misconfigured');
+            expect(() => computeSignalHash({ a: 1 }, salt)).toThrow(/per-deployment salt/);
+        }
+    });
+
+    it('a set salt gives deployment-specific signals: the same signals differ across deployments', () => {
+        const s1 = 'deployment-one-salt-a1b2c3d4';
+        const s2 = 'deployment-two-salt-e5f6a7b8';
+        expect(isUsableSalt(s1)).toBe(true);
+        expect(computeSignalHash({ topics: ['llm'] }, s1)).not.toBe(computeSignalHash({ topics: ['llm'] }, s2));
+        // M7: a good salt is necessary, not sufficient — no identity signal exists.
+        expect(correlationStatus({ ...OPEN, CORRELATION_SALT: s1 })).toMatchObject({ enabled: false, status: 'not_implemented' });
+    });
+});
+

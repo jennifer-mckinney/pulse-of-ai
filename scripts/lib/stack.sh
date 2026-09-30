@@ -105,6 +105,40 @@ effective() {
     printf '%s' "${file_val:-$default}"
 }
 
+# Human-readable watchdog poll interval for standup's summary, e.g. "15 s",
+# "2 min", "1 h". Reads WATCHDOG_POLL_INTERVAL_S the way compose interpolates
+# it for the watchdog container: a variable SET in the shell wins even when
+# empty (compose gives the process environment precedence over the env file),
+# otherwise the env file's value. It then applies the watchdog's own rule (src/watchdog/config.js INT_SETTINGS):
+# a whole number from 15 to 3600, anything else falls back to the 120 s
+# default. Bash 3.2 safe; never fails under set -euo pipefail.
+watchdog_poll_interval_text() {
+    local raw secs=120
+    if [[ -n "${WATCHDOG_POLL_INTERVAL_S+set}" ]]; then
+        raw=$WATCHDOG_POLL_INTERVAL_S
+    else
+        raw=$(env_file_value WATCHDOG_POLL_INTERVAL_S)
+    fi
+    raw="${raw#"${raw%%[![:space:]]*}"}"          # trim like the JS .trim()
+    raw="${raw%"${raw##*[![:space:]]}"}"
+    # Digits only; strip leading zeros so bash never reads them as octal, and
+    # cap the length before arithmetic so a huge value cannot overflow.
+    if [[ "$raw" =~ ^[0-9]+$ ]]; then
+        raw="${raw#"${raw%%[!0]*}"}"
+        [[ -n "$raw" ]] || raw=0
+        if (( ${#raw} <= 4 )) && (( raw >= 15 && raw <= 3600 )); then
+            secs=$raw
+        fi
+    fi
+    if (( secs % 3600 == 0 )); then
+        printf '%d h' $((secs / 3600))
+    elif (( secs % 60 == 0 )); then
+        printf '%d min' $((secs / 60))
+    else
+        printf '%d s' "$secs"
+    fi
+}
+
 # ─── Env file creation / merge (scripts/standup.sh) ──────────────────────────
 # Keys whose value standup GENERATES (openssl rand -hex 32) instead of
 # copying the .env.example placeholder. Values are never printed.
@@ -112,11 +146,12 @@ STACK_SECRET_KEYS=(POSTGRES_PASSWORD REDIS_PASSWORD AUDIT_HASH_KEY CORRELATION_S
 # Temp file of an env file being created (removed on any exit — F9-4).
 STACK_ENV_TMP=''
 # Operator decisions (ADR 0001 D1 "Off for others, on for you"): the
-# collector contact URL and the permission-gated feeds' acknowledgement.
+# collector contact URL, the permission-gated feeds' acknowledgement and
+# the named gate approval (PR #22 decision G5).
 # They ship EMPTY in .env.example and are NEVER appended to an existing env
 # file by the merge path — only the operator sets them (by hand, or through
 # the interactive prompt in collector_operator_setup).
-STACK_OPERATOR_KEYS=(COLLECTOR_CONTACT_URL PERMISSION_GATED_FEEDS_ACCEPTED_BY)
+STACK_OPERATOR_KEYS=(COLLECTOR_CONTACT_URL PERMISSION_GATED_FEEDS_ACCEPTED_BY GATE_APPROVED_BY)
 
 # 64 hex chars (256 bits) on stdout; non-zero exit when no source works.
 gen_secret() {
@@ -323,10 +358,21 @@ collector_operator_setup() {
             warn "expected '<name> <YYYY-MM-DD>' — try again, or press Enter to keep the feeds closed"
         done
     fi
+    # PR #22 decision G5: every gated source (key, approval, licence or
+    # permission — the 8 feeds above included) opens only under a named
+    # approval in GATE_APPROVED_BY. Set by hand; never prompted or defaulted.
+    local approved
+    approved=$(effective GATE_APPROVED_BY)
     if [[ -z "$ack" ]]; then
         info "the 8 permission-gated news feeds stay closed (PERMISSION_GATED_FEEDS_ACCEPTED_BY is not set)"
+    elif [[ -z "$approved" ]]; then
+        info "the 8 permission-gated news feeds stay closed: awaiting named approval (GATE_APPROVED_BY is not set)"
     else
-        ok "permission-gated news feeds open (acknowledgement recorded)"
+        ok "permission-gated news feeds open (acknowledgement and named approval recorded)"
+    fi
+    if [[ -z "$approved" ]]; then
+        info "every gated source (key, approval, licence or permission) stays closed until GATE_APPROVED_BY"
+        info "names who approved opening it, as '<name> <YYYY-MM-DD>', in $STACK_ENV_FILE (PR #22 decision G5)"
     fi
 }
 
@@ -407,7 +453,9 @@ project_from_foreign_shell() {
 compose_full() {
     local env_args=()
     [[ -f "$STACK_ENV_FILE" ]] && env_args=(--env-file "$STACK_ENV_FILE")
-    docker compose --project-directory "$STACK_ROOT" -f "$STACK_COMPOSE_FILE" \
+    # PULSE_ENV_FILE is passed explicitly: the worker's env_file (P10-18)
+    # must be the SAME file that --env-file interpolates, never a default.
+    PULSE_ENV_FILE="$STACK_ENV_FILE" docker compose --project-directory "$STACK_ROOT" -f "$STACK_COMPOSE_FILE" \
         ${env_args[@]+"${env_args[@]}"} -p "$STACK_PROJECT" --profile full "$@"
 }
 
@@ -416,7 +464,9 @@ compose_full() {
 compose_all() {
     local env_args=()
     [[ -f "$STACK_ENV_FILE" ]] && env_args=(--env-file "$STACK_ENV_FILE")
-    docker compose --project-directory "$STACK_ROOT" -f "$STACK_COMPOSE_FILE" \
+    # PULSE_ENV_FILE is passed explicitly: the worker's env_file (P10-18)
+    # must be the SAME file that --env-file interpolates, never a default.
+    PULSE_ENV_FILE="$STACK_ENV_FILE" docker compose --project-directory "$STACK_ROOT" -f "$STACK_COMPOSE_FILE" \
         ${env_args[@]+"${env_args[@]}"} -p "$STACK_PROJECT" --profile full --profile demo "$@"
 }
 

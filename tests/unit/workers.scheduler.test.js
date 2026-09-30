@@ -18,13 +18,20 @@ jest.mock('../../src/queues/index', () => {
     return { COLLECT_QUEUES };
 });
 jest.mock('../../src/db/connection', () => ({ dbAll: jest.fn() }));
+// Governance records are covered against Postgres in
+// tests/integration/governance.test.js; here only that they are written.
+jest.mock('../../src/collectors/governance', () => ({
+    recordGateTransitions: jest.fn().mockResolvedValue([]),
+    recordCorrelationGate: jest.fn().mockResolvedValue(null),
+}));
+const governance = require('../../src/collectors/governance');
 
 const { dbAll } = require('../../src/db/connection');
 const { COLLECT_QUEUES } = require('../../src/queues/index');
 const { scheduleAllSources, collectWindowMs, DEFAULT_COLLECT_WINDOW_MS } = require('../../src/workers/collector.scheduler');
 const { SOURCES } = require('../../src/config/source-registry');
 
-const ENV = { COLLECTOR_CONTACT_URL: 'https://example.org/c', PERMISSION_GATED_FEEDS_ACCEPTED_BY: 'Test Operator 2026-09-29', COLLECT_WINDOW_MS: '150000' };
+const ENV = { COLLECTOR_CONTACT_URL: 'https://example.org/c', PERMISSION_GATED_FEEDS_ACCEPTED_BY: 'Test Operator 2026-09-29', GATE_APPROVED_BY: 'Test Operator 2026-09-29', COLLECT_WINDOW_MS: '150000' };
 const NOW = 1790000000000;
 const rows = (slugs) => slugs.map(slug => {
     const s = SOURCES.find(x => x.slug === slug);
@@ -62,7 +69,7 @@ test('cadence: the window, stretched to each source\'s poll interval; staggered 
     const byId = Object.fromEntries(upserts().map(([, id, repeat]) => [id, repeat]));
     expect(byId.bbc_news.every).toBe(150000);
     expect(byId.stack_overflow.every).toBe(900000);   // 300/day keyless quota
-    expect(byId.gitlab.every).toBe(300000);
+    expect(byId.gitlab.every).toBe(150000);      // D4: 24 requests/hour of 60
     const starts = Object.values(byId).map(r => r.startDate).sort();
     expect(starts).toEqual([NOW, NOW + 50000, NOW + 100000]);
 });
@@ -80,7 +87,7 @@ test('a new credential schedules its source (X on collect.api)', async () => {
     dbAll.mockResolvedValue(rows(['x']));
     expect(await scheduleAllSources({ env: ENV })).toBe(0);
     expect(await scheduleAllSources({ env: { ...ENV, X_BEARER_TOKEN: 't' } })).toBe(1);
-    expect(COLLECT_QUEUES.api.upsertJobScheduler).toHaveBeenCalledWith('x', expect.objectContaining({ every: 1800000 }), expect.anything());
+    expect(COLLECT_QUEUES.api.upsertJobScheduler).toHaveBeenCalledWith('x', expect.objectContaining({ every: 180000 }) /* D4: 2–3 min band */, expect.anything());
 });
 
 test('non-registry rows and unknown types are skipped with a log line, never crash', async () => {
@@ -103,4 +110,30 @@ test('COLLECT_WINDOW_MS falls back to 150 s when missing or invalid', () => {
     expect(collectWindowMs({ COLLECT_WINDOW_MS: 'abc' })).toBe(150000);
     expect(collectWindowMs({ COLLECT_WINDOW_MS: '-5' })).toBe(150000);
     expect(collectWindowMs({ COLLECT_WINDOW_MS: '120000' })).toBe(120000);
+});
+
+// P10-14 / G5 / principal #19: gate changes are recorded on every run —
+// also when NOTHING is collecting (a closing must be recorded) — and a
+// governance failure is logged, never fatal to scheduling.
+test('records source and correlation gate changes even when nothing is collecting', async () => {
+    dbAll.mockResolvedValue([]);
+    const lines = [];
+    governance.recordGateTransitions.mockResolvedValueOnce([{ slug: 'npr', event: 'gate_closed', gate_status: 'disabled', approved_by: null }]);
+    governance.recordCorrelationGate.mockResolvedValueOnce({ status: 'awaiting_dpia' });
+    expect(await scheduleAllSources({ env: {}, log: l => lines.push(l) })).toBe(0);
+    expect(governance.recordGateTransitions).toHaveBeenCalledWith({ env: {} });
+    expect(governance.recordCorrelationGate).toHaveBeenCalledWith({ env: {} });
+    expect(lines).toEqual(expect.arrayContaining(['[scheduler] npr: gate_closed (disabled)', '[scheduler] correlation gate: awaiting_dpia']));
+
+    governance.recordGateTransitions.mockResolvedValueOnce([{ slug: 'bbc_news', event: 'gate_opened', gate_status: 'collecting', approved_by: 'Ada Lovelace 2026-09-29' }]);
+    governance.recordCorrelationGate.mockRejectedValueOnce(new Error('db down'));
+    lines.length = 0;
+    await scheduleAllSources({ env: ENV, log: l => lines.push(l) });
+    expect(lines).toEqual(expect.arrayContaining([
+        '[scheduler] bbc_news: gate_opened (collecting) approved by Ada Lovelace 2026-09-29',
+        '[scheduler] correlation gate event not recorded: db down']));
+    governance.recordGateTransitions.mockRejectedValueOnce(new Error('db down'));
+    lines.length = 0;
+    await scheduleAllSources({ env: ENV, log: l => lines.push(l) });
+    expect(lines).toContain('[scheduler] gate events not recorded: db down');
 });

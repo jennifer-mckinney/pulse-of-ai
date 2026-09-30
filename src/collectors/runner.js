@@ -42,7 +42,7 @@
 
 'use strict';
 
-const { dbGet, dbAll, dbRun } = require('../db/connection');
+const { dbGet, dbAll, dbRun, dbTransaction } = require('../db/connection');
 const { SOURCES, getSource, sourceStatus, pollIntervalSec, collectWindowMs } = require('../config/source-registry');
 const { buildCollectors } = require('./index');
 const { HttpClient } = require('./http');
@@ -61,8 +61,13 @@ function defaultQueues() {
     let q = null;
     const get = () => (q = q || require('../queues/index'));
     return {
-        enqueueEmbeds: ids => get().embedQueue.addBulk(ids.map(rawPostId => ({ name: 'embed-post', data: { rawPostId } }))),
-        enqueueIngestRetry: data => get().ingestQueue.add('ingest-retry', data),
+        // PR #22 P1-5: deterministic job ids (src/queues/pending.js), so a
+        // second enqueue of the same post is a no-op while the first exists.
+        enqueueEmbeds: ids => get().embedQueue.addBulk(require('../queues/pending').embedJobs(ids)),
+        enqueueIngestRetry: data => get().ingestQueue.add('ingest-retry', data, { jobId: `retry-${data.rawPostId}` }),
+        // P10-12: scoring off the collect event loop — one ingest job per
+        // new post, deduplicated per post.
+        enqueueIngest: data => get().ingestQueue.add('ingest-score', data, { jobId: `score-${data.rawPostId}` }),
     };
 }
 
@@ -79,6 +84,13 @@ function defaultQueues() {
  * @param {AbortSignal} [o.signal]    collection deadline (G10-9)
  * @param {number}   [o.deadlineMs]   deadline from now, when no signal
  * @param {object}   [o.collectorCtx] extra collector context (imapFactory, sleep)
+ * @param {'inline'|'queue'} [o.scoreVia]  P10-12: 'queue' (the worker's
+ *                    collect jobs) enqueues one `ingest` job per new post
+ *                    instead of scoring on the collect event loop; each holds
+ *                    a slot on its job (inflight_runs) until it scored, so the
+ *                    cycle's bias checks wait for it (G10-2), and an enqueue
+ *                    failure is a run error with the post left to the
+ *                    unscored sweep (G10-4). Default 'inline' (CLI, populate).
  * @param {{ windowMs: number }} [o.cycle]  scheduled per-source run: score
  *                    under the shared collection-cycle job (src/collectors/
  *                    cycle.js), which runs the bias checks when it closes
@@ -102,6 +114,8 @@ async function runCollection(o = {}) {
     let joinedCycle = false;   // G10-2: this run is in the cycle's inflight_runs
     let queried = 0;
     const newPostIds = [];     // posts scored by this run (counted even if it throws)
+    const scoreVia = o.scoreVia === 'queue' ? 'queue' : 'inline';
+    let queuedForScoring = 0;
     const ensureJob = async () => {
         if (!jobId && o.cycle) {
             jobId = await cycle.currentCycleJob(o.cycle.windowMs);
@@ -109,13 +123,29 @@ async function runCollection(o = {}) {
             summary.jobId = jobId;
         } else if (!jobId) {
             const job = await dbGet(
-                `INSERT INTO processing_jobs (triggered_by, status, sources_queried) VALUES ($1, 'running', $2) RETURNING id`,
+                `INSERT INTO processing_jobs (triggered_by, status, sources_queried, last_progress_at)
+                 VALUES ($1, 'running', $2, NOW()) RETURNING id`,
                 [o.triggeredBy || 'cron', slugs.length],
             );
             jobId = job.id;
             summary.jobId = jobId;
         }
         return jobId;
+    };
+    // PR #22 P1-4: the progress heartbeat of a one-shot job (cycle jobs are
+    // closed by closeCycles, not the sweeper). False once the job is no
+    // longer 'running' (the stale-job sweeper closed it): the run then starts
+    // no further source and never writes the row again.
+    let swept = false;
+    const touch = async () => {
+        if (!jobId || o.cycle || swept) return !swept;
+        const r = await dbGet(
+            `UPDATE processing_jobs SET last_progress_at = NOW() WHERE id = $1 AND status = 'running' RETURNING id`, [jobId]);
+        if (!r) {
+            swept = true;
+            log(`[collect] job ${jobId} is no longer running (closed by the stale-job sweeper); no further source starts`);
+        }
+        return !swept;
     };
 
     const summary = {
@@ -135,6 +165,10 @@ async function runCollection(o = {}) {
             const row = { slug, category: src.category, status: st.status, outcome: 'skipped', fetched: 0, kept: 0, new: 0, error: null };
             summary.sources.push(row);
             if (st.status !== 'collecting') { row.reason = st.reason; continue; }
+            if (!(await touch())) {
+                row.reason = 'the job was closed as stale before this source started';
+                continue;
+            }
             if (signal && signal.aborted) {
                 row.reason = 'collection deadline reached before this source started';
                 log(`[collect] ${slug}: skipped — ${row.reason}`);
@@ -159,8 +193,19 @@ async function runCollection(o = {}) {
             const gate = refusalGate(refusal, slug, env, Date.now());
             if (gate.state === 'cooldown') { row.status = BLOCKED_BY_SOURCE; row.reason = gate.reason; continue; }
             if (gate.state === 'reset') {
-                await state.clearRefusal(sourceId, `manual reset (${resetEnv(slug)})`);
-                log(`[collect] ${slug}: refusal cleared by ${resetEnv(slug)}`);
+                // G5 / security L6 / grumpy L16: the reset and its
+                // 'refusal_reset' gate event (actor = the named approval) are
+                // written in one transaction.
+                const { namedApproval } = require('../config/source-registry');
+                const approvedBy = namedApproval(env).value;
+                await dbTransaction(async (client) => {
+                    await state.clearRefusal(sourceId, `manual reset (${resetEnv(slug)}) approved by ${approvedBy}`, { client });
+                    await require('./governance').recordGateEvent({
+                        sourceId, slug, event: 'refusal_reset', actor: approvedBy, approvedBy, client,
+                        reason: `${resetEnv(slug)}=${String(env[resetEnv(slug)]).trim()}`,
+                    });
+                });
+                log(`[collect] ${slug}: refusal cleared by ${resetEnv(slug)} (approved by ${approvedBy})`);
             }
 
             const claimed = await state.claim(sourceId, pollIntervalSec(src, env), o.cycle ? o.cycle.windowMs : collectWindowMs(env));
@@ -211,7 +256,7 @@ async function runCollection(o = {}) {
                 for (const payload of result.payloads) {
                     let stored;
                     try {
-                        stored = await storeRawPost(payload, sourceId, { ingestMvId: mv.ingestMvId });
+                        stored = await storeRawPost(payload, sourceId, { ingestMvId: mv.ingestMvId, admissionMvId: mv.admissionMvId });
                     } catch (err) {
                         routeStoreFailed = true;
                         fail(`${c.route.id}: store failed: ${err.message}`, Object.assign(new Error('store'), { kind: 'store' }));
@@ -220,6 +265,22 @@ async function runCollection(o = {}) {
                     if (!stored.isNew) continue;
                     row.new++;
                     await ensureJob();
+                    if (scoreVia === 'queue') {
+                        // The slot is reserved BEFORE the enqueue, so the
+                        // cycle cannot close between the two (G10-2).
+                        await cycle.reserveRetry(jobId);
+                        try {
+                            await queues.enqueueIngest({ rawPostId: stored.postId, sourceId, jobId, reserved: true });
+                            queuedForScoring++;
+                        } catch (qerr) {
+                            await cycle.releaseRetry(jobId).catch(() => {});
+                            // G10-4: never swallowed; the sweep re-queues it.
+                            queueFailed = true;
+                            fail(`${c.route.id}: the scoring job could not be queued (${qerr.message})`,
+                                Object.assign(new Error('queue'), { kind: 'queue' }));
+                        }
+                        continue;
+                    }
                     try {
                         await scorePost(stored.postId, jobId, mv);
                         newPostIds.push(stored.postId);
@@ -287,9 +348,11 @@ async function runCollection(o = {}) {
                 errorKind: row.errorKind, httpStatus: row.httpStatus, startedAt,
             });
             log(`[collect] ${slug}: ${row.outcome} fetched ${row.fetched}, kept ${row.kept}, new ${row.new}${row.error ? ` — ${row.error}` : ''}`);
+            await touch();
         }
 
         summary.postsProcessed = newPostIds.length;
+        summary.queuedForScoring = queuedForScoring;
         // Copilot 4129565673: with scoring retries outstanding, a non-cycle
         // job's bias checks wait for them — the job goes to
         // 'awaiting_retries' and closeCycles finalizes it (counts from the
@@ -299,7 +362,7 @@ async function runCollection(o = {}) {
             awaitingRetries = !!(await dbGet(
                 `UPDATE processing_jobs
                  SET status = 'awaiting_retries', posts_collected = $2, sources_queried = $3, error_details = $4
-                 WHERE id = $1 AND inflight_runs > 0 RETURNING id`,
+                 WHERE id = $1 AND inflight_runs > 0 AND status = 'running' RETURNING id`,
                 [jobId, summary.postsCollected, queried,
                     summary.errors.length ? summary.errors.join('\n').slice(0, 4000) : null],
             ));
@@ -329,21 +392,28 @@ async function runCollection(o = {}) {
             // The cycle job stays open; closeCycles() runs its bias checks
             // (counts are added when the run leaves the cycle, below).
         } else if (jobId && !awaitingRetries) {
-            await dbRun(
+            // PR #22 P1-4: guarded — a job the sweeper closed stays failed
+            // with its reason (a Tier-3 permanent record is never rewritten).
+            const done = await dbGet(
                 `UPDATE processing_jobs
                  SET status = 'completed', posts_collected = $2, posts_processed = $3,
                      sources_queried = $4, error_details = $5, completed_at = NOW()
-                 WHERE id = $1`,
+                 WHERE id = $1 AND status = 'running' RETURNING id`,
                 [jobId, summary.postsCollected, summary.postsProcessed, queried,
                     summary.errors.length ? summary.errors.join('\n').slice(0, 4000) : null],
             );
+            if (!done) {
+                summary.swept = true;
+                log(`[collect] job ${jobId} was closed by the stale-job sweeper; its record is left as it is`);
+            }
         }
         summary.sourcesQueried = queried;
         return summary;
     } catch (err) {
         if (jobId && !o.cycle) {
             await dbRun(
-                `UPDATE processing_jobs SET status = 'failed', error_details = $2, completed_at = NOW() WHERE id = $1`,
+                `UPDATE processing_jobs SET status = 'failed', error_details = $2, completed_at = NOW()
+                 WHERE id = $1 AND status = 'running'`,
                 [jobId, scrub(err.message, env)],
             ).catch(() => {});
         }
