@@ -124,11 +124,14 @@ async function supervisedRun({
         }
     }
     out(`Sample (${sample.length} of what would be stored, text as redacted):`);
+    // PR #22 security L5: the sample lines go through the scrubber like the
+    // warnings and errors above — a feed link or "self" URL can carry a
+    // token or api_key (scrub also redacts credential query parameters).
     for (const p of sample) {
         const text = String(p.text || '').replace(/\s+/g, ' ');
-        out(`  - [${p.published_at || 'no date'}] ${p.id}${p.location ? ` · ${p.location} (${p.location_basis})` : ''}`);
-        out(`    ${text.slice(0, 200)}${text.length > 200 ? '…' : ''}`);
-        if (p.url) out(`    ${p.url}`);
+        out(scrub(`  - [${p.published_at || 'no date'}] ${p.id}${p.location ? ` · ${p.location} (${p.location_basis})` : ''}`, env));
+        out(scrub(`    ${text.slice(0, 200)}${text.length > 200 ? '…' : ''}`, env));
+        if (p.url) out(scrub(`    ${p.url}`, env));
     }
     out('Sign-off: if the sample is on topic and carries no personal data beyond the ingest claim, add the credential to '
         + 'the worker\'s env and recreate it (docker compose up -d worker web) to schedule the source.');

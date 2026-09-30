@@ -50,6 +50,45 @@ describe('supervisedRun', () => {
     });
 });
 
+// PR #22 security L5: the printed sample (id, text, url) is scrubbed like
+// the warnings and errors — a feed link can carry a token or api_key.
+describe('supervised sample output is scrubbed (security L5)', () => {
+    it('removes secret env values and credential query parameters from every sample line', async () => {
+        const SECRET = 'feed-secret-token-5e6f7a8b';
+        const env = { ...TEST_ENV, CNN_API_KEY: SECRET };
+        const out = [];
+        let isolated;
+        jest.isolateModules(() => {
+            jest.doMock('../../../src/collectors/index', () => ({
+                buildCollectors: () => [{
+                    route: { id: 'fake-route' },
+                    collect: async () => ({
+                        fetched: 1,
+                        warnings: [],
+                        payloads: [{
+                            id: `item-${SECRET}`,
+                            text: `body mentions ${SECRET} inline`,
+                            url: `https://feed.example/item/1?api_key=zzz-leak-999&token=${SECRET}&page=2`,
+                            published_at: '2026-09-29T00:00:00Z',
+                        }],
+                    }),
+                }],
+            }));
+            isolated = require('../../../scripts/collect');
+        });
+        await isolated.supervisedRun({ slug: 'hacker_news', env, out: l => out.push(l), governance: OPEN });
+        jest.dontMock('../../../src/collectors/index');
+        const sample = out.slice(out.findIndex(l => l.startsWith('Sample')) + 1, out.findIndex(l => l.startsWith('Sign-off')));
+        expect(sample).toHaveLength(3);
+        const text = sample.join('\n');
+        expect(text).not.toContain(SECRET);
+        expect(text).not.toContain('zzz-leak-999');
+        expect(text).toContain('[redacted]');
+        expect(text).toMatch(/api_key=REDACTED/);
+        expect(text).toMatch(/page=2/);
+    });
+});
+
 // PR #22 security M2: the database kill switch and the refusal cooldown
 // apply to a supervised run; nothing is fetched when either is closed.
 describe('supervisedRun honours the database gates (security M2)', () => {
