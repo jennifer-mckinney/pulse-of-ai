@@ -245,7 +245,7 @@ async function runCollection(o = {}) {
                 for (const payload of result.payloads) {
                     let stored;
                     try {
-                        stored = await storeRawPost(payload, sourceId, { ingestMvId: mv.ingestMvId });
+                        stored = await storeRawPost(payload, sourceId, { ingestMvId: mv.ingestMvId, admissionMvId: mv.admissionMvId });
                     } catch (err) {
                         routeStoreFailed = true;
                         fail(`${c.route.id}: store failed: ${err.message}`, Object.assign(new Error('store'), { kind: 'store' }));

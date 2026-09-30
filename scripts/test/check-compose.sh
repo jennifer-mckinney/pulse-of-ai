@@ -47,7 +47,7 @@ fi
 # values for the required secrets (never real ones).
 cfg=$(env -i PATH="$PATH" HOME="$HOME" ${DOCKER_HOST:+DOCKER_HOST="$DOCKER_HOST"} \
     ${DOCKER_CONTEXT:+DOCKER_CONTEXT="$DOCKER_CONTEXT"} \
-    POSTGRES_PASSWORD=compose-check REDIS_PASSWORD=compose-check \
+    POSTGRES_PASSWORD=compose-check REDIS_PASSWORD=compose-check PULSE_ENV_FILE=/dev/null \
     docker compose --project-directory "$ROOT" -f "$ROOT/docker-compose.yml" \
         --env-file /dev/null -p compose-check --profile full --profile demo \
         config --format json)
@@ -111,6 +111,13 @@ missing_values=$(jq -r --argjson probe "$probe_json" '(.services.worker.environm
     | $probe[] | select(. as $k | ($w[$k] // "") != "probe-secret-\($k)")
     | "worker lacks the value of \(.) (its env_file)"' <<< "$cfg_probe")
 check "worker receives the collector credentials (env_file, P10-18)" "$missing_values"
+# PR #22 grumpy L12: the worker's env_file is required (the resolved config
+# inlines env_file values, so the source file is read).
+env_optional=$(awk '/^  worker:/{w=1} w&&/^  [a-z_]+:$/&&!/^  worker:/{w=0} w&&/required:/{print}' "$ROOT/docker-compose.yml" \
+    | { grep -v 'required: true' || true; } | sed 's/^ */worker env_file: /')
+env_required=$(awk '/^  worker:/{w=1} w&&/^  [a-z_]+:$/&&!/^  worker:/{w=0} w&&/required: true/{print}' "$ROOT/docker-compose.yml")
+[[ -z "$env_required" ]] && env_optional="${env_optional:-worker env_file has no required: true}"
+check "the worker's env_file is required (a missing file fails loudly)" "$env_optional"
 nomark=$(jq -r --argjson probe "$probe_json" '(.services.web.environment // {}) as $w
     | $probe[] | select(. as $k | ($w[$k] // "") != "set")
     | "web lacks the presence marker for \(.) (x-collector-presence)"' <<< "$cfg_probe")

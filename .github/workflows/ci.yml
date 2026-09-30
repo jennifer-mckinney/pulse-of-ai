@@ -190,6 +190,8 @@ jobs:
         env:
           POSTGRES_PASSWORD: ci_password
           REDIS_PASSWORD: ci_password
+          # The worker's env_file is required (PR #22 grumpy L12); CI has no .env.
+          PULSE_ENV_FILE: /dev/null
         run: |
           docker compose config --quiet
           docker compose --profile full --profile demo config --quiet
