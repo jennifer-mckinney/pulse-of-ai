@@ -50,6 +50,7 @@
 'use strict';
 
 const { logRouteError } = require('../middleware/log-error');
+const { responseCache } = require('../middleware/response-cache');
 
 const { Router }     = require('express');
 const { isConnected, dbGet, dbAll } = require('../db/connection');
@@ -182,7 +183,13 @@ async function queueStatus() {
     return { redis: { reachable: true }, worker: { ...worker, queues }, published };
 }
 
-router.get('/health', async (req, res) => {
+// PR #22 security L2: /api/health is public and fans out to Redis (8
+// queues) and Postgres on every call. A 5 s response cache, keyed on the
+// path alone (the route takes no parameters, so a varying query string
+// cannot bypass it), bounds that load; the dashboard polls far less often.
+const HEALTH_CACHE_TTL_MS = 5000;
+
+router.get('/health', responseCache(HEALTH_CACHE_TTL_MS, { key: () => 'GET /api/health' }), async (req, res) => {
     try {
         const dbConnected = await isConnected();
 
@@ -297,3 +304,4 @@ module.exports = router;
 module.exports._setRedisClientForTests = _setRedisClientForTests;
 module.exports._setQueueCountsForTests = _setQueueCountsForTests;
 module.exports.QUEUE_NAMES = QUEUE_NAMES;
+module.exports.HEALTH_CACHE_TTL_MS = HEALTH_CACHE_TTL_MS;

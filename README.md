@@ -382,7 +382,7 @@ All endpoints are prefixed `/api`.
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/health` | System health, active alerts, data freshness |
+| `GET` | `/api/health` | System health, active alerts, data freshness (cached for 5 s: it fans out to Redis and Postgres) |
 | `GET` | `/api/config` | Public config (Mapbox token) for the frontend |
 | `GET` | `/api/posts` | Paginated post list with sentiment |
 | `GET` | `/api/sentiment` | Aggregated sentiment by geography / source |
