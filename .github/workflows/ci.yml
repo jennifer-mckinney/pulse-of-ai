@@ -114,12 +114,31 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: python/requirements.txt
+          # The workflow is part of the key: the torch pin below lives here.
+          cache-dependency-path: |
+            python/requirements.txt
+            .github/workflows/ci.yml
 
       # Full service requirements: the pytest suite imports the FastAPI app
       # and exercises the real sentence-transformers model (384-dim vectors).
+      # torch is installed FIRST as the CPU-only build from the PyTorch CPU
+      # index, so the sentence-transformers dependency is already satisfied
+      # and pip does not pull the default PyPI torch with its CUDA (nvidia-*)
+      # wheels. Keep TORCH_VERSION in step with the torch pin in
+      # python/requirements-service.in / requirements-service.txt, so this
+      # job tests the same torch build the embeddings image runs.
       - name: Install dependencies
-        run: pip install -r python/requirements.txt
+        env:
+          TORCH_VERSION: 2.12.1+cpu
+        run: |
+          pip install "torch==${TORCH_VERSION}" --index-url https://download.pytorch.org/whl/cpu
+          pip install -r python/requirements.txt
+          pip list 2>/dev/null | grep -iE '^(torch|sentence-transformers) '
+          if pip list 2>/dev/null | grep -i '^nvidia-'; then
+            echo "::error::CUDA (nvidia-*) packages were installed alongside the CPU torch build"
+            exit 1
+          fi
+          echo "No nvidia-* packages installed."
 
       - name: Check black formatting
         run: black --check python/

@@ -11,7 +11,8 @@ sentence-transformers==6.1.0
 
 # Database
 psycopg2-binary>=2.9.13
-pgvector>=0.2.4
+# No Python pgvector client: no Python file imports it. Vectors are stored
+# through PostgreSQL's pgvector extension from the Node side.
 
 # HTTP server for python/embeddings_service.py (the production embedder)
 fastapi>=0.141.1
