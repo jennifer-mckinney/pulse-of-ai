@@ -121,18 +121,39 @@
     // degraded backend, or an unreachable endpoint (null) → yellow (never a
     // fake "nominal"); otherwise green. alert_events.severity is
     // 'info' | 'warning' | 'critical' (migration 003).
+    // SYSTEM alerts (PR #22 principal #12): the external watchdog's critical
+    // alerts (worker down, maintenance failing, …) arrive flagged
+    // `system: true` with a title and summary. They take the chip label —
+    // "SYSTEM ALERT: Worker down (heartbeat stale)" — because they mean the
+    // dashboard itself may be stale; `systemAlerts` lists them for the banner.
     function healthState(health) {
         if (!health || typeof health !== 'object') {
-            return { state: 'yellow', label: 'model health: unavailable', alerts: 0, critical: 0 };
+            return { state: 'yellow', label: 'model health: unavailable', alerts: 0, critical: 0, systemAlerts: [] };
         }
         const list = Array.isArray(health.active_alerts) ? health.active_alerts : [];
         const alerts = list.length;
         const critical = list.filter((a) => a
             && String(a.severity || '').toLowerCase() === 'critical').length;
+        const systemAlerts = list.filter((a) => a && a.system === true).map((a) => ({
+            title: String(a.title || a.alert_type || 'system alert'),
+            summary: String(a.summary || ''),
+            since: a.created_at || null,
+        }));
+        if (systemAlerts.length > 0) {
+            const more = alerts - 1;
+            return {
+                state: 'red',
+                label: 'SYSTEM ALERT: ' + systemAlerts[0].title
+                    + (more > 0 ? ' · +' + more + ' more' : ''),
+                alerts,
+                critical,
+                systemAlerts,
+            };
+        }
         if (critical > 0) {
             const label = alerts === 1 ? '1 critical alert'
                 : alerts + ' active alerts · ' + critical + ' critical';
-            return { state: 'red', label, alerts, critical };
+            return { state: 'red', label, alerts, critical, systemAlerts };
         }
         if (alerts > 0) {
             return {
@@ -140,12 +161,13 @@
                 label: alerts === 1 ? '1 active alert' : alerts + ' active alerts',
                 alerts,
                 critical,
+                systemAlerts,
             };
         }
         if (health.status === 'degraded') {
-            return { state: 'yellow', label: 'model health: degraded', alerts, critical };
+            return { state: 'yellow', label: 'model health: degraded', alerts, critical, systemAlerts };
         }
-        return { state: 'green', label: 'model health: nominal', alerts, critical };
+        return { state: 'green', label: 'model health: nominal', alerts, critical, systemAlerts };
     }
 
     return {

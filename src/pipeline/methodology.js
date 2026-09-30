@@ -14,11 +14,12 @@ const { dbAll } = require('../db/connection');
 const { CURRENT_VERSIONS } = require('../config/methodology-registry');
 
 // Components the collection pipeline records decisions under.
-const PIPELINE_COMPONENTS = Object.freeze(['sentiment', 'relevance', 'discourse', 'bias', 'ingest']);
+// admission_filter (PR #22 G6): the version each collected post was admitted under.
+const PIPELINE_COMPONENTS = Object.freeze(['sentiment', 'relevance', 'discourse', 'bias', 'ingest', 'admission_filter']);
 
 /**
  * @returns {Promise<{ sentimentMvId, relevanceMvId, discourseMvId, biasMvId,
- *                     ingestMvId, versions: object }>}
+ *                     ingestMvId, admissionMvId, versions: object }>}
  * @throws when a current version is not registered (migrations/seed not run)
  */
 async function resolveCurrentMethodology() {
@@ -40,6 +41,7 @@ async function resolveCurrentMethodology() {
         discourseMvId: byComponent.discourse,
         biasMvId:      byComponent.bias,
         ingestMvId:    byComponent.ingest,
+        admissionMvId: byComponent.admission_filter,
         versions:      Object.fromEntries(PIPELINE_COMPONENTS.map(c => [c, CURRENT_VERSIONS[c]])),
     };
 }

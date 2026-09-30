@@ -38,6 +38,34 @@ describe('beat', () => {
     });
 });
 
+// PR #22 security L1: the worker publishes its correlation gate status with
+// the beat, so the web process never needs CORRELATION_SALT.
+describe('correlation status published with the beat (security L1)', () => {
+    test('beat publishes { enabled, status, reason, checked_at } with the same TTL; never the salt', async () => {
+        const redis = fakeRedis();
+        const now = new Date('2026-09-28T12:00:00Z');
+        const status = { enabled: false, status: 'awaiting_dpia', reason: 'no DPIA', salt: 'must-not-leak' };
+        await hb.beat(redis, { file: tmpFile(), now, correlation: () => status });
+        const call = redis.set.mock.calls.find(c => c[0] === hb.CORRELATION_KEY);
+        expect(call.slice(2)).toEqual(['EX', hb.HEARTBEAT_TTL_S]);
+        expect(JSON.parse(call[1])).toEqual({ enabled: false, status: 'awaiting_dpia', reason: 'no DPIA', checked_at: now.toISOString() });
+    });
+
+    test('no correlation function: only the heartbeat key is written', async () => {
+        const redis = fakeRedis();
+        await hb.beat(redis, { file: tmpFile() });
+        expect(redis.set.mock.calls.map(c => c[0])).toEqual([hb.HEARTBEAT_KEY]);
+    });
+
+    test('readCorrelationStatus parses a published value; missing or malformed is null', async () => {
+        const v = JSON.stringify({ enabled: true, status: 'enabled', reason: 'r', checked_at: 't' });
+        expect(await hb.readCorrelationStatus(fakeRedis({ value: v }))).toEqual({ enabled: true, status: 'enabled', reason: 'r', checked_at: 't' });
+        expect(await hb.readCorrelationStatus(fakeRedis({ value: null }))).toBeNull();
+        expect(await hb.readCorrelationStatus(fakeRedis({ value: 'not json' }))).toBeNull();
+        expect(await hb.readCorrelationStatus(fakeRedis({ value: '{"status":"enabled"}' }))).toBeNull();
+    });
+});
+
 describe('fileIsFresh (container healthcheck)', () => {
     test('fresh within the max age, stale after it, false when missing', () => {
         const file = tmpFile();

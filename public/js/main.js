@@ -77,12 +77,15 @@
     }
 
     // ── 3. Health chip (light + label; drawer content is C4) ────────────────
-    function setHealthChip(state, label) {
+    // system = a watchdog alert is open (PR #22 principal #12): the chip is
+    // emphasized (h-system) and its label names the condition.
+    function setHealthChip(state, label, system) {
         const chip = document.getElementById('health-chip');
         const labelEl = document.getElementById('health-label');
         if (!chip || !labelEl) return;
         chip.classList.remove('h-green', 'h-yellow', 'h-red');
         chip.classList.add('h-' + state);
+        chip.classList.toggle('h-system', system === true);
         labelEl.textContent = label;
     }
 
@@ -95,7 +98,8 @@
             return;
         }
         const hs = utils.healthState(data);
-        setHealthChip(hs.state, hs.label);
+        setHealthChip(hs.state, hs.label,
+            Array.isArray(hs.systemAlerts) && hs.systemAlerts.length > 0);
     }
 
     function pollHealth() {

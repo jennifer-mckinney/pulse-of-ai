@@ -11,7 +11,7 @@ const ROOT = path.join(__dirname, '../../..');
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const lock = JSON.parse(fs.readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8'));
 
-test.each(['imapflow', 'mailparser', 'xml2js', 'htmlparser2'])('%s is pinned to an exact version that the lockfile installs', (name) => {
+test.each(['imapflow', 'mailparser', 'xml2js', 'htmlparser2', 'nodemailer'])('%s is pinned to an exact version that the lockfile installs', (name) => {
     const spec = pkg.dependencies[name];
     expect(spec).toMatch(/^\d+\.\d+\.\d+$/);
     expect(lock.packages[`node_modules/${name}`].version).toBe(spec);

@@ -52,10 +52,14 @@ it('closing a cycle runs the bias checks once over every source\'s posts', async
     const closed = await closeCycles(WINDOW);
     expect(closed).toHaveLength(1);
     expect(closed[0].jobId).toBe(a.jobId);
-    const bias = await dbAll('SELECT assessment_type, group_value FROM bias_assessments WHERE job_id = $1', [a.jobId]);
+    const bias = await dbAll('SELECT assessment_type, group_value, evidence FROM bias_assessments WHERE job_id = $1', [a.jobId]);
     expect(bias).toHaveLength(3);
-    // The parity check sees BOTH categories (news, forums) — impossible on a one-source job.
-    expect(bias.find(x => x.assessment_type === 'platform_sentiment_parity').group_value).toMatch(/news vs forums|forums vs news/);
+    // The parity check sees BOTH categories (news, forums) — impossible on a
+    // one-source job. With a few posts each, bias@1.4.0 records
+    // "insufficient sample" (fewer than 10 per category) instead of a gap.
+    const parity = bias.find(x => x.assessment_type === 'platform_sentiment_parity');
+    expect(parity.evidence.rows.map(r => r.category).sort()).toEqual(['forums', 'news']);
+    expect(parity.group_value).toBe('insufficient sample');
     expect((await dbGet('SELECT status FROM processing_jobs WHERE id = $1', [a.jobId])).status).toBe('completed');
     // A later run opens a NEW cycle.
     await dbRun(`UPDATE source_collection_state SET last_attempt_at = NOW() - INTERVAL '1 day'`);

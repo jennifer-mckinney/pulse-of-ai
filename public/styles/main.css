@@ -155,6 +155,10 @@ body {
 .about-item { padding: 3px 0; line-height: 1.45; }
 .about-item a { color: var(--ink); text-decoration: underline; text-underline-offset: 2px; }
 .about-item a:hover { color: var(--accent); }
+/* PR #22 principal #12: a watchdog (system) alert — worker, database or
+   maintenance down — fills the chip so it cannot be missed. */
+.h-system.hdr-health { border-color: #FF6E5E; background: rgba(255,110,94,0.18); }
+.h-system .hdr-chip-lbl { color: #FFB3AA; font-weight: 700; }
 
 /* chapter cards — docked bottom-left so the globe stays clear */
 .card-col {
@@ -361,6 +365,8 @@ body {
 .tip-city { font-weight: 700; font-size: 15px; }
 .tip-sent { font-size: 13px; font-weight: 600; }
 .tip-sub { font-size: 10.5px; color: var(--ink-dim); margin-top: 2px; }
+.tip-pub { font-size: 9.5px; color: var(--ink-dim); margin-top: 4px; padding-left: 14px; position: relative; line-height: 1.35; }
+.tip-pub::before { content: ''; position: absolute; left: 0; top: 2px; width: 8px; height: 8px; border-radius: 50%; border: 1.2px dashed rgba(234,241,250,0.85); }
 .tip-bars { margin-top: 10px; display: flex; flex-direction: column; gap: 5px; }
 .tip-bar-row { display: grid; grid-template-columns: 66px 1fr 32px; gap: 8px; align-items: center; }
 .tip-bar-lbl { font-size: 10px; color: var(--ink-dim); }
@@ -385,6 +391,9 @@ body {
 .health-banner .health-light { margin-top: 5px; flex: 0 0 8px; }
 .hb-title { font-weight: 700; font-size: 14px; }
 .hb-sub { font-size: 12.5px; color: var(--ink-dim); line-height: 1.55; margin-top: 4px; }
+.health-banner.hb-system { border-color: rgba(255,110,94,0.7); background: rgba(255,110,94,0.12); }
+.health-banner.hb-system .hb-title { color: #FFB3AA; }
+.kv-row.kv-warn .kv-v { color: #F5C36B; }
 .sec-lbl { font-size: 10px; letter-spacing: 0.14em; color: var(--ink-dim); margin: 20px 0 10px; }
 
 /* theme rows on story card */
@@ -467,6 +476,9 @@ body {
 .legend { position: fixed; left: 28px; bottom: 24px; z-index: 20; display: flex; align-items: center; gap: 10px; font-size: 10.5px; color: var(--ink-dim); }
 .legend-grad { width: 90px; height: 4px; border-radius: 2px; }
 .legend-sep { margin-left: 10px; padding-left: 14px; border-left: 1px solid var(--line); }
+/* D3 publisher-location layer key: the dashed ring the globe draws. */
+.legend-pub { display: inline-flex; align-items: center; gap: 6px; margin-left: 10px; padding-left: 14px; border-left: 1px solid var(--line); }
+.legend-pub::before { content: ''; width: 9px; height: 9px; border-radius: 50%; border: 1.3px dashed rgba(234,241,250,0.85); }
 /* NOTE: the prototype's .scroll-cue class + its translateX-based `cue`
    keyframe are deliberately OMITTED — the class is dead (nothing renders it;
    the intro uses .intro-cue with the translateY-only `cue-y` keyframe, per

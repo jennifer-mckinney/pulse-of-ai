@@ -22,6 +22,10 @@
 'use strict';
 
 const DEMO_SOURCE_TYPE = 'demo';
+// data_retention_log.action of a demo purge batch (scripts/compact.js). Its
+// reason JSON lists the purged post ids, so a job that later finds its post
+// gone can tell a legitimate purge from a real error (src/pipeline/embeddings.js).
+const DEMO_PURGE_ACTION = 'purged_demo';
 const DATA_MODES = Object.freeze(['none', 'demo', 'live', 'mixed']);
 
 /**
@@ -38,4 +42,4 @@ function deriveDataMode(demoPosts, totalPosts) {
     return 'mixed';
 }
 
-module.exports = { DEMO_SOURCE_TYPE, DATA_MODES, deriveDataMode };
+module.exports = { DEMO_SOURCE_TYPE, DEMO_PURGE_ACTION, DATA_MODES, deriveDataMode };

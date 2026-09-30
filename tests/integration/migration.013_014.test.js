@@ -88,7 +88,8 @@ describe('migration 014_methodology_alignment.sql', () => {
     it('orders 1.0.0 before 1.1.0 in one transaction; a later seed cannot reorder them', async () => {
         await dbTransaction(c => c.query(SQL_014));
         await seedMethodology();
-        expect((await versions('relevance')).map(r => r.version)).toEqual(['1.0.0', '1.1.0']);
+        // 1.2.0 (migration 029, P10-13) is seeded after 014's rows.
+        expect((await versions('relevance')).map(r => r.version)).toEqual(['1.0.0', '1.1.0', '1.2.0']);
         expect((await versions('discourse')).map(r => r.version)).toEqual(['1.0.0-DQI', '1.1.0-DQI']);
     });
 
@@ -105,8 +106,8 @@ describe('migration 014_methodology_alignment.sql', () => {
         await seedMethodology();
         const mv = await resolveCurrentMethodology();
         const row = await dbGet('SELECT component, version FROM methodology_versions WHERE id = $1', [mv.relevanceMvId]);
-        expect(row).toEqual({ component: 'relevance', version: '1.1.0' });
-        expect(mv.versions).toEqual(expect.objectContaining({ discourse: '1.1.0-DQI', ingest: '1.5.0' }));
+        expect(row).toEqual({ component: 'relevance', version: '1.2.0' });
+        expect(mv.versions).toEqual(expect.objectContaining({ discourse: '1.1.0-DQI', ingest: '1.7.0' }));
     });
 
     it('resolveCurrentMethodology fails loudly when a version is not registered', async () => {

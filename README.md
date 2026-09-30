@@ -12,6 +12,7 @@ Pulse of AI collects public, AI-related posts from a registry of 52 global onlin
 - [Quick start](#quick-start)
 - [Turning on live collection](#turning-on-live-collection)
 - [Live and demo data](#live-and-demo-data)
+- [Alerting](#alerting)
 - [Architecture](#architecture)
 - [API](#api)
 - [Development](#development)
@@ -30,7 +31,7 @@ What works today, stated plainly:
 
 - **The registry has 52 sources** (`src/config/source-registry.js`, which matches the workbook of record `docs/requirements/Top_50_Global_Online_Sources.xlsx` (Rev. 4, exported as `docs/requirements/Top_52_Global_Online_Sources.rev4.csv`), ADR 0001). Each resolves at runtime to a gate status: `collecting`, `awaiting_key`, `awaiting_approval`, `awaiting_licence`, `blocked` or `disabled`.
 - **Live collection is off on a fresh clone.** Without `COLLECTOR_CONTACT_URL` every source is `disabled` except the 4 `blocked` ones, which stay `blocked` with or without the contact URL until an official permission is recorded (a kill switch reports them `disabled`), and the page runs on clearly labelled demo data. See [Turning on live collection](#turning-on-live-collection).
-- **With the contact URL set, 23 sources collect with no keys.** With the contact URL and the operator acknowledgement for the 8 permission-gated news feeds, **31 collect**. The other 21 wait for something only their operator can provide:
+- **With the contact URL set, 23 sources collect with no keys.** With the contact URL, the operator acknowledgement for the 8 permission-gated news feeds and a named approval (`GATE_APPROVED_BY`, decision G5), **31 collect**. The other 21 wait for something only their operator can provide, and every one of them also needs the named approval to open:
 
   | Status | Count | Sources | What opens them |
   |---|---|---|---|
@@ -41,7 +42,8 @@ What works today, stated plainly:
 
 - **Reddit (#52) is built but awaiting approval.** It uses only the approved Reddit Data API and stays closed until Reddit approves the app and all four `REDDIT_*` variables are set. Reddit post text is blanked 48 hours after collection, or sooner when the 6-hourly re-check finds the post deleted or removed upstream, while its scores and audit rows are kept (ADR 0001 rulings 8 and 9).
 - **Demo data is always labelled.** When the trailing hour has no live posts, fictional demo posts go through the real pipeline and the page says DEMO (details in [Live and demo data](#live-and-demo-data)).
-- **In progress** (a follow-up PR, marked *wip* in the diagrams): collection handing scoring to the ingest queue, per-source retention and scheduled compaction, source gate-event and terms-snapshot tables, excluding publisher-located posts from the bias checks, a minimum sample for the bias checks, staleness alerts in `/api/health`, `relevance@1.2.0`, `env_file` in compose, and binding the dev server to 127.0.0.1.
+- **Maintenance runs on its own.** The worker removes post text past its source's window every 5 minutes (Reddit 48 h; every other source, the Guardian included, the 90-day detail window, except YouTube and TikTok at 30 days), and once a day compacts whole months past the detail window into rollups, rolls up run history and runs the bias checks over a rolling 24 h window. Processing-job records are kept permanently.
+- **Alerting runs outside the worker.** The `watchdog` service raises critical alerts on the dashboard, and by e-mail when SMTP is configured, when the web API, the database, Valkey, the worker or maintenance fail (see [Alerting](#alerting)).
 
 ---
 
@@ -68,7 +70,7 @@ When it finishes, open **http://localhost:3000**: the globe, the eleven chapters
 
 1. Creates `.env` from `.env.example` if you don't have one, generating strong random `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `AUDIT_HASH_KEY` and `CORRELATION_SALT` values. It never prints them. An existing `.env` keeps its values: only missing keys are added (standup refuses to add secrets to a group- or world-writable file), and the file is set to mode 600. If a secret is empty or still has its `.env.example` placeholder, standup stops and names it. Run on a terminal, it offers to set the two collection settings described below.
 2. Builds two images: `pulse-of-ai/app` (Node 22; one image for web, worker, migrate and populate) and `pulse-of-ai/embeddings` (Python 3.13, FastAPI and sentence-transformers, CPU only). Both run as non-root users.
-3. Starts the compose `full` profile. A one-shot `migrate` job applies migrations 001–026 and the seed; web and the worker start only after it exits successfully.
+3. Starts the compose `full` profile. A one-shot `migrate` job applies the 46 migrations (001–060; the numbering has gaps) and the seed; web and the worker start only after it exits successfully.
 4. Waits for health, with timeouts, and prints a failing service's logs.
 5. Populates data: one real collection run, then demo data only if the trailing hour has no live posts, and starts the `populate` demo-fallback service.
 6. Runs a smoke check: the API, the page and the page's own data calls, population counts, the worker heartbeat, one receipt with its four audience views and bias lineage, and `npm run replay` on that post, which must PASS. It ends with a population summary that labels the hour LIVE, MIXED or DEMO.
@@ -82,15 +84,16 @@ The first start downloads the ~90 MB `all-MiniLM-L6-v2` model into the `hf_cache
 | Service | Host port (override) | Role |
 |---|---|---|
 | `web` | `3000` (`WEB_PORT`) | Express API and the static frontend (`public/`) |
-| `worker` | none | Collection scheduler and `collect.{rss,api,bulk}` consumers, refresh collections, cycle close and bias checks, scoring retries, embed jobs, Reddit maintenance (`src/workers/start.js`). The only role holding collector credentials. Healthy while its heartbeat is fresh; `docker stop` gives it 180 s to finish in-flight jobs |
+| `worker` | none | Collection scheduler and `collect.{rss,api,bulk}` consumers, refresh collections, scoring (the `ingest` queue), cycle close and bias checks, embed jobs, the `maintenance` schedules (retention, compaction, run rollups, the rolling bias window, terms snapshots) and Reddit maintenance (`src/workers/start.js`). The only role holding collector credentials: it loads the env file (`PULSE_ENV_FILE`, default `.env`) whole through Compose `env_file`, while web gets only a "set" marker per credential. Healthy while its heartbeat is fresh; `docker stop` gives it 180 s to finish in-flight jobs |
 | `embeddings` | none (compose network only, `embeddings:8000`) | `POST /embeddings` and `GET /health`, unauthenticated, so never published |
+| `watchdog` | none | External alerting (see [Alerting](#alerting)). Polls `/api/health` every 2 minutes from its own container, so it still alerts when the worker is dead; writes critical alerts to the database and e-mails them. Holds only the database password and the SMTP settings; the only role that gets `SMTP_PASSWORD` |
 | `populate` | none | Demo fallback (profile `demo`): a fictional batch every 150 s, only while the trailing hour has no live posts |
 | `migrate` | none | One-shot: migrations and seed |
 | `postgres` | `POSTGRES_PORT` (`5434` in `.env.example`; `5432` if unset) | PostgreSQL 16 + pgvector (`postgres_data` volume) |
 | `postgres_test` | `5433` (`POSTGRES_TEST_PORT`) | Test database, not used by the running app |
-| `redis` | `6379` (`REDIS_PORT`) | BullMQ queues and the worker heartbeat (`redis_data` volume); password required (`REDIS_PASSWORD`) |
+| `redis` | `6379` (`REDIS_PORT`) | Valkey 8, the BullMQ queue backend and the worker heartbeat (`valkey_data` volume). It speaks the Redis protocol, so the service name and the `REDIS_*` variables keep that name. Password required (`REDIS_PASSWORD`) |
 
-Every published port binds to `127.0.0.1` by default (`PULSE_BIND_ADDR`). Setting `PULSE_BIND_ADDR=0.0.0.0` exposes all of them to your network, databases included. `GET /api/health` reports `redis.reachable` and `worker.alive`, and every container's logs rotate (json-file, 5 × 10 MB).
+Every published port binds to `127.0.0.1` by default (`PULSE_BIND_ADDR`). Setting `PULSE_BIND_ADDR=0.0.0.0` exposes all of them to your network, databases included. `GET /api/health` reports `redis.reachable` and `worker.alive`, the `watchdog` service polls it and alerts when something is wrong, and every container's logs rotate (json-file, 5 × 10 MB). The worker's `env_file` uses the long syntax with `required: true` (Compose 2.24 or newer, covered by the 2.39.0 minimum): a missing `.env`, or a wrong `PULSE_ENV_FILE`, stops `docker compose --profile full up` with "env file … not found" instead of starting a worker whose keyed sources are all silently closed.
 
 To run a second stack beside this one, give it its own project name and ports:
 
@@ -103,7 +106,7 @@ POSTGRES_PORT=5534 POSTGRES_TEST_PORT=5533 REDIS_PORT=6479 npm run standup
 
 ```bash
 npm run teardown                    # stop and remove containers, keep the data volumes
-npm run teardown -- --purge         # also delete the volumes (database, redis, model cache); asks first
+npm run teardown -- --purge         # also delete the volumes (database, Valkey, model cache); asks first
 npm run teardown -- --purge --yes   # non-interactive purge
 bash scripts/teardown.sh --purge    # the same without Node.js/npm on the host
 ```
@@ -112,7 +115,15 @@ Teardown acts on one compose project: `COMPOSE_PROJECT_NAME` if set, otherwise t
 
 ### Upgrading an existing database
 
+**Take a `pg_dump` before the first worker start after upgrading.** The worker's maintenance job runs as soon as it starts: it permanently removes post text past each source's window (a platform's terms where they set one, such as Reddit's 48 h; otherwise the 90-day detail window, `RETENTION_DETAIL_DAYS`) and compacts every whole month older than that into rollups. On a database that has not run it before, that is all old data at once, and it cannot be undone. Back up first, before `npm run standup` (or before starting the worker by hand): `docker compose up -d postgres`, then `docker compose exec postgres pg_dump -U pulse_user pulse_of_ai > backup-before-upgrade.sql`.
+
 Standup applies pending migrations and the idempotent seed on every run. For host-side development, run `npm run migrate && npm run seed` after pulling. Migrations are forward-only; take a backup first if you may need to go back: `docker compose exec postgres pg_dump -U pulse_user pulse_of_ai > backup.sql`. Postgres reads `POSTGRES_PASSWORD` only when it first creates the database, so to change it on an existing volume run `\password pulse_user` in `docker compose exec postgres psql -U pulse_user -d pulse_of_ai` and put the same value in `.env` (or start over with `npm run teardown -- --purge`, which deletes the data).
+
+**Upgrading a stack that ran Redis 7.** The queue store is now Valkey 8 on a new `valkey_data` volume. Redis 7.4 writes RDB format 12, which Valkey 8 will not load, so the old `redis_data` volume is left unused rather than reused. Schedules need no migrating: the worker re-registers every schedule when it starts. Jobs still queued at the switch are dropped, though, and a later collection does not fetch their items again (stored posts are deduplicated):
+
+1. **Drain first.** Switch collection off with the database kill switch for each collecting source (`npm run source:disable -- <slug> --reason "valkey upgrade"`; undo with `source:enable` afterwards), then wait until `GET /api/health` shows `worker.queues.ingest` and `worker.queues.embed` with 0 waiting, active and delayed.
+2. **Upgrade within 24 hours of the last collection.** Dropped scoring jobs are recovered only by the unscored-post sweep, which looks back 24 hours; their collection cycles close at the 15-minute hard cap. Dropped embed jobs are not recovered at all.
+3. Stop the stack cleanly (`docker stop` gives the worker 180 s to finish in-flight jobs), bring it back up, and once it is healthy remove the old volume with `docker volume rm <project>_redis_data`.
 
 ---
 
@@ -130,9 +141,17 @@ COLLECTOR_CONTACT_URL=https://github.com/<you>/pulse-of-ai
 # public, but their terms require permission for automated analysis; setting
 # this records that YOU accept that legal risk.
 PERMISSION_GATED_FEEDS_ACCEPTED_BY="<your name> <YYYY-MM-DD>"
+
+# Needed to open ANY gated source: one that needs a key, an approval
+# reference, a licence or the acknowledgement above (decision G5).
+GATE_APPROVED_BY="<name> <YYYY-MM-DD>"
 ```
 
-Run interactively, `npm run standup` asks for both; `--yes` never asks. With the contact URL alone, 23 sources collect; with both, 31. `.env.example` lists every source key and where to get it, and documents the per-source kill switch `SOURCE_<SLUG>_ENABLED=false` (slugs are in `src/config/source-registry.js`).
+Run interactively, `npm run standup` asks for the first two; `--yes` never asks. Standup never asks for `GATE_APPROVED_BY` or fills it in: set it by hand in `.env`.
+
+**Every gated source needs a named approval** (ADR 0001, decision G5). A source that needs a key, an approval reference, a licence or the acknowledgement above opens only when `GATE_APPROVED_BY` names the person who approved opening it (a name, then a real date). Until then it stays closed with the status reason "awaiting named approval"; keyless sources are unaffected. The value is recorded as the approver of every gate opening in the append-only `source_gate_events` table, and `npm run source:disable | enable | reset` refuse to run without it (it is their recorded actor, not your shell's `$USER`).
+
+With the contact URL set, 23 sources collect, whether or not the acknowledgement is set. With the contact URL, the acknowledgement and `GATE_APPROVED_BY`, 31 collect. A key, approval reference or licence you add later opens its source only while `GATE_APPROVED_BY` is set. `.env.example` lists every source key and where to get it, and documents the per-source kill switch `SOURCE_<SLUG>_ENABLED=false` (slugs are in `src/config/source-registry.js`).
 
 After changing `.env`, recreate the containers (`docker compose up -d worker web`; `docker restart` does not re-read `.env`). To stop a source at once without touching env:
 
@@ -142,9 +161,34 @@ npm run source:enable  -- <slug>
 npm run source:reset   -- <slug> --note "<why>"     # clear the refused state after a 401/403/451 or robots refusal
 ```
 
+All three need `GATE_APPROVED_BY` set, and record it as the actor.
+
 Env kill switches also exist: `SOURCE_<SLUG>_ENABLED=false`, `COLLECTORS_DISABLED=slug1,slug2`, and the global `COLLECTORS_ENABLED=false`.
 
 Collection runs in the worker: each collecting source on its own schedule, every 150 s by default (`COLLECT_WINDOW_MS`), stretched where a documented rate limit needs it. `POST /api/refresh` asks the worker for one collection over every source (see [API](#api)). `npm run collect` runs one collection job by hand; `npm run collect:smoke` fetches every enabled keyless route once and writes nothing.
+
+### Adding a keyed source (a supervised first run)
+
+A source whose key, licence or approval arrives later is not scheduled blind (PR #10 review P10-17):
+
+1. Keep the new credential out of `.env` for now, and run a supervised dry run of that one source. **Never type a key on the command line** (a `NAME=value` prefix in front of a command): the whole line is saved in your shell history (`~/.zsh_history`, `~/.bash_history`), which persists, is often backed up or synced, and is outside every log-scrubbing control. Use one of these instead:
+   - Prompt for it. `read -rs` does not echo the key and nothing reaches the history; unset it afterwards:
+     ```bash
+     read -rs -p 'Guardian API key: ' GUARDIAN_API_KEY; echo; export GUARDIAN_API_KEY
+     read -r -p 'Guardian licence reference: ' GUARDIAN_COMMERCIAL_LICENSE_REF; export GUARDIAN_COMMERCIAL_LICENSE_REF
+     npm run collect -- --supervised --only guardian
+     unset GUARDIAN_API_KEY GUARDIAN_COMMERCIAL_LICENSE_REF
+     ```
+     (In zsh, `read -rs` takes the prompt as `read -rs 'GUARDIAN_API_KEY?Guardian API key: '`.)
+   - Or write it with an editor into a private env file outside the repository, readable only by you, load it for this one run, then delete it:
+     ```bash
+     umask 077 && "${EDITOR:-vi}" ~/guardian-trial.env        # GUARDIAN_API_KEY=… and GUARDIAN_COMMERCIAL_LICENSE_REF=…
+     node --env-file="$HOME/guardian-trial.env" scripts/collect.js --supervised --only guardian
+     rm ~/guardian-trial.env
+     ```
+   The dry run opens the source only if it would collect under that environment, so `COLLECTOR_CONTACT_URL` and `GATE_APPROVED_BY` must already be set in `.env`; otherwise it stops and prints the source's status.
+2. It fetches every open route through the real collectors (robots, allowed hosts, quotas and redaction all apply), prints what each route returned and a sample of up to 5 payloads exactly as they would be stored, and stores nothing: no posts, scores, cursors, collection state or job. Its only database access is one read of the source's kill switch and refusal state: a source disabled with `npm run source:disable` or still in its refusal cooldown is refused before any request, exactly as the worker would refuse it.
+3. Sign off if the sample is on topic and carries no personal data beyond the ingest claim. Then add the credential to `.env` and recreate the containers (`docker compose up -d worker web`); the worker schedules the source on its next reschedule.
 
 ---
 
@@ -158,6 +202,46 @@ Demo data is only the fallback, used when collection yields nothing in the trail
 - **Shown as DEMO on the page.** `GET /api/health` reports `data_mode` (`live`, `demo`, `mixed` or `none`) for exactly what the globe shows, every aggregated row carries `demo_posts` / `data_mode`, and every receipt carries `data_origin`. With demo data the intro kicker reads DEMO, chapter titles carry a "— Demo data" marker, and receipts say the post is fictional demo content.
 
 The health drawer counts demo feeds separately from the 52 registry sources.
+
+---
+
+## Alerting
+
+Every other alert (freshness, retention, bias) is evaluated inside the worker, so a dead worker would stop them all. The `watchdog` service (`scripts/watchdog.js`, `src/watchdog/`) runs in its own container in the `full` profile. Every `WATCHDOG_POLL_INTERVAL_S` (default 120 s, first poll 60 s after start) it reads `GET /api/health`, probes PostgreSQL itself, and raises a **critical** alert for each of these conditions:
+
+| Condition | Raised when |
+|---|---|
+| Web API unreachable | `/api/health` does not answer (refused, timeout, 5xx) |
+| Database unreachable | the watchdog's own `SELECT 1` fails, or health reports `db_connected: false` |
+| Valkey unreachable | health reports `redis.reachable: false` |
+| Worker down | Valkey answers but the worker heartbeat is missing or older than 90 s |
+| Maintenance failing or overdue | a maintenance task's latest run failed, or its last success is older than 30 min (retention), 26 h (daily: compaction, run rollups and the rolling 24 h bias window) or 8 days (terms) |
+| Text retention overdue | text is stored past its retention window, or the window setting is invalid |
+| Collection failing | sources are enabled but none collected successfully in the last hour |
+| Queue backlog abnormal | a queue holds more than 5000 waiting + delayed jobs |
+| Failed jobs abnormal | more than 25 queue jobs failed in the last hour, or more than 3 collection cycles |
+
+What happens when a condition appears:
+
+- **Dashboard.** One critical alert row per condition (the database allows only one open), shown as a red **SYSTEM ALERT** on the header health chip and at the top of the health drawer, with its summary. The drawer's SYSTEM WATCHDOG section says whether the watchdog is reporting and whether e-mail is on. When the condition clears, the alert is resolved with an audited `alert_resolutions` record.
+- **E-mail.** One message when the condition opens and one when it clears, never one per poll. At most `WATCHDOG_EMAIL_MAX_PER_HOUR` (12) messages an hour; a failed send is retried on the next polls. Every decision is logged in `watchdog_notifications`.
+- **The watchdog never crash-loops.** The API or the database being down is itself a condition; it keeps polling and clears the alert when they return. A condition that opened and cleared while the database was down is recorded afterwards as an already-resolved alert.
+
+**Configuring e-mail.** Add the SMTP settings to `.env` (see `.env.example`, "Alerting"), then recreate the watchdog with `docker compose --profile full up -d watchdog`:
+
+```bash
+SMTP_HOST=smtp.example.org
+SMTP_PORT=587            # empty: 587, or 465 with SMTP_SECURE=true
+SMTP_SECURE=false        # true = TLS from the first byte (465)
+SMTP_REQUIRE_TLS=true    # with SMTP_SECURE=false, STARTTLS is required unless this is false
+SMTP_USER=alerts@example.org
+SMTP_PASSWORD=           # edit .env with an editor; never type it on a command line (shell history)
+SMTP_FROM="Pulse of AI <alerts@example.org>"
+SMTP_TO=you@example.org,oncall@example.org
+WATCHDOG_DASHBOARD_URL=http://localhost:3000   # optional link in the e-mails
+```
+
+E-mail is on when `SMTP_HOST`, `SMTP_FROM` and `SMTP_TO` are all set. Without them the watchdog alerts on the dashboard only, and `/api/health` (`watchdog.email.status`) and the health drawer say **"email alerting not configured"**. Incomplete or invalid settings are named there too. The SMTP password reaches the `watchdog` container only: web never gets it, and the worker, which loads `.env` whole, has it blanked (`scripts/test/check-compose.sh` enforces both). Test your settings by stopping the worker for a few minutes (`docker compose --profile full stop worker`, then `start worker`): you should get a CRITICAL and then a CLEARED e-mail. The thresholds are in `.env.example`; `docker compose --profile full logs watchdog` shows every poll.
 
 ---
 

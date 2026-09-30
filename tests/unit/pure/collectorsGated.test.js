@@ -98,7 +98,7 @@ describe('paid APIs (active only with their key)', () => {
     });
 
     test('Guardian Content API (commercial key)', async () => {
-        const { c, transport } = make('guardian', 'content-api', [['https://content.guardianapis.com/search?tag=technology%2Fartificialintelligenceai&show-fields=trailText&order-by=newest&page-size=30', G('guardian-content.json')]], { GUARDIAN_API_KEY: 'k' });
+        const { c, transport } = make('guardian', 'content-api', [['https://content.guardianapis.com/search?tag=technology%2Fartificialintelligenceai&show-fields=trailText&order-by=newest&page-size=30', G('guardian-content.json')]], { GUARDIAN_API_KEY: 'k', GUARDIAN_COMMERCIAL_LICENSE_REF: 'L-1' });
         const r = await c.collect();
         expect(transport.calls[0].url).toMatch(/tag=technology%2Fartificialintelligenceai/);
         expect(r.payloads[0].title).toBe('AI models and the energy grid');

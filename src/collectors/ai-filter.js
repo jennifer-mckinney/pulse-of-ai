@@ -6,11 +6,27 @@
 //
 // Deliberately precise over broad: "AI" must be the upper-case word (so
 // "said", "Thai" or "ai" in a URL never match), product names are specific.
+//
+// P10-13: the "AI" rule is the SAME expression the relevance score uses
+// (src/config/ai-lexicon.js AI_ACRONYM_RE, relevance@1.2.0), so an item this
+// filter admits for "AI" also scores that term. How the filter's wider
+// product/topic patterns relate to the registered relevance lexicon is
+// documented in src/config/ai-lexicon.js.
+//
+// PR #22 G6 (Jennifer, 2026-09-29): this filter decides WHAT IS STORED, so it
+// is selection methodology and is versioned: admission_filter@1.0.0
+// (src/config/methodology-registry.js, migration 042). Every collected post
+// records the version it was admitted under (raw_posts.admission_mv_id).
+// ANY change to PATTERNS, SEARCH_TERMS or the scope rule needs a NEW
+// registry version (and a migration); tests/unit/pure/admissionFilter.test.js
+// fails when the code and the registered config differ.
 
 'use strict';
 
+const { AI_ACRONYM_RE } = require('../config/ai-lexicon');
+
 const PATTERNS = [
-    /\bA\.?I\.?(?![a-z])/,                     // AI, A.I. (upper case only)
+    AI_ACRONYM_RE,                             // AI, A.I. (upper case only; shared with relevance@1.2.0)
     /\bAGI\b/,
     /\bLLMs?\b/,
     /\bNLP\b/,
@@ -53,4 +69,12 @@ function isAiRelated(text) {
     return PATTERNS.some(re => re.test(text));
 }
 
-module.exports = { isAiRelated, PATTERNS, SEARCH_TERMS };
+/** The version of the admission filter this code implements (G6). */
+const ADMISSION_FILTER_VERSION = '1.0.0';
+
+/** PATTERNS as registered: each RegExp's source and flags. */
+function patternDescriptions() {
+    return PATTERNS.map(re => ({ source: re.source, flags: re.flags }));
+}
+
+module.exports = { isAiRelated, PATTERNS, SEARCH_TERMS, ADMISSION_FILTER_VERSION, patternDescriptions };
