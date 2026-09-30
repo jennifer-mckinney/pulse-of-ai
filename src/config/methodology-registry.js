@@ -583,6 +583,45 @@ const METHODOLOGY_VERSIONS = [
     });
 })();
 
+// admission_filter@1.0.0 — PR #22 G6 (Jennifer, 2026-09-29): the collection
+// admission filter (src/collectors/ai-filter.js) decides which items are
+// stored, so it is a versioned methodology component. The config IS the
+// code's patterns (tests/unit/pure/admissionFilter.test.js); any change is a
+// new version. Every collected post records its version
+// (raw_posts.admission_mv_id, migration 042).
+(() => {
+    const { patternDescriptions, SEARCH_TERMS, ADMISSION_FILTER_VERSION } = require('../collectors/ai-filter');
+    METHODOLOGY_VERSIONS.push({
+        component: 'admission_filter',
+        version: ADMISSION_FILTER_VERSION,
+        model_name: 'ai-scope-filter-v1',
+        config: {
+            // Must equal src/collectors/ai-filter.js PATTERNS (order included)
+            patterns: patternDescriptions(),
+            match_rule: 'an item is admitted when ANY pattern matches its title + summary text',
+            scope_rule: {
+                filter: 'site-wide and technology feeds (registry route scope "filter"): only items the patterns match are stored',
+                ai: 'AI-specific feeds and searches (route scope "ai"): every item is stored; the patterns are not applied',
+            },
+            // Must equal src/collectors/ai-filter.js SEARCH_TERMS
+            search_terms: [...SEARCH_TERMS],
+            search_terms_rule: 'server-side search terms (Reddit subreddit discovery); every result is still filtered with the patterns',
+            shared_with: 'the "AI" pattern is src/config/ai-lexicon.js AI_ACRONYM_RE, the same expression relevance@1.2.0 scores',
+            not_relevance: 'admission scopes collection only; the relevance score (relevance@1.2.0) is a separate component',
+        },
+        justification: 'admission_filter@1.0.0 registers the collection admission filter as methodology (PR #22 review, decision G6, '
+            + 'Jennifer McKinney 2026-09-29). The filter decides which items of a site-wide or technology feed are stored at all, '
+            + 'which is a selection decision: it shapes every downstream measure. It was code-only until now; this version records '
+            + 'exactly the patterns that ran since relevance@1.2.0 (PR #10 P10-13): upper-case "AI" or "A.I." as a whole word, AGI, '
+            + 'LLM, NLP, GPT with a version suffix, and topic and product phrases (artificial intelligence, machine learning, deep '
+            + 'learning, neural networks, language models, generative AI, natural language processing, computer vision, named AI '
+            + 'products and labs, deepfakes, facial recognition, algorithmic, autonomous vehicles, agents or weapons, robots and '
+            + 'robotics). An item is stored when any pattern matches its title and summary. AI-specific feeds are stored whole. '
+            + 'Each collected post records the admission version it was stored under; a change to the patterns, the search terms '
+            + 'or the scope rule is a new version, never an edit of this row.',
+    });
+})();
+
 // ─── Errata (P10-16) ─────────────────────────────────────────────────────────
 // A released methodology row is never edited, even when it turns out not to
 // describe the code that ran. An erratum is a NEW row in

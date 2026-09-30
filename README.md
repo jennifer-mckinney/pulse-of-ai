@@ -121,7 +121,7 @@ When it finishes, open **http://localhost:3000**: the globe, the eleven chapters
 
 ### Prerequisites
 
-- Docker Desktop (macOS / Windows) or Docker Engine with the Compose plugin (Linux), with the daemon running. **Docker Compose 2.39.0 or newer** (`docker compose version`): `docker-compose.yml` uses `build.provenance` / `build.sbom`, which Compose added in 2.39.0, and older versions reject the file. Standup checks the version and stops with upgrade instructions if it is too old.
+- Docker Desktop (macOS / Windows) or Docker Engine with the Compose plugin (Linux), with the daemon running. **Docker Compose 2.39.0 or newer** (`docker compose version`): `docker-compose.yml` uses `build.provenance` / `build.sbom`, which Compose added in 2.39.0, and older versions reject the file. Standup checks the version and stops with upgrade instructions if it is too old. (The worker's `env_file` uses the long syntax with `required: true`, which needs Compose 2.24 or newer and is covered by that minimum: a missing `.env`, or a wrong `PULSE_ENV_FILE`, stops `docker compose --profile full up` with "env file … not found" instead of starting a worker whose keyed sources are all silently closed.)
 - **Bash 3.2 or newer.** macOS's `/bin/bash` (3.2) and any Linux bash work. On **Windows**, run it from **WSL 2** (recommended, with Docker Desktop's WSL integration turned on) or **Git Bash**. PowerShell and `cmd.exe` cannot run the script themselves: `npm run standup` from them works only when one of those `bash` executables is on `PATH`. Under Git Bash, NTFS does not enforce the `chmod 600` standup applies to `.env`, so restrict that file with Windows permissions yourself.
 - `curl` (used by the smoke check), plus the standard tools every macOS, Linux, WSL and Git Bash install has: `awk`, `sed`, `grep`, `find`, and `openssl` (or `/dev/urandom` with `od`) for the generated secrets.
 
@@ -163,7 +163,11 @@ Re-running is safe. The images come from the build cache, running containers are
 | `postgres_test` | `5433` (`POSTGRES_TEST_PORT`) | Test database (not used by the running app) |
 | `redis` | `6379` (`REDIS_PORT`) | Valkey 8, the BullMQ queue backend (`valkey_data` volume). It speaks the Redis protocol, so the service name and the `REDIS_*` variables keep that name. Password required (`REDIS_PASSWORD`) |
 
-**Upgrading a stack that ran Redis 7.** The queue store is now Valkey 8 on a new `valkey_data` volume. Redis 7.4 writes RDB format 12, which Valkey 8 will not load, so the old `redis_data` volume is left unused rather than reused. Nothing needs migrating because the queue data is transient: the worker re-registers every schedule when it starts. Stop the stack cleanly, bring it back up, and once it is healthy remove the old volume with `docker volume rm <project>_redis_data`.
+**Upgrading a stack that ran Redis 7.** The queue store is now Valkey 8 on a new `valkey_data` volume. Redis 7.4 writes RDB format 12, which Valkey 8 will not load, so the old `redis_data` volume is left unused rather than reused. Schedules need no migrating: the worker re-registers every schedule when it starts. Jobs still queued at the switch are dropped, though, and a later collection does not fetch their items again (stored posts are deduplicated):
+
+1. **Drain first.** Switch collection off with the database kill switch for each collecting source (`npm run source:disable -- <slug> --reason "valkey upgrade"`; undo with `source:enable` afterwards), then wait until `GET /api/health` shows `worker.queues.ingest` and `worker.queues.embed` with 0 waiting, active and delayed.
+2. **Upgrade within 24 hours of the last collection.** Dropped scoring jobs are recovered only by the unscored-post sweep, which looks back 24 hours; their collection cycles close at the 15-minute hard cap. Dropped embed jobs are not recovered at all.
+3. Stop the stack cleanly (`docker stop` gives the worker 180 s to finish in-flight jobs), bring it back up, and once it is healthy remove the old volume with `docker volume rm <project>_redis_data`.
 
 Every published port (web and the databases and redis) binds to `127.0.0.1` by default (`PULSE_BIND_ADDR`). Setting `PULSE_BIND_ADDR=0.0.0.0` exposes all of them to your network, databases included. To run a second stack beside this one, give it its own project name and ports:
 
@@ -266,6 +270,7 @@ Both act on one compose project only: `COMPOSE_PROJECT_NAME` if it's set, otherw
 
 ### Upgrading an existing dev database
 
+- **Take a `pg_dump` before the first worker start after upgrading.** The worker's maintenance job runs as soon as it starts: it permanently removes post text past each source's window (a platform's terms where they set one, such as Reddit's 48 h; otherwise the 90-day detail window, `RETENTION_DETAIL_DAYS`) and compacts every whole month older than that into rollups. On a database that has not run it before, that is all old data at once, and it cannot be undone. Back up first, before `npm run standup` (or before starting the worker by hand): `docker compose up -d postgres`, then `docker compose exec postgres pg_dump -U pulse_user pulse_of_ai > backup-before-upgrade.sql`.
 - **Standup applies migrations for you.** The `migrate` job runs every pending migration and the idempotent seed before web and the worker start, on every `npm run standup`.
 - **Host-side development (`npm run dev`)**: after pulling, run `npm run migrate && npm run seed` against your dev database.
 - **Migrations are forward-only.** There are no down migrations, and older code isn't guaranteed to run against a newer schema. Take a backup first if you may need to go back: `docker compose exec postgres pg_dump -U pulse_user pulse_of_ai > backup.sql`.
