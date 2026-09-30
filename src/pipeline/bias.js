@@ -154,22 +154,35 @@ async function checkLocationConcentration(jobId, biasMvId) {
     )).n;
     const exclusion = excludedBases.length === 0 ? {} : { excluded_location_bases: excludedBases, excluded_posts: excluded };
 
-    // No located posts — cannot compute concentration
+    const minSample = Number.isInteger(config.location_min_sample) && config.location_min_sample > 0
+        ? config.location_min_sample : 0;
+
+    // No located posts — cannot compute concentration. PR #22 grumpy M5:
+    // under a version with a minimum (bias@1.3.0+) zero content-located
+    // posts is below that minimum, so it is recorded as "insufficient
+    // sample" like any other small sample (never a "pass"). Older versions
+    // keep their 'none' row, so their replays are unchanged.
     if (rows.length === 0) {
+        const insufficient = minSample > 0;
         await writeBiasAssessment({
             jobId,
             assessmentType: 'location_concentration',
             groupField:     'location',
-            groupValue:     'none',
+            groupValue:     insufficient ? INSUFFICIENT_SAMPLE : 'none',
             metricName:     'share_of_total',
             metricValue:    0,
             threshold,
             isViolation:    false,
             severity:       null,
-            evidence:       { rows: [], total: 0, ...exclusion },
+            evidence:       {
+                rows: [], total: 0, ...exclusion,
+                ...(insufficient ? { insufficient_sample: true, min_sample: minSample } : {}),
+            },
             biasMvId,
         });
-        return { isViolation: false, metricValue: 0, groupValue: null };
+        return insufficient
+            ? { isViolation: false, metricValue: 0, groupValue: INSUFFICIENT_SAMPLE, insufficientSample: true }
+            : { isViolation: false, metricValue: 0, groupValue: null };
     }
 
     const total      = rows.reduce((sum, r) => sum + r.post_count, 0);
@@ -182,8 +195,6 @@ async function checkLocationConcentration(jobId, biasMvId) {
     // check records an "insufficient sample" assessment — the share is still
     // stated — and raises NO violation and NO alert. Older versions carry no
     // minimum, so their replays are unchanged.
-    const minSample = Number.isInteger(config.location_min_sample) && config.location_min_sample > 0
-        ? config.location_min_sample : 0;
     if (total < minSample) {
         await writeBiasAssessment({
             jobId,
@@ -277,11 +288,14 @@ async function checkPlatformSentimentParity(jobId, biasMvId) {
     // bias@1.4.0: only categories with at least parity_min_per_category
     // posts are compared (an average over three posts is noise); with fewer
     // than two such categories the check records "insufficient sample" and
-    // raises no alert. Older versions compare every category.
+    // raises no alert. Older versions compare every category. PR #22
+    // grumpy M5: that includes a job with ONE category (the most common
+    // cycle shape) or none — below the registered rule, so "insufficient
+    // sample", never a "pass".
     const minPer = Number.isInteger(config.parity_min_per_category) && config.parity_min_per_category > 0
         ? config.parity_min_per_category : 0;
     const rows = allRows.filter(r => r.n >= minPer);
-    if (minPer > 0 && rows.length < 2 && allRows.length >= 2) {
+    if (minPer > 0 && rows.length < 2) {
         await writeBiasAssessment({
             jobId,
             assessmentType: 'platform_sentiment_parity',
@@ -392,30 +406,34 @@ async function checkNegativeDominance(jobId, biasMvId) {
         [jobId],
     );
 
+    // bias@1.4.0: a negative share over a handful of posts is noise —
+    // below negative_min_sample the check records "insufficient sample".
+    const minNeg = Number.isInteger(config.negative_min_sample) && config.negative_min_sample > 0 ? config.negative_min_sample : 0;
+
+    // PR #22 grumpy M5: zero posts is below any minimum — "insufficient
+    // sample" under bias@1.4.0+, the old 'all' row for older versions.
     if (rows.length === 0) {
+        const insufficient = minNeg > 0;
         await writeBiasAssessment({
             jobId,
             assessmentType: 'negative_dominance',
             groupField:     'global',
-            groupValue:     'all',
+            groupValue:     insufficient ? INSUFFICIENT_SAMPLE : 'all',
             metricName:     'negative_share',
             metricValue:    0,
             threshold,
             isViolation:    false,
             severity:       null,
-            evidence:       { rows: [], total: 0 },
+            evidence:       { rows: [], total: 0, ...(insufficient ? { insufficient_sample: true, min_sample: minNeg } : {}) },
             biasMvId,
         });
-        return { isViolation: false, metricValue: 0 };
+        return insufficient ? { isViolation: false, metricValue: 0, insufficientSample: true } : { isViolation: false, metricValue: 0 };
     }
 
     const total      = rows.reduce((sum, r) => sum + r.count, 0);
     const negRow     = rows.find(r => r.indicator === 'negative');
     const negCount   = negRow ? negRow.count : 0;
     const metricValue = negCount / total;
-    // bias@1.4.0: a negative share over a handful of posts is noise —
-    // below negative_min_sample the check records "insufficient sample".
-    const minNeg = Number.isInteger(config.negative_min_sample) && config.negative_min_sample > 0 ? config.negative_min_sample : 0;
     if (total < minNeg) {
         await writeBiasAssessment({
             jobId,

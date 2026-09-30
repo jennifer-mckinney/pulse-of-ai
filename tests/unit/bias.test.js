@@ -506,6 +506,7 @@ describe('bias@1.4.0 — minimum samples (parity per category, negative dominanc
     const { METHODOLOGY_VERSIONS } = require('../../src/config/methodology-registry');
     const V14 = METHODOLOGY_VERSIONS.find(m => m.component === 'bias' && m.version === '1.4.0').config;
     const mv14 = () => insertBiasMv(V14);
+    const { INSUFFICIENT_SAMPLE } = require('../../src/pipeline/bias');
 
     it('a single-post cycle raises no alert at all', async () => {
         const src = await insertSource('one-post', 'news');
@@ -520,6 +521,60 @@ describe('bias@1.4.0 — minimum samples (parity per category, negative dominanc
         expect(rows).toEqual([
             { assessment_type: 'location_concentration', group_value: 'insufficient sample' },
             { assessment_type: 'negative_dominance', group_value: 'insufficient sample' },
+            // PR #22 grumpy M5: one category is below the parity rule.
+            { assessment_type: 'platform_sentiment_parity', group_value: 'insufficient sample' },
+        ]);
+    });
+
+    // PR #22 grumpy M5: the empty and single-group shapes are "insufficient
+    // sample" under bias@1.4.0 (as registered), never a recorded pass.
+    it('M5: a single-category job (40 posts, one category) records parity "insufficient sample", no pass', async () => {
+        const src = await insertSource('m5-one-cat', 'news');
+        const jobId = await insertJob();
+        const mvIds = await insertMethodologyVersions();
+        const biasMv = await mv14();
+        for (let i = 0; i < 40; i++) await insertPostWithSentiment(src, jobId, mvIds.sentimentMvId, { comparative: 0.2, externalId: `oc${i}` });
+        const r = await checkPlatformSentimentParity(jobId, biasMv);
+        expect(r).toMatchObject({ isViolation: false, insufficientSample: true, groupValue: INSUFFICIENT_SAMPLE });
+        const a = await dbGet(`SELECT group_value, is_violation, evidence FROM bias_assessments WHERE job_id = $1`, [jobId]);
+        expect(a).toMatchObject({ group_value: 'insufficient sample', is_violation: false });
+        expect(a.evidence).toMatchObject({ insufficient_sample: true, min_per_category: 10, compared: ['news'] });
+    });
+
+    it('M5: an all-publisher-located job records location "insufficient sample" (not "pass 0.000")', async () => {
+        const src = await insertSource('m5-pub', 'news');
+        const jobId = await insertJob();
+        const mvIds = await insertMethodologyVersions();
+        const biasMv = await mv14();
+        for (let i = 0; i < 5; i++) {
+            const id = await insertPostWithSentiment(src, jobId, mvIds.sentimentMvId, { location: 'London', externalId: `ap${i}` });
+            await dbRun(`UPDATE raw_posts SET raw_payload = '{"location_basis":"publisher"}'::jsonb WHERE id = $1`, [id]);
+        }
+        const r = await checkLocationConcentration(jobId, biasMv);
+        expect(r).toMatchObject({ isViolation: false, insufficientSample: true, groupValue: INSUFFICIENT_SAMPLE, metricValue: 0 });
+        const a = await dbGet(`SELECT group_value, evidence FROM bias_assessments WHERE job_id = $1`, [jobId]);
+        expect(a.group_value).toBe('insufficient sample');
+        expect(a.evidence).toMatchObject({ total: 0, excluded_posts: 5, insufficient_sample: true, min_sample: 30 });
+    });
+
+    it('M5: a job with zero scored posts records all three checks as "insufficient sample"', async () => {
+        const jobId = await insertJob();
+        const biasMv = await mv14();
+        const r = await runBiasChecks(jobId, biasMv);
+        expect(r.violationsFound).toBe(0);
+        expect(r.results.every(x => x.insufficientSample === true)).toBe(true);
+        const rows = await dbAll('SELECT assessment_type, group_value FROM bias_assessments WHERE job_id = $1 ORDER BY assessment_type', [jobId]);
+        expect(rows.map(x => x.group_value)).toEqual(['insufficient sample', 'insufficient sample', 'insufficient sample']);
+    });
+
+    it('M5: a version with no minimums (bias@1.0 shape) keeps its original none/all rows', async () => {
+        const jobId = await insertJob();
+        const biasMv = await insertBiasMv();
+        await runBiasChecks(jobId, biasMv);
+        const rows = await dbAll('SELECT assessment_type, group_value FROM bias_assessments WHERE job_id = $1 ORDER BY assessment_type', [jobId]);
+        expect(rows).toEqual([
+            { assessment_type: 'location_concentration', group_value: 'none' },
+            { assessment_type: 'negative_dominance', group_value: 'all' },
             { assessment_type: 'platform_sentiment_parity', group_value: 'none' },
         ]);
     });
