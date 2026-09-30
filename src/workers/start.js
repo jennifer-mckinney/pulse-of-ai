@@ -28,9 +28,13 @@
 
 // P10-12: size the PostgreSQL pool against this process's job concurrency
 // BEFORE anything opens the pool (src/db/pool-size.js).
-const { workerPoolSize, workerConcurrency } = require('../db/pool-size');
+const { workerPoolSize, workerConcurrency, checkPoolBudget } = require('../db/pool-size');
 const POOL = workerPoolSize();
-if (!POOL.explicit) process.env.PG_POOL_MAX = String(POOL.size);
+// The env as the operator set it (web's PG_POOL_MAX is budgeted from it).
+const HOST_ENV = Object.freeze({ ...process.env });
+// PR #22 P1-21: the worker's pool is ALWAYS its own (WORKER_PG_POOL_MAX or
+// the computed size); a host PG_POOL_MAX in .env never shrinks it.
+process.env.PG_POOL_MAX = String(POOL.size);
 
 const { Worker } = require('bullmq');
 const { connection, ingestQueue, maintenanceQueue } = require('../queues/index');
@@ -62,17 +66,20 @@ const RESCHEDULE_MS         = int(process.env.COLLECT_RESCHEDULE_MS, 10 * 60 * 1
 // Every line is scrubbed of secrets (src/workers/logging.js).
 const { log, logError } = require('./logging');
 
+// PR #22 P1-21: created with autorun off; they start only after the
+// connection-budget check passed (boot, below).
+const W = { connection, autorun: false };
 const workers = [
-    new Worker('collect.rss',  job => processCollectJob(job), { connection, concurrency: COLLECT_CONCURRENCY }),
-    new Worker('collect.api',  job => processCollectJob(job), { connection, concurrency: COLLECT_CONCURRENCY }),
-    new Worker('collect.bulk', job => processCollectJob(job), { connection, concurrency: 1 }),
+    new Worker('collect.rss',  job => processCollectJob(job), { ...W, concurrency: COLLECT_CONCURRENCY }),
+    new Worker('collect.api',  job => processCollectJob(job), { ...W, concurrency: COLLECT_CONCURRENCY }),
+    new Worker('collect.bulk', job => processCollectJob(job), { ...W, concurrency: 1 }),
     // POST /api/refresh collections (F10-3, F10-8): one at a time.
-    new Worker('collect.refresh', job => processRefreshJob(job), { connection, concurrency: 1 }),
-    new Worker('ingest',    processIngestJob,    { connection, concurrency: INGEST_CONCURRENCY }),
-    new Worker('embed',     processEmbedJob,     { connection, concurrency: EMBED_CONCURRENCY }),
-    new Worker('correlate', processCorrelateJob, { connection, concurrency: CORRELATE_CONCURRENCY }),
+    new Worker('collect.refresh', job => processRefreshJob(job), { ...W, concurrency: 1 }),
+    new Worker('ingest',    processIngestJob,    { ...W, concurrency: INGEST_CONCURRENCY }),
+    new Worker('embed',     processEmbedJob,     { ...W, concurrency: EMBED_CONCURRENCY }),
+    new Worker('correlate', processCorrelateJob, { ...W, concurrency: CORRELATE_CONCURRENCY }),
     // P10-2: text retention + compaction (repeatable, one at a time).
-    new Worker('maintenance', job => processMaintenanceJob(job, { log, logError }), { connection, concurrency: 1 }),
+    new Worker('maintenance', job => processMaintenanceJob(job, { log, logError }), { ...W, concurrency: 1 }),
 ];
 
 workers.forEach(w => {
@@ -175,11 +182,34 @@ async function redditMaintenance() {
     }
 }
 
-schedule();
-redditMaintenance();
-const timer = setInterval(schedule, RESCHEDULE_MS);
-const cycleTimer = setInterval(closeDueCycles, 30 * 1000);
-const redditTimer = setInterval(redditMaintenance, MAINTENANCE_MS);
+let timer = null;
+let cycleTimer = null;
+let redditTimer = null;
+
+// PR #22 P1-21: fail fast when every process's pool together would exceed
+// PostgreSQL's max_connections; otherwise start the workers and timers.
+async function boot() {
+    const { dbGet } = require('../db/connection');
+    let budget;
+    try {
+        budget = await checkPoolBudget({ env: HOST_ENV, workerPool: POOL.size, get: sql => dbGet(sql) });
+    } catch (err) {
+        logError(`[pool] could not check the connection budget: ${err.message}`);
+        process.exit(1);
+    }
+    if (!budget.ok) {
+        logError(`[pool] ${budget.message}; the worker does not start`);
+        process.exit(1);
+    }
+    log(`[pool] ${budget.message}`);
+    for (const w of workers) w.run().catch(err => logError(`[${w.name}] worker stopped: ${err.message}`));
+    schedule();
+    redditMaintenance();
+    timer = setInterval(schedule, RESCHEDULE_MS);
+    cycleTimer = setInterval(closeDueCycles, 30 * 1000);
+    redditTimer = setInterval(redditMaintenance, MAINTENANCE_MS);
+}
+boot();
 
 // M1: a bad retention window is reported at boot (the maintenance steps
 // that depend on it fail, and change nothing, until it is fixed).
@@ -190,11 +220,15 @@ try {
 }
 
 if (POOL.short) {
-    logError(`[pool] PG_POOL_MAX=${POOL.size} is below the ${POOL.required} connections this worker's concurrency can use; `
-        + 'jobs will wait for connections (src/db/pool-size.js)');
+    logError(`[pool] the worker pool (${POOL.size}${POOL.explicit ? ', WORKER_PG_POOL_MAX' : ', capped'}) is below the ${POOL.required} `
+        + 'connections this worker\'s concurrency can use; jobs will wait for connections (src/db/pool-size.js)');
+}
+if (POOL.hostPoolMaxIgnored) {
+    log(`[pool] PG_POOL_MAX=${POOL.hostPoolMaxIgnored} applies to web and the CLI only; the worker uses ${POOL.size} `
+        + '(set WORKER_PG_POOL_MAX to size the worker)');
 }
 log(
-    `Workers started — pg pool ${POOL.size} (needs ${POOL.required}) — collect:${COLLECT_CONCURRENCY}/type ingest:${INGEST_CONCURRENCY} `
+    `Workers configured (they start once the connection budget is checked) — pg pool ${POOL.size} (needs ${POOL.required}) — collect:${COLLECT_CONCURRENCY}/type ingest:${INGEST_CONCURRENCY} `
     + `embed:${EMBED_CONCURRENCY} correlate:${CORRELATE_CONCURRENCY}; rescheduling every ${Math.round(RESCHEDULE_MS / 1000)}s`,
 );
 
@@ -217,9 +251,9 @@ const stopHeartbeat = startHeartbeat(heartbeatRedis, {
 async function shutdown() {
     log('Shutting down workers...');
     stopHeartbeat();
-    clearInterval(timer);
-    clearInterval(cycleTimer);
-    clearInterval(redditTimer);
+    if (timer) clearInterval(timer);
+    if (cycleTimer) clearInterval(cycleTimer);
+    if (redditTimer) clearInterval(redditTimer);
     await Promise.all(workers.map(w => w.close()));
     await heartbeatRedis.quit().catch(() => {});
     process.exit(0);
