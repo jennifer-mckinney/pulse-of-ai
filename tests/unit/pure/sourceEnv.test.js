@@ -54,7 +54,7 @@ test('the anchors are merged into the right roles only (F9-2)', () => {
     // P10-18: the worker — and ONLY the worker — loads the env file.
     expect(compose.match(/env_file:/g)).toHaveLength(1);
     const worker = compose.slice(compose.indexOf('\n  worker:\n'), compose.indexOf('\n  embeddings:'));
-    expect(worker).toMatch(/env_file:\n\s+- path: \$\{PULSE_ENV_FILE:-\.env\}\n\s+required: false/);
+    expect(worker).toMatch(/env_file:\n\s+- path: \$\{PULSE_ENV_FILE:-\.env\}\n\s+required: true/);
     // web and the env-file-fed worker must use the same Redis logical db.
     expect(compose).toMatch(/^  REDIS_DB: \$\{REDIS_DB:-\}$/m);
 });
