@@ -36,13 +36,17 @@ flowchart LR
     direction TB
     M1["standup: populate --once&lt;br/&gt;(populate container, collector settings only)&lt;br/&gt;one real collection job, triggered_by standup;&lt;br/&gt;no API keys, so only routes that need none;&lt;br/&gt;a gated route also needs GATE_APPROVED_BY"]:::done
     M2{"trailing hour holds&lt;br/&gt;live posts (and no --force)?"}:::done
-    M3["demo batch (skipped only when the hour already&lt;br/&gt;holds --size demo posts, no live posts and collection&lt;br/&gt;is unavailable; --force always writes one)"]:::done
+    M3["demo batch (--force always writes one)"]:::done
+    M9{"--once, no --force: hour already holds&lt;br/&gt;--size demo posts, no live posts and&lt;br/&gt;collection unavailable? (checked first)"}:::done
     M4["populate --loop (profile demo)&lt;br/&gt;every DEMO_FEED_INTERVAL_MS (150 s):&lt;br/&gt;DEMO_FEED_BATCH posts (default 16,&lt;br/&gt;two per category) only while the hour has no live posts"]:::done
     M5["fictional posts: text starts with [Demo],&lt;br/&gt;raw_payload demo: true, fictional: true,&lt;br/&gt;under data_sources demo_#lt;category#gt;&lt;br/&gt;(source_type demo, active false)"]:::done
     M6["normalisePost → raw_posts (collected_at = now)&lt;br/&gt;→ saveSentiment / saveRelevance / saveDQI&lt;br/&gt;with audit rows → runBiasChecks&lt;br/&gt;→ embed jobs; processing_jobs triggered_by demo"]:::done
     M7["labelled on the way out: data_mode on /api/health,&lt;br/&gt;demo_posts + data_mode per city row,&lt;br/&gt;data_origin on receipts → DEMO kicker,&lt;br/&gt;Demo data markers, demo receipt wording"]:::done
     M8["no demo post written;&lt;br/&gt;the page reads LIVE"]:::done
-    M1 --&gt; M2
+    M10["collection and batch skipped; only missing&lt;br/&gt;demo embeddings are backfilled"]:::done
+    M1 --&gt; M9
+    M9 -- yes --&gt; M10
+    M9 -- no --&gt; M2
     M2 -- yes --&gt; M8
     M2 -- no --&gt; M3 --&gt; M5
     M4 --&gt; M2

@@ -7,13 +7,17 @@ flowchart LR
     direction TB
     M1["standup: populate --once<br/>(populate container, collector settings only)<br/>one real collection job, triggered_by standup;<br/>no API keys, so only routes that need none;<br/>a gated route also needs GATE_APPROVED_BY"]:::done
     M2{"trailing hour holds<br/>live posts (and no --force)?"}:::done
-    M3["demo batch (skipped only when the hour already<br/>holds --size demo posts, no live posts and collection<br/>is unavailable; --force always writes one)"]:::done
+    M3["demo batch (--force always writes one)"]:::done
+    M9{"--once, no --force: hour already holds<br/>--size demo posts, no live posts and<br/>collection unavailable? (checked first)"}:::done
     M4["populate --loop (profile demo)<br/>every DEMO_FEED_INTERVAL_MS (150 s):<br/>DEMO_FEED_BATCH posts (default 16,<br/>two per category) only while the hour has no live posts"]:::done
     M5["fictional posts: text starts with [Demo],<br/>raw_payload demo: true, fictional: true,<br/>under data_sources demo_#lt;category#gt;<br/>(source_type demo, active false)"]:::done
     M6["normalisePost → raw_posts (collected_at = now)<br/>→ saveSentiment / saveRelevance / saveDQI<br/>with audit rows → runBiasChecks<br/>→ embed jobs; processing_jobs triggered_by demo"]:::done
     M7["labelled on the way out: data_mode on /api/health,<br/>demo_posts + data_mode per city row,<br/>data_origin on receipts → DEMO kicker,<br/>Demo data markers, demo receipt wording"]:::done
     M8["no demo post written;<br/>the page reads LIVE"]:::done
-    M1 --> M2
+    M10["collection and batch skipped; only missing<br/>demo embeddings are backfilled"]:::done
+    M1 --> M9
+    M9 -- yes --> M10
+    M9 -- no --> M2
     M2 -- yes --> M8
     M2 -- no --> M3 --> M5
     M4 --> M2

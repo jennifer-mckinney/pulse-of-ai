@@ -29,7 +29,7 @@
 <pre class="mermaid">
 %% Title: Collection cycle · part 2 of 3 · fetch, normalise, store, score
 %% Summary: What one open route of a claimed source does: the guarded HTTP fetch, normalisation with redaction, the admission filter and the provenance fingerprint, storage with the ingest and admission versions, scoring (ingest queue for scheduled and refresh runs, inline for npm run collect and standup) with audit rows, and the run record.
-%% Sources: src/collectors/{index,base,http,netguard,transport,robots,normalize,identity,provenance,errors,redact,state,cycle,runner,ai-filter}.js, src/workers/{collect,ingest}.worker.js, src/pipeline/{ingest,sentiment,relevance,discourse,methodology}.js, src/config/methodology-registry.js; migrations 022, 031, 040, 042. Spec: TECHNICAL_SPEC.md section 8 (PII handling, provenance); ADR 0001 (terms and politeness, D2); PR #22 decision G6.
+%% Sources: src/collectors/{index,base,http,netguard,transport,robots,normalize,identity,provenance,errors,redact,state,refusal,cycle,runner,ai-filter}.js, src/workers/{collect,ingest}.worker.js, src/pipeline/{ingest,sentiment,relevance,discourse,methodology}.js, src/config/methodology-registry.js; migrations 022, 031, 040, 042, 062. Spec: TECHNICAL_SPEC.md section 8 (PII handling, provenance); ADR 0001 (terms and politeness, D2); PR #22 decision G6.
 flowchart LR
 
   subgraph FETCH["Fetch · one collector per open route"]
@@ -71,7 +71,7 @@ flowchart LR
     direction TB
     V1["24 · classify errors: error_kind + http_status only;&lt;br/&gt;error text scrubbed of every secret (redact.js)"]:::done
     V2["25 · saveOutcome() on source_collection_state:&lt;br/&gt;cursor, HTTP validators, last success / error,&lt;br/&gt;last_new_post_at, consecutive_failures"]:::done
-    V3["26 · refused → recordRefusal(): refused_until,&lt;br/&gt;refusal_count + 1, one critical source_refused&lt;br/&gt;alert; a successful probe clears it;&lt;br/&gt;then unchanged run → unchanged_runs + 1,&lt;br/&gt;else one source_runs row"]:::done
+    V3["26 · refused → recordRefusal(): refused_until,&lt;br/&gt;refusal_count + 1, one critical source_refused&lt;br/&gt;alert; a successful probe ends the refused state&lt;br/&gt;and starts a 24 h probation (a refusal on probation&lt;br/&gt;escalates the cooldown, up to 24 h; 24 h clean decays the count);&lt;br/&gt;then unchanged run → unchanged_runs + 1,&lt;br/&gt;else one source_runs row"]:::done
     V4["27 · inline runs: embed gate relevance ≥ 1/21&lt;br/&gt;(relevance@1.2.0, one of its 21 terms) → one&lt;br/&gt;embed job per new post (queued runs: the&lt;br/&gt;ingest worker applies the same gate)"]:::done
     V5["28 · scheduled run: leaveCycle(): counts added,&lt;br/&gt;inflight_runs − 1 (always, in finally); a one-shot&lt;br/&gt;job touches last_progress_at before and after&lt;br/&gt;every source, then completes or awaits&lt;br/&gt;its scoring retries → part 3"]:::done
     V1 --&gt; V2 --&gt; V3 --&gt; V4 --&gt; V5

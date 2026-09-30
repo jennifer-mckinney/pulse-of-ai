@@ -29,7 +29,7 @@
 <pre class="mermaid">
 %% Title: Object model · pipeline modules, workers and queues
 %% Summary: The scoring pipeline modules and what each exports, the methodology resolver, the BullMQ queues on Valkey and the worker handlers that consume them (incl. the maintenance schedulers), the audit replay module and the external watchdog.
-%% Sources: src/pipeline/*.js, src/collectors/ai-filter.js, src/queues/{index,connection,pending}.js, src/workers/*.js, src/db/pool-size.js (workerConcurrency), src/audit/replay.js, src/watchdog/*.js, scripts/watchdog.js, src/config/methodology-registry.js (CURRENT_VERSIONS), docker-compose.yml (redis service = Valkey 8). Updated 2026-09-29. Spec: TECHNICAL_SPEC.md sections 9, 10, 12, 18, 19, 20. Versions are CURRENT_VERSIONS of the methodology registry.
+%% Sources: src/pipeline/*.js, src/collectors/ai-filter.js, src/queues/{index,connection,pending}.js, src/workers/*.js, src/collectors/runner.js (single-job finalization), src/db/pool-size.js (workerConcurrency), src/audit/replay.js, src/watchdog/*.js, scripts/watchdog.js, src/config/methodology-registry.js (CURRENT_VERSIONS), docker-compose.yml (redis service = Valkey 8). Updated 2026-09-30. Spec: TECHNICAL_SPEC.md sections 9, 10, 12, 18, 19, 20. Versions are CURRENT_VERSIONS of the methodology registry.
 classDiagram
   direction LR
 
@@ -78,7 +78,7 @@ classDiagram
     +TextRemovedError, isTextRemoved(err)
   }
   class bias {
-    &lt;&lt;module pipeline/bias.js · bias@1.5.0&gt;&gt;
+    &lt;&lt;module pipeline/bias.js · bias@1.6.0&gt;&gt;
     +INSUFFICIENT_SAMPLE
     +runBiasChecks(jobId, biasMvId) checksRun 3, violationsFound
     +checkLocationConcentration(target, biasMvId)
@@ -94,7 +94,7 @@ classDiagram
     +insufficientSampleReport(o: anchor)
   }
   class embeddings {
-    &lt;&lt;module pipeline/embeddings.js · embedding@1.0.0&gt;&gt;
+    &lt;&lt;module pipeline/embeddings.js · embedding@1.1.0&gt;&gt;
     +EMBEDDING_DIMENSIONS 384
     +SKIP_REASONS purged_demo, text_removed
     +generateEmbedding(text)
@@ -227,7 +227,8 @@ classDiagram
   embedWorker --&gt; correlationGate : status only
   correlateWorker --&gt; correlationGate
   heartbeat ..&gt; correlationGate : publishes status
-  collectWorker ..&gt; methodology
+  collectWorker ..&gt; methodology : via collectors/runner.js
+  collectWorker ..&gt; bias : via runner, finalizes a single job with no scoring slot held
 
   class Watchdog {
     &lt;&lt;watchdog/index.js · own container, scripts/watchdog.js&gt;&gt;
