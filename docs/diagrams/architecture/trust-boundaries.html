@@ -24,12 +24,12 @@
 </head>
 <body>
 <h1>Trust boundaries and security controls</h1>
-<p class="summary">The three trust boundaries (browser to web, worker to the internet, containers to the host) and the control that guards each crossing: CSP, CORS scope, the refresh CSRF guard, the SSRF guard, secret scrubbing and PII redaction.</p>
+<p class="summary">The three trust boundaries (browser to web, worker to the internet, containers to the host) and the control that guards each crossing: CSP, CORS scope, the refresh CSRF guard, the SSRF guard, named gate approval, secret scrubbing and PII redaction.</p>
 <p class="source">Canonical source: <code>trust-boundaries.mmd</code> · index: <code>docs/diagrams/README.md</code></p>
 <pre class="mermaid">
 %% Title: Trust boundaries and security controls
-%% Summary: The three trust boundaries (browser to web, worker to the internet, containers to the host) and the control that guards each crossing: CSP, CORS scope, the refresh CSRF guard, the SSRF guard, secret scrubbing and PII redaction.
-%% Sources: src/server.js, src/middleware/same-origin.js, src/routes/{refresh,audit,sources}.js, src/collectors/{http,netguard,transport,robots,redact,errors,identity,normalize,provenance}.js, src/pipeline/ingest.js, docker-compose.yml, public/js/*.js (DOM discipline). Spec: TECHNICAL_SPEC.md section 8 (security and privacy).
+%% Summary: The three trust boundaries (browser to web, worker to the internet, containers to the host) and the control that guards each crossing: CSP, CORS scope, the refresh CSRF guard, the SSRF guard, named gate approval, secret scrubbing and PII redaction.
+%% Sources: src/server.js (jsonErrorHandler, listenHost), src/middleware/{same-origin,log-error}.js, src/db/connection.js (pool error logging), src/routes/{refresh,audit,sources}.js, src/collectors/{http,netguard,transport,robots,redact,errors,identity,normalize,provenance,governance}.js, src/config/source-registry.js (GATE_APPROVED_BY), src/config/methodology-registry.js (ingest@1.7.0), src/pipeline/ingest.js, src/db/migrations/035, 036 (append-only triggers), 056, docker-compose.yml, public/js/*.js (DOM discipline). Updated 2026-09-29. Spec: TECHNICAL_SPEC.md section 8 (security and privacy).
 flowchart LR
 
   subgraph INTERNET["Untrusted · readers' browsers and any caller"]
@@ -42,10 +42,11 @@ flowchart LR
     direction TB
     C1["every response: CSP default-src 'self', script-src 'self',&lt;br/&gt;style-src 'self', object-src 'none', base-uri 'self',&lt;br/&gt;frame-ancestors 'none';&lt;br/&gt;X-Content-Type-Options nosniff, X-Frame-Options DENY,&lt;br/&gt;Referrer-Policy no-referrer"]:::done
     C2["CORS only on the read-only router;&lt;br/&gt;POST /api/refresh mounted first, without CORS,&lt;br/&gt;OPTIONS answered 403"]:::done
-    C3["refresh CSRF guard: Sec-Fetch-Site must be same-origin or none;&lt;br/&gt;if the header is absent, Origin (else Referer) host = Host;&lt;br/&gt;anything else 403;&lt;br/&gt;X-Refresh-Token required beyond loopback;&lt;br/&gt;409 in flight, 60 s global debounce"]:::done
-    C4["input validation: UUID post ids, integer hours,&lt;br/&gt;canonical categories, dates, limit ≤ 100;&lt;br/&gt;500s return a generic message only"]:::done
+    C3["refresh CSRF guard: Sec-Fetch-Site must be same-origin or none;&lt;br/&gt;if the header is absent, Origin (else Referer) host = Host;&lt;br/&gt;anything else 403;&lt;br/&gt;X-Refresh-Token checked whenever REFRESH_TOKEN is set;&lt;br/&gt;no token set: 403 when bound beyond loopback,&lt;br/&gt;on a wildcard bind outside the compose container,&lt;br/&gt;or via a proxy (Forwarded, X-Forwarded-#42;, X-Real-IP);&lt;br/&gt;409 in flight, 60 s global debounce"]:::done
+    C4["input validation: UUID post ids, integer hours,&lt;br/&gt;canonical categories, dates, limit ≤ 100;&lt;br/&gt;malformed JSON → 400 JSON (jsonErrorHandler);&lt;br/&gt;no stack, path or upstream text in any error;&lt;br/&gt;500s return a generic message only"]:::done
     C5["audit input_hash served as HMAC(AUDIT_HASH_KEY),&lt;br/&gt;omitted without a key; /api/sources serves error_kind&lt;br/&gt;and http_status, never error text or env values"]:::done
     C6["frontend: textContent only, no innerHTML;&lt;br/&gt;all assets self-hosted, no CDN"]:::done
+    C7["log scrubbing: every route handler error (log-error.js)&lt;br/&gt;and PostgreSQL pool error passes scrub;&lt;br/&gt;control characters escaped, one line per error"]:::done
   end
 
   subgraph WORKB["Boundary 2 · worker to the internet"]
@@ -55,23 +56,24 @@ flowchart LR
     S3["response caps (5 MB, robots 500 KiB, bulk 50 MB),&lt;br/&gt;decompression counted, DTD entities refused,&lt;br/&gt;linear-time text processing"]:::done
     S4["politeness: contact User-Agent, robots.txt,&lt;br/&gt;per-host spacing; 401/403/451/challenge never retried,&lt;br/&gt;source enters the refused state"]:::done
     S5["secret scrubbing: every stored or logged error passes&lt;br/&gt;redactUrl + scrub (env secrets raw and URL-encoded)"]:::done
-    S6["PII: allowlisted payload, PII_FIELDS removed,&lt;br/&gt;in-text redaction (ingest@1.5.0), city-level location,&lt;br/&gt;identity-bearing ids stored as keyed fingerprints"]:::done
+    S7["named approval: a gated route (key, approval, licence&lt;br/&gt;or permission) opens only with a valid GATE_APPROVED_BY&lt;br/&gt;(Name YYYY-MM-DD); gate changes recorded with approved_by&lt;br/&gt;in append-only source_gate_events"]:::done
+    S6["PII: allowlisted payload, PII_FIELDS removed,&lt;br/&gt;in-text redaction (ingest@1.7.0), city-level location,&lt;br/&gt;identity-bearing ids stored as keyed fingerprints"]:::done
   end
 
   subgraph HOSTB["Boundary 3 · containers to the host and network"]
     direction TB
-    D1["published ports bind 127.0.0.1 by default&lt;br/&gt;(PULSE_BIND_ADDR); embeddings never published"]:::done
-    D2["secrets split: collector credentials reach the worker only;&lt;br/&gt;web gets presence markers (set / empty)"]:::done
-    D3["redis requirepass (config file, not argv);&lt;br/&gt;.env mode 600, generated secrets never printed"]:::done
+    D1["published ports bind 127.0.0.1 by default&lt;br/&gt;(PULSE_BIND_ADDR); embeddings and watchdog never published"]:::done
+    D2["secrets split: collector credentials reach the worker only&lt;br/&gt;(env_file); web gets presence markers (set / empty);&lt;br/&gt;CORRELATION_SALT worker only (web: a presence flag);&lt;br/&gt;SMTP_PASSWORD watchdog only (blanked for the worker)"]:::done
+    D3["Valkey requirepass (config file, not argv);&lt;br/&gt;.env mode 600, generated secrets never printed"]:::done
     D4["app and embeddings images run as non-root users;&lt;br/&gt;base images pinned by digest"]:::done
   end
 
   EXT["registry sources on the internet"]:::done
   WK["worker process"]:::done
-  DB[("PostgreSQL · Redis")]:::done
+  DB[("PostgreSQL · Valkey")]:::done
 
   subgraph LEGEND["Status legend"]
-    L1["done: on master or ships in this PR"]:::done
+    L1["all done (every element is on master)"]:::done
   end
 
   U1 -- "GET / and /api/*" --&gt; C1
@@ -79,7 +81,8 @@ flowchart LR
   C1 --&gt; C2 --&gt; C3
   C2 --&gt; C4 --&gt; C5
   C1 --&gt; C6
-  WK --&gt; S1 --&gt; S2 --&gt; S3 --&gt; EXT
+  C4 --&gt; C7
+  WK --&gt; S7 --&gt; S1 --&gt; S2 --&gt; S3 --&gt; EXT
   S4 --&gt; EXT
   EXT -- "responses" --&gt; S6 --&gt; DB
   WK --&gt; S5 --&gt; DB
@@ -87,7 +90,6 @@ flowchart LR
   D1 --&gt; DB
 
   classDef done fill:#e8f5e9,stroke:#2e7d32,color:#1b3d1f
-  classDef wip fill:#fff8e1,stroke:#b7791f,color:#5c3d00,stroke-dasharray:5 3
   classDef planned fill:#f2f2f2,stroke:#8a8a8a,color:#4a4a4a,stroke-dasharray:2 3
 </pre>
 <script>mermaid.initialize({ startOnLoad: true, theme: 'forest', securityLevel: 'strict', maxTextSize: 200000 });</script>

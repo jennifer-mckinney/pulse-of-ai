@@ -11,7 +11,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Pulse of AI · Data model 3 of 3 · retention, rollups, correlation, migrations</title>
+<title>Pulse of AI · Data model 3 of 4 · retention, rollups, correlation, migrations</title>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
 <style>
   body { margin: 0; padding: 32px 40px; background: #ffffff; color: #1b1f23;
@@ -23,20 +23,20 @@
 </style>
 </head>
 <body>
-<h1>Data model 3 of 3 · retention, rollups, correlation, migrations</h1>
-<p class="summary">The GDPR lifecycle log, the monthly rollups and compaction log of the layered retention model, the pseudonymous cross-platform correlation tables (reserved: nothing writes them for collected posts), and the migration ledger.</p>
+<h1>Data model 3 of 4 · retention, rollups, correlation, migrations</h1>
+<p class="summary">The GDPR lifecycle log, the monthly rollups and compaction log of the layered retention model, the pseudonymous cross-platform correlation tables (never written: correlateUser throws; compaction only deletes demo sightings), the correlation gate log, and the migration ledger.</p>
 <p class="source">Canonical source: <code>erd-3-retention-and-correlation.mmd</code> · index: <code>docs/diagrams/README.md</code></p>
 <pre class="mermaid">
-%% Title: Data model 3 of 3 · retention, rollups, correlation, migrations
-%% Summary: The GDPR lifecycle log, the monthly rollups and compaction log of the layered retention model, the pseudonymous cross-platform correlation tables (reserved: nothing writes them for collected posts), and the migration ledger.
-%% Sources: src/db/migrations/002 (data_retention_log), 005, 006; scripts/migrate.js (schema_migrations). Spec: TECHNICAL_SPEC.md sections 19 (layered retention) and 20 (correlation). raw_posts and data_sources are shown with their keys only. Dotted lines are logical links without a foreign key.
+%% Title: Data model 3 of 4 · retention, rollups, correlation, migrations
+%% Summary: The GDPR lifecycle log, the monthly rollups and compaction log of the layered retention model, the pseudonymous cross-platform correlation tables (never written: correlateUser throws; compaction only deletes demo sightings), the correlation gate log, and the migration ledger.
+%% Sources: src/db/migrations/002 (data_retention_log), 005, 006, 036 and 056 (correlation_gate_events, append-only trigger); scripts/migrate.js (schema_migrations). Writers: src/pipeline/ingest.js (collected), src/collectors/retention.js (blanked_platform_terms, text_removed_detail_window), src/collectors/run-retention.js (rolled_up_source_runs), scripts/compact.js (compacted, purged_demo, compaction_log), src/collectors/governance.js (correlation_gate_events), src/pipeline/correlation.js and correlation-gate.js. Spec: TECHNICAL_SPEC.md sections 19 (layered retention) and 20 (correlation). raw_posts and data_sources are shown with their keys only. Dotted lines are logical links without a foreign key.
 erDiagram
 
   data_retention_log {
     uuid id PK
-    uuid raw_post_id "nullable, not enforced"
-    text action "compacted | purged_demo | blanked_platform_terms"
-    text reason
+    uuid raw_post_id "not enforced; NULL on batch rows"
+    text action "collected | blanked_platform_terms | text_removed_detail_window | rolled_up_source_runs | compacted | purged_demo"
+    text reason "JSON on batch rows"
     text legal_basis
     timestamptz performed_at
     text performed_by
@@ -79,7 +79,7 @@ erDiagram
     int posts_compacted
     int rollups_created
     int embeddings_deleted
-    int content_nulled
+    int content_nulled "005 name; holds texts blanked (not nulled)"
     timestamptz completed_at
   }
 
@@ -101,6 +101,17 @@ erDiagram
     text signal_hash
     real confidence
     timestamptz sighted_at
+  }
+
+  correlation_gate_events {
+    uuid id PK
+    text status "awaiting_dpia | disabled | misconfigured | unverified | not_implemented"
+    boolean enabled "NOT NULL"
+    text reason "NOT NULL"
+    text dpia_ref
+    text actor "NOT NULL; approved_by when named"
+    text approved_by
+    timestamptz occurred_at "056: append-only (trigger)"
   }
 
   schema_migrations {

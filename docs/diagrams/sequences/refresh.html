@@ -29,14 +29,15 @@
 <pre class="mermaid">
 %% Title: Sequence · POST /api/refresh
 %% Summary: How an on-demand collection is requested: the same-origin guard, the shared-secret check, the in-flight and debounce guards, the 202 hand-off to the worker, and the worker completing the job row.
-%% Sources: src/routes/refresh.js, src/middleware/same-origin.js, src/server.js (mount order, no CORS), src/queues/index.js (collect.refresh), src/workers/collect.worker.js (processRefreshJob), src/collectors/runner.js, src/db/migrations/019_refresh_inflight.sql. Spec: TECHNICAL_SPEC.md section 7 (POST /api/refresh) and section 8 (rate limiting). The page itself never calls this endpoint.
+%% Sources: src/routes/refresh.js (refreshTokenCheck, boundBeyondLoopback, viaProxy), src/middleware/same-origin.js, src/server.js (mount order, no CORS, listenHost), src/queues/index.js (collect.refresh, ingest), src/workers/collect.worker.js (processRefreshJob, refreshDeadlineMs), src/collectors/runner.js (scoreVia queue), src/workers/ingest.worker.js, src/collectors/cycle.js (reserveRetry, releaseRetry, closeCycles), src/collectors/stale-jobs.js, src/db/migrations/019_refresh_inflight.sql, 040_job_progress.sql. Updated 2026-09-29. Spec: TECHNICAL_SPEC.md section 7 (POST /api/refresh) and section 8 (rate limiting). The page itself never calls this endpoint.
 sequenceDiagram
   autonumber
   actor Caller as Caller (browser tab or script)
   participant Web as web · refresh router (no CORS)
   participant DB as PostgreSQL
-  participant Q as Redis · collect.refresh
+  participant Q as Valkey · collect.refresh
   participant W as worker · processRefreshJob
+  participant I as worker · ingest queue
   participant Src as registry sources
 
   opt CORS preflight
@@ -48,11 +49,11 @@ sequenceDiagram
   alt cross-site or unprovable
     Web--&gt;&gt;Caller: 403 Cross-site request rejected
   end
-  Web-&gt;&gt;Web: REFRESH_TOKEN set → X-Refresh-Token must match (timing-safe),&lt;br/&gt;unset but PULSE_BIND_ADDR / HOST beyond loopback → refused
+  Web-&gt;&gt;Web: REFRESH_TOKEN set → X-Refresh-Token must match (timing-safe),&lt;br/&gt;unset → refused when bound beyond loopback (HOST / PULSE_BIND_ADDR,&lt;br/&gt;a wildcard bind outside the compose container, a non-loopback&lt;br/&gt;published address) or the request came through a proxy&lt;br/&gt;(Forwarded, X-Forwarded-For / -Host, X-Real-IP)
   alt token missing or wrong
     Web--&gt;&gt;Caller: 403
   end
-  Web-&gt;&gt;DB: mark 'api' jobs running longer than REFRESH_STALE_MINUTES (30) failed
+  Web-&gt;&gt;DB: mark 'api' jobs with no progress (last_progress_at, else started_at)&lt;br/&gt;for REFRESH_STALE_MINUTES (30) failed as stale
   Web-&gt;&gt;DB: SELECT a running 'api' job
   alt one is running
     Web--&gt;&gt;Caller: 409 with its job_id
@@ -73,9 +74,17 @@ sequenceDiagram
 
   Q-&gt;&gt;W: collect-all job (concurrency 1)
   W-&gt;&gt;DB: job still running? else skip
-  W-&gt;&gt;Src: runCollection over every registry source&lt;br/&gt;(same gates, claim and guards as a scheduled run)
-  W-&gt;&gt;DB: raw_posts, scores, audit rows, source_runs
-  W-&gt;&gt;DB: bias checks for the job when it stored new posts, then completed&lt;br/&gt;with genuine counts (or awaiting_retries until reserved scoring retries finish)
+  W-&gt;&gt;Src: runCollection over every registry source, deadline 80 % of&lt;br/&gt;REFRESH_STALE_MINUTES (same gates, claim and guards as a scheduled run)
+  W-&gt;&gt;DB: raw_posts, source_runs, last_progress_at after every source
+  W-&gt;&gt;I: one ingest job per new post, each holding a slot on the job (reserveRetry)
+  I-&gt;&gt;DB: scores + audit rows under the job, slot released,&lt;br/&gt;embed job when the relevance gate passes
+  alt slots still held when the run ends
+    W-&gt;&gt;DB: job awaiting_retries
+    Note over DB: cycle closer (every 30 s) finalizes it once every slot is released:&lt;br/&gt;counts from decision_audit_log, bias checks once, completed
+  else no slot held
+    W-&gt;&gt;DB: completed with the run's counts (no job-level bias checks:&lt;br/&gt;the run scored nothing inline)
+  end
+  Note over DB: maintenance stale-job sweep (every 5 min) fails an 'api' job&lt;br/&gt;with no progress for REFRESH_STALE_MINUTES
 </pre>
 <script>mermaid.initialize({ startOnLoad: true, theme: 'forest', securityLevel: 'strict', maxTextSize: 200000 });</script>
 </body>

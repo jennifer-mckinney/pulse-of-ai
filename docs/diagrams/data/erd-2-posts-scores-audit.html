@@ -11,7 +11,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Pulse of AI · Data model 2 of 3 · posts, scores, audit trail, bias</title>
+<title>Pulse of AI · Data model 2 of 4 · posts, scores, audit trail, bias</title>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
 <style>
   body { margin: 0; padding: 32px 40px; background: #ffffff; color: #1b1f23;
@@ -23,20 +23,20 @@
 </style>
 </head>
 <body>
-<h1>Data model 2 of 3 · posts, scores, audit trail, bias</h1>
+<h1>Data model 2 of 4 · posts, scores, audit trail, bias</h1>
 <p class="summary">The immutable post, its three per-post scores, the decision audit log that ties every score to a registered methodology version, the embedding, and the job-level bias assessments.</p>
 <p class="source">Canonical source: <code>erd-2-posts-scores-audit.mmd</code> · index: <code>docs/diagrams/README.md</code></p>
 <pre class="mermaid">
-%% Title: Data model 2 of 3 · posts, scores, audit trail, bias
+%% Title: Data model 2 of 4 · posts, scores, audit trail, bias
 %% Summary: The immutable post, its three per-post scores, the decision audit log that ties every score to a registered methodology version, the embedding, and the job-level bias assessments.
-%% Sources: src/db/migrations/001, 002, 003, 004, 006, 010, 012, 017, 022, 025. Spec: TECHNICAL_SPEC.md sections 6 and 10 (the explainability chain). data_sources and processing_jobs are shown with their keys only (full columns in data model 1).
+%% Sources: src/db/migrations/001, 002, 003, 004, 006, 010, 012, 017, 022, 025, 042; src/pipeline/ingest.js (insert), src/collectors/retention.js (blanking), src/config/methodology-registry.js (components). The rolling-window bias tables (060) are in data model 4. Spec: TECHNICAL_SPEC.md sections 6 and 10 (the explainability chain). data_sources and processing_jobs are shown with their keys only (full columns in data model 1).
 erDiagram
 
   raw_posts {
     uuid id PK
     uuid source_id FK
     text external_id "UNIQUE with source_id; route:id or route:fp:HMAC"
-    text content "redacted text; NOT NULL"
+    text content "redacted text; NOT NULL; retention blanks it to a removal notice, never NULL"
     jsonb raw_payload "allowlisted fields, PII fields removed"
     text content_hash "SHA-256 of normalised content"
     text location "city level or empty"
@@ -45,8 +45,9 @@ erDiagram
     uuid pseudo_user_id FK "nullable, 006"
     text provenance_fingerprint "017: HMAC-SHA256"
     uuid ingest_mv_id FK "022: ingest version stored under"
-    timestamptz text_removed_at "025: Reddit blanking"
+    timestamptz text_removed_at "025: set when retention blanks the text"
     text text_removed_reason "025"
+    uuid admission_mv_id FK "042: admission_filter version that admitted it"
   }
 
   decision_audit_log {
@@ -64,7 +65,7 @@ erDiagram
 
   methodology_versions {
     uuid id PK
-    text component "sentiment | relevance | discourse | bias | ingest | audit_narration | embedding"
+    text component "sentiment | relevance | discourse | bias | ingest | audit_narration | embedding | admission_filter"
     text version "UNIQUE with component"
     text model_name
     jsonb config
@@ -141,7 +142,7 @@ erDiagram
   }
 
   data_sources ||--o{ raw_posts : "source_id"
-  methodology_versions |o--o{ raw_posts : "ingest_mv_id"
+  methodology_versions |o--o{ raw_posts : "ingest_mv_id, admission_mv_id"
   raw_posts ||--o{ decision_audit_log : "raw_post_id"
   processing_jobs ||--o{ decision_audit_log : "job_id"
   methodology_versions ||--o{ decision_audit_log : "methodology_version_id"

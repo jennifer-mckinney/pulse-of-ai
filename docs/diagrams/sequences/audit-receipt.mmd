@@ -1,6 +1,6 @@
 %% Title: Sequence · the "why?" audit receipt
 %% Summary: What happens when a reader opens a post's receipt: the drawer request, the queries behind GET /api/audit/:post_id, the provenance and lineage it adds, and the four audience views the drawer switches between.
-%% Sources: public/js/ui.js (openAudit, mapAuditResponse, AUDIENCES), src/routes/audit.js, src/config/{audit-narration,bias-lineage,bias-vocabulary,source-registry,data-mode}.js, src/collectors/retention.js. Spec: TECHNICAL_SPEC.md sections 7 (GET /api/audit/:post_id), 8 (provenance), 10 (explainability chain, audiences).
+%% Sources: public/js/ui.js (openAudit, mapAuditResponse, AUDIENCES), src/routes/audit.js, src/config/{audit-narration,bias-lineage,bias-vocabulary,source-registry,data-mode}.js, src/collectors/retention.js (retentionStatus), src/db/migrations/042_admission_filter.sql. Updated 2026-09-29. Spec: TECHNICAL_SPEC.md sections 7 (GET /api/audit/:post_id), 8 (provenance), 10 (explainability chain, audiences).
 sequenceDiagram
   autonumber
   actor Reader
@@ -17,7 +17,7 @@ sequenceDiagram
   else live post
     UI->>API: GET /api/audit/{post_id}
     API->>API: validate UUID, else 400
-    API->>DB: raw_posts JOIN data_sources (content, location, external_id,<br/>provenance_fingerprint, ingest_mv_id, text_removed_at, permalink)
+    API->>DB: raw_posts JOIN data_sources (content, location, external_id,<br/>provenance_fingerprint, ingest_mv_id, admission_mv_id,<br/>text_removed_at / _reason, permalink)
     alt no such post
       API-->>UI: 404 Post not found
     end
@@ -25,9 +25,11 @@ sequenceDiagram
     API->>API: per decision: status, score, 4 audiences rendered from stored<br/>output + config (audit_narration@1.3.0), input_hash as<br/>HMAC-SHA256(AUDIT_HASH_KEY, stored hash), omitted without a key
     API->>DB: bias_assessments of the job that scored the post
     API->>DB: bias methodology versions
-    API->>API: bias lineage: recorded (methodology_version_id),<br/>inferred (effective_from), or current, layers from bias@1.1.0 config
+    API->>API: bias lineage: recorded (methodology_version_id),<br/>inferred (effective_from), or current, layers from that version's config
     API->>DB: ingest methodology: raw_posts.ingest_mv_id (recorded),<br/>else the version effective at collected_at (inferred)
-    API->>API: provenance: source, published_at, permalink unless an identity link,<br/>external_id, fingerprint, how to verify (npm run verify-provenance),<br/>Reddit: retention live (removes_at) or text_removed
+    API->>API: provenance: source, published_at, permalink unless an identity link,<br/>external_id, fingerprint, how to verify (npm run verify-provenance),<br/>retention: text_removed (any source) or, on a platform-terms source<br/>(Reddit, YouTube, TikTok), live with removes_at
+    API->>DB: admission filter version of raw_posts.admission_mv_id
+    API->>API: provenance.admission: admission_filter@version (recorded),<br/>else not recorded (before migration 042) or not applicable (demo)
     API-->>UI: 200 provenance, post (attribution, data_origin), narration,<br/>ingest (with lineage), decisions, bias
     UI->>UI: mapAuditResponse() → steps
   end

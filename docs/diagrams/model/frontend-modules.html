@@ -29,7 +29,7 @@
 <pre class="mermaid">
 %% Title: Object model · frontend modules
 %% Summary: The browser UMD modules in their script order, the public API each exposes on window, the document events they exchange, and the API endpoints each one calls.
-%% Sources: public/index.html (script order), public/js/*.js, public/js/config/*.js. Spec: TECHNICAL_SPEC.md section 11; PRD section 4.3 (the FuN.zip prototype is the design of record).
+%% Sources: public/index.html (script order), public/js/*.js, public/js/config/*.js. Updated 2026-09-29 (PR #22: the watchdog SYSTEM ALERT chip and banner, the SYSTEM WATCHDOG drawer section, the publisher-location layer). Spec: TECHNICAL_SPEC.md section 11; PRD section 4.3 (the FuN.zip prototype is the design of record).
 classDiagram
   direction LR
 
@@ -67,7 +67,7 @@ classDiagram
   class PulseUtils {
     &lt;&lt;utils.js&gt;&gt;
     +esc(s)
-    +healthState(health) state, label
+    +healthState(health) state, label, systemAlerts
     +catLabel(slug)
     +netSentiment() · sentimentBucket()
     +fmtPct() · fmtCount() · fmtNet()
@@ -76,7 +76,7 @@ classDiagram
     &lt;&lt;data.js&gt;&gt;
     DEMO_DATA
     +buildDemoData(cities)
-    +normalizeCities(raw)
+    +normalizeCities(raw) keeps publisher_posts
     +mergeWithBaseline(rows)
     +loadCityData() cities, isDemo, dataMode
     +dataModeOf(rows) demo, live, mixed, none
@@ -101,7 +101,8 @@ classDiagram
     +create(mount, deps) instance
     +init() · getInstance()
     +loadLandDots(url) vendor/world-atlas
-    math pure namespace
+    math pure namespace: publisherCount(), publisherLayer()
+    publisher-location layer: dashed ring
     instance.setState(partial) · getState() · destroy()
     callbacks onHover, onDrag, onCityClick
     mark pulse:first-frame
@@ -113,14 +114,17 @@ classDiagram
     +getCities()
     +consumePendingCity()
     +setExploreSelection(cityId)
-    fires pulse:exploring-changed, pulse:drill,
-    pulse:trace, pulse:data
+    fires pulse:exploring-changed, pulse:drill
+    fires pulse:trace, pulse:data
+    legend key: publisher location
   }
   class PulseUI {
     &lt;&lt;ui.js&gt;&gt;
     +init()
     +openAudit(post) audit drawer, 4 audiences
-    +openHealth() health drawer
+    +openHealth() health drawer, SYSTEM WATCHDOG section
+    healthBanner() SYSTEM ALERT banner, watchdogModel()
+    publisherTipText() tooltip line
     explore filters, city detail, tooltip, source ribbon
     listens to the four pulse:* events
   }
@@ -129,6 +133,7 @@ classDiagram
     +freezeInsightTimer()
     +scrollToExplore()
     sizes the scroll spacer, polls the health chip
+    health chip h-system on a watchdog alert
     renders the about panel
     starts PulseGlobe, PulseStory and PulseUI
   }
@@ -148,16 +153,20 @@ classDiagram
   PulseUI --&gt; PulseMain : freezeInsightTimer()
   PulseMain --&gt; PulseLegalConfig
   PulseMain --&gt; PulseUtils : healthState()
+  PulseUI --&gt; PulseUtils : healthState()
 
   class Endpoints {
     &lt;&lt;called by the page&gt;&gt;
     data.js - GET /api/posts/aggregated-by-location
-    story.js - GET /api/themes, POST /api/query, GET /api/sources
-    ui.js - POST /api/query, GET /api/sources/timeseries
+    story.js - GET /api/themes, GET /api/sources
+    story.js - POST /api/query
+    ui.js - POST /api/query
+    ui.js - GET /api/sources/timeseries
     ui.js - GET /api/audit/POST_ID
-    ui.js - GET /api/health, /api/bias/history, /api/methodology, /api/sources
+    ui.js - GET /api/health, /api/bias/history
+    ui.js - GET /api/methodology, /api/sources
     main.js - GET /api/health
-    in ENDPOINTS but never called - /api/bias/latest, /api/refresh
+    in ENDPOINTS, never called - /api/bias/latest, /api/refresh
   }
   PulseData ..&gt; Endpoints
   PulseStory ..&gt; Endpoints

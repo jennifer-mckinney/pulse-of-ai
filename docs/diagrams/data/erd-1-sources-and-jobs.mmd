@@ -1,6 +1,6 @@
-%% Title: Data model 1 of 3 · sources, collection state, jobs, alerts, Reddit
+%% Title: Data model 1 of 4 · sources, collection state, jobs, alerts, Reddit
 %% Summary: The tables that describe the 52 registry sources, their collection state and runs, the processing jobs every score belongs to, alerts, and Reddit's selection, budget and maintenance state.
-%% Sources: src/db/migrations/001, 003, 013, 016, 018, 019, 020, 021, 023, 025. Spec: TECHNICAL_SPEC.md section 6. raw_posts is shown with its keys only (full columns in data model 2). Dotted lines are logical links without a foreign key.
+%% Sources: src/db/migrations/001, 003, 013, 016, 018, 019, 020, 021, 023, 025, 033, 037, 038, 040, 050. Alert writers: src/pipeline/bias.js (writeAlertEvent), src/collectors/source-alerts.js, source-health.js, retention-overdue.js, state.js, governance.js, src/watchdog/store.js and conditions.js. raw_posts is shown with its keys only (full columns in data model 2); alert resolutions, run rollups, gate events and the watchdog tables are in data model 4. Dotted lines are logical links without a foreign key. NOTE_alert_type_values is a legend box, not a table.
 erDiagram
 
   data_sources {
@@ -39,6 +39,8 @@ erDiagram
     int refusal_count
     bigint unchanged_runs "023"
     timestamptz last_unchanged_at
+    timestamptz last_new_post_at "033: newest stored post; source_stale clock"
+    timestamptz freshness_anchor_at "037: NOT NULL DEFAULT NOW()"
     timestamptz updated_at
   }
 
@@ -69,19 +71,28 @@ erDiagram
     timestamptz started_at
     timestamptz completed_at
     int inflight_runs "021"
+    timestamptz last_progress_at "040: stale refresh after 30 min without progress"
   }
 
   alert_events {
     uuid id PK
-    text alert_type "location_concentration | platform_sentiment_parity | negative_dominance | source_refused; bias_violation from the e2e fixture only"
+    text alert_type "bias checks | source_* | retention_overdue | terms_changed | watchdog_* (see NOTE)"
     text severity "warning | critical"
-    text source_table
-    uuid source_id "not enforced"
+    text source_table "bias_assessments | bias_window_assessments | data_sources | watchdog"
+    uuid source_id "not enforced; unique open per type+source (038)"
     jsonb details
     timestamptz acknowledged_at
     text acknowledged_by
     timestamptz resolved_at
     timestamptz created_at
+  }
+
+  NOTE_alert_type_values {
+    text bias "location_concentration | platform_sentiment_parity | negative_dominance (bias.js; job or 24 h window)"
+    text source "source_stale, source_failing (warning), source_refused, retention_overdue (critical), terms_changed (warning)"
+    text watchdog "watchdog_ + web_unreachable, db_unreachable, valkey_unreachable, worker_down, maintenance_failing"
+    text watchdog_more "retention_overdue, collection_failing, queue_backlog, failed_jobs_abnormal; all critical, one open per type (050)"
+    text fixture "bias_violation: written by the e2e fixture only"
   }
 
   raw_posts {
@@ -128,4 +139,5 @@ erDiagram
   data_sources ||--o{ source_runs : "run log"
   processing_jobs |o--o{ source_runs : "job_id, null when no job was open"
   data_sources ||--o{ raw_posts : "source_id"
-  alert_events }o..o| data_sources : "source_refused alerts"
+  alert_events ||..|| NOTE_alert_type_values : "alert_type values"
+  alert_events }o..o| data_sources : "per-source alerts (source_table data_sources)"

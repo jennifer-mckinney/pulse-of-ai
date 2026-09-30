@@ -1,17 +1,23 @@
 %% Title: Object model · pipeline modules, workers and queues
-%% Summary: The scoring pipeline modules and what each exports, the methodology resolver, the BullMQ queues and the worker handlers that consume them, and the audit replay module.
-%% Sources: src/pipeline/*.js, src/queues/{index,connection}.js, src/workers/*.js, src/audit/replay.js, src/config/methodology-registry.js. Spec: TECHNICAL_SPEC.md sections 9, 10, 12, 18, 20. Versions are CURRENT_VERSIONS of the methodology registry.
+%% Summary: The scoring pipeline modules and what each exports, the methodology resolver, the BullMQ queues on Valkey and the worker handlers that consume them (incl. the maintenance schedulers), the audit replay module and the external watchdog.
+%% Sources: src/pipeline/*.js, src/collectors/ai-filter.js, src/queues/{index,connection,pending}.js, src/workers/*.js, src/db/pool-size.js (workerConcurrency), src/audit/replay.js, src/watchdog/*.js, scripts/watchdog.js, src/config/methodology-registry.js (CURRENT_VERSIONS), docker-compose.yml (redis service = Valkey 8). Updated 2026-09-29. Spec: TECHNICAL_SPEC.md sections 9, 10, 12, 18, 19, 20. Versions are CURRENT_VERSIONS of the methodology registry.
 classDiagram
   direction LR
 
   class ingest {
-    <<module pipeline/ingest.js · ingest@1.5.0>>
+    <<module pipeline/ingest.js · ingest@1.7.0>>
     +PII_FIELDS
     +normalisePost(rawPayload, sourceType)
-    +storeRawPost(payload, sourceId, ingestMvId) postId, isNew
+    +storeRawPost(payload, sourceId, o: ingestMvId, admissionMvId) postId, isNew
     +scorePost(postId, jobId, mvIds) sentiment, relevance, discourse
     +ingestPost(payload, sourceId, jobId, mvIds)
     +ingestBatch(payloads, sourceId, jobId, mvIds)
+  }
+  class admissionFilter {
+    <<module collectors/ai-filter.js · admission_filter@1.0.0>>
+    +isAiRelated(text) boolean
+    +PATTERNS, SEARCH_TERMS
+    +patternDescriptions()
   }
   class sentiment {
     <<module pipeline/sentiment.js · sentiment@1.0.0>>
@@ -21,10 +27,12 @@ classDiagram
     +saveSentiment(postId, jobId, mvId)
   }
   class relevance {
-    <<module pipeline/relevance.js · relevance@1.1.0>>
-    +KEYWORD_LIST 20 terms
-    +EMBED_GATE_MIN_SCORE 1/20
-    +computeRelevance(text)
+    <<module pipeline/relevance.js · relevance@1.2.0>>
+    +KEYWORD_LIST 21 terms, whole-word
+    +EMBED_GATE_MIN_SCORE 1/21
+    +VERSIONS 1.0.0, 1.1.0, 1.2.0
+    +scorerFor(version)
+    +computeRelevance(text, version)
     +saveRelevance(postId, jobId, mvId)
     +passesEmbedGate(score)
   }
@@ -35,61 +43,93 @@ classDiagram
     +computeDQI(text)
     +saveDQI(postId, jobId, mvId)
   }
+  class scorable {
+    <<module pipeline/scorable.js>>
+    +loadScorablePost(postId, stage)
+    +TextRemovedError, isTextRemoved(err)
+  }
   class bias {
-    <<module pipeline/bias.js · bias@1.1.0>>
+    <<module pipeline/bias.js · bias@1.5.0>>
+    +INSUFFICIENT_SAMPLE
     +runBiasChecks(jobId, biasMvId) checksRun 3, violationsFound
-    +checkLocationConcentration(jobId, biasMvId)
-    +checkPlatformSentimentParity(jobId, biasMvId)
-    +checkNegativeDominance(jobId, biasMvId)
+    +checkLocationConcentration(target, biasMvId)
+    +checkPlatformSentimentParity(target, biasMvId)
+    +checkNegativeDominance(target, biasMvId)
+    +scopeOf(target) job or window
+  }
+  class biasWindow {
+    <<module pipeline/bias-window.js · rolling 24 h>>
+    +CHECKS 3
+    +runBiasWindow(o: triggeredBy) runId, violationsFound
+    +currentBiasVersion()
+    +insufficientSampleReport(o: anchor)
   }
   class embeddings {
     <<module pipeline/embeddings.js · embedding@1.0.0>>
     +EMBEDDING_DIMENSIONS 384
+    +SKIP_REASONS purged_demo, text_removed
     +generateEmbedding(text)
     +saveEmbedding(postId, embedding, modelName)
     +embedPost(postId)
+    +findDemoPurgeRecord(postId)
     +embeddingMethodologyVersion(env)
   }
   class correlation {
-    <<module pipeline/correlation.js · reserved>>
-    +CORRELATION_MIN_CONFIDENCE 0.85
+    <<module pipeline/correlation.js · not implemented>>
     +generatePseudoId(seed)
     +computeSignalHash(signals, salt)
-    +correlateUser(o)
+    +correlateUser() throws CorrelationNotImplementedError
+  }
+  class correlationGate {
+    <<module pipeline/correlation-gate.js · DPIA gate>>
+    status awaiting_dpia, disabled, misconfigured,
+    status unverified, not_implemented, never enabled
+    +correlationStatus(env) enabled false, status, reason
+    +isUsableSalt(v)
+    +saltUsableHere(env)
   }
   class methodology {
     <<module pipeline/methodology.js>>
-    +PIPELINE_COMPONENTS
-    +resolveCurrentMethodology() mv ids
+    +PIPELINE_COMPONENTS 6 incl. admission_filter
+    +resolveCurrentMethodology() mv ids incl. admissionMvId
   }
   class replay {
     <<module audit/replay.js>>
     +STATUS PASS, DIVERGENCE, NOT RE-RUNNABLE
     +replayDecision(content, decision, removal)
-    +replayPost(post, decisions) report
+    +replayPost(o: post, decisions) report
     +formatReport(report)
   }
   ingest --> sentiment
   ingest --> relevance
   ingest --> discourse
+  ingest ..> admissionFilter : storeRawPost records admissionMvId
+  sentiment --> scorable
+  relevance --> scorable
+  discourse --> scorable
+  biasWindow --> bias : window target
   replay --> sentiment : re-run
-  replay --> relevance : re-run
+  replay --> relevance : re-run at the decision version
   replay --> discourse : re-run
 
   class Queues {
-    <<queues/index.js · BullMQ on Redis>>
+    <<queues/index.js · BullMQ on Valkey>>
     collect.rss, collect.api, collect.bulk attempts 1
     collect.refresh attempts 1
     ingest attempts 5, backoff 1 s
     embed attempts 5, backoff 2 s
     correlate attempts 5
+    maintenance attempts 1
   }
   class WorkerProcess {
     <<workers/start.js>>
-    collect.rss / collect.api concurrency 4 each
-    collect.bulk, collect.refresh concurrency 1
-    ingest 20 · embed 4 · correlate 8
-    +schedule() every 10 min
+    concurrency: collect.rss 4, collect.api 4
+    concurrency: collect.bulk 1, collect.refresh 1
+    concurrency: ingest 8, embed 4, correlate 8
+    concurrency: maintenance 1
+    30 s tick: cycles, source health
+    30 s tick: retention overdue, unscored sweep
+    +schedule() every 10 min, also scheduleMaintenance
     +closeDueCycles() every 30 s
     +redditMaintenance() every 5 min
     +startHeartbeat() every 15 s
@@ -97,12 +137,23 @@ classDiagram
   }
   class collectWorker {
     <<workers/collect.worker.js>>
-    +processCollectJob(job) run summary
-    +processRefreshJob(job) run summary
+    +processCollectJob(job) run summary, scoreVia queue
+    +processRefreshJob(job) run summary, scoreVia queue
+    +refreshDeadlineMs(env)
   }
   class scheduler {
     <<workers/collector.scheduler.js>>
-    +scheduleAllSources(env, log) count
+    +scheduleAllSources(o: env, log) count
+    each run also records gate + correlation gate events
+  }
+  class maintenanceWorker {
+    <<workers/maintenance.worker.js>>
+    retention every 5 min: text retention, stale jobs
+    daily every 24 h: compaction, source_runs rollup, bias_window
+    terms every 7 days: terms snapshots
+    +processMaintenanceJob(job, o) steps
+    +scheduleMaintenance(queue, env)
+    +recordMaintenanceRun(task, out) maintenance_state
   }
   class ingestWorker {
     <<workers/ingest.worker.js>>
@@ -110,34 +161,59 @@ classDiagram
     +onIngestJobFailed(job)
   }
   class embedWorker {
-    <<workers/embed.worker.js>>
-    +processEmbedJob(job)
+    <<workers/embed.worker.js · enqueues no correlate job>>
+    +processEmbedJob(job, o: env)
   }
   class correlateWorker {
     <<workers/correlate.worker.js · nothing enqueues it>>
-    +processCorrelateJob(job)
+    +processCorrelateJob(job, o: env) refused with the gate status
   }
   class heartbeat {
     <<workers/heartbeat.js + healthcheck.js>>
-    +HEARTBEAT_KEY pulse:worker:heartbeat
-    +beat(redis)
+    +HEARTBEAT_KEY pulse:worker:heartbeat, TTL 90 s
+    +CORRELATION_KEY pulse:worker:correlation
+    +beat(redis, o: correlation)
+    +startHeartbeat(redis, o) stop()
     +readHeartbeat(redis) alive, last_heartbeat
+    +readCorrelationStatus(redis)
     +fileIsFresh(file, maxAgeMs)
   }
   WorkerProcess --> collectWorker
   WorkerProcess --> ingestWorker
   WorkerProcess --> embedWorker
   WorkerProcess --> correlateWorker
+  WorkerProcess --> maintenanceWorker
   WorkerProcess --> scheduler
   WorkerProcess --> heartbeat
   Queues <.. WorkerProcess : consumes
   scheduler ..> Queues : upsertJobScheduler
-  collectWorker ..> ingest : via collectors/runner
-  collectWorker ..> bias : via runner (refresh jobs)
-  WorkerProcess ..> bias : closeDueCycles → cycle close
+  maintenanceWorker ..> Queues : upsertJobScheduler x3
+  collectWorker ..> Queues : one ingest job per new post
+  WorkerProcess ..> bias : closeDueCycles, cron cycles and awaiting_retries jobs
+  maintenanceWorker --> biasWindow : daily
   ingestWorker --> ingest : scorePost
   ingestWorker --> relevance : passesEmbedGate
   ingestWorker --> methodology
   embedWorker --> embeddings
-  correlateWorker --> correlation
+  embedWorker --> correlationGate : status only
+  correlateWorker --> correlationGate
+  heartbeat ..> correlationGate : publishes status
   collectWorker ..> methodology
+
+  class Watchdog {
+    <<watchdog/index.js · own container, scripts/watchdog.js>>
+    every WATCHDOG_POLL_INTERVAL_S 120 s
+    +init()
+    +pollOnce() open conditions
+    +run()
+    +stop()
+  }
+  class watchdogParts {
+    <<watchdog/conditions.js + store.js + notifier.js + config.js>>
+    +evaluate(probe, o) 9 CONDITIONS
+    +store: openAlert, resolveAlert, writeState, recordNotification
+    +Notifier: enqueue(ev), deliver() SMTP, rate-limited
+    +readConfig(env)
+  }
+  Watchdog --> watchdogParts
+  Watchdog ..> heartbeat : reads worker liveness via /api/health

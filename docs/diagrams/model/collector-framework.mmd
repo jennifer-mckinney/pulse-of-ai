@@ -1,6 +1,6 @@
 %% Title: Object model · collector framework
-%% Summary: The collector base classes and their adapters by type, the HTTP client and its guards, the Reddit API helpers, and the module functions the runner, cycle and state layers expose.
-%% Sources: src/collectors/{base,index,http,robots,netguard,transport,errors,runner,cycle,state,refusal,status,retention,normalize,provenance,redact}.js, src/collectors/adapters/*.js, src/collectors/reddit/{api,budget}.js, src/config/source-registry.js. Spec: ADR 0001 (strategy / adapter pattern, gate status); TECHNICAL_SPEC.md section 17.
+%% Summary: The collector base classes and their adapters by type, the HTTP client and its guards, the Reddit API helpers, and the module functions the runner, cycle, state, gate governance, source health and retention layers expose.
+%% Sources: src/collectors/{base,index,http,robots,netguard,transport,errors,runner,cycle,state,refusal,status,retention,normalize,identity,provenance,redact,ai-filter,governance,terms-text,source-health,source-alerts,retention-overdue,run-retention,stale-jobs,sweep}.js, src/collectors/adapters/*.js, src/collectors/reddit/{api,budget}.js, src/config/source-registry.js. Spec: ADR 0001 (strategy / adapter pattern, gate status); TECHNICAL_SPEC.md section 17.
 classDiagram
   direction LR
 
@@ -163,9 +163,16 @@ classDiagram
     <<module config/source-registry.js>>
     +SOURCES 52
     +GATE_STATUSES
+    +GATE_APPROVAL_ENV GATE_APPROVED_BY
     +getSource(slug)
     +sourceStatus(src, env)
     +openRoutes(src, env)
+    +namedApproval(env) ok, value
+    +isGatedRoute(route)
+    +routesAwaitingApproval(src, env)
+    +killSwitchEnv(slug)
+    +retentionHours(src, env)
+    +retentionDetailDays(env)
     +pollIntervalSec(src, env)
     +collectWindowMs(env)
     +routeAllowedHosts(route, env)
@@ -178,10 +185,10 @@ classDiagram
     +recordRun(o)
     +countUnchangedRun(sourceId)
     +dbKillSwitch(sourceId)
-    +setDbKillSwitch(sourceId, disabled, o)
+    +setDbKillSwitch(sourceId, disabled, o: reason, by, client)
     +getRefusal(sourceId)
     +recordRefusal(sourceId, refusal, slug)
-    +clearRefusal(sourceId, resolution)
+    +clearRefusal(sourceId, resolution, o: client)
   }
   class cycle {
     <<module cycle.js>>
@@ -190,11 +197,12 @@ classDiagram
     +retryJobFor(jobId, windowMs)
     +leaveCycle(jobId, counts)
     +reserveRetry / releaseRetry(jobId)
-    +closeCycles(windowMs)
+    +closeCycles(windowMs) runs bias checks
   }
   class refusal {
     <<module refusal.js>>
-    +refusalGate(row, slug, env, now)
+    +refusalGate(row, slug, env, now) reset, cooldown, probe
+    +envReset(slug, env, deniedAt) date AND named approval
     +refusalOf(classified)
     +cooldownMs(n)
     +resetEnv(slug)
@@ -204,20 +212,67 @@ classDiagram
     +sourceRows(o)
     +summarize(rows)
     +isOnline(status, lastSuccessAt, now, lastErrorAt)
+    +registryFields(row, env, now)
+    +RUNTIME_STATUSES gate statuses + blocked_by_source
   }
   class normalize {
     <<module normalize.js + identity.js + provenance.js>>
     +toPayload(item, source, route, o: key)
+    +redactIdentities(text)
     +redactText(text)
     +isIdentityUrl(url)
     +provenanceFingerprint(key, slug, rawId, url)
     +storedExternalId(routeId, rawId, key)
   }
   class retention {
-    <<module retention.js>>
-    +blankExpired(o)
-    +blankPosts(slug, postIds, o)
+    <<module retention.js, text blanked never nulled>>
+    +REMOVAL_NOTICE, DETAIL_NOTICE
+    +retentionSources()
+    +blankExpired(o: batchSize, log, env)
+    +blankPosts(slug, postIds, o: reason)
+    +blankPlatformPosts(client, slug, postIds, o)
+    platform-terms blanking also deletes the embedding
+    +removeTextBatch(client, slug, postIds, o)
+    +postsWithText(slug)
     +retentionStatus(slug, o)
+  }
+  class aiFilter {
+    <<module ai-filter.js, admission_filter@1.0.0>>
+    +isAiRelated(text) boolean
+    +PATTERNS, SEARCH_TERMS
+    +ADMISSION_FILTER_VERSION
+    +patternDescriptions()
+  }
+  class governance {
+    <<module governance.js, source_gate_events>>
+    +recordGateEvent(o) event, actor, approvedBy
+    +recordGateTransitions(o: env, actor) events
+    +recordCorrelationGate(o: env, actor)
+    +snapshotTerms(o: http, slugs, log) rows
+    +saveTermsSnapshots(rows) saved, changed
+    +SCHEDULER_ACTOR
+  }
+  class termsText {
+    <<module terms-text.js>>
+    +normaliseTermsText(body, contentType)
+    +sha256(text)
+  }
+  class sourceHealth {
+    <<source-health + source-alerts + retention-overdue>>
+    +evaluateSourceHealth(o: env, now) opened, resolved
+    +conditionsFor(row, src, now)
+    +TYPES source_stale, source_failing, source_refused
+    +openSourceAlert(type, severity, sourceId, details, client)
+    +resolveSourceAlert(type, sourceId, o, outer)
+    +evaluateRetentionOverdue(o: env) critical retention_overdue
+    +overdueBySource(o: env)
+  }
+  class housekeeping {
+    <<modules stale-jobs.js + run-retention.js + sweep.js>>
+    +sweepStaleJobs(o: env)
+    +rollupSourceRuns(o: env, batch) to source_run_daily
+    +sweepUnscored(o: enqueue, isPending, now, limit)
+    +pendingJobIds(rawPostId, bucket)
   }
   class redact {
     <<module redact.js>>
@@ -230,7 +285,13 @@ classDiagram
   runner --> index
   runner --> cycle
   runner --> redact
+  runner --> governance : refusal_reset event
   index --> Collector : builds one per open route
   Collector --> normalize : collect()
+  Collector --> aiFilter : scope filter routes
+  governance --> sourceRegistry
+  governance --> termsText
+  sourceHealth --> sourceRegistry
+  refusal --> sourceRegistry : namedApproval
   status --> sourceRegistry
   status --> refusal
