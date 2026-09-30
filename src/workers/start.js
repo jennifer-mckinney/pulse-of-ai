@@ -9,8 +9,9 @@
 //   ingest    — scoring retries (ingest.worker.js)
 //   embed     — embeddings via the Python service (embed.worker.js)
 //   correlate — reserved (collectors store no identity signals)
-//   maintenance — repeatable every MAINTENANCE_EVERY_MS: text retention for
-//               every source + compaction (maintenance.worker.js, P10-2)
+//   maintenance — two repeatable jobs (maintenance.worker.js, P10-2, PR #22
+//               P1-7): every MAINTENANCE_EVERY_MS text retention + stale
+//               jobs; every MAINTENANCE_DAILY_EVERY_MS compaction + run rollup
 // and the Reddit maintenance timer (deletion re-check, subreddit
 // discovery — src/collectors/reddit/maintenance.js),
 // and starts the collection scheduler (collector.scheduler.js): at start and

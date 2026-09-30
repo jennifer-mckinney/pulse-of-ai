@@ -60,8 +60,8 @@ describe('processing_jobs: kept permanently (G4)', () => {
         const left = (await db.dbAll('SELECT id FROM processing_jobs')).map(r => r.id).sort();
         expect(left).toEqual([empty, failedEmpty, recent].sort());
         expect(runRetention.purgeEmptyJobs).toBeUndefined();
-        const { defaultSteps } = require('../../src/workers/maintenance.worker');
-        const names = defaultSteps({ log: () => {} }).map(([n]) => n);
+        const { defaultSteps, TASKS } = require('../../src/workers/maintenance.worker');
+        const names = Object.keys(TASKS).flatMap(task => defaultSteps({ log: () => {}, task }).map(([n]) => n));
         expect(names.length).toBeGreaterThan(0);
         expect(names).not.toContain('processing_jobs');
     });

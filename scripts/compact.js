@@ -105,20 +105,34 @@ async function getMonthsToCompact() {
     // P10-2: only months that END before the cutoff (every post of the month
     // is past the detail window), with real (non-demo) posts, not yet
     // compacted. The month holding the cutoff waits until it is whole.
+    //
+    // PR #22 principal #7: no DISTINCT DATE_TRUNC over every raw_posts row
+    // (a growing sequential scan). Walk month to month instead: each step is
+    // one range query on the collected_at index — the earliest real post at
+    // or after the previous month's end — so the cost is one indexed lookup
+    // per month that has posts, compacted months skipped.
     const cutoff = getCutoffDate();
-    const rows = await dbAll(`
-        SELECT DISTINCT TO_CHAR(DATE_TRUNC('month', rp.collected_at), 'YYYY-MM-DD') AS rollup_month
-        FROM raw_posts rp
-        JOIN data_sources ds ON ds.id = rp.source_id
-        WHERE ds.source_type <> $2
-          AND DATE_TRUNC('month', rp.collected_at) + INTERVAL '1 month' <= $1
-          AND DATE_TRUNC('month', rp.collected_at) NOT IN (
-              SELECT compacted_month FROM compaction_log
-          )
-        ORDER BY rollup_month ASC
-    `, [cutoff.toISOString(), DEMO_SOURCE_TYPE]);
-
-    return rows.map(r => r.rollup_month);
+    const done = new Set((await dbAll(
+        `SELECT TO_CHAR(compacted_month, 'YYYY-MM-DD') AS m FROM compaction_log`)).map(r => r.m));
+    const months = [];
+    let from = null;
+    for (;;) {
+        const row = (await dbAll(`
+            SELECT TO_CHAR(DATE_TRUNC('month', rp.collected_at), 'YYYY-MM-DD') AS m,
+                   TO_CHAR(DATE_TRUNC('month', rp.collected_at) + INTERVAL '1 month', 'YYYY-MM-DD') AS next
+            FROM raw_posts rp
+            JOIN data_sources ds ON ds.id = rp.source_id
+            WHERE ds.source_type <> $2
+              AND rp.collected_at < DATE_TRUNC('month', $1::timestamptz)
+              AND ($3::date IS NULL OR rp.collected_at >= $3::date)
+            ORDER BY rp.collected_at ASC
+            LIMIT 1
+        `, [cutoff.toISOString(), DEMO_SOURCE_TYPE, from]))[0];
+        if (!row) break;
+        if (!done.has(row.m)) months.push(row.m);
+        from = row.next;
+    }
+    return months;
 }
 
 /**

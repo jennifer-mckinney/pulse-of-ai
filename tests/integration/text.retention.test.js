@@ -187,11 +187,27 @@ describe('the repeatable maintenance job', () => {
         expect(out).toEqual({ a: { ok: true, result: 1 }, b: { ok: false, error: 'boom' }, c: { ok: true, result: 3 } });
     });
 
-    it('is registered as a BullMQ job scheduler (every MAINTENANCE_EVERY_MS, default 5 min)', async () => {
+    // PR #22 principal #7: retention every 5 minutes; compaction and the
+    // run-table rollup once a day.
+    it('registers two BullMQ job schedulers: retention (5 min) and daily (24 h)', async () => {
         const calls = [];
         await scheduleMaintenance({ upsertJobScheduler: async (...a) => calls.push(a) }, {});
-        expect(calls).toEqual([['retention', { every: 300000 }, { name: 'maintenance', data: {} }]]);
+        expect(calls).toEqual([
+            ['retention', { every: 300000 }, { name: 'maintenance', data: { task: 'retention' } }],
+            ['daily', { every: 86400000 }, { name: 'maintenance', data: { task: 'daily' } }],
+        ]);
         expect(maintenanceEveryMs({ MAINTENANCE_EVERY_MS: '60000' })).toBe(60000);
         expect(maintenanceEveryMs({ MAINTENANCE_EVERY_MS: '5' })).toBe(300000);
+        const { dailyEveryMs } = require('../../src/workers/maintenance.worker');
+        expect(dailyEveryMs({ MAINTENANCE_DAILY_EVERY_MS: '3600000' })).toBe(3600000);
+    });
+
+    it('the 5-minute task never compacts; the daily task does compaction and the run rollup', () => {
+        const { defaultSteps, taskOf } = require('../../src/workers/maintenance.worker');
+        const names = (task) => defaultSteps({ log: () => {}, task }).map(([n]) => n);
+        expect(names('retention')).toEqual(['retention', 'stale_jobs']);
+        expect(names('daily')).toEqual(['compaction', 'source_runs']);
+        expect(taskOf({ data: {} })).toBe('retention');           // a job from before the split
+        expect(taskOf({ data: { task: 'daily' } })).toBe('daily');
     });
 });
