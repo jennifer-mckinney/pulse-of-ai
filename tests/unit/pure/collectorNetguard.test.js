@@ -363,6 +363,65 @@ describe('F10-4: response size caps and decompression bombs', () => {
             expect(cache).toEqual({ 'https://blog.archive.org/feed/': { etag: '"v1"', last_modified: null } });
         });
 
+        // Security review H1 / grumpy #1: a WAF 403 page served plain but
+        // labelled gzip used to become a 'parse' error, so the refusal was
+        // never honoured and the source was asked again on the next tick.
+        test.each([401, 403, 451])('transport-level %i with a mislabelled gzip body is a REFUSAL (AccessDeniedError), one request', async (status) => {
+            const { AccessDeniedError } = require('../../../src/collectors/errors');
+            let calls = 0;
+            const transport = createNetworkTransport({
+                lookup: () => {},
+                request: (u, opts, onResponse) => {
+                    calls++;
+                    const req = new EventEmitter();
+                    req.write = () => {};
+                    req.end = () => setImmediate(() => onResponse(Object.assign(streamOf(Buffer.from('<html>Access denied</html>'), {
+                        'content-encoding': 'gzip', server: 'AkamaiGHost', 'set-cookie': 'bm=1',
+                    }), { statusCode: status })));
+                    return req;
+                },
+            });
+            const err = await client(transport).request('https://www.pewresearch.org/wp-json/wp/v2/posts').catch(e => e);
+            expect(err).toBeInstanceOf(AccessDeniedError);
+            expect(calls).toBe(1);
+            expect(err.status).toBe(status);
+            expect(classifyError(err)).toEqual({ error_kind: 'access_denied', http_status: status });
+            expect(err.headers).toEqual({ server: 'AkamaiGHost' });
+            expect(JSON.stringify(err)).not.toContain('Access denied</html>');
+        });
+
+        test('the decode error carries the status and headers (so http.js can honour a refusal)', async () => {
+            const err = await readBody(Object.assign(streamOf(Buffer.from('plain'), { 'content-encoding': 'gzip', server: 'x' }),
+                { statusCode: 403 })).catch(e => e);
+            expect(err).toMatchObject({ decode: true, kind: 'parse', status: 403, headers: expect.objectContaining({ server: 'x' }) });
+        });
+
+        // Security review L4: the empty-body tolerance is pinned to zero raw
+        // bytes; ANY non-empty undecodable body is an error.
+        test.each([
+            ['plain text labelled gzip', Buffer.from('not gzip at all'), 'gzip'],
+            ['one stray byte labelled gzip', Buffer.from([0x1f]), 'gzip'],
+            ['plain text labelled deflate', Buffer.from('nope'), 'deflate'],
+            ['plain text labelled br', Buffer.from('nope nope nope'), 'br'],
+        ])('a 200 with %s is a decode error, never ""', async (_label, body, enc) => {
+            const err = await readBody(Object.assign(streamOf(body, { 'content-encoding': enc }), { statusCode: 200 })).catch(e => e);
+            expect(err).toBeInstanceOf(Error);
+            expect(err.decode).toBe(true);
+        });
+
+        // Security review L2: the no-content drain.
+        test('a bodiless response that sends bytes anyway is destroyed, and a later socket error is not unhandled', async () => {
+            const s = new PassThrough();
+            s.headers = { 'content-encoding': 'gzip' };
+            s.statusCode = 304;
+            const destroy = jest.spyOn(s, 'destroy');
+            await expect(readBody(s)).resolves.toBe('');
+            s.write(Buffer.from('unexpected body'));
+            await new Promise(r => setImmediate(r));
+            expect(destroy).toHaveBeenCalled();
+            expect(() => s.emit('error', new Error('ECONNRESET'))).not.toThrow();
+        });
+
         test('a decode error is deterministic: NOT retried, classified parse', async () => {
             let calls = 0;
             const gz = zlib.gzipSync('x'.repeat(1000));

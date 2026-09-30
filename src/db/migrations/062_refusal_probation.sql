@@ -15,7 +15,13 @@
 --    retry-after, cache / edge request ids …; never Set-Cookie, auth or any
 --    body — src/collectors/http.js refusalHeaders), so operators can tell
 --    which layer refused. Cleared with the refused state.
--- 3. source_runs.response_headers — the same headers on the run row that
+-- 3. source_collection_state.last_refused_at — when the source last
+--    refused. Unlike access_denied_at it survives the probation (it is
+--    cleared only when the count decays or is reset), so an operator's
+--    SOURCE_<SLUG>_RESET date newer than the last refusal also clears a
+--    probation (with the same named approval and 'refusal_reset' gate
+--    event as a reset of the refused state).
+-- 4. source_runs.response_headers — the same headers on the run row that
 --    recorded the refusal (history per refusal). NULL on every other run.
 --
 -- Additive and idempotent: ADD COLUMN IF NOT EXISTS only; no existing row
@@ -24,4 +30,5 @@
 
 ALTER TABLE source_collection_state ADD COLUMN IF NOT EXISTS probation_until       TIMESTAMPTZ;
 ALTER TABLE source_collection_state ADD COLUMN IF NOT EXISTS access_denied_headers JSONB;
+ALTER TABLE source_collection_state ADD COLUMN IF NOT EXISTS last_refused_at       TIMESTAMPTZ;
 ALTER TABLE source_runs             ADD COLUMN IF NOT EXISTS response_headers      JSONB;

@@ -71,6 +71,11 @@ function readBody(res, { maxBytes = DEFAULT_MAX_BYTES, status = res.statusCode, 
         // No content: never build a decoder. Drain the stream so the socket
         // is released, and resolve the empty body.
         if (hasNoContent(status, method, res.headers)) {
+            // Security review L2: a socket error while draining must not be
+            // an unhandled 'error' event, and a server that sends bytes on a
+            // bodiless response gets its connection closed, not read.
+            res.on('error', () => {});
+            res.on('data', () => res.destroy());
             res.resume();
             resolve('');
             return;
@@ -117,13 +122,19 @@ function readBody(res, { maxBytes = DEFAULT_MAX_BYTES, status = res.statusCode, 
             decoder.on('error', (err) => {
                 // Defence in depth: an EMPTY body under a Content-Encoding
                 // (no Content-Length, e.g. chunked) is an empty body, not a
-                // corrupt one. A non-empty body that fails to decode is.
+                // corrupt one. Security review L4: the tolerance is pinned
+                // to rawBytes === 0 — not ONE byte arrived on the wire — so
+                // a non-empty body that fails to decode (truncated,
+                // mislabelled, hostile) is always a ResponseDecodeError.
                 if (rawBytes === 0 && total === 0 && err && err.code === 'Z_BUF_ERROR') {
                     finish(null, '');
                     return;
                 }
+                // Security review H1: the status and headers travel with the
+                // error, so http.js still honours a 401 / 403 / 451 whose
+                // body cannot be decoded as a refusal.
                 finish(new ResponseDecodeError(`response body could not be decoded (${enc}: ${(err && err.code) || 'error'})`,
-                    { code: err && err.code }));
+                    { code: err && err.code, status: Number.isInteger(status) ? status : null, headers: flattenHeaders(res.headers) }));
             });
         } else {
             stream.on('error', err => finish(err));

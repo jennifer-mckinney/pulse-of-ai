@@ -20,8 +20,10 @@
 //                           next successful run, or a later refusal counts
 //                           as refusal 1 again)
 //   manual reset            env SOURCE_<SLUG>_RESET=<ISO date> newer than
-//                           the refusal, or `npm run source:reset -- <slug>`
-//                           — clears everything, count and probation too
+//                           the (last) refusal, with its named approval, or
+//                           `npm run source:reset -- <slug>` — clears
+//                           everything, count and probation too, in the
+//                           refused state AND during probation
 //
 // Probation (diagnosis 2026-09-30, Jennifer: "Probation + log headers
 // (Recommended)"; ADR 0001 dated note): one clean probe used to zero the
@@ -83,7 +85,14 @@ function envReset(slug, env, deniedAt) {
  * @returns {{ state: 'none'|'reset'|'cooldown'|'probe', reason?: string, until?: string }}
  */
 function refusalGate(row, slug, env = process.env, now = Date.now()) {
-    if (!row || !row.access_denied_at) return { state: 'none' };
+    if (!row) return { state: 'none' };
+    if (!row.access_denied_at) {
+        // Grumpy #3 (option b): an approved SOURCE_<SLUG>_RESET newer than
+        // the last refusal also clears a PROBATION (the count), exactly as
+        // it clears the refused state.
+        const onProbation = (row.refusal_count || 0) > 0 && !probationOver(row, now);
+        return onProbation && row.last_refused_at && envReset(slug, env, row.last_refused_at) ? { state: 'reset' } : { state: 'none' };
+    }
     if (envReset(slug, env, row.access_denied_at)) return { state: 'reset' };
     const until = row.refused_until ? new Date(row.refused_until).getTime() : 0;
     const status = row.access_denied_status ? `HTTP ${row.access_denied_status}` : (row.access_denied_kind === 'robots' ? 'robots.txt' : 'access denied');
@@ -101,24 +110,14 @@ const ms = v => (v ? new Date(v).getTime() : NaN);
  * Whether the refusal count has decayed: the source is not refused and not
  * inside its probation window (24 h after its successful probe). A count
  * left with no probation time (a row written before migration 062) has
- * decayed too. Mirrored in SQL by state.recordRefusal / state.decayRefusal.
+ * decayed too. The same rule is PRIOR_COUNT_SQL / decayRefusal in state.js;
+ * tests/integration/collect.refusal.test.js pins the two together.
  * @param {object|null} row  source_collection_state
  */
 function probationOver(row, now = Date.now()) {
     if (!row || row.access_denied_at) return false;
     if (!row.probation_until) return true;
     return now >= ms(row.probation_until);
-}
-
-/** The refusal number a new refusal gets (n >= 1): the count continues during a refusal or its probation. */
-function nextRefusalCount(row, now = Date.now()) {
-    const prev = !row || probationOver(row, now) ? 0 : Math.max(0, Math.floor(row.refusal_count || 0));
-    return prev + 1;
-}
-
-/** When the probation that starts at `at` (a successful probe) ends. */
-function probationUntil(at = Date.now()) {
-    return new Date(ms(at) + PROBATION_MS);
 }
 
 /** From the run's classified route errors: the refusal, or null. */
@@ -129,5 +128,5 @@ function refusalOf(classified) {
 
 module.exports = {
     BLOCKED_BY_SOURCE, REFUSED_KINDS, COOLDOWN_BASE_MS, COOLDOWN_MAX_MS, PROBATION_MS,
-    resetEnv, cooldownMs, envReset, refusalGate, refusalOf, probationOver, nextRefusalCount, probationUntil,
+    resetEnv, cooldownMs, envReset, refusalGate, refusalOf, probationOver,
 };

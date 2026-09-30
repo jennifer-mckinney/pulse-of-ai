@@ -48,7 +48,10 @@ describe('refusal rules', () => {
     });
 
     // ADR 0001 note 2026-09-30 (Jennifer: "Probation + log headers
-    // (Recommended)"): a clean probe no longer zeroes the count.
+    // (Recommended)"): a clean probe no longer zeroes the count. The count
+    // arithmetic itself is SQL (state.js PRIOR_COUNT_SQL) and is pinned by
+    // tests/integration/collect.refusal.test.js; probationOver is the JS
+    // rule the runner and /api/sources use.
     describe('probation', () => {
         const now = Date.parse('2026-09-30T17:00:00Z');
         const at = h => new Date(now + h * H).toISOString();
@@ -56,45 +59,41 @@ describe('refusal rules', () => {
         test('the probation window is the 24 h cap of the cooldown schedule', () => {
             expect(R.PROBATION_MS).toBe(24 * H);
             expect(R.PROBATION_MS).toBe(R.COOLDOWN_MAX_MS);
-            expect(R.probationUntil(now).toISOString()).toBe(at(24));
         });
 
-        test('refuse → probe ok → refuse again continues the count (2, a 2 h cooldown) instead of restarting at 1', () => {
-            const onProbation = { access_denied_at: null, refusal_count: 1, probation_until: at(23) };
-            expect(R.probationOver(onProbation, now)).toBe(false);
-            expect(R.nextRefusalCount(onProbation, now)).toBe(2);
-            expect(R.cooldownMs(R.nextRefusalCount(onProbation, now)) / H).toBe(2);
+        test('on probation: not over; refused: never over', () => {
+            expect(R.probationOver({ access_denied_at: null, refusal_count: 1, probation_until: at(23) }, now)).toBe(false);
+            expect(R.probationOver({ access_denied_at: at(-1), refused_until: at(-0.01), refusal_count: 3, probation_until: null }, now)).toBe(false);
         });
 
-        test('a refused probe (still in the refused state) continues the count', () => {
-            const refused = { access_denied_at: at(-1), refused_until: at(-0.01), refusal_count: 3, probation_until: null };
-            expect(R.probationOver(refused, now)).toBe(false);
-            expect(R.nextRefusalCount(refused, now)).toBe(4);
+        test('24 h without a refusal: over (the boundary itself included)', () => {
+            expect(R.probationOver({ access_denied_at: null, refusal_count: 5, probation_until: at(-0.001) }, now)).toBe(true);
+            expect(R.probationOver({ access_denied_at: null, refusal_count: 5, probation_until: at(0) }, now)).toBe(true);
         });
 
-        test('the schedule escalates to the cap and stays there', () => {
-            let row = { access_denied_at: null, refusal_count: 0, probation_until: null };
-            const hours = [];
-            for (let i = 0; i < 8; i++) {
-                const n = R.nextRefusalCount(row, now);
-                hours.push(R.cooldownMs(n) / H);
-                row = { access_denied_at: null, refusal_count: n, probation_until: at(24) };   // clean probe → probation
-            }
-            expect(hours).toEqual([1, 2, 4, 8, 16, 24, 24, 24]);
-        });
-
-        test('24 h without a refusal decays the count: the next refusal is refusal 1 again', () => {
-            const over = { access_denied_at: null, refusal_count: 5, probation_until: at(-0.001) };
-            expect(R.probationOver(over, now)).toBe(true);
-            expect(R.nextRefusalCount(over, now)).toBe(1);
-            expect(R.probationOver({ ...over, probation_until: at(0) }, now)).toBe(true);   // the boundary itself
-        });
-
-        test('no row, a clean row, or a count with no probation time (pre-062 row) has no probation', () => {
-            expect(R.nextRefusalCount(null, now)).toBe(1);
+        test('no row has no probation; a clean row or a pre-062 count (no probation time) has decayed', () => {
             expect(R.probationOver(null, now)).toBe(false);
-            expect(R.nextRefusalCount({ access_denied_at: null, refusal_count: 0, probation_until: null }, now)).toBe(1);
+            expect(R.probationOver({ access_denied_at: null, refusal_count: 0, probation_until: null }, now)).toBe(true);
             expect(R.probationOver({ access_denied_at: null, refusal_count: 2, probation_until: null }, now)).toBe(true);
+        });
+
+        test('gate: an approved env reset newer than the LAST refusal clears a probation (grumpy #3, option b)', () => {
+            const APPROVED = { GATE_APPROVED_BY: 'Ada Lovelace 2026-09-29' };
+            const row = { access_denied_at: null, refusal_count: 2, probation_until: at(20), last_refused_at: at(-5) };
+            expect(R.refusalGate(row, 'pew', {}, now)).toEqual({ state: 'none' });
+            expect(R.refusalGate(row, 'pew', { ...APPROVED, SOURCE_PEW_RESET: at(-1) }, now)).toEqual({ state: 'reset' });
+            // older than the last refusal, or no named approval: probation stands
+            expect(R.refusalGate(row, 'pew', { ...APPROVED, SOURCE_PEW_RESET: at(-6) }, now)).toEqual({ state: 'none' });
+            expect(R.refusalGate(row, 'pew', { SOURCE_PEW_RESET: at(-1) }, now)).toEqual({ state: 'none' });
+            // nothing to reset once probation is over
+            expect(R.refusalGate({ ...row, probation_until: at(-1) }, 'pew', { ...APPROVED, SOURCE_PEW_RESET: at(-0.5) }, now))
+                .toEqual({ state: 'none' });
+        });
+
+        test('/api/sources: a count whose probation is over is reported as 0 (grumpy #8)', () => {
+            const base = { name: 'hacker_news', source_type: 'api', access_denied_at: null, refusal_count: 3 };
+            expect(registryFields({ ...base, probation_until: at(-1) }, TEST_ENV, now)).toMatchObject({ refusal_count: 0, probation_until: null });
+            expect(registryFields({ ...base, probation_until: at(5) }, TEST_ENV, now)).toMatchObject({ refusal_count: 3, probation_until: at(5) });
         });
     });
 

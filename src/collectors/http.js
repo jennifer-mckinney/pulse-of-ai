@@ -119,8 +119,10 @@ function isDeterministic(err) {
 const REFUSAL_HEADER_ALLOWLIST = Object.freeze([
     'server', 'date', 'content-type', 'retry-after', 'via', 'age',
     'x-cache', 'x-cache-status', 'cf-cache-status', 'cf-ray', 'cf-mitigated', 'x-served-by',
-    'x-request-id', 'x-amz-cf-id', 'x-amz-cf-pop', 'x-rq', 'x-powered-by',
+    'x-amz-cf-id', 'x-amz-cf-pop', 'x-rq',
 ]);
+// Security review L3: x-powered-by (a software fingerprint) and x-request-id
+// (can carry a session-correlated id) are deliberately NOT kept.
 const REFUSAL_HEADER_MAX = 200;   // characters per value
 
 /**
@@ -142,6 +144,9 @@ function refusalHeaders(headers, env = process.env) {
     }
     return out;
 }
+
+// The statuses that are the source refusing us (never retried).
+const REFUSAL_STATUSES = Object.freeze([401, 403, 451]);
 
 // A body that is a bot-wall challenge page, whatever the status code.
 const CHALLENGE_RE = /(cf-chl|challenge-platform|_Incapsula_Resource|datadome|captcha-delivery|Attention Required! \| Cloudflare)/i;
@@ -291,7 +296,7 @@ class HttpClient {
                 continue;
             }
             if (res.status === 304) return { ...res, notModified: true, url: current };
-            if ([401, 403, 451].includes(res.status) || (res.status >= 400 && CHALLENGE_RE.test(res.body || ''))) {
+            if (REFUSAL_STATUSES.includes(res.status) || (res.status >= 400 && CHALLENGE_RE.test(res.body || ''))) {
                 throw new AccessDeniedError(`${new URL(current).host} refused access (HTTP ${res.status}) — not retried, not worked around`,
                     { status: res.status, url: redactUrl(current), headers: refusalHeaders(res.headers, this.env) });
             }
@@ -315,6 +320,13 @@ class HttpClient {
             } catch (err) {
                 lastErr = err;
                 if (err && err.kind === 'deadline') throw err;
+                // Security review H1 / grumpy #1: a 401 / 403 / 451 whose body
+                // cannot be decoded (a WAF page mislabelled gzip) is still the
+                // source saying no — a refusal, never a parse error.
+                if (err && err.decode && REFUSAL_STATUSES.includes(err.status)) {
+                    throw new AccessDeniedError(`${new URL(url).host} refused access (HTTP ${err.status}; body undecodable) — not retried, not worked around`,
+                        { status: err.status, url: redactUrl(url), headers: refusalHeaders(err.headers, this.env) });
+                }
                 if (attempt < MAX_RETRIES && !/network disabled/.test(err.message) && !isDeterministic(err)) {
                     await this.sleep(1000 * 2 ** attempt);
                     continue;

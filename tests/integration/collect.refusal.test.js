@@ -12,6 +12,8 @@ const { runCollection } = require('../../src/collectors/runner');
 const { sourceRows, summarize } = require('../../src/collectors/status');
 const { seedSources, seedMethodology } = require('../../scripts/seed');
 const { main: adminMain } = require('../../scripts/source-admin');
+const state = require('../../src/collectors/state');
+const { probationOver } = require('../../src/collectors/refusal');
 const { fixtureTransport, RECORDED_AT, TEST_ENV } = require('../helpers/fixtureTransport');
 
 const NOW = () => Date.parse(RECORDED_AT);
@@ -364,6 +366,182 @@ describe('DNS failures are not retried within a run (diagnosis 2026-09-30, optio
         expect(await stateOf('hacker_news')).toMatchObject({ access_denied_at: null, refusal_count: 0 });
     });
 });
+
+const idOf = async slug => (await dbGet('SELECT id FROM data_sources WHERE name = $1', [slug])).id;
+const setState = (slug, sql) => dbRun(`UPDATE source_collection_state SET ${sql}
+     WHERE source_id = (SELECT id FROM data_sources WHERE name = $1)`, [slug]);
+
+// Grumpy review #5: the three transitions that had no test.
+describe('refusal transitions (grumpy review #5)', () => {
+    it.each([
+        ['a 5xx', [/hn\.algolia\.com/, { status: 503, body: 'down' }]],
+        ['a DNS failure', [/hn\.algolia\.com/, () => { throw Object.assign(new Error('getaddrinfo ENOTFOUND'), { code: 'ENOTFOUND' }); }]],
+    ])('(i) a probe that fails with %s (not a refusal) leaves the source refused: next run is a probe again, count unchanged', async (_l, fail) => {
+        await collect([DENIED]);
+        await nextPoll('hacker_news');
+        await endCooldown('hacker_news');
+        const before = await stateOf('hacker_news');
+        const { transport } = await collect([fail]);
+        expect(transport.calls.length).toBeGreaterThanOrEqual(1);
+        const st = await stateOf('hacker_news');
+        expect(st).toMatchObject({ refusal_count: 1, probation_until: null });
+        expect(new Date(st.access_denied_at).getTime()).toBe(new Date(before.access_denied_at).getTime());
+        expect((await alertsOf('hacker_news')).filter(a => !a.resolved_at)).toHaveLength(1);
+        // Still the probe: one request is allowed and a success starts probation.
+        await nextPoll('hacker_news');
+        const { transport: t2 } = await collect([HN]);
+        expect(t2.calls).toHaveLength(1);
+        expect(await stateOf('hacker_news')).toMatchObject({ access_denied_at: null, refusal_count: 1 });
+    });
+
+    it('(ii) a robots.txt refusal during probation continues the count, stores no headers, and resets the alert headers', async () => {
+        const BBC_FEED = 'https://feeds.bbci.co.uk/news/technology/rss.xml';
+        const ROBOTS_OK = ['https://feeds.bbci.co.uk/robots.txt', { status: 200, body: 'User-agent: *\nAllow: /\n' }];
+        const ROBOTS_NO = ['https://feeds.bbci.co.uk/robots.txt', { status: 200, body: 'User-agent: *\nDisallow: /\n' }];
+        const bbc = routes => collect(routes, TEST_ENV, ['bbc_news']);
+        await bbc([ROBOTS_OK, [BBC_FEED, { status: 403, headers: { server: 'Belfrage', via: '1.1 edge' }, body: 'no' }]]);
+        expect((await stateOf('bbc_news')).access_denied_headers).toEqual({ server: 'Belfrage', via: '1.1 edge' });
+        await nextPoll('bbc_news');
+        await endCooldown('bbc_news');
+        await bbc([ROBOTS_OK, [BBC_FEED, 'recorded/bbc-technology.xml']]);     // probe ok → probation
+        expect(await stateOf('bbc_news')).toMatchObject({ access_denied_at: null, refusal_count: 1 });
+        await nextPoll('bbc_news');
+        await bbc([ROBOTS_NO]);
+        const st = await stateOf('bbc_news');
+        expect(st).toMatchObject({ refusal_count: 2, access_denied_kind: 'robots', access_denied_headers: null });
+        expect(cooldownHours(st)).toBe(2);
+        const open = (await alertsOf('bbc_news')).filter(a => !a.resolved_at);
+        expect(open).toHaveLength(1);
+        expect(open[0].details).toMatchObject({ refusal_count: 2, error_kind: 'robots', response_headers: null });
+    });
+
+    it('(iii) a pre-062 row (count > 0, no probation time, not refused) decays to 0 on the next ok run', async () => {
+        await collect([HN]);
+        await setState('hacker_news', 'refusal_count = 2, probation_until = NULL, access_denied_at = NULL');
+        expect((await rowOf('hacker_news')).refusal_count).toBe(0);     // already not in effect (grumpy #8)
+        await nextPoll('hacker_news');
+        await collect([HN]);
+        expect(await stateOf('hacker_news')).toMatchObject({ refusal_count: 0, probation_until: null, last_refused_at: null });
+    });
+});
+
+// Security review: the listed tests.
+describe('refusal state races and escalations (security review)', () => {
+    it('M1: a stale probe success never clears a NEWER refusal; racing endCooldowns resolve the alert once', async () => {
+        await collect([DENIED]);
+        await endCooldown('hacker_news');
+        const id = await idOf('hacker_news');
+        const probed = (await state.getRefusal(id)).access_denied_at;
+        // Another run refuses in between (the probe is refused elsewhere).
+        await dbRun(`UPDATE source_collection_state SET access_denied_at = access_denied_at + interval '1 second' WHERE source_id = $1`, [id]);
+        expect(await state.endCooldown(id, probed)).toBeNull();
+        const st = await stateOf('hacker_news');
+        expect(st.access_denied_at).not.toBeNull();
+        expect(st.probation_until).toBeNull();
+        expect((await alertsOf('hacker_news')).filter(a => !a.resolved_at)).toHaveLength(1);
+        // Two concurrent successes for the SAME refusal: one ends it.
+        const current = (await state.getRefusal(id)).access_denied_at;
+        const results = await Promise.all([state.endCooldown(id, current), state.endCooldown(id, current)]);
+        expect(results.filter(Boolean)).toHaveLength(1);
+        const resolutions = await dbAll(
+            `SELECT r.resolution FROM alert_resolutions r JOIN alert_events a ON a.id = r.alert_id
+             WHERE a.alert_type = 'source_refused' AND a.source_id = $1`, [id]);
+        expect(resolutions).toHaveLength(1);
+        expect(resolutions[0].resolution).not.toMatch(/null/);
+    });
+
+    it('L1: an escalation with headers followed by a header-less refusal leaves no stale headers on the alert', async () => {
+        const H403 = [/hn\.algolia\.com/, { status: 403, headers: { server: 'nginx', 'x-rq': 'sea1' }, body: 'no' }];
+        await collect([DENIED]);                         // opens: no headers
+        await nextPoll('hacker_news');
+        await endCooldown('hacker_news');
+        await collect([H403]);                           // escalates with headers
+        let [alert] = await alertsOf('hacker_news');
+        expect(alert.details).toMatchObject({ refusal_count: 2, response_headers: { server: 'nginx', 'x-rq': 'sea1' } });
+        await nextPoll('hacker_news');
+        await endCooldown('hacker_news');
+        await collect([DENIED]);                         // escalates without headers
+        [alert] = await alertsOf('hacker_news');
+        expect(alert.details).toMatchObject({ refusal_count: 3, response_headers: null, escalations: 2 });
+        expect((await stateOf('hacker_news')).access_denied_headers).toBeNull();
+    });
+
+    it('L3: sourceRows() never returns the refusal headers', async () => {
+        await collect([[/hn\.algolia\.com/, { status: 403, headers: { server: 'nginx', 'x-rq': 'sea1' }, body: 'no' }]]);
+        for (const r of await sourceRows({ env: TEST_ENV, includeInactive: true })) {
+            expect(r).not.toHaveProperty('access_denied_headers');
+            expect(r).not.toHaveProperty('response_headers');
+            expect(JSON.stringify(r)).not.toContain('sea1');
+        }
+    });
+});
+
+// Grumpy #4: the JS rule (refusal.js probationOver, used by the runner and
+// /api/sources) is pinned to the SQL that actually counts
+// (state.js PRIOR_COUNT_SQL): a new refusal is (probationOver ? 0 : n) + 1.
+describe('probationOver pins PRIOR_COUNT_SQL (grumpy #4)', () => {
+    it.each([
+        ['refused', "access_denied_at = NOW() - interval '1 hour', refused_until = NOW() - interval '1 second', refusal_count = 3, probation_until = NULL"],
+        ['on probation', "access_denied_at = NULL, refused_until = NULL, refusal_count = 3, probation_until = NOW() + interval '5 hours'"],
+        ['probation over', "access_denied_at = NULL, refused_until = NULL, refusal_count = 3, probation_until = NOW() - interval '1 second'"],
+        ['pre-062 row', "access_denied_at = NULL, refused_until = NULL, refusal_count = 3, probation_until = NULL"],
+        ['clean', "access_denied_at = NULL, refused_until = NULL, refusal_count = 0, probation_until = NULL"],
+    ])('%s', async (_label, sql) => {
+        await collect([HN]);
+        await setState('hacker_news', sql);
+        const id = await idOf('hacker_news');
+        const before = await state.getRefusal(id);
+        const expected = (probationOver(before, Date.now()) ? 0 : before.refusal_count) + 1;
+        const r = await state.recordRefusal(id, { kind: 'access_denied', status: 403 }, 'hacker_news');
+        expect(r.refusal_count).toBe(expected);
+    });
+});
+
+// Grumpy #3 (option b): the env reset clears a PROBATION too, with the same
+// named approval and 'refusal_reset' gate event as a reset of the refused state.
+describe('env reset during probation (grumpy #3)', () => {
+    it('an approved SOURCE_<SLUG>_RESET newer than the last refusal clears the count; unapproved or older does not', async () => {
+        await collect([DENIED]);
+        await probeThenRefuseQuick();                    // refusal 2
+        await nextPoll('hacker_news');
+        await endCooldown('hacker_news');
+        await collect([HN]);                             // probe ok → probation, count 2
+        expect(await stateOf('hacker_news')).toMatchObject({ access_denied_at: null, refusal_count: 2 });
+
+        const resetAt = new Date(Date.now() + 1000).toISOString();
+        const { GATE_APPROVED_BY: _drop, ...unapproved } = TEST_ENV;
+        await nextPoll('hacker_news');
+        await collect([HN], { ...unapproved, SOURCE_HACKER_NEWS_RESET: resetAt });
+        expect((await stateOf('hacker_news')).refusal_count).toBe(2);
+        await nextPoll('hacker_news');
+        await collect([HN], { ...TEST_ENV, SOURCE_HACKER_NEWS_RESET: '2000-01-01' });
+        expect((await stateOf('hacker_news')).refusal_count).toBe(2);
+        expect(await dbAll(`SELECT 1 FROM source_gate_events WHERE event = 'refusal_reset'`)).toEqual([]);
+
+        await nextPoll('hacker_news');
+        const { transport } = await collect([HN], { ...TEST_ENV, SOURCE_HACKER_NEWS_RESET: resetAt });
+        expect(transport.calls).toHaveLength(1);
+        expect(await stateOf('hacker_news')).toMatchObject({ refusal_count: 0, probation_until: null, last_refused_at: null });
+        expect(await dbAll(`SELECT event, actor, approved_by, reason FROM source_gate_events
+                            WHERE slug = 'hacker_news' AND event = 'refusal_reset'`)).toEqual([{
+            event: 'refusal_reset', actor: 'Test Operator 2026-09-29', approved_by: 'Test Operator 2026-09-29',
+            reason: `SOURCE_HACKER_NEWS_RESET=${resetAt}` }]);
+        // A later refusal (newer than the reset date) starts at 1 and is not reset by the stale date.
+        await nextPoll('hacker_news');
+        await collect([DENIED], { ...TEST_ENV, SOURCE_HACKER_NEWS_RESET: resetAt });
+        const st = await stateOf('hacker_news');
+        expect(st.refusal_count).toBe(1);
+        expect(cooldownHours(st)).toBe(1);
+    });
+});
+
+async function probeThenRefuseQuick() {
+    await nextPoll('hacker_news');
+    await endCooldown('hacker_news');
+    await collect([HN]);
+    await nextPoll('hacker_news');
+    await collect([DENIED]);
+}
 
 function summaryReason({ summary }) {
     return summary.sources[0].reason;

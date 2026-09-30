@@ -111,6 +111,7 @@ describe('refusal response headers (diagnosis 2026-09-30, option D)', () => {
         'www-authenticate': 'Bearer realm="api"',
         authorization: 'Bearer xyz',
         'x-custom-debug': 'internal',
+        'x-request-id': 'req-7f3a-session-bound',
     };
 
     test('a 403 AccessDeniedError carries ONLY the allow-listed headers, scrubbed and one-line', async () => {
@@ -120,9 +121,12 @@ describe('refusal response headers (diagnosis 2026-09-30, option D)', () => {
         const err = await http.request('https://www.pewresearch.org/wp-json/wp/v2/posts').catch(e => e);
         expect(err).toBeInstanceOf(AccessDeniedError);
         expect(transport.calls).toHaveLength(1);
-        expect(Object.keys(err.headers).sort()).toEqual(['cf-ray', 'content-type', 'date', 'server', 'x-powered-by', 'x-rq', 'x-served-by']);
-        // Dropped: cookies, auth, anything not allow-listed.
-        for (const k of ['set-cookie', 'www-authenticate', 'authorization', 'x-custom-debug']) expect(err.headers).not.toHaveProperty(k);
+        expect(Object.keys(err.headers).sort()).toEqual(['cf-ray', 'content-type', 'date', 'server', 'x-rq', 'x-served-by']);
+        // Dropped: cookies, auth, fingerprints / session-correlated ids
+        // (security L3: x-powered-by, x-request-id), anything not allow-listed.
+        for (const k of ['set-cookie', 'www-authenticate', 'authorization', 'x-custom-debug', 'x-powered-by', 'x-request-id']) {
+            expect(err.headers).not.toHaveProperty(k);
+        }
         // Scrubbed and control-character free (security L4).
         expect(err.headers['x-served-by']).not.toContain(SECRET);
         expect(err.headers['x-served-by']).toContain('[redacted]');
@@ -133,7 +137,8 @@ describe('refusal response headers (diagnosis 2026-09-30, option D)', () => {
     });
 
     test('the allow-list never contains a cookie or credential header', () => {
-        for (const bad of ['set-cookie', 'cookie', 'authorization', 'proxy-authorization', 'www-authenticate', 'proxy-authenticate']) {
+        for (const bad of ['set-cookie', 'cookie', 'authorization', 'proxy-authorization', 'www-authenticate', 'proxy-authenticate',
+            'x-powered-by', 'x-request-id']) {
             expect(REFUSAL_HEADER_ALLOWLIST).not.toContain(bad);
         }
     });

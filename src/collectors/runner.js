@@ -353,9 +353,9 @@ async function runCollection(o = {}) {
             } else if (ok && refusal && refusal.access_denied_at && gate.state === 'probe') {
                 // Probation (ADR 0001 note 2026-09-30): one clean probe ends
                 // the cooldown, not the count.
-                const p = await state.endCooldown(sourceId);
+                const p = await state.endCooldown(sourceId, refusal.access_denied_at);
                 if (p) log(`[collect] ${slug}: probe succeeded — on probation until ${new Date(p.probation_until).toISOString()} (refusal count ${p.refusal_count} kept)`);
-            } else if (ok && refusal && refusal.refusal_count > 0 && probationOver(refusal, Date.now())) {
+            } else if (ok && refusal && !refusal.access_denied_at && refusal.refusal_count > 0 && probationOver(refusal, Date.now())) {
                 // 24 h without a refusal: the count decays.
                 if (await state.decayRefusal(sourceId)) log(`[collect] ${slug}: probation over — refusal count reset to 0`);
             }
