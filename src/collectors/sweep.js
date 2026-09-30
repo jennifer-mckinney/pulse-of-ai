@@ -26,6 +26,7 @@ async function sweepUnscored({ enqueue, now = () => Date.now(), limit = SWEEP_LI
          FROM raw_posts rp
          WHERE rp.collected_at > NOW() - make_interval(hours => $1)
            AND rp.collected_at < NOW() - make_interval(secs => $2)
+           AND rp.text_removed_at IS NULL   -- H1: a blanked post is never scored
            AND NOT EXISTS (SELECT 1 FROM sentiment_results sr WHERE sr.raw_post_id = rp.id)
          ORDER BY rp.collected_at ASC
          LIMIT $3`,
