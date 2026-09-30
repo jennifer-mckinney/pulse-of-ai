@@ -12,6 +12,13 @@
 //     inflation), so a decompression bomb or an endless body is cut off
 //     early instead of filling memory; a Content-Length over the cap is
 //     refused before any body is read (F10-4). ResponseTooLargeError.
+//   - a response that has no content (1xx, 204, 304, a HEAD response, or
+//     Content-Length: 0) is NEVER run through a decoder: a 304 may repeat
+//     the 200's Content-Encoding (RFC 9110 §15.4.5) with no body, and gunzip
+//     over zero bytes throws "unexpected end of file" (diagnosis 2026-09-30:
+//     the Internet Archive blog feed failed 91% of runs on it). A body that
+//     is present but cannot be decoded is a ResponseDecodeError (kind
+//     'parse'): deterministic, so http.js never retries it.
 //
 // createNetworkTransport({ request, lookup }) takes injectable node:https
 // request / lookup functions for tests; readBody() is exported for the same
@@ -33,15 +40,41 @@ class ResponseTooLargeError extends CollectorError {
     }
 }
 
+/** A body that is present but cannot be decoded (corrupt / truncated gzip, deflate, br). Never retried. */
+class ResponseDecodeError extends CollectorError {
+    constructor(message, details = {}) {
+        super(message, { kind: 'parse', decode: true, ...details });
+    }
+}
+
+/**
+ * Whether a response carries no content, whatever its headers say
+ * (RFC 9110 §6.4.1: 1xx, 204 and 304 responses and responses to HEAD have
+ * none; Content-Length: 0 declares none).
+ */
+function hasNoContent(status, method, headers) {
+    if (String(method || '').toUpperCase() === 'HEAD') return true;
+    if (status === 204 || status === 304 || (status >= 100 && status < 200)) return true;
+    return String((headers || {})['content-length'] || '').trim() === '0';
+}
+
 /**
  * Read a response stream, inflating by Content-Encoding, capped at maxBytes
  * decoded bytes.
- * @param {import('stream').Readable} res  with .headers
- * @param {{ maxBytes: number }} opts
+ * @param {import('stream').Readable} res  with .headers (and .statusCode)
+ * @param {{ maxBytes?: number, status?: number, method?: string }} opts
+ *        status defaults to res.statusCode; method to 'GET'
  * @returns {Promise<string>}
  */
-function readBody(res, { maxBytes = DEFAULT_MAX_BYTES } = {}) {
+function readBody(res, { maxBytes = DEFAULT_MAX_BYTES, status = res.statusCode, method = 'GET' } = {}) {
     return new Promise((resolve, reject) => {
+        // No content: never build a decoder. Drain the stream so the socket
+        // is released, and resolve the empty body.
+        if (hasNoContent(status, method, res.headers)) {
+            res.resume();
+            resolve('');
+            return;
+        }
         const declared = parseInt((res.headers || {})['content-length'], 10);
         if (Number.isFinite(declared) && declared > maxBytes) {
             res.destroy();
@@ -58,6 +91,7 @@ function readBody(res, { maxBytes = DEFAULT_MAX_BYTES } = {}) {
 
         const chunks = [];
         let total = 0;
+        let rawBytes = 0;   // bytes received before decoding
         let done = false;
         const finish = (err, value) => {
             if (done) return;
@@ -77,8 +111,23 @@ function readBody(res, { maxBytes = DEFAULT_MAX_BYTES } = {}) {
             chunks.push(chunk);
         });
         stream.on('end', () => finish(null, Buffer.concat(chunks).toString('utf8')));
-        stream.on('error', err => finish(err));
-        if (decoder) res.on('error', err => finish(err));
+        if (decoder) {
+            res.on('data', (chunk) => { rawBytes += chunk.length; });
+            res.on('error', err => finish(err));
+            decoder.on('error', (err) => {
+                // Defence in depth: an EMPTY body under a Content-Encoding
+                // (no Content-Length, e.g. chunked) is an empty body, not a
+                // corrupt one. A non-empty body that fails to decode is.
+                if (rawBytes === 0 && total === 0 && err && err.code === 'Z_BUF_ERROR') {
+                    finish(null, '');
+                    return;
+                }
+                finish(new ResponseDecodeError(`response body could not be decoded (${enc}: ${(err && err.code) || 'error'})`,
+                    { code: err && err.code }));
+            });
+        } else {
+            stream.on('error', err => finish(err));
+        }
     });
 }
 
@@ -115,7 +164,7 @@ function createNetworkTransport({ request = https.request, lookup = createGuarde
                 minVersion: 'TLSv1.2',
                 rejectUnauthorized: true,
             }, (res) => {
-                readBody(res, { maxBytes })
+                readBody(res, { maxBytes, status: res.statusCode, method })
                     .then(text => resolve({ status: res.statusCode, headers: flattenHeaders(res.headers), body: text }))
                     .catch(err => reject(timedOut() ? Object.assign(new Error('request timed out'), { name: 'TimeoutError' }) : err));
             });
@@ -127,5 +176,5 @@ function createNetworkTransport({ request = https.request, lookup = createGuarde
 }
 
 module.exports = {
-    createNetworkTransport, readBody, ResponseTooLargeError, DEFAULT_MAX_BYTES, ROBOTS_MAX_BYTES,
+    createNetworkTransport, readBody, hasNoContent, ResponseTooLargeError, ResponseDecodeError, DEFAULT_MAX_BYTES, ROBOTS_MAX_BYTES,
 };

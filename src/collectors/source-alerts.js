@@ -7,6 +7,11 @@
 //                       partial index of migration 038: at most one OPEN
 //                       alert per (type, source), atomically, whatever runs
 //                       concurrently (overlapping ticks, several workers).
+//   escalateSourceAlert updates the OPEN alert's details to the current
+//                       state (e.g. source_refused: the refusal count after a
+//                       refused probe), merging — no key is removed — and
+//                       counting the escalations (diagnosis 2026-09-30: the
+//                       alert said refusal 1 after the escalation to 2)
 //   resolveSourceAlert  closes the open alert AND writes its
 //                       alert_resolutions record (who, why, evidence) in
 //                       one transaction — the same audited design as the
@@ -29,6 +34,25 @@ async function openSourceAlert(type, severity, sourceId, details, client = null)
          ${OPEN_CONFLICT}
          RETURNING id`;
     const params = [type, severity, sourceId, JSON.stringify(details || {})];
+    const row = client ? (await client.query(sql, params)).rows[0] : await dbRun(sql, params);
+    return row ? row.id : null;
+}
+
+/**
+ * Merge the current state into the open alert's details (a jsonb merge, the
+ * same way a resolution is added), with escalated_at and an escalation
+ * count. The opening values stay in keys the patch does not name (e.g.
+ * source_refused's opened_refusal_count).
+ * @returns {Promise<string|null>} the id of the open alert updated, or null when none is open
+ */
+async function escalateSourceAlert(type, sourceId, patch, client = null) {
+    const sql = `UPDATE alert_events
+         SET details = COALESCE(details, '{}'::jsonb) || $3::jsonb
+                       || jsonb_build_object('escalated_at', NOW(),
+                                             'escalations', COALESCE((details->>'escalations')::int, 0) + 1)
+         WHERE alert_type = $1 AND source_id = $2::uuid AND source_table = 'data_sources' AND resolved_at IS NULL
+         RETURNING id`;
+    const params = [type, sourceId, JSON.stringify(patch || {})];
     const row = client ? (await client.query(sql, params)).rows[0] : await dbRun(sql, params);
     return row ? row.id : null;
 }
@@ -62,4 +86,4 @@ async function resolveSourceAlert(type, sourceId, { resolvedBy, resolution, basi
     });
 }
 
-module.exports = { openSourceAlert, resolveSourceAlert };
+module.exports = { openSourceAlert, escalateSourceAlert, resolveSourceAlert };

@@ -6,8 +6,14 @@
 //   - per-host spacing (the source's rateLimit.minIntervalMs);
 //   - timeouts (default 20 s) via AbortSignal;
 //   - retries with exponential backoff on 429 / 5xx / network errors,
-//     honouring Retry-After (capped), at most 2 retries;
+//     honouring Retry-After (capped), at most 2 retries; NOT for a DNS
+//     failure (ENOTFOUND / EAI_AGAIN: the next cadence tick is the retry) or
+//     an undecodable body (deterministic) — diagnosis 2026-09-30;
 //   - 401 / 403 / 451 and bot challenges → AccessDeniedError, never retried;
+//     it carries an ALLOW-LIST of the refusal's response headers (server,
+//     date, retry-after, cache / edge request ids …; never Set-Cookie, auth
+//     or any body), scrubbed and control-character free, so operators can
+//     see which layer refused (diagnosis 2026-09-30, option D);
 //   - conditional GET: ETag / Last-Modified validators in a per-source cache
 //     object; 304 → { notModified: true };
 //   - robots.txt check before every gated request AND every redirect hop
@@ -38,9 +44,10 @@
 const { version } = require('../../package.json');
 const { AccessDeniedError, HttpError, RobotsDisallowedError, ParseError } = require('./errors');
 const { RobotsPolicy, SHARED_CACHE } = require('./robots');
-const { redactUrl, redactUrlsIn } = require('./redact');
+const { redactUrl, redactUrlsIn, scrub } = require('./redact');
 const { checkUrl, RedirectRefusedError } = require('./netguard');
 const { createNetworkTransport, ROBOTS_MAX_BYTES } = require('./transport');
+const { neutralizeControl } = require('../middleware/log-error');
 
 const DEFAULT_TIMEOUT_MS = 20000;
 const MAX_RETRIES = 2;
@@ -96,6 +103,46 @@ class HostLimiter {
     }
 }
 
+// DNS failures are not transient within a second: the next cadence tick is
+// the retry (diagnosis 2026-09-30: Pew's ENOTFOUND was retried twice in 4 s).
+const NO_RETRY_CODES = Object.freeze(['ENOTFOUND', 'EAI_AGAIN']);
+
+/** Whether a transport error must not be retried inside the same run. */
+function isDeterministic(err) {
+    return !!err && (NO_RETRY_CODES.includes(err.code) || err.decode === true);
+}
+
+// The response headers kept from a refusal (401 / 403 / 451 / bot wall):
+// enough to tell the refusing layer (origin, CDN, WAF) apart, nothing that
+// identifies us or a session. Everything else — Set-Cookie, auth challenges,
+// any body — is dropped.
+const REFUSAL_HEADER_ALLOWLIST = Object.freeze([
+    'server', 'date', 'content-type', 'retry-after', 'via', 'age',
+    'x-cache', 'x-cache-status', 'cf-cache-status', 'cf-ray', 'cf-mitigated', 'x-served-by',
+    'x-request-id', 'x-amz-cf-id', 'x-amz-cf-pop', 'x-rq', 'x-powered-by',
+]);
+const REFUSAL_HEADER_MAX = 200;   // characters per value
+
+/**
+ * The allow-listed refusal headers, each value scrubbed (every secret env
+ * value, credential URL parameters), control characters neutralized (PR #22
+ * security L4: one header, one line) and capped.
+ * @returns {object} { name: value } — only allow-listed names, never empty strings
+ */
+function refusalHeaders(headers, env = process.env) {
+    const out = {};
+    const h = headers || {};
+    for (const name of REFUSAL_HEADER_ALLOWLIST) {
+        const v = h[name];
+        if (v === undefined || v === null) continue;
+        const raw = Array.isArray(v) ? v.join(', ') : String(v);
+        let clean = neutralizeControl(scrub(raw, env) || '');
+        if (clean.length > REFUSAL_HEADER_MAX) clean = `${clean.slice(0, REFUSAL_HEADER_MAX - 1)}…`;
+        if (clean) out[name] = clean;
+    }
+    return out;
+}
+
 // A body that is a bot-wall challenge page, whatever the status code.
 const CHALLENGE_RE = /(cf-chl|challenge-platform|_Incapsula_Resource|datadome|captcha-delivery|Attention Required! \| Cloudflare)/i;
 
@@ -123,6 +170,7 @@ class HttpClient {
         // starts and in-flight ones are aborted (error kind 'deadline').
         this.signal = signal || null;
         this.transport = transport;
+        this.env = env;
         this.ua = userAgent(env);
         this.sleep = sleep || (ms => new Promise(r => setTimeout(r, ms)));
         this.limiter = limiter || new HostLimiter({ sleep: this.sleep });
@@ -245,7 +293,7 @@ class HttpClient {
             if (res.status === 304) return { ...res, notModified: true, url: current };
             if ([401, 403, 451].includes(res.status) || (res.status >= 400 && CHALLENGE_RE.test(res.body || ''))) {
                 throw new AccessDeniedError(`${new URL(current).host} refused access (HTTP ${res.status}) — not retried, not worked around`,
-                    { status: res.status, url: redactUrl(current) });
+                    { status: res.status, url: redactUrl(current), headers: refusalHeaders(res.headers, this.env) });
             }
             if (res.status < 200 || res.status >= 300) {
                 throw new HttpError(`HTTP ${res.status} from ${redactUrl(current)}`, { status: res.status, url: redactUrl(current) });
@@ -267,13 +315,16 @@ class HttpClient {
             } catch (err) {
                 lastErr = err;
                 if (err && err.kind === 'deadline') throw err;
-                if (attempt < MAX_RETRIES && !/network disabled/.test(err.message)) {
+                if (attempt < MAX_RETRIES && !/network disabled/.test(err.message) && !isDeterministic(err)) {
                     await this.sleep(1000 * 2 ** attempt);
                     continue;
                 }
                 // The transport's own message may quote the URL: redact it too.
-                throw new HttpError(`request to ${redactUrl(url)} failed: ${redactUrlsIn(err.message)}`,
-                    { url: redactUrl(url), cause: { name: err.name, message: redactUrlsIn(err.message) } });
+                // An undecodable body keeps its 'parse' classification.
+                throw new HttpError(`request to ${redactUrl(url)} failed: ${redactUrlsIn(err.message)}`, {
+                    url: redactUrl(url), cause: { name: err.name, message: redactUrlsIn(err.message) },
+                    ...(err.code ? { code: err.code } : {}), ...(err.decode ? { kind: 'parse' } : {}),
+                });
             }
             // A bot challenge is a refusal, never something to retry into.
             if ((res.status === 429 || res.status >= 500) && attempt < MAX_RETRIES && !CHALLENGE_RE.test(res.body || '')) {
@@ -303,4 +354,7 @@ class HttpClient {
     }
 }
 
-module.exports = { HttpClient, HostLimiter, userAgent, defaultTransport, retryAfterMs, CHALLENGE_RE, redactUrl, SENSITIVE_HEADERS };
+module.exports = {
+    HttpClient, HostLimiter, userAgent, defaultTransport, retryAfterMs, CHALLENGE_RE, redactUrl, SENSITIVE_HEADERS,
+    REFUSAL_HEADER_ALLOWLIST, refusalHeaders, isDeterministic, NO_RETRY_CODES,
+};

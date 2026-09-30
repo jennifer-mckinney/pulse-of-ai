@@ -41,6 +41,11 @@ const nextPoll = slug => dbRun(
 const endCooldown = slug => dbRun(
     `UPDATE source_collection_state SET refused_until = NOW() - interval '1 second'
      WHERE source_id = (SELECT id FROM data_sources WHERE name = $1)`, [slug]);
+// Let the 24 h probation pass (as if a day went by without a refusal).
+const endProbation = slug => dbRun(
+    `UPDATE source_collection_state SET probation_until = NOW() - interval '1 second'
+     WHERE source_id = (SELECT id FROM data_sources WHERE name = $1)`, [slug]);
+const cooldownHours = st => Math.round((new Date(st.refused_until) - new Date(st.access_denied_at)) / 3600000);
 const rowOf = async slug => (await sourceRows({ env: TEST_ENV })).find(r => r.slug === slug);
 
 beforeEach(async () => {
@@ -91,17 +96,23 @@ describe('the refused state (F10-5)', () => {
         expect(await alertsOf('hacker_news')).toHaveLength(1);
     });
 
-    it('a successful probe clears the state and resolves the alert', async () => {
+    it('a successful probe ends the refused state and resolves the alert, but KEEPS the count (24 h probation)', async () => {
         await collect([DENIED]);
         await nextPoll('hacker_news');
         await endCooldown('hacker_news');
         const { summary } = await collect([HN]);
         expect(summary.sources[0].outcome).toBe('ok');
-        expect(await stateOf('hacker_news')).toMatchObject({ access_denied_at: null, refused_until: null, refusal_count: 0 });
+        const st = await stateOf('hacker_news');
+        expect(st).toMatchObject({ access_denied_at: null, refused_until: null, refusal_count: 1, access_denied_headers: null });
+        const probationH = (new Date(st.probation_until) - Date.now()) / 3600000;
+        expect(probationH).toBeGreaterThan(23.9);
+        expect(probationH).toBeLessThanOrEqual(24);
         const [alert] = await alertsOf('hacker_news');
         expect(alert.resolved_at).not.toBeNull();
-        expect(alert.details.resolution).toMatch(/probe/);
-        expect((await rowOf('hacker_news')).status).toBe('collecting');
+        expect(alert.details.resolution).toMatch(/probe run after the cooldown succeeded; on probation until .*refusal count 1 kept/);
+        const row = await rowOf('hacker_news');
+        expect(row).toMatchObject({ status: 'collecting', refusal_count: 1 });
+        expect(row.probation_until).not.toBeNull();
     });
 
     it('an env reset newer than the refusal clears it and the source is asked again; an older one does not', async () => {
@@ -166,3 +177,194 @@ describe('the refused state (F10-5)', () => {
         expect(await alertsOf('hacker_news')).toHaveLength(0);
     });
 });
+
+// Diagnosis 2026-09-30 (Pew Research Center): one clean probe zeroed the
+// count, so a publisher that lets a few requests through before refusing
+// again held us at a 1 h cooldown forever. Jennifer's ruling "Probation +
+// log headers (Recommended)" (ADR 0001 note 2026-09-30).
+describe('refusal probation (ADR 0001 note 2026-09-30)', () => {
+    const OK_RUNS = 3;
+    // refuse → cooldown ends → probe ok → more ok runs → refuse again
+    async function probeThenRefuse() {
+        await nextPoll('hacker_news');
+        await endCooldown('hacker_news');
+        expect((await collect([HN])).summary.sources[0].outcome).toBe('ok');
+        for (let i = 1; i < OK_RUNS; i++) {
+            await nextPoll('hacker_news');
+            expect((await collect([HN])).summary.sources[0].outcome).toBe('ok');
+        }
+        await nextPoll('hacker_news');
+        const { transport } = await collect([DENIED]);
+        expect(transport.calls).toHaveLength(1);
+        return stateOf('hacker_news');
+    }
+
+    it('refuse → cooldown → success → refuse again ESCALATES: refusal 2, a 2 h cooldown (not 1 and 1 h)', async () => {
+        await collect([DENIED]);
+        const st = await probeThenRefuse();
+        expect(st).toMatchObject({ refusal_count: 2, probation_until: null, access_denied_status: 403 });
+        expect(cooldownHours(st)).toBe(2);
+        expect(summaryReason(await collect([HN]))).toMatch(/cooldown until/);
+    });
+
+    it('repeated refusals after clean probes escalate 1 h → 2 h → 4 h → … → 24 h (capped)', async () => {
+        await collect([DENIED]);
+        expect(cooldownHours(await stateOf('hacker_news'))).toBe(1);
+        const seen = [];
+        for (let n = 2; n <= 7; n++) {
+            const st = await probeThenRefuse();
+            expect(st.refusal_count).toBe(n);
+            seen.push(cooldownHours(st));
+        }
+        expect(seen).toEqual([2, 4, 8, 16, 24, 24]);
+    });
+
+    it('sustained success decays: after 24 h without a refusal the next ok run resets the count to 0', async () => {
+        await collect([DENIED]);
+        await nextPoll('hacker_news');
+        await endCooldown('hacker_news');
+        await collect([HN]);                     // probe ok → probation
+        await nextPoll('hacker_news');
+        await collect([HN]);                     // still on probation: count kept
+        expect(await stateOf('hacker_news')).toMatchObject({ refusal_count: 1 });
+        await endProbation('hacker_news');
+        await nextPoll('hacker_news');
+        await collect([HN]);                     // probation over → decays
+        expect(await stateOf('hacker_news')).toMatchObject({ refusal_count: 0, probation_until: null, access_denied_at: null });
+        await nextPoll('hacker_news');
+        await collect([DENIED]);                 // a later refusal starts over at 1 h
+        const st = await stateOf('hacker_news');
+        expect(st.refusal_count).toBe(1);
+        expect(cooldownHours(st)).toBe(1);
+    });
+
+    it('a refusal after the probation window counts as refusal 1 even with no run in between', async () => {
+        await collect([DENIED]);
+        await nextPoll('hacker_news');
+        await endCooldown('hacker_news');
+        await collect([HN]);
+        await endProbation('hacker_news');
+        await nextPoll('hacker_news');
+        await collect([DENIED]);
+        const st = await stateOf('hacker_news');
+        expect(st.refusal_count).toBe(1);
+        expect(cooldownHours(st)).toBe(1);
+    });
+
+    it('the open source_refused alert reflects the current count when a refused probe escalates it', async () => {
+        await collect([DENIED]);
+        await nextPoll('hacker_news');
+        await endCooldown('hacker_news');
+        await collect([DENIED]);                 // the probe itself is refused: 1 → 2, same episode
+        let alerts = await alertsOf('hacker_news');
+        expect(alerts).toHaveLength(1);
+        expect(alerts[0].resolved_at).toBeNull();
+        expect(alerts[0].details).toMatchObject({ refusal_count: 2, opened_refusal_count: 1, escalations: 1, http_status: 403 });
+        const st = await stateOf('hacker_news');
+        expect(new Date(alerts[0].details.refused_until).getTime()).toBe(new Date(st.refused_until).getTime());
+        expect(alerts[0].details.escalated_at).toBeTruthy();
+        // A clean probe resolves it; a refusal during probation opens a NEW
+        // alert that starts at the continued count.
+        const after = await probeThenRefuse();
+        expect(after.refusal_count).toBe(3);
+        alerts = await alertsOf('hacker_news');
+        expect(alerts).toHaveLength(2);
+        expect(alerts[0].resolved_at).not.toBeNull();
+        expect(alerts[1]).toMatchObject({ resolved_at: null,
+            details: expect.objectContaining({ refusal_count: 3, opened_refusal_count: 3 }) });
+        expect(alerts[1].details).not.toHaveProperty('escalations');
+    });
+
+    it('refusals are still honoured throughout: no request during any cooldown of the escalated schedule', async () => {
+        await collect([DENIED]);
+        await probeThenRefuse();
+        await nextPoll('hacker_news');
+        const { transport, summary } = await collect([HN]);
+        expect(transport.calls).toHaveLength(0);
+        expect(summary.sources[0]).toMatchObject({ outcome: 'skipped', status: 'blocked_by_source',
+            reason: expect.stringMatching(/refusal 2; .*cooldown until/) });
+    });
+
+    it('a manual reset clears the count and the probation too', async () => {
+        await collect([DENIED]);
+        await nextPoll('hacker_news');
+        await endCooldown('hacker_news');
+        await collect([HN]);
+        expect(await adminMain(['reset', 'hacker_news', '--note', 'publisher confirmed'],
+            { db, out: () => {}, err: () => {}, env: { GATE_APPROVED_BY: 'Tess Tester 2026-09-29' } })).toBe(0);
+        expect(await stateOf('hacker_news')).toMatchObject({ refusal_count: 0, probation_until: null });
+    });
+});
+
+describe('refusal response headers (diagnosis 2026-09-30, option D)', () => {
+    const SECRET = 'sk-refusal-test-5e6f7a8b9c0d';
+    const HEADERS = {
+        server: 'nginx', date: 'Wed, 30 Sep 2026 16:26:35 GMT', 'content-type': 'text/html',
+        'x-rq': 'sea1 83 196 443', 'x-served-by': `cache-sea\nFAKE ${SECRET}`,
+        'set-cookie': 'vip-go-seg=abc; HttpOnly', 'www-authenticate': 'Basic realm="x"', 'x-debug-internal': 'nope',
+    };
+    const DENIED_H = [/hn\.algolia\.com/, { status: 403, headers: HEADERS, body: '<html>Forbidden body</html>' }];
+
+    it('are logged and stored with the refusal: allow-listed only, scrubbed, one line; never cookies, auth or body', async () => {
+        const env = { ...TEST_ENV, SOME_SERVICE_TOKEN: SECRET };
+        const lines = [];
+        await runCollection({
+            slugs: ['hacker_news'], triggeredBy: 'test', env, transport: fixtureTransport([DENIED_H]), now: NOW,
+            log: l => lines.push(l),
+            queues: { enqueueEmbeds: jest.fn().mockResolvedValue(), enqueueIngestRetry: jest.fn().mockResolvedValue() },
+            collectorCtx: { sleep: () => Promise.resolve() },
+        });
+        const expected = ['content-type', 'date', 'server', 'x-rq', 'x-served-by'];
+        const st = await stateOf('hacker_news');
+        expect(Object.keys(st.access_denied_headers).sort()).toEqual(expected);
+        const [run] = await dbAll(
+            `SELECT r.response_headers, r.error_kind, r.http_status FROM source_runs r
+             JOIN data_sources ds ON ds.id = r.source_id WHERE ds.name = 'hacker_news'`);
+        expect(run).toMatchObject({ error_kind: 'access_denied', http_status: 403 });
+        expect(run.response_headers).toEqual(st.access_denied_headers);
+        const [alert] = await alertsOf('hacker_news');
+        expect(alert.details.response_headers).toEqual(st.access_denied_headers);
+        const stored = JSON.stringify([st.access_denied_headers, run.response_headers, alert.details]);
+        for (const bad of [SECRET, 'vip-go-seg', 'Basic realm', 'x-debug-internal', 'Forbidden body']) expect(stored).not.toContain(bad);
+        expect(st.access_denied_headers['x-served-by']).toBe('cache-sea\\nFAKE [redacted]');
+        const logged = lines.filter(l => /refusal response headers/.test(l));
+        expect(logged).toHaveLength(1);
+        expect(logged[0]).not.toContain(SECRET);
+        expect(logged[0]).not.toMatch(/\n/);
+        expect(logged[0]).toContain('"x-rq":"sea1 83 196 443"');
+        // Never on the public surface (F10-1: classification only).
+        expect(JSON.stringify(await rowOf('hacker_news'))).not.toContain('sea1 83 196 443');
+    });
+
+    it('a run that was not refused stores no headers; a successful probe clears the refusal headers', async () => {
+        await collect([HN]);
+        const runs = await dbAll(`SELECT response_headers FROM source_runs`);
+        expect(runs.every(r => r.response_headers === null)).toBe(true);
+        await nextPoll('hacker_news');
+        await collect([DENIED_H]);
+        expect((await stateOf('hacker_news')).access_denied_headers).not.toBeNull();
+        await nextPoll('hacker_news');
+        await endCooldown('hacker_news');
+        await collect([HN]);
+        expect((await stateOf('hacker_news')).access_denied_headers).toBeNull();
+    });
+});
+
+describe('DNS failures are not retried within a run (diagnosis 2026-09-30, option D)', () => {
+    it('ENOTFOUND costs ONE request, is a network error, and is not a refusal', async () => {
+        let n = 0;
+        const { summary } = await collect([[/hn\.algolia\.com/, () => {
+            n++;
+            throw Object.assign(new Error('getaddrinfo ENOTFOUND hn.algolia.com'), { code: 'ENOTFOUND' });
+        }]]);
+        expect(n).toBe(1);
+        expect(summary.sources[0]).toMatchObject({ outcome: 'error', errorKind: 'network' });
+        const [run] = await dbAll(`SELECT requests, error_kind FROM source_runs`);
+        expect(run).toEqual({ requests: 1, error_kind: 'network' });
+        expect(await stateOf('hacker_news')).toMatchObject({ access_denied_at: null, refusal_count: 0 });
+    });
+});
+
+function summaryReason({ summary }) {
+    return summary.sources[0].reason;
+}

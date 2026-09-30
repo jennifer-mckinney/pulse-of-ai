@@ -9,20 +9,41 @@
 //   refusal n (1, 2, 3, …)  cooldown = min(1 h × 2^(n-1), 24 h)
 //   during the cooldown     the runner skips the source: status
 //                           'blocked_by_source', no request is made
-//   after the cooldown      ONE probe run is allowed; success clears the
-//                           state, another refusal doubles the cooldown
+//   after the cooldown      ONE probe run is allowed; another refusal
+//                           doubles the cooldown. A successful probe ends
+//                           the refused state (the source collects again)
+//                           but KEEPS the count: the source is on PROBATION
+//                           for 24 h (PROBATION_MS)
+//   during probation        a refusal is refusal n+1 (the cooldown keeps
+//                           escalating up to 24 h)
+//   24 h without a refusal  probation is over: the count decays to 0 (at the
+//                           next successful run, or a later refusal counts
+//                           as refusal 1 again)
 //   manual reset            env SOURCE_<SLUG>_RESET=<ISO date> newer than
 //                           the refusal, or `npm run source:reset -- <slug>`
+//                           — clears everything, count and probation too
+//
+// Probation (diagnosis 2026-09-30, Jennifer: "Probation + log headers
+// (Recommended)"; ADR 0001 dated note): one clean probe used to zero the
+// count, so a publisher that lets a few requests through before refusing
+// again (Pew: bursts of 1–9 runs, then 403) held us at a 1 h cooldown
+// forever. The rule is TIME-based, not a run count: 24 h is the cap of the
+// cooldown schedule, so any refusal pattern up to once a day escalates to the
+// cap, and the rule does not depend on the cadence (a run count would be
+// satisfied by a burst — Pew allowed 9 clean runs, 22 minutes, before its
+// next 403 — or never be reached while the stack is idle).
 //
 // Each transition into the refused state writes one critical alert_events
-// row (alert_type 'source_refused') unless one is already open; clearing the
-// state resolves it.
+// row (alert_type 'source_refused') unless one is already open — then the
+// open alert's details are updated to the current refusal count (an
+// escalation). Ending the refused state resolves it.
 
 'use strict';
 
 const HOUR_MS = 3600 * 1000;
 const COOLDOWN_BASE_MS = HOUR_MS;
 const COOLDOWN_MAX_MS = 24 * HOUR_MS;
+const PROBATION_MS = COOLDOWN_MAX_MS;   // 24 h without a refusal decays the count
 const REFUSED_KINDS = Object.freeze(['access_denied', 'robots']);
 const BLOCKED_BY_SOURCE = 'blocked_by_source';
 
@@ -74,6 +95,32 @@ function refusalGate(row, slug, env = process.env, now = Date.now()) {
     return { state: 'probe', reason };
 }
 
+const ms = v => (v ? new Date(v).getTime() : NaN);
+
+/**
+ * Whether the refusal count has decayed: the source is not refused and not
+ * inside its probation window (24 h after its successful probe). A count
+ * left with no probation time (a row written before migration 062) has
+ * decayed too. Mirrored in SQL by state.recordRefusal / state.decayRefusal.
+ * @param {object|null} row  source_collection_state
+ */
+function probationOver(row, now = Date.now()) {
+    if (!row || row.access_denied_at) return false;
+    if (!row.probation_until) return true;
+    return now >= ms(row.probation_until);
+}
+
+/** The refusal number a new refusal gets (n >= 1): the count continues during a refusal or its probation. */
+function nextRefusalCount(row, now = Date.now()) {
+    const prev = !row || probationOver(row, now) ? 0 : Math.max(0, Math.floor(row.refusal_count || 0));
+    return prev + 1;
+}
+
+/** When the probation that starts at `at` (a successful probe) ends. */
+function probationUntil(at = Date.now()) {
+    return new Date(ms(at) + PROBATION_MS);
+}
+
 /** From the run's classified route errors: the refusal, or null. */
 function refusalOf(classified) {
     const hit = (classified || []).find(c => c && REFUSED_KINDS.includes(c.error_kind));
@@ -81,6 +128,6 @@ function refusalOf(classified) {
 }
 
 module.exports = {
-    BLOCKED_BY_SOURCE, REFUSED_KINDS, COOLDOWN_BASE_MS, COOLDOWN_MAX_MS,
-    resetEnv, cooldownMs, envReset, refusalGate, refusalOf,
+    BLOCKED_BY_SOURCE, REFUSED_KINDS, COOLDOWN_BASE_MS, COOLDOWN_MAX_MS, PROBATION_MS,
+    resetEnv, cooldownMs, envReset, refusalGate, refusalOf, probationOver, nextRefusalCount, probationUntil,
 };

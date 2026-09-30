@@ -74,6 +74,86 @@ describe('refusals and retries', () => {
         await expect(http.request('https://a.example/x')).rejects.toThrow(/ECONNRESET/);
         expect(n).toBe(3);
     });
+
+    // Diagnosis 2026-09-30 (option D): Pew's getaddrinfo ENOTFOUND was
+    // retried twice within 4 s. A DNS failure is not transient within the
+    // same run; the next cadence tick is the retry.
+    test.each(['ENOTFOUND', 'EAI_AGAIN'])('a DNS failure (%s) is NOT retried, and is reported as network', async (code) => {
+        let n = 0;
+        const sleeps = [];
+        const { http } = client([['https://a.example/x', () => {
+            n++;
+            throw Object.assign(new Error(`getaddrinfo ${code} a.example`), { code });
+        }]], { sleep: (ms) => { sleeps.push(ms); return Promise.resolve(); } });
+        const err = await http.request('https://a.example/x').catch(e => e);
+        expect(err).toBeInstanceOf(HttpError);
+        expect(err.code).toBe(code);
+        expect(require('../../../src/collectors/errors').classifyError(err).error_kind).toBe('network');
+        expect(n).toBe(1);
+        expect(http.requests).toBe(1);
+        expect(sleeps).toEqual([]);
+    });
+});
+
+describe('refusal response headers (diagnosis 2026-09-30, option D)', () => {
+    const { refusalHeaders, REFUSAL_HEADER_ALLOWLIST } = require('../../../src/collectors/http');
+    const SECRET = 'sk-live-refusal-9f8e7d6c5b4a';
+    const env = { ...TEST_ENV, SOME_API_KEY: SECRET };
+    const refusal = {
+        server: 'nginx',
+        date: 'Wed, 30 Sep 2026 16:26:35 GMT',
+        'content-type': 'text/html; charset=UTF-8',
+        'x-rq': 'sea1 123 456 443',
+        'x-powered-by': 'WordPress VIP',
+        'cf-ray': '8c1f0e2d3a4b5c6d-SEA',
+        'x-served-by': `cache-sea-1\r\nX-Injected: forged ${SECRET}`,
+        'set-cookie': 'session=abc123; HttpOnly',
+        'www-authenticate': 'Bearer realm="api"',
+        authorization: 'Bearer xyz',
+        'x-custom-debug': 'internal',
+    };
+
+    test('a 403 AccessDeniedError carries ONLY the allow-listed headers, scrubbed and one-line', async () => {
+        const { http, transport } = client([['https://www.pewresearch.org/wp-json/wp/v2/posts', {
+            status: 403, headers: refusal, body: '<html>Forbidden</html>',
+        }]], { env });
+        const err = await http.request('https://www.pewresearch.org/wp-json/wp/v2/posts').catch(e => e);
+        expect(err).toBeInstanceOf(AccessDeniedError);
+        expect(transport.calls).toHaveLength(1);
+        expect(Object.keys(err.headers).sort()).toEqual(['cf-ray', 'content-type', 'date', 'server', 'x-powered-by', 'x-rq', 'x-served-by']);
+        // Dropped: cookies, auth, anything not allow-listed.
+        for (const k of ['set-cookie', 'www-authenticate', 'authorization', 'x-custom-debug']) expect(err.headers).not.toHaveProperty(k);
+        // Scrubbed and control-character free (security L4).
+        expect(err.headers['x-served-by']).not.toContain(SECRET);
+        expect(err.headers['x-served-by']).toContain('[redacted]');
+        expect(err.headers['x-served-by']).not.toMatch(/[\r\n]/);
+        expect(err.headers['x-served-by']).toContain('\\r\\n');
+        // No body is ever kept.
+        expect(JSON.stringify(err)).not.toContain('Forbidden');
+    });
+
+    test('the allow-list never contains a cookie or credential header', () => {
+        for (const bad of ['set-cookie', 'cookie', 'authorization', 'proxy-authorization', 'www-authenticate', 'proxy-authenticate']) {
+            expect(REFUSAL_HEADER_ALLOWLIST).not.toContain(bad);
+        }
+    });
+
+    test('values are capped, array values joined, empty values and missing headers omitted', () => {
+        const out = refusalHeaders({ server: 'x'.repeat(500), via: ['1.1 a', '1.1 b'], 'retry-after': '' }, env);
+        expect(out.server.length).toBe(200);
+        expect(out.via).toBe('1.1 a, 1.1 b');
+        expect(out).not.toHaveProperty('retry-after');
+        expect(refusalHeaders(undefined, env)).toEqual({});
+    });
+
+    test('a bot-challenge refusal carries its headers too', async () => {
+        const { http } = client([['https://a.example/x', {
+            status: 429, headers: { server: 'cloudflare', 'cf-mitigated': 'challenge' }, body: '<div id="cf-chl-widget">',
+        }]]);
+        const err = await http.request('https://a.example/x').catch(e => e);
+        expect(err).toBeInstanceOf(AccessDeniedError);
+        expect(err.headers).toEqual({ server: 'cloudflare', 'cf-mitigated': 'challenge' });
+    });
 });
 
 describe('conditional GET', () => {

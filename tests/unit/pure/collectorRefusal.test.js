@@ -47,6 +47,57 @@ describe('refusal rules', () => {
         expect(R.refusalGate({ ...row, access_denied_status: null, access_denied_kind: 'robots' }, 'cato', {}, now).reason).toMatch(/robots\.txt/);
     });
 
+    // ADR 0001 note 2026-09-30 (Jennifer: "Probation + log headers
+    // (Recommended)"): a clean probe no longer zeroes the count.
+    describe('probation', () => {
+        const now = Date.parse('2026-09-30T17:00:00Z');
+        const at = h => new Date(now + h * H).toISOString();
+
+        test('the probation window is the 24 h cap of the cooldown schedule', () => {
+            expect(R.PROBATION_MS).toBe(24 * H);
+            expect(R.PROBATION_MS).toBe(R.COOLDOWN_MAX_MS);
+            expect(R.probationUntil(now).toISOString()).toBe(at(24));
+        });
+
+        test('refuse → probe ok → refuse again continues the count (2, a 2 h cooldown) instead of restarting at 1', () => {
+            const onProbation = { access_denied_at: null, refusal_count: 1, probation_until: at(23) };
+            expect(R.probationOver(onProbation, now)).toBe(false);
+            expect(R.nextRefusalCount(onProbation, now)).toBe(2);
+            expect(R.cooldownMs(R.nextRefusalCount(onProbation, now)) / H).toBe(2);
+        });
+
+        test('a refused probe (still in the refused state) continues the count', () => {
+            const refused = { access_denied_at: at(-1), refused_until: at(-0.01), refusal_count: 3, probation_until: null };
+            expect(R.probationOver(refused, now)).toBe(false);
+            expect(R.nextRefusalCount(refused, now)).toBe(4);
+        });
+
+        test('the schedule escalates to the cap and stays there', () => {
+            let row = { access_denied_at: null, refusal_count: 0, probation_until: null };
+            const hours = [];
+            for (let i = 0; i < 8; i++) {
+                const n = R.nextRefusalCount(row, now);
+                hours.push(R.cooldownMs(n) / H);
+                row = { access_denied_at: null, refusal_count: n, probation_until: at(24) };   // clean probe → probation
+            }
+            expect(hours).toEqual([1, 2, 4, 8, 16, 24, 24, 24]);
+        });
+
+        test('24 h without a refusal decays the count: the next refusal is refusal 1 again', () => {
+            const over = { access_denied_at: null, refusal_count: 5, probation_until: at(-0.001) };
+            expect(R.probationOver(over, now)).toBe(true);
+            expect(R.nextRefusalCount(over, now)).toBe(1);
+            expect(R.probationOver({ ...over, probation_until: at(0) }, now)).toBe(true);   // the boundary itself
+        });
+
+        test('no row, a clean row, or a count with no probation time (pre-062 row) has no probation', () => {
+            expect(R.nextRefusalCount(null, now)).toBe(1);
+            expect(R.probationOver(null, now)).toBe(false);
+            expect(R.nextRefusalCount({ access_denied_at: null, refusal_count: 0, probation_until: null }, now)).toBe(1);
+            expect(R.probationOver({ access_denied_at: null, refusal_count: 2, probation_until: null }, now)).toBe(true);
+        });
+    });
+
     test('status: a refused collecting source is blocked_by_source and never online', () => {
         const now = Date.now();
         const base = { name: 'hacker_news', source_type: 'api', last_success_at: new Date(now - 1000).toISOString() };

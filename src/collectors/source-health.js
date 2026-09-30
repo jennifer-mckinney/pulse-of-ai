@@ -53,7 +53,8 @@ function conditionsFor(row, src, now = Date.now()) {
     }
     if (row.access_denied_at) {
         out.source_refused = { severity: 'critical', error_kind: row.access_denied_kind || null,
-            http_status: row.access_denied_status || null, refused_until: row.refused_until || null };
+            http_status: row.access_denied_status || null, refused_until: row.refused_until || null,
+            refusal_count: row.refusal_count || null };
     }
     return out;
 }
@@ -67,7 +68,7 @@ async function evaluateSourceHealth({ env = process.env, now = Date.now() } = {}
         `SELECT ds.id, ds.name, ds.collection_disabled_at,
                 s.last_attempt_at, s.last_success_at, s.last_new_post_at, s.freshness_anchor_at, s.consecutive_failures,
                 s.last_error_kind, s.last_http_status, s.access_denied_at, s.access_denied_kind,
-                s.access_denied_status, s.refused_until
+                s.access_denied_status, s.refused_until, s.refusal_count
          FROM data_sources ds
          JOIN source_collection_state s ON s.source_id = ds.id
          WHERE ds.source_type <> $1`,

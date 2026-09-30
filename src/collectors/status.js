@@ -75,6 +75,7 @@ function registryFields(row, env, now) {
         access_denied_at: row.access_denied_at || null,
         refused_until: row.refused_until || null,
         refusal_count: row.refusal_count || 0,
+        probation_until: row.probation_until || null,
         reset_env: resetEnv(src.slug),
         last_attempt_at: row.last_attempt_at || null,
         last_success_at: row.last_success_at || null,
@@ -108,7 +109,7 @@ async function sourceRows({ includeInactive = false, env = process.env, now = Da
                 ds.collection_disabled_at, ds.collection_disabled_reason, ds.collection_disabled_by,
                 s.last_attempt_at, s.last_success_at, s.last_item_count, s.last_error_kind, s.last_http_status,
                 s.last_error_at, s.consecutive_failures,
-                s.access_denied_at, s.access_denied_status, s.access_denied_kind, s.refused_until, s.refusal_count
+                s.access_denied_at, s.access_denied_status, s.access_denied_kind, s.refused_until, s.refusal_count, s.probation_until
          FROM data_sources ds
          LEFT JOIN source_collection_state s ON s.source_id = ds.id
          ${includeInactive ? '' : 'WHERE ds.active = true'}
