@@ -18,7 +18,7 @@
 -- 3. source_collection_state.last_refused_at — when the source last
 --    refused. Unlike access_denied_at it survives the probation (it is
 --    cleared only when the count decays or is reset), so an operator's
---    SOURCE_<SLUG>_RESET date newer than the last refusal also clears a
+--    SOURCE_<SLUG>_RESET date at or after the last refusal also clears a
 --    probation (with the same named approval and 'refusal_reset' gate
 --    event as a reset of the refused state).
 -- 4. source_runs.response_headers — the same headers on the run row that
