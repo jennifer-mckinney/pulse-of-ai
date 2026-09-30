@@ -233,7 +233,7 @@ describe('migration 014 ↔ methodology registry (alignment)', () => {
 
     test('the code implements the CURRENT versions', () => {
         expect(CURRENT_VERSIONS).toEqual(expect.objectContaining({
-            sentiment: '1.0.0', relevance: '1.2.0', discourse: '1.1.0-DQI', ingest: '1.6.0',
+            sentiment: '1.0.0', relevance: '1.2.0', discourse: '1.1.0-DQI', ingest: '1.7.0',
         }));
     });
 
@@ -430,7 +430,7 @@ describe('migration 026 ↔ methodology registry (ingest@1.5.0, Reddit u/ names)
     test('ingest@1.5.0 redacts Reddit user names (superseded by 1.6.0, never edited); 1.4.0 is unchanged', () => {
         const reg = registry('ingest', '1.5.0');
         const prev = registry('ingest', '1.4.0');
-        expect(latest('ingest').version).toBe('1.6.0');
+        expect(latest('ingest').version).toBe('1.7.0');
         expect(reg.config.text_redaction.reddit_user_handles).toMatch(/u\/\[user\]/);
         expect(prev.config.text_redaction.reddit_user_handles).toBeUndefined();
         expect(reg.config.pii_fields_removed).toEqual(prev.config.pii_fields_removed);
@@ -531,12 +531,37 @@ describe('migration 031 ↔ methodology registry (ingest@1.6.0, P10-2)', () => {
 
     test('ingest@1.6.0 registers the payload keys the code no longer stores and every text window', () => {
         const reg = registry('ingest', '1.6.0');
-        const { SOURCES, retentionHours } = require('../../../src/config/source-registry');
         expect(reg.config.payload_text_keys_not_stored).toEqual([...PAYLOAD_TEXT_KEYS]);
         expect(reg.config.pii_fields_removed).toEqual(PII_FIELDS);
+        // Released row: the windows in force when it was registered (the
+        // Guardian's 24 h was withdrawn by ingest@1.7.0, migration 055).
+        expect(reg.config.text_retention.platform_terms_hours).toEqual({ reddit: 48, guardian: 24, youtube: 720, tiktok: 720 });
+        expect(reg.config.privacy_claim).toBe(registry('ingest', '1.5.0').config.privacy_claim);
+    });
+});
+
+describe('migration 055 ↔ methodology registry (ingest@1.7.0: GUARDIAN ruling and G3)', () => {
+    const { generate } = require('../../../scripts/generate-methodology-migration');
+    const SQL_055 = fs.readFileSync(path.join(__dirname, '../../../src/db/migrations/055_ingest_retention_rulings.sql'), 'utf8');
+
+    test('055 is exactly the generated ingest@1.7.0 row after its header, and changes no data', () => {
+        expect(SQL_055.endsWith(generate(['ingest@1.7.0']))).toBe(true);
+        const body = SQL_055.split('\n').filter(l => !l.startsWith('--')).join('\n');
+        expect(body).not.toMatch(/DO UPDATE|UPDATE |DELETE|DROP/);
+    });
+
+    test('ingest@1.7.0 registers the current platform windows, the Guardian ruling verbatim and G3', () => {
+        const reg = registry('ingest', '1.7.0');
+        const { SOURCES, retentionHours } = require('../../../src/config/source-registry');
         const platform = Object.fromEntries(SOURCES.filter(s => s.retention).map(s => [s.slug, retentionHours(s)]));
         expect(reg.config.text_retention.platform_terms_hours).toEqual(platform);
-        expect(reg.config.privacy_claim).toBe(registry('ingest', '1.5.0').config.privacy_claim);
+        expect(platform).not.toHaveProperty('guardian');
+        expect(reg.config.text_retention.rulings.guardian).toMatch(/Jennifer McKinney, 2026-09-29, verbatim "Use normal retention"/);
+        expect(reg.config.text_retention.embeddings_on_platform_blanking).toMatch(/deleted with the text.*G3/);
+        expect(reg.config.text_retention.applied_by_analogy).toEqual(['youtube', 'tiktok']);
+        const prev = registry('ingest', '1.6.0');
+        for (const k of Object.keys(prev.config).filter(k => k !== 'text_retention')) expect([k, reg.config[k]]).toEqual([k, prev.config[k]]);
+        expect(reg.model_name).toBe(prev.model_name);
     });
 });
 

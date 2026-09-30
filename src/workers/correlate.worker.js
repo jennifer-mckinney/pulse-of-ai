@@ -1,41 +1,26 @@
 // src/workers/correlate.worker.js
 // BullMQ worker handler for the 'correlate' queue.
 //
-// Runs cross-platform pseudonymous user correlation for a single post.
-// Returns { correlated: false } when confidence is below threshold — not an
-// error, so BullMQ marks the job complete rather than retrying.
+// Cross-platform correlation is NOT IMPLEMENTED (PR #22 grumpy M7): no
+// identity signal exists on identity-free data, and designing one needs the
+// DPIA (spec §20). Nothing enqueues correlate jobs; a job that reaches this
+// worker anyway (a stale queue, a manual add) COMPLETES refused, with the
+// gate's status and reason — never processed, never retried.
 
 'use strict';
 
-const { correlateUser } = require('../pipeline/correlation');
 const { correlationStatus } = require('../pipeline/correlation-gate');
 
 /**
- * Process a single correlate job.
- *
- * Job data shape:
- *   { rawPostId, sourceId, signalHash, topicAffinity, confidence }
- *
+ * Refuse a correlate job with the DPIA gate's status (awaiting_dpia,
+ * disabled, misconfigured or not_implemented) and reason.
  * @param {{ data: object }} job
- * @returns {Promise<object>}
+ * @param {{ env?: object }} [o]
+ * @returns {Promise<{ correlated: false, refused: string, reason: string }>}
  */
 async function processCorrelateJob(job, { env = process.env } = {}) {
-    // DPIA gate (spec §20): a job that reaches this worker while correlation
-    // is not enabled is refused, never processed.
     const gate = correlationStatus(env);
-    if (!gate.enabled) return { correlated: false, refused: gate.status, reason: gate.reason };
-    const { sourceId, signalHash, topicAffinity, confidence } = job.data;
-
-    const result = await correlateUser({ sourceId, signalHash, topicAffinity, confidence });
-
-    // correlateUser returns null when confidence < CORRELATION_MIN_CONFIDENCE.
-    // This is expected behaviour, not a failure — return a structured non-null value
-    // so BullMQ records the job as completed (not failed/retried).
-    if (!result) {
-        return { correlated: false };
-    }
-
-    return { correlated: true, ...result };
+    return { correlated: false, refused: gate.status, reason: gate.reason };
 }
 
 module.exports = { processCorrelateJob };

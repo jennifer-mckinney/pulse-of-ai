@@ -85,6 +85,17 @@ const LEGAL_RISK_RULING = 'Enabled by Jennifer\'s 2026-09-29 ruling ("Build all,
 // it and is marked permissionGated (tests/unit/pure/sourceRegistry.test.js).
 const PERMISSION_GATED_ACK_ENV = 'PERMISSION_GATED_FEEDS_ACCEPTED_BY';
 
+// PR #22 decision G5 (Jennifer, 2026-09-29): opening ANY gated route — one
+// that needs a key, an approval, a licence or a permission, i.e. every
+// route with a non-empty `requires` — also needs a NAMED approval in
+// GATE_APPROVED_BY, "Name YYYY-MM-DD". Without a valid one the route stays
+// closed and the status reason says "awaiting named approval". The value is
+// the actor of the source_gate_events rows that record the opening
+// (src/collectors/governance.js) and of every database kill-switch change
+// (scripts/source-admin.js). Keyless routes are not gated.
+const GATE_APPROVAL_ENV = 'GATE_APPROVED_BY';
+const AWAITING_NAMED_APPROVAL = 'awaiting named approval';
+
 const AI_QUERY = 'artificial intelligence';
 
 // ADR 0001 ruling 8 (Jennifer, 2026-09-29) on how Reddit posts are shown.
@@ -337,20 +348,20 @@ const SOURCES = [
         ],
         termsUrl: 'https://www.theguardian.com/open-platform/terms-and-conditions',
         termsNote: 'Open Platform §6 bans analysis/mining and ML use on the free key; §5 requires deletion within 24 hours; site terms apply the same to RSS.',
-        // P10-2: the Guardian's terms require deleting content within 24 hours
-        // (Open Platform §5; the termsNote records that the site terms apply
-        // the same to RSS). Applied BY ANALOGY with ruling 9, "Blank text,
-        // keep audit rows": the text is blanked at 24 h, scores and audit rows
-        // are kept — flagged for Jennifer to confirm (ADR 0001).
-        retention: {
-            maxAgeHours: 24,
-            byAnalogy: 'ruling 9 ("Blank text, keep audit rows"), applied by analogy; awaiting Jennifer\'s confirmation',
-            removalNotice: '[removed: Guardian terms retention]',
-            legalBasis: 'Guardian Open Platform terms §5: content must be deleted within 24 hours (the site terms apply the same to '
-                + 'the RSS). Text removed at 24 hours; the score and audit rows are retained, applying ADR 0001 ruling 9 ("Blank '
-                + 'text, keep audit rows") by analogy, pending the owner\'s confirmation.',
-            notice: 'Guardian post text is removed 24 hours after collection because of the Guardian\'s terms; its scores and audit '
-                + 'rows are retained (ADR 0001 ruling 9, applied by analogy).',
+        // GUARDIAN ruling (Jennifer McKinney, 2026-09-29), verbatim: "Use
+        // normal retention". The 24-hour blanking applied by analogy with
+        // ruling 9 (P10-2) is removed: the Guardian has no platform-terms
+        // `retention` block, so its text follows the default §19 detail
+        // window (RETENTION_DETAIL_DAYS). `retentionRuling` records the
+        // ruling and the window it replaced, so receipts of posts already
+        // blanked under that window stay truthful (retention.js).
+        retentionRuling: {
+            by: 'Jennifer McKinney',
+            date: '2026-09-29',
+            verbatim: 'Use normal retention',
+            effect: 'The Guardian uses the default text retention (TECHNICAL_SPEC §19, RETENTION_DETAIL_DAYS); the 24-hour '
+                + 'blanking applied by analogy with ADR 0001 ruling 9 is removed (ADR 0001, "Decisions of 2026-09-29 (PR #22 review)").',
+            former: { maxAgeHours: 24, basis: 'Guardian Open Platform terms §5, applied by analogy with ADR 0001 ruling 9 (PR #10 P10-2)' },
         },
         rateLimit: { minIntervalMs: 1000, note: 'free key 1 call/s, 500/day; commercial per contract' },
         pollIntervalSec: DEFAULT_POLL_SEC,
@@ -1040,6 +1051,7 @@ const ENV_DOCS = {
     COLLECTORS_ENABLED: { group: 'kill-switch', signup: null, description: 'Global kill switch: false stops every collector' },
     COLLECTORS_DISABLED: { group: 'kill-switch', signup: null, description: 'Comma-separated source slugs to turn off (per-source kill switch)' },
     COLLECT_WINDOW_MS: { group: 'collector', signup: null, description: 'Collection cycle length in ms (default 150000)' },
+    GATE_APPROVED_BY: { group: 'collector', signup: null, description: 'Named approval ("<name> <YYYY-MM-DD>") required to open ANY gated source — one that needs a key, an approval, a licence or a permission (PR #22 decision G5). Without a valid value those sources stay closed ("awaiting named approval"); keyless sources are unaffected. It is recorded as the approver of every gate opening and of every database kill-switch change (source_gate_events). Empty keeps gated sources closed' },
     PERMISSION_GATED_FEEDS_ACCEPTED_BY: { group: 'collector', signup: null, description: 'Operator acknowledgement ("<name> <YYYY-MM-DD>") that opens the 8 permission-gated news feeds of ADR 0001 ruling 4 (BBC, NYT, Guardian, Al Jazeera, WSJ, NBC, Washington Post, Ars Technica): their terms require permission for automated analysis, and setting this records that you accept that legal risk. Empty keeps them closed' },
     YOUTUBE_API_KEY: { group: 'free-key', signup: 'https://console.cloud.google.com/apis/library/youtube.googleapis.com', description: 'YouTube Data API v3 key' },
     SPRINGER_API_KEY: { group: 'free-key', signup: 'https://dev.springernature.com', description: 'Springer Nature Meta API key' },
@@ -1142,14 +1154,53 @@ function killReason(src, env) {
     return null;
 }
 
+/** G5: a gated route needs a key, approval, licence or permission (any `requires`). */
+function isGatedRoute(route) {
+    return (route.requires || []).length > 0;
+}
+
+/**
+ * G5: the named approval in GATE_APPROVED_BY — "Name YYYY-MM-DD": a name
+ * (at least two characters, with a letter, not a placeholder such as "Name"
+ * or "<your name>") then a real calendar date.
+ * @returns {{ ok: true, value: string, name: string, date: string } | { ok: false, reason: string }}
+ */
+function namedApproval(env = process.env) {
+    const raw = env ? env[GATE_APPROVAL_ENV] : undefined;
+    if (!nonEmpty(raw)) return { ok: false, reason: `${GATE_APPROVAL_ENV} is not set` };
+    const v = raw.trim().replace(/\s+/g, ' ');
+    const m = v.match(/^(.+) (\d{4})-(\d{2})-(\d{2})$/);
+    const bad = { ok: false, reason: `${GATE_APPROVAL_ENV} is not "Name YYYY-MM-DD"` };
+    if (!m) return bad;
+    const name = m[1].trim();
+    if (name.length < 2 || !/\p{L}/u.test(name) || /^(name|your name|approver|operator|todo|tbd|changeme|x+)$/i.test(name) || /[<>{}$]/.test(name)) return bad;
+    const [y, mo, d] = [Number(m[2]), Number(m[3]), Number(m[4])];
+    const dt = new Date(Date.UTC(y, mo - 1, d));
+    if (y < 2000 || dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return bad;
+    return { ok: true, value: v, name, date: `${m[2]}-${m[3]}-${m[4]}` };
+}
+
+/** Routes whose env vars are all set (before G5 approval and `replaces`). */
+function configuredRoutes(src, env) {
+    return src.routes.filter(r => (r.requires || []).every(k => nonEmpty(env[k])));
+}
+
 /**
  * The routes that would run now: every route whose required env vars are all
- * set, minus routes superseded by another open route (`replaces`).
+ * set — and, for a gated route, with a valid named approval (G5) — minus
+ * routes superseded by another open route (`replaces`).
  */
 function openRoutes(src, env = process.env) {
-    const open = src.routes.filter(r => (r.requires || []).every(k => nonEmpty(env[k])));
+    const approved = namedApproval(env).ok;
+    const open = configuredRoutes(src, env).filter(r => approved || !isGatedRoute(r));
     const replaced = new Set(open.flatMap(r => r.replaces || []));
     return open.filter(r => !replaced.has(r.id));
+}
+
+/** G5: routes fully configured but closed only for want of a named approval. */
+function routesAwaitingApproval(src, env = process.env) {
+    if (namedApproval(env).ok) return [];
+    return configuredRoutes(src, env).filter(isGatedRoute);
 }
 
 /**
@@ -1165,13 +1216,23 @@ function sourceStatus(src, env = process.env) {
         .flatMap(r => (r.requires || []).filter(k => !nonEmpty(env[k]))))];
     const recorded = {};
     for (const k of src.recordEnv || []) recorded[k] = nonEmpty(env[k]);
-    const base = { openRoutes: routes.map(r => r.id), missing, recorded };
+    // G5: configured gated routes held back for want of a named approval.
+    const pending = routesAwaitingApproval(src, env);
+    if (pending.length && !missing.includes(GATE_APPROVAL_ENV)) missing.push(GATE_APPROVAL_ENV);
+    const approval = namedApproval(env);
+    const base = {
+        openRoutes: routes.map(r => r.id), missing, recorded,
+        awaitingApproval: pending.map(r => r.id),
+        // The approver of the open gated routes (governance records only;
+        // never served by the API), or null.
+        approvedBy: approval.ok && routes.some(isGatedRoute) ? approval.value : null,
+    };
 
     const killed = killReason(src, env);
     if (killed) return { ...base, status: 'disabled', reason: killed };
     // Blocked is a property of the source's terms, not of this process's
     // config: it is reported as blocked whatever else is (un)set.
-    if (src.auth.kind === 'blocked' && routes.length === 0) {
+    if (src.auth.kind === 'blocked' && routes.length === 0 && pending.length === 0) {
         return { ...base, status: 'blocked', reason: `blocked: no compliant access — ${src.blocked.reason}` };
     }
     if (!nonEmpty(env.COLLECTOR_CONTACT_URL)) {
@@ -1186,6 +1247,15 @@ function sourceStatus(src, env = process.env) {
                 : `collecting via ${routes.map(r => r.id).join(', ')}`;
         return { ...base, status: 'collecting', reason };
     }
+    if (pending.length) {
+        return {
+            ...base,
+            status: src.closedStatus,
+            reason: `${AWAITING_NAMED_APPROVAL}: ${pending.map(r => r.id).join(', ')} ${pending.length > 1 ? 'are configured but stay' : 'is configured but stays'} `
+                + `closed until a named person approves opening ${pending.length > 1 ? 'them' : 'it'} in ${GATE_APPROVAL_ENV} ("Name YYYY-MM-DD"; `
+                + `${approval.reason}). PR #22 decision G5.`,
+        };
+    }
     if (src.routes.some(r => r.permissionGated)) {
         return {
             ...base,
@@ -1199,8 +1269,9 @@ function sourceStatus(src, env = process.env) {
 
 /**
  * P10-2: hours a source's post TEXT is kept (src/collectors/retention.js).
- * A platform-terms window (Reddit 48 h, Guardian 24 h, YouTube and TikTok
- * 30 days) where the source has one, else the spec §19 detail window:
+ * A platform-terms window (Reddit 48 h, YouTube and TikTok 30 days) where
+ * the source has one, else the spec §19 detail window (the Guardian since
+ * Jennifer's ruling of 2026-09-29, "Use normal retention"):
  * RETENTION_DETAIL_DAYS (default 90) days.
  */
 function retentionHours(src, env = process.env) {
@@ -1297,7 +1368,7 @@ function collectWindowMs(env = process.env) {
 
 /** Every env var referenced by the registry, with its docs entry. */
 function registryEnvVars() {
-    const names = new Set(['COLLECTOR_CONTACT_URL', 'COLLECTORS_ENABLED', 'COLLECTORS_DISABLED', 'COLLECT_WINDOW_MS']);
+    const names = new Set(['COLLECTOR_CONTACT_URL', 'COLLECTORS_ENABLED', 'COLLECTORS_DISABLED', 'COLLECT_WINDOW_MS', GATE_APPROVAL_ENV]);
     for (const s of SOURCES) {
         for (const r of s.routes) for (const k of [...(r.requires || []), ...(r.optional || [])]) names.add(k);
         for (const k of s.recordEnv || []) names.add(k);
@@ -1414,7 +1485,7 @@ function allowedHosts(src, env = process.env) {
 // it is deliberately listed here.
 const SETTING_ENV = Object.freeze([
     'COLLECTOR_CONTACT_URL', 'COLLECTORS_ENABLED', 'COLLECTORS_DISABLED', 'COLLECT_WINDOW_MS',
-    'PERMISSION_GATED_FEEDS_ACCEPTED_BY',
+    'PERMISSION_GATED_FEEDS_ACCEPTED_BY', 'GATE_APPROVED_BY',
     'NCBI_TOOL', 'SCHOLAR_ALERTS_IMAP_PORT', 'SCHOLAR_ALERTS_MAILBOX',
     'REDDIT_MIN_AI_POSTS_7D',
 ]);
@@ -1430,6 +1501,11 @@ module.exports = {
     routeAllowedHosts,
     allowedHosts,
     PERMISSION_GATED_ACK_ENV,
+    GATE_APPROVAL_ENV,
+    AWAITING_NAMED_APPROVAL,
+    namedApproval,
+    isGatedRoute,
+    routesAwaitingApproval,
     SETTING_ENV,
     envClass,
     AUTH_KINDS,

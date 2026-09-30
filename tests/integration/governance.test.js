@@ -9,7 +9,8 @@
 const db = require('../../src/db/connection');
 const { seedSources } = require('../../scripts/seed');
 const admin = require('../../scripts/source-admin');
-const { recordGateTransitions, snapshotTerms, saveTermsSnapshots } = require('../../src/collectors/governance');
+const governance = require('../../src/collectors/governance');
+const { recordGateTransitions, recordCorrelationGate, snapshotTerms, saveTermsSnapshots } = governance;
 const { HttpClient } = require('../../src/collectors/http');
 const { fixtureTransport, TEST_ENV } = require('../helpers/fixtureTransport');
 const { SOURCES } = require('../../src/config/source-registry');
@@ -31,13 +32,14 @@ describe('source_gate_events', () => {
 
     it('source:disable / source:enable record who and why', async () => {
         await seedSources({ actor: 'test-seed' });
-        const io = { out: () => {}, err: () => {}, who: 'jennifer' };
+        // G5 / security L6: the actor is the named approval, not $USER.
+        const io = { out: () => {}, err: () => {}, env: { GATE_APPROVED_BY: 'Jennifer McKinney 2026-09-29' } };
         expect(await admin.main(['disable', 'npr', '--reason', 'publisher asked'], io)).toBe(0);
         expect(await admin.main(['enable', 'npr', '--note', 'resolved'], io)).toBe(0);
         const e = (await events('npr')).slice(1);
         expect(e).toEqual([
-            { event: 'disabled', gate_status: null, actor: 'jennifer', reason: 'publisher asked' },
-            { event: 'enabled', gate_status: null, actor: 'jennifer', reason: 'resolved' },
+            { event: 'disabled', gate_status: null, actor: 'Jennifer McKinney 2026-09-29', reason: 'publisher asked' },
+            { event: 'enabled', gate_status: null, actor: 'Jennifer McKinney 2026-09-29', reason: 'resolved' },
         ]);
     });
 
@@ -47,9 +49,86 @@ describe('source_gate_events', () => {
         expect(first.length).toBe(SOURCES.length);                      // first observation of each
         expect(await recordGateTransitions({ env: TEST_ENV })).toEqual([]);
         const closed = await recordGateTransitions({ env: { ...TEST_ENV, SOURCE_NPR_ENABLED: 'false' } });
-        expect(closed).toEqual([{ slug: 'npr', event: 'gate_closed', gate_status: 'disabled' }]);
+        expect(closed).toEqual([{ slug: 'npr', event: 'gate_closed', gate_status: 'disabled', approved_by: null }]);
         const reopened = await recordGateTransitions({ env: TEST_ENV });
-        expect(reopened).toEqual([{ slug: 'npr', event: 'gate_opened', gate_status: 'collecting' }]);
+        expect(reopened).toEqual([{ slug: 'npr', event: 'gate_opened', gate_status: 'collecting', approved_by: null }]);
+    });
+
+    // PR #22 decision G5: a gated route opens only under a named approval,
+    // and the opening records who approved it (actor and approved_by).
+    it('a gated source stays closed "awaiting named approval" until GATE_APPROVED_BY names who approved it', async () => {
+        await seedSources({ actor: 'test-seed' });
+        const { GATE_APPROVED_BY: _drop, ...unapproved } = TEST_ENV;
+        await recordGateTransitions({ env: unapproved });
+        const [closed] = await db.dbAll(`SELECT event, gate_status, actor, approved_by, reason, routes FROM source_gate_events
+                                         WHERE slug = 'bbc_news' AND event LIKE 'gate_%'`);
+        expect(closed).toMatchObject({ event: 'gate_closed', gate_status: 'awaiting_approval', actor: 'worker scheduler (runtime env)',
+            approved_by: null, routes: [], reason: expect.stringMatching(/^awaiting named approval: technology-rss is configured but stays closed.*GATE_APPROVED_BY is not set/) });
+        // Keyless sources are not gated: they open without it.
+        expect((await db.dbGet(`SELECT event, approved_by FROM source_gate_events WHERE slug = 'npr' AND event LIKE 'gate_%'`)))
+            .toEqual({ event: 'gate_opened', approved_by: null });
+
+        const opened = await recordGateTransitions({ env: TEST_ENV });
+        expect(opened).toContainEqual({ slug: 'bbc_news', event: 'gate_opened', gate_status: 'collecting', approved_by: 'Test Operator 2026-09-29' });
+        expect(opened.find(e => e.slug === 'npr')).toBeUndefined();
+        const row = await db.dbGet(`SELECT actor, approved_by, routes FROM source_gate_events
+                                    WHERE slug = 'bbc_news' AND event = 'gate_opened'`);
+        expect(row).toEqual({ actor: 'Test Operator 2026-09-29', approved_by: 'Test Operator 2026-09-29', routes: ['technology-rss'] });
+        // A new approver of an open gate is a new, recorded opening.
+        const again = await recordGateTransitions({ env: { ...TEST_ENV, GATE_APPROVED_BY: 'Jennifer McKinney 2026-09-30' } });
+        expect(again).toContainEqual({ slug: 'bbc_news', event: 'gate_opened', gate_status: 'collecting', approved_by: 'Jennifer McKinney 2026-09-30' });
+        expect(await recordGateTransitions({ env: { ...TEST_ENV, GATE_APPROVED_BY: 'Jennifer McKinney 2026-09-30' } })).toEqual([]);
+    });
+
+    // Grumpy L14: the database kill switch closes the recorded gate.
+    it('a source disabled by the database kill switch is recorded closed, whatever the env says', async () => {
+        await seedSources({ actor: 'test-seed' });
+        await recordGateTransitions({ env: TEST_ENV });
+        const io = { out: () => {}, err: () => {}, env: { GATE_APPROVED_BY: 'Jennifer McKinney 2026-09-29' } };
+        expect(await admin.main(['disable', 'npr', '--reason', 'takedown'], io)).toBe(0);
+        expect(await recordGateTransitions({ env: TEST_ENV })).toEqual([{ slug: 'npr', event: 'gate_closed', gate_status: 'disabled', approved_by: null }]);
+        const row = await db.dbGet(`SELECT reason, routes FROM source_gate_events WHERE slug = 'npr' AND event = 'gate_closed'`);
+        expect(row).toEqual({ reason: 'database kill switch (Jennifer McKinney 2026-09-29): takedown', routes: [] });
+        expect(await recordGateTransitions({ env: TEST_ENV })).toEqual([]);
+        expect(await admin.main(['enable', 'npr'], io)).toBe(0);
+        expect(await recordGateTransitions({ env: TEST_ENV })).toEqual([{ slug: 'npr', event: 'gate_opened', gate_status: 'collecting', approved_by: null }]);
+    });
+
+    // Grumpy L16: seed's upsert and its 'seeded_active' event are one transaction.
+    it('a failed seeded_active write rolls the upsert back', async () => {
+        const spy = jest.spyOn(governance, 'recordGateEvent').mockRejectedValueOnce(new Error('event insert failed'));
+        try {
+            await expect(seedSources({ actor: 'test-seed' })).rejects.toThrow(/event insert failed/);
+        } finally { spy.mockRestore(); }
+        expect(await db.dbGet(`SELECT COUNT(*)::int AS n FROM data_sources WHERE name = $1`, [SOURCES[0].slug])).toEqual({ n: 0 });
+        expect(await db.dbGet(`SELECT COUNT(*)::int AS n FROM source_gate_events`)).toEqual({ n: 0 });
+    });
+});
+
+// Principal #19: every change of the correlation DPIA gate is recorded.
+describe('correlation_gate_events', () => {
+    const rows = () => db.dbAll('SELECT status, enabled, dpia_ref, actor, approved_by, reason FROM correlation_gate_events ORDER BY occurred_at, id');
+
+    it('records the first observation and every change of status or DPIA reference, with who', async () => {
+        expect(await recordCorrelationGate({ env: {} })).toMatchObject({ status: 'awaiting_dpia', enabled: false, dpia_ref: null,
+            actor: 'worker scheduler (runtime env)', approved_by: null });
+        expect(await recordCorrelationGate({ env: {} })).toBeNull();
+        const approver = { GATE_APPROVED_BY: 'Jennifer McKinney 2026-09-29' };
+        expect(await recordCorrelationGate({ env: { ...approver, CORRELATION_DPIA_REF: 'DPIA-1' } }))
+            .toMatchObject({ status: 'disabled', dpia_ref: 'DPIA-1', actor: 'Jennifer McKinney 2026-09-29', approved_by: 'Jennifer McKinney 2026-09-29' });
+        expect(await recordCorrelationGate({ env: { ...approver, CORRELATION_DPIA_REF: 'DPIA-2' } })).toMatchObject({ status: 'disabled', dpia_ref: 'DPIA-2' });
+        const all = { ...approver, CORRELATION_DPIA_REF: 'DPIA-2', CORRELATION_ENABLED: 'true', CORRELATION_SALT: 'c4554f4f1956b970ee9140dc82f241cb' };
+        expect(await recordCorrelationGate({ env: all })).toMatchObject({ status: 'not_implemented', enabled: false,
+            reason: expect.stringMatching(/^not implemented: signal design pending DPIA/) });
+        expect(await recordCorrelationGate({ env: all })).toBeNull();
+        expect((await rows()).map(r => [r.status, r.dpia_ref])).toEqual([
+            ['awaiting_dpia', null], ['disabled', 'DPIA-1'], ['disabled', 'DPIA-2'], ['not_implemented', 'DPIA-2']]);
+    });
+
+    it('is append-only (migration 056 trigger)', async () => {
+        await recordCorrelationGate({ env: {} });
+        await expect(db.dbRun(`UPDATE correlation_gate_events SET actor = 'x'`)).rejects.toThrow(/append-only/);
+        await expect(db.dbRun(`DELETE FROM correlation_gate_events`)).rejects.toThrow(/append-only/);
     });
 });
 
@@ -103,6 +182,22 @@ describe('terms snapshots', () => {
         const alerts = await db.dbAll(`SELECT severity, details FROM alert_events WHERE alert_type = 'terms_changed' AND resolved_at IS NULL`);
         expect(alerts).toHaveLength(1);
         expect(alerts[0]).toMatchObject({ severity: 'warning', details: { slug: 'npr' } });
+    });
+
+    // Grumpy L16: a snapshot and the terms_changed alert it raises are one transaction.
+    it('a failed terms_changed alert rolls its snapshot back', async () => {
+        await seedSources({ actor: 'test-seed' });
+        const row = (text) => ({ slug: 'npr', terms_url: 'https://www.npr.org/t', status: 'fetched', sha256: 'h', http_status: 200,
+            bytes: 1, reason: null, terms_text: text, text_sha256: require('crypto').createHash('sha256').update(text).digest('hex'),
+            normaliser: 'terms-text@1' });
+        await saveTermsSnapshots([row('first terms')]);
+        const alerts = require('../../src/collectors/source-alerts');
+        const spy = jest.spyOn(alerts, 'openSourceAlert').mockRejectedValueOnce(new Error('alert insert failed'));
+        try {
+            await expect(saveTermsSnapshots([row('changed terms')])).rejects.toThrow(/alert insert failed/);
+        } finally { spy.mockRestore(); }
+        expect(await db.dbGet(`SELECT COUNT(*)::int AS n FROM source_terms_snapshots WHERE slug = 'npr'`)).toEqual({ n: 1 });
+        expect(await saveTermsSnapshots([row('changed terms')])).toEqual({ saved: 1, changed: ['npr'] });
     });
 
     it('terms:snapshot parses --only / --json strictly (--json is never a slug)', () => {

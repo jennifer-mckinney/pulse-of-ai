@@ -113,21 +113,42 @@ describe('the refused state (F10-5)', () => {
         const { summary, transport } = await collect([HN], fresh);
         expect(transport.calls).toHaveLength(1);
         expect(summary.sources[0].outcome).toBe('ok');
-        expect((await alertsOf('hacker_news'))[0].details.resolution).toMatch(/SOURCE_HACKER_NEWS_RESET/);
+        expect((await alertsOf('hacker_news'))[0].details.resolution).toMatch(/SOURCE_HACKER_NEWS_RESET\) approved by Test Operator 2026-09-29/);
+        // Security L6 / G5: the env reset is a recorded gate event, its actor the named approval.
+        expect(await db.dbAll(`SELECT event, actor, approved_by, reason FROM source_gate_events
+                               WHERE slug = 'hacker_news' AND event = 'refusal_reset'`)).toEqual([{
+            event: 'refusal_reset', actor: 'Test Operator 2026-09-29', approved_by: 'Test Operator 2026-09-29',
+            reason: `SOURCE_HACKER_NEWS_RESET=${fresh.SOURCE_HACKER_NEWS_RESET}` }]);
+    });
+
+    it('an env reset without a named approval (G5) leaves the refusal standing and records nothing', async () => {
+        await collect([DENIED]);
+        await nextPoll('hacker_news');
+        const { GATE_APPROVED_BY: _drop, ...unapproved } = TEST_ENV;
+        const env = { ...unapproved, SOURCE_HACKER_NEWS_RESET: new Date(Date.now() + 1000).toISOString() };
+        const { summary, transport } = await collect([HN], env);
+        expect(transport.calls).toHaveLength(0);
+        expect(summary.sources[0]).toMatchObject({ outcome: 'skipped', status: 'blocked_by_source',
+            reason: expect.stringMatching(/SOURCE_HACKER_NEWS_RESET is set but awaiting named approval/) });
+        expect((await stateOf('hacker_news')).refusal_count).toBe(1);
+        expect(await db.dbAll(`SELECT 1 FROM source_gate_events WHERE event = 'refusal_reset'`)).toEqual([]);
     });
 
     it('npm run source:reset clears the refused state (the DB flag) and resolves the alert with the note', async () => {
         await collect([DENIED]);
         const lines = [];
         expect(await adminMain(['reset', 'hacker_news', '--note', 'publisher allowlisted us'],
-            { db, out: l => lines.push(l), err: l => lines.push(l), who: 'tester' })).toBe(0);
+            { db, out: l => lines.push(l), err: l => lines.push(l), env: { GATE_APPROVED_BY: 'Tess Tester 2026-09-29' } })).toBe(0);
         expect(lines.join('\n')).toMatch(/refused state cleared/);
         expect((await stateOf('hacker_news')).access_denied_at).toBeNull();
-        expect((await alertsOf('hacker_news'))[0].details.resolution).toBe('manual reset by tester: publisher allowlisted us');
+        expect((await alertsOf('hacker_news'))[0].details.resolution).toBe('manual reset by Tess Tester 2026-09-29: publisher allowlisted us');
+        expect(await db.dbAll(`SELECT event, actor, approved_by, reason FROM source_gate_events WHERE event = 'refusal_reset'`))
+            .toEqual([{ event: 'refusal_reset', actor: 'Tess Tester 2026-09-29', approved_by: 'Tess Tester 2026-09-29',
+                reason: 'publisher allowlisted us' }]);
         await nextPoll('hacker_news');
         expect((await collect([HN])).transport.calls).toHaveLength(1);
         const errs = [];
-        expect(await adminMain(['reset'], { db, err: l => errs.push(l) })).toBe(2);
+        expect(await adminMain(['reset'], { db, err: l => errs.push(l), env: {} })).toBe(2);
         expect(await adminMain(['reset', 'nope'], { db, err: l => errs.push(l) })).toBe(2);
         expect(errs.join('\n')).toMatch(/usage[\s\S]*unknown source 'nope'/);
     });

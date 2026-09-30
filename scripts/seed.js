@@ -5,9 +5,9 @@
 //      (src/config/source-registry.js — the workbook, ADR 0001). The old
 //      50-row seed list is gone; migration 013 retired its rows (history kept).
 //   2. methodology_versions — every row of src/config/methodology-registry.js
-//      (shared with migrations 009, 011, 012, 014, 015, 017, 024, 026, 027, 028, 029, 031, 032 and 042). The current
+//      (shared with migrations 009, 011, 012, 014, 015, 017, 024, 026, 027, 028, 029, 031, 032, 042 and 055). The current
 //      (latest registered) version of each component: sentiment 1.0.0,
-//      relevance 1.2.0, discourse 1.1.0-DQI, bias 1.4.0, ingest 1.6.0,
+//      relevance 1.2.0, discourse 1.1.0-DQI, bias 1.4.0, ingest 1.7.0,
 //      audit_narration 1.3.0, embedding 1.0.0, admission_filter 1.0.0; every earlier released row
 //      of a component is inserted too and never edited.
 // Safe to re-run. Registry rows are UPSERTED (name = slug): display name,
@@ -21,7 +21,7 @@
 'use strict';
 
 require('dotenv').config();
-const { dbRun, dbGet, closePool } = require('../src/db/connection');
+const { dbRun, dbTransaction, closePool } = require('../src/db/connection');
 const { SOURCES } = require('../src/config/source-registry');
 const { METHODOLOGY_VERSIONS, METHODOLOGY_ERRATA } = require('../src/config/methodology-registry');
 
@@ -49,29 +49,32 @@ async function seedSources({ actor = `scripts/seed.js (${process.env.USER || 'op
     for (const s of SOURCES) {
         // P10-14: seed never activates a row silently — a new row, or a
         // retired / inactive one it switches back on, gets a
-        // source_gate_events 'seeded_active' row (who and when).
-        const prior = await dbGet('SELECT active FROM data_sources WHERE name = $1', [s.slug]);
-        const row = await dbRun(
-            `INSERT INTO data_sources (name, display_name, source_type, category, config, active)
-             VALUES ($1, $2, $3, $4, $5::jsonb, TRUE)
-             ON CONFLICT (name) DO UPDATE
-                SET display_name = EXCLUDED.display_name,
-                    source_type  = EXCLUDED.source_type,
-                    category     = EXCLUDED.category,
-                    config       = EXCLUDED.config,
-                    active       = TRUE,
-                    retired_at   = NULL,
-                    retired_note = NULL
-             RETURNING id`,
-            [s.slug, s.name, s.sourceType, s.category, JSON.stringify(sourceConfig(s))],
-        );
-        if (!prior || prior.active !== true) {
-            const id = row && row.id ? row.id : (await dbGet('SELECT id FROM data_sources WHERE name = $1', [s.slug])).id;
-            await recordGateEvent({
-                sourceId: id, slug: s.slug, event: 'seeded_active', actor,
-                reason: prior ? 'registry row re-activated by seed (was inactive or retired)' : 'registry row created by seed',
-            });
-        }
+        // source_gate_events 'seeded_active' row (who and when), written in
+        // the same transaction as the upsert (PR #22 grumpy L16).
+        await dbTransaction(async (client) => {
+            const prior = (await client.query('SELECT active FROM data_sources WHERE name = $1 FOR UPDATE', [s.slug])).rows[0];
+            const row = (await client.query(
+                `INSERT INTO data_sources (name, display_name, source_type, category, config, active)
+                 VALUES ($1, $2, $3, $4, $5::jsonb, TRUE)
+                 ON CONFLICT (name) DO UPDATE
+                    SET display_name = EXCLUDED.display_name,
+                        source_type  = EXCLUDED.source_type,
+                        category     = EXCLUDED.category,
+                        config       = EXCLUDED.config,
+                        active       = TRUE,
+                        retired_at   = NULL,
+                        retired_note = NULL
+                 RETURNING id`,
+                [s.slug, s.name, s.sourceType, s.category, JSON.stringify(sourceConfig(s))],
+            )).rows[0];
+            if (!prior || prior.active !== true) {
+                // RETURNING id always returns a row, on insert and on update.
+                await recordGateEvent({
+                    sourceId: row.id, slug: s.slug, event: 'seeded_active', actor, client,
+                    reason: prior ? 'registry row re-activated by seed (was inactive or retired)' : 'registry row created by seed',
+                });
+            }
+        });
         n++;
     }
     return n;
@@ -116,8 +119,9 @@ async function seedErrata() {
 async function main() {
     const sources = await seedSources();
     const methods = await seedMethodology();
-    await seedErrata();
-    console.log(`✓ Seed complete: ${sources} registry data_sources upserted, ${methods} methodology_versions inserted.`);
+    const errata = await seedErrata();
+    console.log(`✓ Seed complete: ${sources} registry data_sources upserted, ${methods} methodology_versions inserted, `
+        + `${errata} methodology_errata inserted.`);
 }
 
 /* istanbul ignore next -- process entry point */

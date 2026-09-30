@@ -8,32 +8,26 @@
 //   - Pseudonymous IDs use an adjective-animal format ('balanced-impala') drawn from
 //     unique-names-generator (1,202 × 355 = 426,710 combinations) — human-readable
 //     but unlinked to any real identity
-//   - Correlation requires >= CORRELATION_MIN_CONFIDENCE (0.85) to create a profile
+//   - NOT IMPLEMENTED (PR #22 grumpy M7): no identity signal exists on
+//     identity-free data, and its design needs the DPIA (spec §20). The
+//     gate (src/pipeline/correlation-gate.js) reports 'not_implemented' and
+//     correlateUser throws; no profile is ever created.
 //
 // Entry points:
 //   generatePseudoId(seed)                    — deterministic adjective-animal from seed
-//   computeSignalHash(signals, salt)          — SHA-256 of behavioral signals
-//   correlateUser({ sourceId, signalHash,     — find/create pseudonymous user
-//                   topicAffinity, confidence})
+//   computeSignalHash(signals, salt)          — keyed HMAC-SHA256 of signals
+//   correlateUser()                           — throws CorrelationNotImplementedError
 //
 // See: src/db/migrations/006_correlation_tables.sql
 
 'use strict';
 
-const { isUsableSalt } = require('./correlation-gate');
+const { isUsableSalt, NOT_IMPLEMENTED_REASON } = require('./correlation-gate');
 
 const crypto = require('crypto');
 const { adjectives, animals, uniqueNamesGenerator } = require('unique-names-generator');
-const { dbGet, dbRun } = require('../db/connection');
 
 // ─── Constants ─────────────────────────────────────────────────────────────────
-
-/**
- * Minimum confidence before a pseudonymous profile is created.
- * Below this value, correlateUser() returns null.
- * Threshold is 0.85 per the technical specification §20.
- */
-const CORRELATION_MIN_CONFIDENCE = 0.85;
 
 // unique-names-generator provides curated, library-maintained word pools.
 // adjectives (1,202 words) × animals (355 words) = 426,710 combinations.
@@ -86,88 +80,33 @@ function computeSignalHash(signals, salt) {
 
 // ─── correlateUser ────────────────────────────────────────────────────────────
 
+/** Thrown by correlateUser: no identity signal is designed or implemented. */
+class CorrelationNotImplementedError extends Error {
+    constructor() {
+        super(NOT_IMPLEMENTED_REASON);
+        this.name = 'CorrelationNotImplementedError';
+        this.code = 'CORRELATION_NOT_IMPLEMENTED';
+    }
+}
+
 /**
- * Find or create a pseudonymous user profile for the given correlation signals.
- * Returns null if confidence is below the minimum threshold.
- *
- * On first sighting:  creates pseudonymous_users + user_platform_sightings rows.
- * On repeat sighting: updates platform_count + last_sighted_at, adds sighting row.
- *
- * @param {{
- *   sourceId:       string,   UUID of data_sources row
- *   signalHash:     string,   SHA-256 of behavioral signals (from computeSignalHash)
- *   topicAffinity:  string[], Top topic categories (stored for audit)
- *   confidence:     number,   0.0–1.0 correlation confidence score
- * }} params
- * @returns {Promise<{
- *   pseudoUserId: string,
- *   pseudoId:     string,
- *   isNew:        boolean
- * } | null>}
+ * Cross-platform correlation is NOT IMPLEMENTED (PR #22 grumpy M7): the only
+ * signal identity-free data offers (a post's topics plus its posting hour)
+ * is not an identity signal, and designing one needs the DPIA (spec §20).
+ * The former body created profiles from post-level signals with confidence
+ * 0 — a no-op that pretended to be a pipeline stage, and a mis-linking
+ * hazard if the threshold were ever lowered. It is removed: this always
+ * throws, so no pseudonymous_users / user_platform_sightings row can be
+ * written from a non-identity signal. A DPIA-approved design replaces it.
+ * @returns {Promise<never>}
  */
-async function correlateUser({ sourceId, signalHash, topicAffinity = [], confidence }) {
-    // Reject low-confidence correlations before any DB write
-    if (confidence < CORRELATION_MIN_CONFIDENCE) {
-        return null;
-    }
-
-    // Derive pseudo_id deterministically from signal hash + deployment salt
-    // Spec §20: salted per deployment — never a default salt.
-    const salt    = process.env.CORRELATION_SALT;
-    if (!isUsableSalt(salt)) {
-        throw new Error('CORRELATION_SALT is unset or a placeholder: no pseudonym is computed without the per-deployment salt (spec §20)');
-    }
-    const pseudoId = generatePseudoId(signalHash + salt);
-
-    // Check if this pseudo_id already exists (same behavioral fingerprint)
-    const existing = await dbGet(
-        'SELECT id FROM pseudonymous_users WHERE pseudo_id = $1',
-        [pseudoId],
-    );
-
-    if (existing) {
-        // Existing profile — update stats and add sighting record
-        await dbRun(
-            `UPDATE pseudonymous_users
-             SET last_sighted_at        = NOW(),
-                 platform_count         = platform_count + 1,
-                 correlation_confidence = GREATEST(correlation_confidence, $1)
-             WHERE id = $2`,
-            [confidence, existing.id],
-        );
-
-        await dbRun(
-            `INSERT INTO user_platform_sightings
-                (pseudo_user_id, source_id, signal_hash, confidence)
-             VALUES ($1, $2, $3, $4)`,
-            [existing.id, sourceId, signalHash, confidence],
-        );
-
-        return { pseudoUserId: existing.id, pseudoId, isNew: false };
-    }
-
-    // New profile — create pseudonymous user and first sighting
-    const newUser = await dbRun(
-        `INSERT INTO pseudonymous_users
-            (pseudo_id, topic_affinity, platform_count, correlation_confidence)
-         VALUES ($1, $2, 1, $3)
-         RETURNING id`,
-        [pseudoId, topicAffinity, confidence],
-    );
-
-    await dbRun(
-        `INSERT INTO user_platform_sightings
-            (pseudo_user_id, source_id, signal_hash, confidence)
-         VALUES ($1, $2, $3, $4)`,
-        [newUser.id, sourceId, signalHash, confidence],
-    );
-
-    return { pseudoUserId: newUser.id, pseudoId, isNew: true };
+async function correlateUser() {
+    throw new CorrelationNotImplementedError();
 }
 
 module.exports = {
     generatePseudoId,
     computeSignalHash,
     correlateUser,
-    CORRELATION_MIN_CONFIDENCE,
+    CorrelationNotImplementedError,
 };

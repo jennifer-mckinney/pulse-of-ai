@@ -78,7 +78,7 @@ describe('migration 036', () => {
             alert_resolutions: res,
             alert_resolution_approvals: (await dbRun(`INSERT INTO alert_resolution_approvals (resolution_id, kind, approved_by, ruling_date, ruling)
                 VALUES ($1, 'resolved', 't', '2026-09-29', 't') RETURNING id`, [res])).id,
-            source_gate_events: (await dbRun(`INSERT INTO source_gate_events (source_id, slug, event, actor) VALUES ($1, 'm036-ao', 'enabled', 't') RETURNING id`, [src])).id,
+            source_gate_events: (await dbRun(`INSERT INTO source_gate_events (source_id, slug, event, actor) VALUES ($1, 'm036-ao', 'gate_opened', 't') RETURNING id`, [src])).id,
             source_terms_snapshots: (await dbRun(`INSERT INTO source_terms_snapshots (slug, terms_url, status) VALUES ('m036-ao', 'https://x', 'not_fetched') RETURNING id`)).id,
             methodology_errata: (await dbRun(`INSERT INTO methodology_errata (methodology_version_id, erratum_key, erratum) VALUES ($1, $2, 't') RETURNING id`, [mv, `k-${Date.now()}`])).id,
         };

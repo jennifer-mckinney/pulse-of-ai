@@ -19,15 +19,17 @@ const { dbRun, dbTransaction } = require('../db/connection');
 const OPEN_CONFLICT = `ON CONFLICT (alert_type, source_id)
     WHERE resolved_at IS NULL AND source_table = 'data_sources' AND source_id IS NOT NULL DO NOTHING`;
 
-/** @returns {Promise<string|null>} the new alert id, or null when one was already open */
-async function openSourceAlert(type, severity, sourceId, details) {
-    const row = await dbRun(
-        `INSERT INTO alert_events (alert_type, severity, source_table, source_id, details)
+/**
+ * @param {import('pg').PoolClient} [client]  write in the caller's transaction (PR #22 L16)
+ * @returns {Promise<string|null>} the new alert id, or null when one was already open
+ */
+async function openSourceAlert(type, severity, sourceId, details, client = null) {
+    const sql = `INSERT INTO alert_events (alert_type, severity, source_table, source_id, details)
          VALUES ($1, $2, 'data_sources', $3::uuid, $4::jsonb)
          ${OPEN_CONFLICT}
-         RETURNING id`,
-        [type, severity, sourceId, JSON.stringify(details || {})],
-    );
+         RETURNING id`;
+    const params = [type, severity, sourceId, JSON.stringify(details || {})];
+    const row = client ? (await client.query(sql, params)).rows[0] : await dbRun(sql, params);
     return row ? row.id : null;
 }
 
@@ -35,10 +37,12 @@ async function openSourceAlert(type, severity, sourceId, details) {
  * @param {string} type
  * @param {string} sourceId
  * @param {{ resolvedBy: string, resolution: string, basis?: object }} o
+ * @param {import('pg').PoolClient} [outer]  run in the caller's transaction
  * @returns {Promise<string[]>} ids of the alerts resolved
  */
-async function resolveSourceAlert(type, sourceId, { resolvedBy, resolution, basis = {} }) {
-    return dbTransaction(async (client) => {
+async function resolveSourceAlert(type, sourceId, { resolvedBy, resolution, basis = {} }, outer = null) {
+    const inTx = (fn) => (outer ? fn(outer) : dbTransaction(fn));
+    return inTx(async (client) => {
         const ids = (await client.query(
             `UPDATE alert_events
              SET resolved_at = NOW(),

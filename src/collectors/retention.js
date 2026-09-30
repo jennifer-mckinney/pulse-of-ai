@@ -5,11 +5,13 @@
 // Every real (non-demo) source has a window after which a post's TEXT is
 // removed (src/config/source-registry.js retentionHours):
 //   - platform terms (`retention` block): Reddit 48 h (ruling 9, Jennifer:
-//     "Blank text, keep audit rows"), the Guardian 24 h (its terms §5),
-//     YouTube and TikTok 30 days. For the Guardian, YouTube and TikTok the
-//     ruling-9 mechanism is applied BY ANALOGY, for consistency — recorded in
-//     the ADR and flagged for Jennifer's confirmation;
+//     "Blank text, keep audit rows"), YouTube and TikTok 30 days. For
+//     YouTube and TikTok the ruling-9 mechanism is applied BY ANALOGY, for
+//     consistency — recorded in the ADR;
 //   - otherwise the spec §19 detail window, RETENTION_DETAIL_DAYS (90) days.
+//     The Guardian is here since Jennifer's ruling of 2026-09-29, verbatim
+//     "Use normal retention" (its former 24 h blanking by analogy is gone;
+//     the registry's `retentionRuling` keeps the ruling and the old window).
 // Reddit posts are also blanked as soon as the 6-hourly re-check sees them
 // deleted upstream (src/collectors/reddit/recheck.js → blankPosts).
 //
@@ -25,6 +27,10 @@
 //         the original URL can still prove the match: npm run
 //         verify-provenance), the content hash, and every score and
 //         decision_audit_log row.
+//   DROP  for a platform-terms source, the post's post_embeddings row, in
+//         the same transaction (PR #22 decision G3, Jennifer 2026-09-29:
+//         the embedding is derived from the text). The §19 detail window
+//         leaves embeddings to monthly compaction (scripts/compact.js).
 //   LOG   one data_retention_log row per batch that changed rows, listing
 //         the post ids ACTUALLY changed (RETURNING), never a claim about rows
 //         that were not touched: action 'blanked_platform_terms' (platform
@@ -52,8 +58,12 @@ const DETAIL_ACTION = 'text_removed_detail_window';
 // Reddit's notice (ruling 9); every retention source carries its own.
 const REMOVAL_NOTICE = '[removed: Reddit Data API Terms retention]';
 const DETAIL_NOTICE = '[removed: detail retention window (spec §19)]';
-const RETAINED_NOTE = 'Audit and score rows (decision_audit_log, sentiment/relevance/discourse results, embeddings) '
-    + 'are retained by owner decision: ADR 0001 ruling 9, Jennifer 2026-09-29, "Blank text, keep audit rows".';
+// PR #22 decision G3 (Jennifer, 2026-09-29): the post's embedding
+// (post_embeddings) is derived from its text, so it is DELETED in the same
+// transaction as platform-terms blanking; scores and audit rows stay.
+const RETAINED_NOTE = 'Audit and score rows (decision_audit_log, sentiment/relevance/discourse results) '
+    + 'are retained by owner decision: ADR 0001 ruling 9, Jennifer 2026-09-29, "Blank text, keep audit rows". '
+    + 'The post embedding (derived from the text) is deleted with the text: PR #22 decision G3, Jennifer 2026-09-29.';
 const DETAIL_LEGAL_BASIS = 'GDPR Article 5(1)(e) - Storage Limitation: post text is kept for the detail window '
     + '(TECHNICAL_SPEC §19) and then removed; scores, audit rows and monthly rollups remain.';
 const DEFAULT_BATCH = 500;
@@ -112,6 +122,15 @@ async function removeTextBatch(client, slug, postIds, { reason, rule, performedB
         [slug, DEMO_SOURCE_TYPE, postIds, notice, reason, keepUrl, [...PAYLOAD_TEXT_KEYS]],
     );
     const ids = res.rows.map(r => r.id);
+    // G3: a platform-terms source's embeddings go with the text, in this
+    // transaction (the embed writer takes FOR SHARE on the post row, so an
+    // embedding computed concurrently is either deleted here or never
+    // written — src/pipeline/embeddings.js saveEmbeddingIfTextStored).
+    let embeddingsDeleted = 0;
+    if (ids.length && platform) {
+        embeddingsDeleted = (await client.query(
+            'DELETE FROM post_embeddings WHERE raw_post_id = ANY($1::uuid[])', [ids])).rowCount;
+    }
     if (ids.length) {
         const name = src ? src.name : slug;
         const legal = platform ? `${src.retention.legalBasis} ${RETAINED_NOTE}` : DETAIL_LEGAL_BASIS;
@@ -122,6 +141,7 @@ async function removeTextBatch(client, slug, postIds, { reason, rule, performedB
                 summary: `Text of ${ids.length} ${name} post(s) replaced by the removal notice.`,
                 source: slug, rule, reason, post_ids: ids,
                 retained: platform ? RETAINED_NOTE : 'Scores, audit rows and monthly rollups are retained (spec §19).',
+                ...(platform ? { embeddings_deleted: embeddingsDeleted } : {}),
                 ...(platform && src.retention.byAnalogy ? { applied_by_analogy: src.retention.byAnalogy } : {}),
             }), legal, performedBy],
         );
@@ -211,6 +231,21 @@ async function postsWithText(slug) {
 function retentionStatus(slug, { collectedAt, textRemovedAt, textRemovedReason }) {
     const src = getSource(slug);
     const platform = src && src.retention;
+    // A post blanked under a platform window that a later ruling removed
+    // (the Guardian's 24 h, before "Use normal retention") says so, rather
+    // than claiming the §19 window it never reached.
+    const former = !platform && src && src.retentionRuling && src.retentionRuling.former;
+    if (textRemovedAt && former && textRemovedReason === `${former.maxAgeHours}-hour retention window ended`) {
+        const r = src.retentionRuling;
+        return {
+            status: 'text_removed',
+            removed_at: textRemovedAt,
+            reason: textRemovedReason,
+            notice: `Text removed after ${former.maxAgeHours} hours under the window then in force (${former.basis}). `
+                + `That window was withdrawn by ${r.by}'s ruling of ${r.date}, "${r.verbatim}"; later posts follow the `
+                + 'detail retention window. Scores and audit rows are retained.',
+        };
+    }
     if (textRemovedAt) {
         return {
             status: 'text_removed',

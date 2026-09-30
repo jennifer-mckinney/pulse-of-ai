@@ -112,11 +112,12 @@ STACK_SECRET_KEYS=(POSTGRES_PASSWORD REDIS_PASSWORD AUDIT_HASH_KEY CORRELATION_S
 # Temp file of an env file being created (removed on any exit — F9-4).
 STACK_ENV_TMP=''
 # Operator decisions (ADR 0001 D1 "Off for others, on for you"): the
-# collector contact URL and the permission-gated feeds' acknowledgement.
+# collector contact URL, the permission-gated feeds' acknowledgement and
+# the named gate approval (PR #22 decision G5).
 # They ship EMPTY in .env.example and are NEVER appended to an existing env
 # file by the merge path — only the operator sets them (by hand, or through
 # the interactive prompt in collector_operator_setup).
-STACK_OPERATOR_KEYS=(COLLECTOR_CONTACT_URL PERMISSION_GATED_FEEDS_ACCEPTED_BY)
+STACK_OPERATOR_KEYS=(COLLECTOR_CONTACT_URL PERMISSION_GATED_FEEDS_ACCEPTED_BY GATE_APPROVED_BY)
 
 # 64 hex chars (256 bits) on stdout; non-zero exit when no source works.
 gen_secret() {
@@ -323,10 +324,21 @@ collector_operator_setup() {
             warn "expected '<name> <YYYY-MM-DD>' — try again, or press Enter to keep the feeds closed"
         done
     fi
+    # PR #22 decision G5: every gated source (key, approval, licence or
+    # permission — the 8 feeds above included) opens only under a named
+    # approval in GATE_APPROVED_BY. Set by hand; never prompted or defaulted.
+    local approved
+    approved=$(effective GATE_APPROVED_BY)
     if [[ -z "$ack" ]]; then
         info "the 8 permission-gated news feeds stay closed (PERMISSION_GATED_FEEDS_ACCEPTED_BY is not set)"
+    elif [[ -z "$approved" ]]; then
+        info "the 8 permission-gated news feeds stay closed: awaiting named approval (GATE_APPROVED_BY is not set)"
     else
-        ok "permission-gated news feeds open (acknowledgement recorded)"
+        ok "permission-gated news feeds open (acknowledgement and named approval recorded)"
+    fi
+    if [[ -z "$approved" ]]; then
+        info "every gated source (key, approval, licence or permission) stays closed until GATE_APPROVED_BY"
+        info "names who approved opening it, as '<name> <YYYY-MM-DD>', in $STACK_ENV_FILE (PR #22 decision G5)"
     fi
 }
 

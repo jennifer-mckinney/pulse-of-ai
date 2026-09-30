@@ -42,7 +42,7 @@
 
 'use strict';
 
-const { dbGet, dbAll, dbRun } = require('../db/connection');
+const { dbGet, dbAll, dbRun, dbTransaction } = require('../db/connection');
 const { SOURCES, getSource, sourceStatus, pollIntervalSec, collectWindowMs } = require('../config/source-registry');
 const { buildCollectors } = require('./index');
 const { HttpClient } = require('./http');
@@ -193,8 +193,19 @@ async function runCollection(o = {}) {
             const gate = refusalGate(refusal, slug, env, Date.now());
             if (gate.state === 'cooldown') { row.status = BLOCKED_BY_SOURCE; row.reason = gate.reason; continue; }
             if (gate.state === 'reset') {
-                await state.clearRefusal(sourceId, `manual reset (${resetEnv(slug)})`);
-                log(`[collect] ${slug}: refusal cleared by ${resetEnv(slug)}`);
+                // G5 / security L6 / grumpy L16: the reset and its
+                // 'refusal_reset' gate event (actor = the named approval) are
+                // written in one transaction.
+                const { namedApproval } = require('../config/source-registry');
+                const approvedBy = namedApproval(env).value;
+                await dbTransaction(async (client) => {
+                    await state.clearRefusal(sourceId, `manual reset (${resetEnv(slug)}) approved by ${approvedBy}`, { client });
+                    await require('./governance').recordGateEvent({
+                        sourceId, slug, event: 'refusal_reset', actor: approvedBy, approvedBy, client,
+                        reason: `${resetEnv(slug)}=${String(env[resetEnv(slug)]).trim()}`,
+                    });
+                });
+                log(`[collect] ${slug}: refusal cleared by ${resetEnv(slug)} (approved by ${approvedBy})`);
             }
 
             const claimed = await state.claim(sourceId, pollIntervalSec(src, env), o.cycle ? o.cycle.windowMs : collectWindowMs(env));

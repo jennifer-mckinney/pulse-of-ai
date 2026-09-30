@@ -538,6 +538,47 @@ const METHODOLOGY_VERSIONS = [
     });
 })();
 
+// ingest@1.7.0 — PR #22 owner decisions of 2026-09-29 (migration 055):
+// GUARDIAN, Jennifer verbatim "Use normal retention" (the Guardian's 24 h
+// blanking by analogy is withdrawn; it takes the §19 detail window), and G3
+// (a platform-terms blanking deletes the post's embedding in the same
+// transaction). Otherwise ingest@1.6.0 unchanged.
+(() => {
+    const prev = METHODOLOGY_VERSIONS.find(m => m.component === 'ingest' && m.version === '1.6.0');
+    METHODOLOGY_VERSIONS.push({
+        component: 'ingest',
+        version: '1.7.0',
+        model_name: prev.model_name,
+        config: {
+            ...prev.config,
+            text_retention: {
+                rule: 'after its source\'s window the text is replaced by a removal notice (raw_posts.text_removed_at); scores and '
+                    + 'audit rows are kept (ADR 0001 ruling 9, "Blank text, keep audit rows"); for a platform-terms window the '
+                    + 'post\'s embedding (post_embeddings) is deleted in the same transaction (PR #22 decision G3)',
+                // Must equal the registry's platform windows (source-registry.js retention blocks)
+                platform_terms_hours: { reddit: 48, youtube: 720, tiktok: 720 },
+                default: 'RETENTION_DETAIL_DAYS (90) days, TECHNICAL_SPEC §19',
+                applied_by_analogy: ['youtube', 'tiktok'],
+                embeddings_on_platform_blanking: 'deleted with the text (PR #22 decision G3, Jennifer McKinney 2026-09-29)',
+                rulings: {
+                    guardian: 'Jennifer McKinney, 2026-09-29, verbatim "Use normal retention": the Guardian takes the default §19 '
+                        + 'detail window; its 24-hour blanking by analogy (ingest@1.6.0) is withdrawn',
+                    g3: 'Jennifer McKinney, 2026-09-29: delete the embeddings when the text is blanked, for any source under '
+                        + 'platform-terms blanking; scores and audit rows stay (ruling 9)',
+                },
+            },
+        },
+        justification: 'ingest@1.7.0 records two owner decisions of 2026-09-29 from the PR #22 review. First, the Guardian: '
+            + 'Jennifer ruled, verbatim, "Use normal retention", so the 24-hour blanking that ingest@1.6.0 applied to the Guardian '
+            + 'by analogy with ruling 9 is withdrawn and Guardian text follows the §19 detail window (90 days) like every source '
+            + 'without a platform-terms window; posts already blanked under the old window stay blanked and their receipts say '
+            + 'so. Second, decision G3: when a platform-terms window (Reddit 48 hours, YouTube and TikTok 30 days) or an upstream '
+            + 'deletion blanks a post\'s text, the post\'s embedding is deleted in the same transaction, because it is derived '
+            + 'from the text; the scores, audit rows, content hash and provenance fingerprint are still kept (ruling 9). The '
+            + 'detail window leaves embeddings to monthly compaction. Everything else is as in ingest@1.6.0.',
+    });
+})();
+
 // bias@1.4.0 — Jennifer's live site (2026-09-29): parity and negative
 // dominance alerts from tiny per-category samples in 2–3 minute cycles. A
 // minimum sample for EVERY check (migration 032). Otherwise bias@1.3.0.

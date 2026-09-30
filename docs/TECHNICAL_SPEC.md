@@ -289,8 +289,9 @@ data_sources.id ─────────────────────�
 | `maintenance_state` | 039 | Last run, last success and last error per maintenance task (`/api/health`) |
 | `processing_jobs.last_progress_at` | 040 | Progress heartbeat of one-shot jobs (the stale-job sweeper uses it, not age) |
 | `raw_posts.admission_mv_id` | 042 | The admission-filter version a post was stored under |
+| `source_gate_events.approved_by`, `routes`, event `refusal_reset`; `correlation_gate_events` | 056 | Decision G5: the named approval (`GATE_APPROVED_BY`, "Name YYYY-MM-DD") behind each gate opening and operator change (a CHECK requires it as the actor of `enabled` / `disabled` / `refusal_reset`); every change of the correlation DPIA gate (principal #19) |
 
-`alert_resolutions`, `alert_resolution_approvals`, `source_gate_events`, `source_terms_snapshots` and `methodology_errata` are append-only: a trigger rejects UPDATE and DELETE (migration 036). Migrations are numbered uniquely and applied in file-name order; gaps in the numbering are allowed.
+`alert_resolutions`, `alert_resolution_approvals`, `source_gate_events`, `correlation_gate_events`, `source_terms_snapshots` and `methodology_errata` are append-only: a trigger rejects UPDATE and DELETE (migrations 036 and 056). Migrations are numbered uniquely and applied in file-name order; gaps in the numbering are allowed.
 
 ### Migration 001 — Core Schema (`src/db/migrations/001_core_schema.sql`)
 
@@ -1539,7 +1540,8 @@ TIER 3: Permanent Archival (automatic — no expiry)
           included — ADR 0001 decision G4), bias_assessments
           (aggregates), alert_events, alert_resolutions,
           alert_resolution_approvals, source_gate_events,
-          source_terms_snapshots, source_run_daily
+          correlation_gate_events, source_terms_snapshots,
+          source_run_daily
   Granularity: Run-level and methodology-level
   Purpose: Audit compliance, reproducibility, GDPR accountability
   Access: GET /api/methodology, GET /api/audit/:post_id (audit skeleton)
@@ -1634,7 +1636,7 @@ Runs in the daily maintenance task (and by hand, `npm run compact`). Compacts ev
 - `post_embeddings` (large, re-computable if needed)
 - the post text: `raw_posts.content` (NOT NULL) is replaced by a removal notice and `text_removed_at` is set (P10-2)
 
-**Text windows (P10-2, ingest@1.6.0).** The text is stored once, in `raw_posts.content`. The worker's repeatable `maintenance` job removes it when its source's window ends: Reddit 48 h, the Guardian 24 h, YouTube and TikTok 30 days (their terms), every other source `RETENTION_DETAIL_DAYS` (90). Each batch writes one `data_retention_log` row listing the post ids it changed; every stored post has a `collected` row.
+**Text windows (P10-2, ingest@1.6.0).** The text is stored once, in `raw_posts.content`. The worker's repeatable `maintenance` job removes it when its source's window ends: Reddit 48 h, YouTube and TikTok 30 days (their terms), every other source `RETENTION_DETAIL_DAYS` (90) — the Guardian included (Jennifer, 2026-09-29: "Use normal retention"; ingest@1.7.0). A platform-terms blanking also deletes the post's embedding in the same transaction (PR #22 decision G3); scores and audit rows stay. Each batch writes one `data_retention_log` row listing the post ids it changed; every stored post has a `collected` row.
 
 **Demo data at the retention boundary (P9-3).** Posts whose source has
 `data_sources.source_type = 'demo'` (the fictional standup population from
@@ -1682,7 +1684,7 @@ When `POST /api/query` date range falls partly outside the detail window:
 
 ### DPIA gate (PR #22)
 
-Correlation is wired but OFF until a completed DPIA is recorded. `src/pipeline/correlation-gate.js` enables it only when `CORRELATION_DPIA_REF` names the completed DPIA, `CORRELATION_ENABLED=true`, and `CORRELATION_SALT` is a usable per-deployment salt (not empty, not a placeholder such as the `.env.example` value). Otherwise no correlate job is queued, the correlate worker refuses work, and `GET /api/health` reports `correlation: { enabled: false, status, reason }`. While the gate is closed the worker's connection pool does not budget for correlate jobs.
+> **Implementation status: not implemented — signal design pending DPIA (PR #22 grumpy M7).** Collectors store no author (ADR 0001 D2), so the only signal on identity-free data is post-level (a post's topics plus its posting hour), which is not an identity signal. `src/pipeline/correlation-gate.js` reports `awaiting_dpia` (no `CORRELATION_DPIA_REF`), `disabled` (`CORRELATION_ENABLED` is not true), `misconfigured` (`CORRELATION_SALT` empty or a placeholder such as the `.env.example` value) or, with every switch set, `not_implemented`; it never reports `enabled`. Nothing enqueues correlate jobs, the correlate worker refuses any job, and `correlateUser` throws, so no `pseudonymous_users` row can be written. `GET /api/health` reports `correlation: { enabled: false, status, reason }`, and while the gate is closed the worker's connection pool does not budget for correlate jobs. Every change of the gate's status or DPIA reference is recorded in the append-only `correlation_gate_events` table (migration 056; principal #19), with who: the named approval in `GATE_APPROVED_BY` when set (decision G5). The design below is the target a DPIA must approve before any of it is built.
 
 ### Design Principles
 

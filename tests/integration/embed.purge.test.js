@@ -172,6 +172,36 @@ describe('embed job for a post whose text retention removed', () => {
         expect(await embeddingCount(postId)).toBe(0);
     });
 
+    // PR #22 G3: platform-terms blanking deletes embeddings in its own
+    // transaction. A blanking that is OPEN (row locked, not committed) while
+    // the vector insert runs must not leave a vector behind: the insert takes
+    // FOR SHARE on the post, waits for the commit, then re-checks and skips.
+    it('a platform-terms blanking open during the vector insert: the insert waits and stores nothing (G3)', async () => {
+        const redditSrc = await insertSource('reddit', 'forums');
+        const postId = await insertPostWithFullPipeline(redditSrc, job, mv, { externalId: 'data-api:t3_race' });
+        let release;
+        let blankTx;
+        mockEmbeddingService(async () => {
+            let blanked;
+            const blankedP = new Promise((r) => { blanked = r; });
+            blankTx = dbTransaction(async (client) => {
+                await removeTextBatch(client, 'reddit', [postId], {
+                    reason: '48-hour retention window ended', rule: '48-hour retention',
+                    performedBy: 'tests/integration/embed.purge.test.js', platform: true,
+                });
+                blanked();
+                await new Promise((r) => { release = r; });
+            });
+            await blankedP;
+            setTimeout(() => release(), 300);
+        });
+
+        const result = await embedPost(postId);
+        await blankTx;
+        expect(result).toMatchObject({ postId, skipped: true, reason: 'text_removed' });
+        expect(await embeddingCount(postId)).toBe(0);
+    });
+
     it('a post with its text stored is still embedded', async () => {
         const postId = await insertPostWithFullPipeline(liveSrc, job, mv, { externalId: 'live-ok' });
         mockEmbeddingService();
