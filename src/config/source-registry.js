@@ -1258,11 +1258,14 @@ function pollIntervalSec(src, env = process.env) {
 
 // D4 band: every cadence is 2–3 minutes, except the routes whose DOCUMENTED
 // quota cannot be met even at 180 s (reported to Jennifer, ADR 0001 D4).
+// Used by quotaAudit, a test-time audit (see there).
 const CADENCE_BAND_SEC = Object.freeze({ min: 120, max: 180 });
 
 /**
  * The quota audit for one route: runs/day at its cadence against its
- * documented caps. @returns {null | { route, intervalSec, runsPerDay,
+ * documented caps. A TEST-TIME audit (PR #22 grumpy NIT 18): the D4 cadence
+ * decision is enforced by tests/unit/pure/sourceRegistry.test.js running it
+ * over every route (with CADENCE_BAND_SEC); nothing at runtime serves it. @returns {null | { route, intervalSec, runsPerDay,
  * requestsPerDay, perDay, fitsQuota, inBand, minIntervalSec, note }}
  */
 function quotaAudit(src, route, env = {}) {
