@@ -172,3 +172,18 @@ describe('GET /api/health — redis and worker (P9-7)', () => {
         expect(res.body.redis).toEqual({ reachable: false });
     });
 });
+
+describe('GET /api/health — correlation DPIA gate (spec §20)', () => {
+    it('states that correlation is off until a DPIA is recorded', async () => {
+        const prior = { ...process.env };
+        delete process.env.CORRELATION_DPIA_REF;
+        try {
+            const res = await request(app).get('/api/health');
+            expect(res.body.correlation).toEqual({ enabled: false, status: 'awaiting_dpia', reason: expect.stringMatching(/DPIA/) });
+        } finally {
+            process.env.CORRELATION_DPIA_REF = prior.CORRELATION_DPIA_REF;
+            if (prior.CORRELATION_DPIA_REF === undefined) delete process.env.CORRELATION_DPIA_REF;
+        }
+    });
+});
+

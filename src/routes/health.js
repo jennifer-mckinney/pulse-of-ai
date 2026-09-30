@@ -47,6 +47,7 @@ const { findCity } = require('../../public/js/config/cities.config.js');
 
 const { createRedisClient } = require('../queues/connection');
 const { readHeartbeat } = require('../workers/heartbeat');
+const { correlationStatus } = require('../pipeline/correlation-gate');
 const { sourceRows, summarize } = require('../collectors/status');
 
 const router = Router();
@@ -205,6 +206,9 @@ router.get('/health', async (req, res) => {
             demo_feeds:     sourceCounts.demo_feeds,
             ...(await queueStatus()),
             sources,
+            // Spec §20 DPIA gate: correlation is off (explicitly) until a
+            // completed DPIA is recorded and the operator enables it.
+            correlation: (({ enabled, status, reason }) => ({ enabled, status, reason }))(correlationStatus()),
         });
     /* istanbul ignore start -- Database failure; requires error injection testing infrastructure */
     } catch (err) {

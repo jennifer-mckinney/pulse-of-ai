@@ -8,6 +8,7 @@
 'use strict';
 
 const { correlateUser } = require('../pipeline/correlation');
+const { correlationStatus } = require('../pipeline/correlation-gate');
 
 /**
  * Process a single correlate job.
@@ -18,7 +19,11 @@ const { correlateUser } = require('../pipeline/correlation');
  * @param {{ data: object }} job
  * @returns {Promise<object>}
  */
-async function processCorrelateJob(job) {
+async function processCorrelateJob(job, { env = process.env } = {}) {
+    // DPIA gate (spec §20): a job that reaches this worker while correlation
+    // is not enabled is refused, never processed.
+    const gate = correlationStatus(env);
+    if (!gate.enabled) return { correlated: false, refused: gate.status, reason: gate.reason };
     const { sourceId, signalHash, topicAffinity, confidence } = job.data;
 
     const result = await correlateUser({ sourceId, signalHash, topicAffinity, confidence });
