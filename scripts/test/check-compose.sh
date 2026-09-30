@@ -14,8 +14,10 @@
 #         IP is the loopback address (nothing listens on 0.0.0.0)
 #   F9-2  collector credential VALUES are set on `worker` only; web gets a
 #         presence marker ("set") per credential, migrate and populate get
-#         none; the base secrets (DB, Redis, AUDIT_HASH_KEY,
-#         CORRELATION_SALT) go to every role
+#         none; the base secrets (DB, Redis, AUDIT_HASH_KEY) go to every role
+#   L1    CORRELATION_SALT's VALUE is set on `worker` only (PR #22 security
+#         L1); web gets the presence flag CORRELATION_SALT_SET, the other
+#         roles nothing
 #   F9-8  the unauthenticated embeddings API publishes no host port
 #   Q     the queue store is valkey/valkey 8.x (same digest in compose and CI)
 #   F9-6  every pulled image (compose services, Dockerfile bases, CI service
@@ -81,7 +83,7 @@ check "by default every published port binds 127.0.0.1" "$not_lo"
 # ${NAME:+set} in x-collector-presence) so it can report source status, and
 # migrate / populate get nothing. A second resolution with dummy credentials
 # (CRED_PROBE) proves the marker, not the value, reaches web.
-BASE_SECRETS='["POSTGRES_PASSWORD","REDIS_PASSWORD","AUDIT_HASH_KEY","CORRELATION_SALT","PROVENANCE_KEY","REFRESH_TOKEN"]'
+BASE_SECRETS='["POSTGRES_PASSWORD","REDIS_PASSWORD","AUDIT_HASH_KEY","PROVENANCE_KEY","REFRESH_TOKEN"]'
 CRED_RE='(_TOKEN|_SECRET|_API_KEY|_KEY|_PASSWORD|_CLIENT_SECRET|_CLIENT_ID|_EMAIL|_IMAP_USER|_IMAP_HOST|_FEED_URL|_PATH|_DIR)$'
 CRED_PROBE=(YOUTUBE_API_KEY GITHUB_TOKEN TIKTOK_RESEARCH_CLIENT_SECRET SCHOLAR_ALERTS_IMAP_PASSWORD
     NCBI_EMAIL CNN_FEED_URL JSTOR_DATASET_PATH REUTERS_CONNECT_CLIENT_ID)
@@ -95,7 +97,8 @@ trap 'rm -f "$probe_file"' EXIT
 printf '%s\n' "${probe_env[@]}" > "$probe_file"
 cfg_probe=$(env -i PATH="$PATH" HOME="$HOME" ${DOCKER_HOST:+DOCKER_HOST="$DOCKER_HOST"} \
     ${DOCKER_CONTEXT:+DOCKER_CONTEXT="$DOCKER_CONTEXT"} \
-    POSTGRES_PASSWORD=compose-check REDIS_PASSWORD=compose-check PULSE_ENV_FILE="$probe_file" "${probe_env[@]}" \
+    POSTGRES_PASSWORD=compose-check REDIS_PASSWORD=compose-check CORRELATION_SALT=probe-salt-value \
+    PULSE_ENV_FILE="$probe_file" "${probe_env[@]}" \
     docker compose --project-directory "$ROOT" -f "$ROOT/docker-compose.yml" \
         --env-file /dev/null -p compose-check --profile full --profile demo \
         config --format json)
@@ -119,6 +122,22 @@ unset_mark=$(jq -r --argjson probe "$probe_json" '(.services.web.environment // 
     | $probe[] | select(. as $k | ($w[$k] // "") != "")
     | "web marks \(.) as set while it is unset"' <<< "$cfg")
 check "an unset credential has no presence marker on web" "$unset_mark"
+
+# ─── L1: the correlation salt reaches the worker only ────────────────────────
+salt_leaks=$(jq -r '.services | to_entries[] | select(.key != "worker") | .key as $s
+    | (.value.environment // {}) | to_entries[]
+    | select(.key == "CORRELATION_SALT" or ((.value // "") | tostring | contains("probe-salt-value")))
+    | "\($s) receives the correlation salt (\(.key))"' <<< "$cfg_probe")
+check "CORRELATION_SALT's value is passed to worker only (security L1)" "$salt_leaks"
+salt_worker=$(jq -r '(.services.worker.environment.CORRELATION_SALT // "") as $v
+    | if $v == "probe-salt-value" then empty else "worker lacks CORRELATION_SALT (got \"\($v)\")" end' <<< "$cfg_probe")
+check "worker receives CORRELATION_SALT" "$salt_worker"
+salt_flag=$(jq -r '(.services.web.environment.CORRELATION_SALT_SET // "") as $v
+    | if $v == "set" then empty else "web lacks the CORRELATION_SALT_SET presence flag (got \"\($v)\")" end' <<< "$cfg_probe")
+check "web receives only the CORRELATION_SALT_SET presence flag" "$salt_flag"
+salt_flag_unset=$(jq -r '(.services.web.environment.CORRELATION_SALT_SET // "") as $v
+    | if $v == "" then empty else "web flags the salt as set while it is unset (\"\($v)\")" end' <<< "$cfg")
+check "an unset salt has no presence flag on web" "$salt_flag_unset"
 
 # ─── F9-8: the embeddings API is never published ─────────────────────────────
 emb_ports=$(jq -r '(.services.embeddings.ports // [])[]

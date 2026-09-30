@@ -43,8 +43,28 @@ function isUsableSalt(v) {
     return true;
 }
 
-/** @returns {{ enabled: boolean, status: string, reason: string }} */
-function correlationStatus(env = process.env) {
+/**
+ * PR #22 security L1: the web process does not hold CORRELATION_SALT (only
+ * the worker computes pseudonyms). It gets a presence flag instead,
+ * CORRELATION_SALT_SET=set (docker-compose.yml). Whether the salt is usable:
+ *   true / false  — this process holds the salt (worker; host `npm run dev`)
+ *                   or knows it is absent;
+ *   null          — the salt is set but held only by the worker, so only the
+ *                   worker can judge it (its status reaches /api/health via
+ *                   Redis, src/workers/heartbeat.js).
+ * @returns {boolean|null}
+ */
+function saltUsableHere(env = process.env) {
+    if (nonEmpty(env.CORRELATION_SALT)) return isUsableSalt(env.CORRELATION_SALT);
+    return String(env.CORRELATION_SALT_SET || '').trim() === 'set' ? null : false;
+}
+
+/**
+ * @param {object} [env]
+ * @param {{ saltUsable?: boolean|null }} [o]  default: judged from env.CORRELATION_SALT
+ * @returns {{ enabled: boolean, status: string, reason: string }}
+ */
+function correlationStatus(env = process.env, { saltUsable } = {}) {
     if (!nonEmpty(env.CORRELATION_DPIA_REF)) {
         return {
             enabled: false, status: 'awaiting_dpia',
@@ -55,7 +75,15 @@ function correlationStatus(env = process.env) {
     if (!/^(true|1|yes|on)$/i.test(String(env.CORRELATION_ENABLED || '').trim())) {
         return { enabled: false, status: 'disabled', reason: 'A DPIA is recorded; correlation is switched off (CORRELATION_ENABLED is not true).' };
     }
-    if (!isUsableSalt(env.CORRELATION_SALT)) {
+    const usable = saltUsable === undefined ? isUsableSalt(env.CORRELATION_SALT) : saltUsable;
+    if (usable === null) {
+        return {
+            enabled: false, status: 'unverified',
+            reason: 'CORRELATION_SALT is set for the worker only (never the web process); the worker, which checks it, has not '
+                + 'reported its correlation status, so correlation is reported off here.',
+        };
+    }
+    if (!usable) {
         return {
             enabled: false, status: 'misconfigured',
             reason: 'CORRELATION_SALT (the per-deployment salt) is unset or a placeholder; correlation stays off and no pseudonym is computed (spec §20).',
@@ -64,4 +92,4 @@ function correlationStatus(env = process.env) {
     return { enabled: true, status: 'enabled', reason: `enabled under DPIA ${env.CORRELATION_DPIA_REF.trim()}` };
 }
 
-module.exports = { correlationStatus, isUsableSalt };
+module.exports = { correlationStatus, isUsableSalt, saltUsableHere };

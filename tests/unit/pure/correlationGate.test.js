@@ -41,3 +41,27 @@ describe('isUsableSalt — placeholders fail closed (M8)', () => {
         expect(st.enabled).toBe(false);
     });
 });
+
+// PR #22 security L1: web holds only a presence flag for the salt.
+describe('saltUsableHere (security L1)', () => {
+    const { saltUsableHere } = require('../../../src/pipeline/correlation-gate');
+    const OPEN = { CORRELATION_DPIA_REF: 'DPIA-1', CORRELATION_ENABLED: 'true' };
+
+    it('judges the salt when this process holds it', () => {
+        expect(saltUsableHere({ CORRELATION_SALT: '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08' })).toBe(true);
+        expect(saltUsableHere({ CORRELATION_SALT: 'changeme' })).toBe(false);
+    });
+
+    it('a presence flag alone is unknown (null); nothing at all is false', () => {
+        expect(saltUsableHere({ CORRELATION_SALT_SET: 'set' })).toBeNull();
+        expect(saltUsableHere({ CORRELATION_SALT_SET: '' })).toBe(false);
+        expect(saltUsableHere({})).toBe(false);
+    });
+
+    it('an unknown salt is reported "unverified" and never enabled', () => {
+        const st = correlationStatus({ ...OPEN, CORRELATION_SALT_SET: 'set' }, { saltUsable: saltUsableHere({ CORRELATION_SALT_SET: 'set' }) });
+        expect(st).toMatchObject({ enabled: false, status: 'unverified' });
+        expect(correlationStatus({ ...OPEN }, { saltUsable: false }).status).toBe('misconfigured');
+        expect(correlationStatus({ CORRELATION_ENABLED: 'true' }, { saltUsable: null }).status).toBe('awaiting_dpia');
+    });
+});
