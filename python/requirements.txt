@@ -17,7 +17,7 @@ uvicorn>=0.54.0
 # Testing
 pytest>=9.1.1
 pytest-asyncio>=1.4.0
-httpx>=0.26.0         # async HTTP client for test requests
+httpx>=0.28.1         # async HTTP client for test requests
 
 # Code quality
 black>=26.5.1         # code formatter (run: black python/)
