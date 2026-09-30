@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // scripts/bias-window.js — `npm run bias:window [-- --json]`
 // PR #22 decision G2 (Jennifer McKinney, 2026-09-29; ADR 0001): run the
-// rolling 24 h fairness checks (bias@1.5.0) NOW, on demand. The worker also
+// rolling 24 h fairness checks NOW, on demand, under the current bias version
+// (the window was introduced by bias@1.5.0). The worker also
 // runs them daily (maintenance task 'daily'). Writes one bias_window_runs row
 // and its bias_window_assessments (migration 060); a violation raises an
 // alert like a per-cycle one. Prints a summary (or --json).

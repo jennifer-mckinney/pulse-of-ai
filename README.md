@@ -296,7 +296,10 @@ npm run docker:up           # postgres (POSTGRES_PORT, 5434) + postgres_test (54
 npm run migrate             # apply pending migrations
 npm run seed                # 52 registry sources + methodology versions (idempotent)
 npm run dev                 # Express on http://localhost:3000
+node --env-file=.env src/workers/start.js   # in a second terminal: the worker (collection, scoring, maintenance)
 ```
+
+`npm run dev` serves the page and the API only. Collection, scoring, the bias checks and the maintenance schedules all run in the worker, so start it too. There is no npm script for it, and it must get `.env` from Node: the worker builds its queue connection from `REDIS_HOST`, `REDIS_PORT` and `REDIS_PASSWORD` before any module loads `.env`, so a plain `node src/workers/start.js` connects without the password. `--env-file=.env` (Node 22) loads the file first. Without `COLLECTOR_CONTACT_URL` it registers the maintenance schedules but closes every source (`gate_closed` in its log); see [Turning on live collection](#turning-on-live-collection). `GET /api/health` shows `worker.alive: true` once its heartbeat is up. Stop it with Ctrl-C; it finishes in-flight jobs first.
 
 Optional embeddings service on the host (Python 3.11 or newer; CI tests 3.11 and the image runs 3.13):
 
