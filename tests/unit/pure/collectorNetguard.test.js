@@ -273,6 +273,176 @@ describe('F10-4: response size caps and decompression bombs', () => {
         await expect(readBody(streamOf(zlib.gzipSync('héllo'), { 'content-encoding': 'gzip' }))).resolves.toBe('héllo');
     });
 
+    // Diagnosis 2026-09-30 (Internet Archive blog feed): blog.archive.org
+    // answers the conditional GET with a 304 that repeats
+    // "Content-Encoding: gzip" and has no body (valid, RFC 9110 §15.4.5).
+    // Gunzip over zero bytes threw Z_BUF_ERROR "unexpected end of file"
+    // before http.js could see the 304, in 91% of runs.
+    describe('responses that carry no content are never decoded (RFC 9110 §6.4.1)', () => {
+        const empty = (headers, statusCode) => Object.assign(streamOf(Buffer.alloc(0), headers), { statusCode });
+
+        test.each(['gzip', 'x-gzip', 'deflate', 'br'])('a 304 with Content-Encoding: %s and no body resolves ""', async (enc) => {
+            await expect(readBody(empty({ 'content-encoding': enc }, 304))).resolves.toBe('');
+        });
+
+        test('the status can be passed explicitly (304, 204, 1xx) and HEAD is bodiless', async () => {
+            const gz = { 'content-encoding': 'gzip' };
+            await expect(readBody(streamOf(Buffer.alloc(0), gz), { status: 304 })).resolves.toBe('');
+            await expect(readBody(streamOf(Buffer.alloc(0), gz), { status: 204 })).resolves.toBe('');
+            await expect(readBody(streamOf(Buffer.alloc(0), gz), { status: 103 })).resolves.toBe('');
+            await expect(readBody(streamOf(Buffer.alloc(0), gz), { status: 200, method: 'HEAD' })).resolves.toBe('');
+        });
+
+        test('Content-Length: 0 with a Content-Encoding resolves ""', async () => {
+            await expect(readBody(empty({ 'content-encoding': 'gzip', 'content-length': '0' }, 200))).resolves.toBe('');
+        });
+
+        test('a bodiless response is drained, not left paused (the socket is released)', async () => {
+            const s = empty({ 'content-encoding': 'gzip' }, 304);
+            const resume = jest.spyOn(s, 'resume');
+            await readBody(s);
+            expect(resume).toHaveBeenCalled();
+        });
+
+        test('a 200 with an empty body and Content-Encoding (no Content-Length) resolves "" instead of throwing', async () => {
+            await expect(readBody(empty({ 'content-encoding': 'gzip' }, 200))).resolves.toBe('');
+        });
+
+        test('a real gzipped 200 still decodes, and a TRUNCATED gzip body still fails as a decode error', async () => {
+            const gz = zlib.gzipSync('<rss><channel><item>x</item></channel></rss>');
+            await expect(readBody(Object.assign(streamOf(gz, { 'content-encoding': 'gzip' }), { statusCode: 200 })))
+                .resolves.toBe('<rss><channel><item>x</item></channel></rss>');
+            const cut = gz.subarray(0, gz.length - 12);
+            const err = await readBody(Object.assign(streamOf(cut, { 'content-encoding': 'gzip' }), { statusCode: 200 })).catch(e => e);
+            expect(err).toBeInstanceOf(Error);
+            expect(err.kind).toBe('parse');
+            expect(err.decode).toBe(true);
+            expect(classifyError(err).error_kind).toBe('parse');
+        });
+
+        test('createNetworkTransport resolves { status: 304, body: "" } for the IA 304-with-gzip response', async () => {
+            // The exact response recorded on 2026-09-30 (scratch net/ia-probe.out).
+            const request = (u, opts, onResponse) => {
+                const req = new EventEmitter();
+                req.write = () => {};
+                req.end = () => setImmediate(() => {
+                    onResponse(Object.assign(streamOf(Buffer.alloc(0), {
+                        'content-encoding': 'gzip', etag: '"d35aeb5e6ecdb8f9de4f9422b04c0ffa-gzip"',
+                        'last-modified': 'Wed, 30 Sep 2026 16:29:56 GMT', server: 'Caddy', vary: 'Accept-Encoding',
+                    }), { statusCode: 304 }));
+                });
+                return req;
+            };
+            const transport = createNetworkTransport({ request, lookup: () => {} });
+            const res = await transport('https://blog.archive.org/feed/', {
+                headers: { 'If-None-Match': '"d35aeb5e6ecdb8f9de4f9422b04c0ffa-gzip"' },
+            });
+            expect(res).toMatchObject({ status: 304, body: '' });
+            expect(res.headers.etag).toBe('"d35aeb5e6ecdb8f9de4f9422b04c0ffa-gzip"');
+        });
+
+        test('HttpClient: that 304 is notModified after ONE request, validators unchanged', async () => {
+            let calls = 0;
+            const transport = createNetworkTransport({
+                lookup: () => {},
+                request: (u, opts, onResponse) => {
+                    calls++;
+                    const req = new EventEmitter();
+                    req.write = () => {};
+                    req.end = () => setImmediate(() => onResponse(Object.assign(
+                        streamOf(Buffer.alloc(0), { 'content-encoding': 'gzip', etag: '"v1"' }), { statusCode: 304 })));
+                    return req;
+                },
+            });
+            const http = client(transport);
+            const cache = { 'https://blog.archive.org/feed/': { etag: '"v1"', last_modified: null } };
+            const res = await http.request('https://blog.archive.org/feed/', { cache });
+            expect(res.notModified).toBe(true);
+            expect(calls).toBe(1);
+            expect(http.requests).toBe(1);
+            expect(cache).toEqual({ 'https://blog.archive.org/feed/': { etag: '"v1"', last_modified: null } });
+        });
+
+        // Security review H1 / grumpy #1: a WAF 403 page served plain but
+        // labelled gzip used to become a 'parse' error, so the refusal was
+        // never honoured and the source was asked again on the next tick.
+        test.each([401, 403, 451])('transport-level %i with a mislabelled gzip body is a REFUSAL (AccessDeniedError), one request', async (status) => {
+            const { AccessDeniedError } = require('../../../src/collectors/errors');
+            let calls = 0;
+            const transport = createNetworkTransport({
+                lookup: () => {},
+                request: (u, opts, onResponse) => {
+                    calls++;
+                    const req = new EventEmitter();
+                    req.write = () => {};
+                    req.end = () => setImmediate(() => onResponse(Object.assign(streamOf(Buffer.from('<html>Access denied</html>'), {
+                        'content-encoding': 'gzip', server: 'AkamaiGHost', 'set-cookie': 'bm=1',
+                    }), { statusCode: status })));
+                    return req;
+                },
+            });
+            const err = await client(transport).request('https://www.pewresearch.org/wp-json/wp/v2/posts').catch(e => e);
+            expect(err).toBeInstanceOf(AccessDeniedError);
+            expect(calls).toBe(1);
+            expect(err.status).toBe(status);
+            expect(classifyError(err)).toEqual({ error_kind: 'access_denied', http_status: status });
+            expect(err.headers).toEqual({ server: 'AkamaiGHost' });
+            expect(JSON.stringify(err)).not.toContain('Access denied</html>');
+        });
+
+        test('the decode error carries the status and headers (so http.js can honour a refusal)', async () => {
+            const err = await readBody(Object.assign(streamOf(Buffer.from('plain'), { 'content-encoding': 'gzip', server: 'x' }),
+                { statusCode: 403 })).catch(e => e);
+            expect(err).toMatchObject({ decode: true, kind: 'parse', status: 403, headers: expect.objectContaining({ server: 'x' }) });
+        });
+
+        // Security review L4: the empty-body tolerance is pinned to zero raw
+        // bytes; ANY non-empty undecodable body is an error.
+        test.each([
+            ['plain text labelled gzip', Buffer.from('not gzip at all'), 'gzip'],
+            ['one stray byte labelled gzip', Buffer.from([0x1f]), 'gzip'],
+            ['plain text labelled deflate', Buffer.from('nope'), 'deflate'],
+            ['plain text labelled br', Buffer.from('nope nope nope'), 'br'],
+        ])('a 200 with %s is a decode error, never ""', async (_label, body, enc) => {
+            const err = await readBody(Object.assign(streamOf(body, { 'content-encoding': enc }), { statusCode: 200 })).catch(e => e);
+            expect(err).toBeInstanceOf(Error);
+            expect(err.decode).toBe(true);
+        });
+
+        // Security review L2: the no-content drain.
+        test('a bodiless response that sends bytes anyway is destroyed, and a later socket error is not unhandled', async () => {
+            const s = new PassThrough();
+            s.headers = { 'content-encoding': 'gzip' };
+            s.statusCode = 304;
+            const destroy = jest.spyOn(s, 'destroy');
+            await expect(readBody(s)).resolves.toBe('');
+            s.write(Buffer.from('unexpected body'));
+            await new Promise(r => setImmediate(r));
+            expect(destroy).toHaveBeenCalled();
+            expect(() => s.emit('error', new Error('ECONNRESET'))).not.toThrow();
+        });
+
+        test('a decode error is deterministic: NOT retried, classified parse', async () => {
+            let calls = 0;
+            const gz = zlib.gzipSync('x'.repeat(1000));
+            const transport = createNetworkTransport({
+                lookup: () => {},
+                request: (u, opts, onResponse) => {
+                    calls++;
+                    const req = new EventEmitter();
+                    req.write = () => {};
+                    req.end = () => setImmediate(() => onResponse(Object.assign(
+                        streamOf(gz.subarray(0, 10), { 'content-encoding': 'gzip' }), { statusCode: 200 })));
+                    return req;
+                },
+            });
+            const err = await client(transport).request('https://blog.archive.org/feed/').catch(e => e);
+            expect(calls).toBe(1);
+            expect(classifyError(err).error_kind).toBe('parse');
+            expect(err.message).toMatch(/could not be decoded/);
+        });
+    });
+
     test('the network transport: https only, guarded lookup, TLS >= 1.2 verified, compression negotiated, capped', async () => {
         const seen = [];
         const request = (u, opts, onResponse) => {

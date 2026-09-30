@@ -7,7 +7,9 @@
 //             database kill switch (data_sources.collection_disabled_at, F10-10)
 //     refusal — src/collectors/refusal.js: a source that refused access
 //             (401/403/451, bot wall, robots) is skipped through its
-//             cooldown and reported 'blocked_by_source' (F10-5)
+//             cooldown and reported 'blocked_by_source' (F10-5); a clean
+//             probe starts a 24 h probation during which a refusal keeps
+//             escalating the cooldown (ADR 0001 note 2026-09-30)
 //     claim — state.claim(): the source's poll interval is honoured across
 //             processes (worker schedule + POST /api/refresh)
 //     fetch — one collector per open route (src/collectors), through the
@@ -58,7 +60,7 @@ const { EMBED_GATE_MIN_SCORE } = require('../pipeline/relevance');
 const cycle = require('./cycle');
 const { scrub } = require('./redact');
 const { classifyError } = require('./errors');
-const { refusalGate, refusalOf, resetEnv, BLOCKED_BY_SOURCE } = require('./refusal');
+const { refusalGate, refusalOf, resetEnv, probationOver, BLOCKED_BY_SOURCE } = require('./refusal');
 
 /** Default queue hooks: lazily bind BullMQ (opening Redis only when needed). */
 function defaultQueues() {
@@ -334,13 +336,28 @@ async function runCollection(o = {}) {
                 cursor, httpCache, ok, itemCount: row.kept, newPosts: row.new,
                 error: row.error, errorKind: row.errorKind, httpStatus: row.httpStatus,
             });
+            // Diagnosis 2026-09-30 (option D): the refusal's allow-listed,
+            // scrubbed response headers (http.js refusalHeaders; never a
+            // cookie, credential or body), logged and stored with the refusal.
+            const refusedErr = refusedIdx >= 0 ? routeErrors[refusedIdx].err : null;
+            const refusalHeaders = refusedErr && refusedErr.headers && Object.keys(refusedErr.headers).length
+                ? refusedErr.headers : null;
             if (refused) {
-                const r = await state.recordRefusal(sourceId, refused, slug);
+                const r = await state.recordRefusal(sourceId, { ...refused, headers: refusalHeaders }, slug);
                 row.status = BLOCKED_BY_SOURCE;
-                row.reason = `refused (${refused.kind}${refused.status ? ` HTTP ${refused.status}` : ''}); cooldown until ${new Date(r.refused_until).toISOString()}`;
+                row.refusalCount = r.refusal_count;
+                row.reason = `refused (${refused.kind}${refused.status ? ` HTTP ${refused.status}` : ''}); refusal ${r.refusal_count},`
+                    + ` cooldown until ${new Date(r.refused_until).toISOString()}`;
                 log(`[collect] ${slug}: REFUSED by the source — ${row.reason}`);
+                if (refusalHeaders) log(`[collect] ${slug}: refusal response headers ${JSON.stringify(refusalHeaders)}`);
             } else if (ok && refusal && refusal.access_denied_at && gate.state === 'probe') {
-                await state.clearRefusal(sourceId, 'a probe run after the cooldown succeeded');
+                // Probation (ADR 0001 note 2026-09-30): one clean probe ends
+                // the cooldown, not the count.
+                const p = await state.endCooldown(sourceId, refusal.access_denied_at);
+                if (p) log(`[collect] ${slug}: probe succeeded — on probation until ${new Date(p.probation_until).toISOString()} (refusal count ${p.refusal_count} kept)`);
+            } else if (ok && refusal && !refusal.access_denied_at && refusal.refusal_count > 0 && probationOver(refusal, Date.now())) {
+                // 24 h without a refusal: the count decays.
+                if (await state.decayRefusal(sourceId)) log(`[collect] ${slug}: probation over — refusal count reset to 0`);
             }
             // G10-12: a run that changed nothing (304 / nothing fetched, no
             // error) is counted on the state row, not inserted.
@@ -350,6 +367,7 @@ async function runCollection(o = {}) {
                 sourceId, jobId, gateStatus: st.status, outcome: row.outcome, itemsFetched: row.fetched,
                 postsNew: row.new, requests: http.requests - before, error: row.error,
                 errorKind: row.errorKind, httpStatus: row.httpStatus, startedAt,
+                responseHeaders: refused ? refusalHeaders : null,
             });
             log(`[collect] ${slug}: ${row.outcome} fetched ${row.fetched}, kept ${row.kept}, new ${row.new}${row.error ? ` — ${row.error}` : ''}`);
             await touch();

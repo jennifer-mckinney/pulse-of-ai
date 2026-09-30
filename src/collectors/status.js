@@ -19,7 +19,7 @@
 const { dbAll } = require('../db/connection');
 const { SOURCES, getSource, sourceStatus, killSwitchEnv, GATE_STATUSES } = require('../config/source-registry');
 const { DEMO_SOURCE_TYPE } = require('../config/data-mode');
-const { refusalGate, resetEnv, BLOCKED_BY_SOURCE } = require('./refusal');
+const { refusalGate, resetEnv, probationOver, BLOCKED_BY_SOURCE } = require('./refusal');
 const { selectionStatus } = require('./reddit/selection');
 
 // Runtime statuses: the registry gate statuses plus 'blocked_by_source' (a
@@ -74,7 +74,10 @@ function registryFields(row, env, now) {
         online: isOnline(status, row.last_success_at, now, row.last_error_at),
         access_denied_at: row.access_denied_at || null,
         refused_until: row.refused_until || null,
-        refusal_count: row.refusal_count || 0,
+        // Grumpy #8: a count whose probation is over no longer applies (the
+        // next refusal starts at 1), even before an ok run writes the decay.
+        refusal_count: probationOver(row, now) ? 0 : (row.refusal_count || 0),
+        probation_until: probationOver(row, now) ? null : (row.probation_until || null),
         reset_env: resetEnv(src.slug),
         last_attempt_at: row.last_attempt_at || null,
         last_success_at: row.last_success_at || null,
@@ -108,7 +111,7 @@ async function sourceRows({ includeInactive = false, env = process.env, now = Da
                 ds.collection_disabled_at, ds.collection_disabled_reason, ds.collection_disabled_by,
                 s.last_attempt_at, s.last_success_at, s.last_item_count, s.last_error_kind, s.last_http_status,
                 s.last_error_at, s.consecutive_failures,
-                s.access_denied_at, s.access_denied_status, s.access_denied_kind, s.refused_until, s.refusal_count
+                s.access_denied_at, s.access_denied_status, s.access_denied_kind, s.refused_until, s.refusal_count, s.probation_until
          FROM data_sources ds
          LEFT JOIN source_collection_state s ON s.source_id = ds.id
          ${includeInactive ? '' : 'WHERE ds.active = true'}
