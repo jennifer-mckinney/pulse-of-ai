@@ -222,4 +222,23 @@ describe('saveRelevance() — the recorded version decides the rule (relevance@1
         const audit = await dbGet(`SELECT model_name FROM decision_audit_log WHERE raw_post_id = $1`, [postId]);
         expect(audit.model_name).toBe('keyword-relevance-v1');
     });
+
+    // PR #22 grumpy M10: never score with a different rule than the one
+    // recorded. A version this build has no scorer for (a newer row
+    // registered by a migration during a rolling deploy) fails loudly.
+    test('an unknown relevance version is rejected and nothing is written', async () => {
+        const postId = await insertPost('AI is changing schools');
+        const jobId = await insertJob();
+        await expect(saveRelevance(postId, jobId, await mvFor('9.9.9', 'keyword-relevance-v9')))
+            .rejects.toThrow(/relevance@9\.9\.9 has no scorer in this build/);
+        const n = await dbGet('SELECT COUNT(*)::int AS n FROM decision_audit_log WHERE raw_post_id = $1', [postId]);
+        expect(n.n).toBe(0);
+    });
+
+    test('an unregistered methodology id is rejected', async () => {
+        const postId = await insertPost('AI is changing schools');
+        const jobId = await insertJob();
+        await expect(saveRelevance(postId, jobId, '00000000-0000-0000-0000-000000000000'))
+            .rejects.toThrow(/not a registered relevance methodology/);
+    });
 });

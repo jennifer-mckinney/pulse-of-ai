@@ -92,7 +92,7 @@ const MODEL_NAME = VERSIONS[CURRENT_VERSION].model;
 // The CURRENT lexicon (relevance@1.2.0).
 const KEYWORD_LIST = VERSIONS[CURRENT_VERSION].lexicon;
 
-/** The scorer of a registered version (unknown or missing → current). */
+/** The scorer of a registered version (unknown or missing → current; replay only — saveRelevance refuses an unknown version). */
 function scorerFor(version) {
     return VERSIONS[version] || VERSIONS[CURRENT_VERSION];
 }
@@ -135,10 +135,16 @@ async function saveRelevance(postId, jobId, mvId) {
 
     // Score with the rule of the version this decision is recorded under
     // (P10-13): the audit row's methodology_version_id and its output then
-    // always agree, and `npm run replay` reproduces it. An unregistered id
-    // (or a version with no kept scorer) falls back to the current rule.
-    const mv = await dbGet('SELECT version FROM methodology_versions WHERE id = $1', [mvId]);
-    const scorer    = scorerFor(mv && mv.version);
+    // always agree, and `npm run replay` reproduces it. PR #22 M10: an
+    // unregistered id, or a version this build has no scorer for, FAILS —
+    // never a decision recorded under one version and computed with another
+    // (the fallback to the current rule is kept for replay only).
+    const mv = await dbGet('SELECT component, version FROM methodology_versions WHERE id = $1', [mvId]);
+    if (!mv || mv.component !== 'relevance') {
+        throw new Error(`saveRelevance: ${mvId} is not a registered relevance methodology version`);
+    }
+    if (!VERSIONS[mv.version]) throw new Error(`relevance@${mv.version} has no scorer in this build`);
+    const scorer    = VERSIONS[mv.version];
     const scored    = scorer.run(post.content);
     const inputHash = crypto.createHash('sha256').update(post.content).digest('hex');
 
