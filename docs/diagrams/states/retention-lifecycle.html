@@ -24,32 +24,30 @@
 </head>
 <body>
 <h1>State · retention lifecycle of a stored post</h1>
-<p class="summary">What becomes of a post over time: live Reddit text blanked at 48 hours or on upstream deletion, demo posts purged at the retention boundary, and real posts meant to be compacted into monthly rollups, which on master rolls back at the content-nulling step, with what is kept at each step.</p>
+<p class="summary">What becomes of a post over time: its text blanked when its source&#x27;s window ends (platform terms or the detail window) or when Reddit reports it deleted, demo posts purged at the retention boundary, and real posts compacted into monthly rollups, with what is kept at each step.</p>
 <p class="source">Canonical source: <code>retention-lifecycle.mmd</code> · index: <code>docs/diagrams/README.md</code></p>
 <pre class="mermaid">
 %% Title: State · retention lifecycle of a stored post
-%% Summary: What becomes of a post over time: live Reddit text blanked at 48 hours or on upstream deletion, demo posts purged at the retention boundary, and real posts meant to be compacted into monthly rollups, which on master rolls back at the content-nulling step, with what is kept at each step.
-%% Sources: src/collectors/retention.js, src/collectors/reddit/{maintenance,recheck}.js, scripts/compact.js (purgeDemoPosts, compactMonth), src/db/migrations/001 (content NOT NULL), 005, 025. Spec: TECHNICAL_SPEC.md section 19 (three-tier model); ADR 0001 ruling 9.
+%% Summary: What becomes of a post over time: its text blanked when its source's window ends (platform terms or the detail window) or when Reddit reports it deleted, demo posts purged at the retention boundary, and real posts compacted into monthly rollups, with what is kept at each step.
+%% Sources: src/collectors/retention.js, src/config/source-registry.js (retentionHours), src/workers/maintenance.worker.js, src/collectors/reddit/{maintenance,recheck}.js, scripts/compact.js (purgeDemoPosts, compactMonth), scripts/populate.js (demo embed jobs), src/collectors/runner.js and src/workers/ingest.worker.js (embed gate), src/pipeline/relevance.js (EMBED_GATE_MIN_SCORE); migrations 001 (content NOT NULL), 005, 025, 031. Spec: TECHNICAL_SPEC.md section 19 (three-tier model); ADR 0001 ruling 9; PR #22 decisions G3, G4.
 stateDiagram-v2
   direction LR
 
-  [*] --&gt; detail : stored (raw_posts, scores, audit rows, embedding when relevance ≥ 1/20)
+  [*] --&gt; detail : stored (raw_posts, scores, audit rows, embedding for a live post with relevance ≥ 1/21 and for every demo post)
 
   state "Tier 1 · full detail&lt;br/&gt;shown on the page for its trailing hour,&lt;br/&gt;receipt available" as detail
-  state "Reddit text blanked&lt;br/&gt;content = removal notice,&lt;br/&gt;text_removed_at set;&lt;br/&gt;scores, audit rows, hash,&lt;br/&gt;fingerprint and embedding kept" as blanked
+  state "text blanked, platform terms&lt;br/&gt;content = the source's removal notice,&lt;br/&gt;text_removed_at set, embedding deleted&lt;br/&gt;in the same transaction (G3);&lt;br/&gt;scores, audit rows, hash, fingerprint kept" as blanked
+  state "text removed, detail window&lt;br/&gt;content = the detail-window notice,&lt;br/&gt;text_removed_at set; embedding kept&lt;br/&gt;until compaction; scores, audit rows kept" as removed
   state "demo post purged&lt;br/&gt;post and every dependent row deleted&lt;br/&gt;(scores, audit, embedding, sightings)" as purged
-  state "Tier 2 · compacted month (target, not reachable on master)&lt;br/&gt;monthly_topic_rollups + monthly_source_rollups,&lt;br/&gt;embeddings deleted, audit rows kept" as compacted
-  state "content nulling blocked&lt;br/&gt;raw_posts.content is NOT NULL,&lt;br/&gt;so a real month cannot finish compacting" as blocked_null
-  state "scheduled compaction and&lt;br/&gt;per-source retention windows" as wip_sched
+  state "Tier 2 · compacted month&lt;br/&gt;monthly_topic_rollups + monthly_source_rollups,&lt;br/&gt;any remaining text blanked (never nulled),&lt;br/&gt;embeddings deleted; row, scores and audit rows kept" as compacted
 
-  detail --&gt; blanked : Reddit only, 48 h after collection (worker, every 5 min)
-  detail --&gt; blanked : Reddit only, re-check finds it deleted or removed (every 6 h)
-  detail --&gt; purged : demo feed only, older than RETENTION_DETAIL_DAYS (90) at npm run compact
-  detail --&gt; blocked_null : real post, its month holds a post older than 90 days, npm run compact
-  blocked_null --&gt; detail : step 5 (null raw_posts.content) fails, the month's transaction rolls back rollups and embedding deletes
-  blanked --&gt; blocked_null : its month holds a post older than 90 days (same rollback)
-  blocked_null --&gt; compacted : once raw_posts.content may be NULL (not on master)
-  detail --&gt; wip_sched
+  detail --&gt; blanked : Reddit 48 h, YouTube and TikTok 30 days after collection (maintenance job, every 5 min)
+  detail --&gt; blanked : Reddit only, the re-check finds it deleted or removed (every 6 h, gate open)
+  detail --&gt; removed : any other real source, RETENTION_DETAIL_DAYS (90) after collection (same job)
+  detail --&gt; purged : demo feed only, older than RETENTION_DETAIL_DAYS (daily job or npm run compact)
+  blanked --&gt; compacted : its month ended before the cutoff (daily job or npm run compact)
+  removed --&gt; compacted : its month ended before the cutoff
+  detail --&gt; compacted : text still stored in a due month, blanked by compaction in the month's transaction
   purged --&gt; [*]
 
   note right of blanked
@@ -57,23 +55,22 @@ stateDiagram-v2
     action blanked_platform_terms
     (owner decision: blank text, keep audit rows)
   end note
+  note right of removed
+    one data_retention_log row per batch,
+    action text_removed_detail_window
+  end note
   note right of purged
     data_retention_log action purged_demo,
     demo posts never enter a rollup
   end note
-
-  note right of wip_sched
-    legend: green = done, on master or ships in this PR;
-    dashed amber = wip, PR #10 Part 2;
-    dotted red = gap, not reachable on master
+  note right of compacted
+    one data_retention_log row compacted and one
+    compaction_log row per month.
+    Legend: all done (every element is on master)
   end note
 
   classDef done fill:#e8f5e9,stroke:#2e7d32,color:#1b3d1f
-  classDef wip fill:#fff8e1,stroke:#b7791f,color:#5c3d00,stroke-dasharray:5 3
-  class detail, blanked, purged, blocked_null done
-  classDef gap fill:#fdecea,stroke:#b3261e,color:#5c1a14,stroke-dasharray:2 3
-  class compacted gap
-  class wip_sched wip
+  class detail, blanked, removed, purged, compacted done
 </pre>
 <script>mermaid.initialize({ startOnLoad: true, theme: 'forest', securityLevel: 'strict', maxTextSize: 200000 });</script>
 </body>

@@ -1,12 +1,12 @@
 %% Title: Data flow · demo population and retention
-%% Summary: The demo fallback path (fictional posts through the real scorers, labelled DEMO end to end) and the three retention flows: Reddit 48-hour text blanking, the demo purge and monthly compaction.
-%% Sources: scripts/populate.js, scripts/standup.sh, src/config/data-mode.js, src/collectors/retention.js, src/collectors/reddit/{maintenance,recheck}.js, scripts/compact.js, src/db/migrations/005_retention_tables.sql, 025_reddit_source.sql. Spec: TECHNICAL_SPEC.md section 19 (layered retention); ADR 0001 ruling 9.
+%% Summary: The demo fallback path (fictional posts through the real scorers, labelled DEMO end to end) and the retention flows run by the worker's maintenance jobs: text removal by blanking (platform-terms windows, the Reddit deletion re-check, the detail window), the demo purge, monthly compaction and the source_runs rollup.
+%% Sources: scripts/populate.js, scripts/standup.sh, docker-compose.yml (populate, collector settings), src/config/data-mode.js, src/config/source-registry.js (retentionHours, sourceStatus), src/workers/maintenance.worker.js, src/workers/start.js, src/collectors/retention.js, src/collectors/run-retention.js, src/collectors/reddit/{maintenance,recheck}.js, scripts/compact.js; migrations 005, 025, 031, 034, 039. Spec: TECHNICAL_SPEC.md section 19 (layered retention); ADR 0001 ruling 9; PR #22 decisions G3, G4, G5.
 flowchart LR
 
   subgraph DEMO["Demo population · scripts/populate.js"]
     direction TB
-    M1["standup: populate --once<br/>(populate container, collector settings only)<br/>one real collection job, triggered_by standup;<br/>no credentials, so keyless and ack-gated routes only"]:::done
-    M2{"trailing hour holds<br/>live posts?"}:::done
+    M1["standup: populate --once<br/>(populate container, collector settings only)<br/>one real collection job, triggered_by standup;<br/>no API keys, so only routes that need none;<br/>a gated route also needs GATE_APPROVED_BY"]:::done
+    M2{"trailing hour holds<br/>live posts (and no --force)?"}:::done
     M3["demo batch (skipped only when the hour already<br/>holds --size demo posts, no live posts and collection<br/>is unavailable; --force always writes one)"]:::done
     M4["populate --loop (profile demo)<br/>every DEMO_FEED_INTERVAL_MS (150 s):<br/>DEMO_FEED_BATCH posts (default 16,<br/>two per category) only while the hour has no live posts"]:::done
     M5["fictional posts: text starts with [Demo],<br/>raw_payload demo: true, fictional: true,<br/>under data_sources demo_#lt;category#gt;<br/>(source_type demo, active false)"]:::done
@@ -20,43 +20,38 @@ flowchart LR
     M5 --> M6 --> M7
   end
 
-  subgraph REDDIT["Reddit text blanking · ADR 0001 ruling 9"]
+  subgraph TEXT["Text retention · job 'retention', 5 min"]
     direction TB
-    R1["worker: Reddit maintenance every 5 min<br/>blankExpired() always, whatever the gate"]:::done
-    R2["recheckDeletions() every 6 h via /api/info,<br/>only while Reddit's gate is open"]:::done
-    R3["raw_posts.content and payload text/title<br/>→ [removed: Reddit Data API Terms retention];<br/>permalink cut to the slug-less form;<br/>text_removed_at, text_removed_reason set"]:::done
-    R4["kept: row, t3_ id, provenance fingerprint,<br/>content hash, every score and audit row"]:::done
-    R5["one data_retention_log row per batch,<br/>action blanked_platform_terms"]:::done
-    R1 -- "collected 48 h ago" --> R3
+    R1["worker: blankExpired() for every real source,<br/>whatever the gate (MAINTENANCE_EVERY_MS, 5 min);<br/>window per source: Reddit 48 h; YouTube, TikTok<br/>30 days (by analogy); every other source, the<br/>Guardian included, RETENTION_DETAIL_DAYS (90)"]:::done
+    R2["Reddit timer: recheckDeletions() every 6 h<br/>via /api/info, only while Reddit's gate is open"]:::done
+    R3["raw_posts.content (NOT NULL) and payload text keys<br/>→ the source's removal notice (never nulled);<br/>url removed (Reddit: slug-less permalink);<br/>text_removed_at, text_removed_reason set"]:::done
+    R6["platform-terms window or upstream deletion:<br/>post_embeddings of the posts deleted in the<br/>same transaction (G3); detail window:<br/>embeddings left to compaction"]:::done
+    R4["kept: row, external id, provenance fingerprint,<br/>content hash, every score and audit row"]:::done
+    R5["one data_retention_log row per batch:<br/>blanked_platform_terms or<br/>text_removed_detail_window"]:::done
+    R1 -- "window ended" --> R3
     R2 -- "deleted or removed upstream" --> R3
+    R3 --> R6
     R3 --> R4
     R3 --> R5
   end
 
-  subgraph COMPACT["npm run compact · scripts/compact.js (run by hand)"]
+  subgraph COMPACT["Compaction · job 'daily'"]
     direction TB
-    P1["demo purge first: demo posts older than<br/>RETENTION_DETAIL_DAYS (90) deleted in batches<br/>(DEMO_PURGE_BATCH_SIZE, 500) with their score,<br/>audit, embedding and sighting rows;<br/>data_retention_log action purged_demo"]:::done
-    P2["compaction: each calendar month holding a post<br/>older than RETENTION_DETAIL_DAYS (90), whole month,<br/>not yet in compaction_log →<br/>monthly_topic_rollups + monthly_source_rollups<br/>(demo posts excluded)"]:::done
+    P1["scripts/compact.js (also npm run compact)<br/>demo purge first: demo posts older than<br/>RETENTION_DETAIL_DAYS (90) deleted in batches<br/>(DEMO_PURGE_BATCH_SIZE, 500) with their score,<br/>audit, embedding and sighting rows;<br/>data_retention_log action purged_demo"]:::done
+    P2["each calendar month that ended before the<br/>cutoff, with real posts, not yet in compaction_log,<br/>one transaction per month →<br/>monthly_topic_rollups + monthly_source_rollups<br/>(demo posts excluded)"]:::done
+    P4["remove any text still stored<br/>(the same blanking, never nulled)"]:::done
     P3["delete post_embeddings of the month"]:::done
-    P4["null raw_posts.content: blocked today,<br/>the column is NOT NULL (migration 001);<br/>compaction cannot complete on a real month"]:::done
-    P5["data_retention_log action compacted,<br/>one compaction_log row per month"]:::done
-    P1 --> P2 --> P3 --> P4 --> P5
-  end
-
-  subgraph WIP["PR #10 Part 2"]
-    direction TB
-    W1["scheduled compaction in the worker"]:::wip
-    W2["per-source retention windows"]:::wip
+    P5["one data_retention_log row compacted,<br/>one compaction_log row"]:::done
+    P6["same daily job: source_runs older than 30 days<br/>→ source_run_daily, then removed<br/>(rolled_up_source_runs); processing_jobs<br/>are never removed (G4)"]:::done
+    P1 --> P2 --> P4 --> P3 --> P5
+    P5 ~~~ P6
   end
 
   subgraph LEGEND["Status legend"]
-    L1["done: on master or ships in this PR"]:::done
-    L2["wip: PR #10 Part 2, in flight"]:::wip
+    L1["all done (every element is on master)"]:::done
   end
 
-  P5 -.-> W1
-  R1 -.-> W2
+  DEMO ~~~ TEXT ~~~ COMPACT ~~~ LEGEND
 
   classDef done fill:#e8f5e9,stroke:#2e7d32,color:#1b3d1f
-  classDef wip fill:#fff8e1,stroke:#b7791f,color:#5c3d00,stroke-dasharray:5 3
   classDef planned fill:#f2f2f2,stroke:#8a8a8a,color:#4a4a4a,stroke-dasharray:2 3

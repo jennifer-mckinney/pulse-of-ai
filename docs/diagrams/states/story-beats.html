@@ -29,11 +29,11 @@
 <pre class="mermaid">
 %% Title: State · the 11-beat scroll story and explore
 %% Summary: The page's story beats in order (scroll progress picks the active beat), the shortcuts into explore, and what explore offers once the reader drives.
-%% Sources: public/js/config/story.config.js (STORY, 11 beats), public/js/story.js (onScroll, jump, explore threshold, pulse:* events), public/js/main.js (scrollToExplore), public/js/ui.js (explore chrome, drawers), public/index.html. Spec: TECHNICAL_SPEC.md section 11; PRD section 4.3 (FuN.zip prototype).
+%% Sources: public/js/config/story.config.js (STORY, 11 beats), public/js/story.js (onScroll, jump, explore threshold, pulse:* events), public/js/main.js (scrollToExplore, about panel), public/js/config/legal.config.js, public/js/ui.js (explore chrome, drawers), public/index.html. Spec: TECHNICAL_SPEC.md section 11; PRD section 4.3 (FuN.zip prototype).
 stateDiagram-v2
   direction LR
 
-  [*] --&gt; overview : page load (data mode then live, demo, mixed, none or fallback)
+  [*] --&gt; overview : page load (data mode unknown, then live, demo, mixed, none or fallback)
 
   state "0 · overview&lt;br/&gt;intro, REFRESH CYCLE 2–3 MIN" as overview
   state "1 · volume&lt;br/&gt;CHAPTER 01 · VOLUME LEADERS" as volume
@@ -64,6 +64,8 @@ stateDiagram-v2
     Any beat: a progress rail dot jumps to its beat.
     The SKIP STORY · EXPLORE pill (shown once progress
     passes 0.14, outside explore) jumps to explore.
+    The header about chip toggles the about panel
+    (licence, source code, legal notice; legal.config.js).
   end note
 
   state explore {
@@ -77,20 +79,20 @@ stateDiagram-v2
     receipt --&gt; city : close
     city --&gt; free : close
     free --&gt; health : header health chip (also on every story beat)
-    health : health drawer, alert history, methodology, sources
+    health : health drawer, system-alert banner, SYSTEM WATCHDOG, alert history, methodology, sources
     health --&gt; free : close
   }
 
   note right of negativity
-    With live data, CH03 and CH04 show a featured post
+    Unless on the bundled fallback, CH03 and CH04 show a featured post
     whose "Why does it say that?" button opens the
     same audit drawer (PulseUI.openAudit, or the
     pulse:trace event if ui.js has not loaded)
   end note
 
   note right of summary
-    legend: all done (every beat here is on master
-    or ships in this PR)
+    legend: done: on master, or ships in this PR
+    (the legal-notice UI)
   end note
 
   classDef done fill:#e8f5e9,stroke:#2e7d32,color:#1b3d1f

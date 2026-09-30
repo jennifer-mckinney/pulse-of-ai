@@ -1,6 +1,6 @@
 %% Title: Collection cycle · part 2 of 3 · fetch, normalise, store, score
-%% Summary: What one open route of a claimed source does: the guarded HTTP fetch, normalisation with redaction and the provenance fingerprint, storage, inline scoring with audit rows, and the run record.
-%% Sources: src/collectors/{index,base,http,netguard,transport,robots,normalize,identity,provenance,errors,redact,state,cycle,runner}.js, src/pipeline/{ingest,sentiment,relevance,discourse}.js. Spec: TECHNICAL_SPEC.md section 8 (PII handling, provenance); ADR 0001 (terms and politeness, D2).
+%% Summary: What one open route of a claimed source does: the guarded HTTP fetch, normalisation with redaction, the admission filter and the provenance fingerprint, storage with the ingest and admission versions, scoring (ingest queue for scheduled and refresh runs, inline for npm run collect and standup) with audit rows, and the run record.
+%% Sources: src/collectors/{index,base,http,netguard,transport,robots,normalize,identity,provenance,errors,redact,state,cycle,runner,ai-filter}.js, src/workers/{collect,ingest}.worker.js, src/pipeline/{ingest,sentiment,relevance,discourse,methodology}.js, src/config/methodology-registry.js; migrations 022, 031, 040, 042. Spec: TECHNICAL_SPEC.md section 8 (PII handling, provenance); ADR 0001 (terms and politeness, D2); PR #22 decision G6.
 flowchart LR
 
   subgraph FETCH["Fetch · one collector per open route"]
@@ -15,40 +15,41 @@ flowchart LR
 
   subgraph NORM["Normalise · base.js collect() → toPayload()"]
     direction TB
-    N1["17 · raw text capped, HTML to text (linear),<br/>identity redaction, ingest@1.5.0: e-mails, @handles,<br/>Reddit u/ names, phones, profile links, cc names,<br/>sign-offs, Wikipedia unsigned notes"]:::done
+    N1["17 · raw text capped, HTML to text (linear),<br/>identity redaction, ingest@1.7.0: e-mails, @handles,<br/>Reddit u/ names, phones, profile links, cc names,<br/>sign-offs, Wikipedia unsigned notes"]:::done
     N2["18 · allowlisted payload: title, text, link unless an<br/>identity link, published_at, language, city-level<br/>location (basis content or publisher), licence,<br/>attribution; an identity-bearing upstream id is<br/>stored only as route:fp:HMAC"]:::done
     N3["19 · provenance_fingerprint = HMAC-SHA256(<br/>PROVENANCE_KEY or AUDIT_HASH_KEY,<br/>slug : upstream id : source URL)"]:::done
-    N4["20 · drop items older than maxAgeDays (default 7);<br/>AI scope filter on scope 'filter' routes;<br/>dedupe within the batch"]:::done
+    N4["20 · drop items older than maxAgeDays (default 7);<br/>admission filter admission_filter@1.0.0<br/>(AI scope, ai-filter.js) on scope 'filter' routes;<br/>dedupe within the batch"]:::done
     N1 --> N2 --> N3 --> N4
   end
 
   subgraph STORE["Store and score · pipeline/ingest.js"]
     direction TB
-    T1["21 · storeRawPost(): strip NUL, drop PII_FIELDS,<br/>SHA-256 content hash, dedupe on<br/>(source_id, external_id), insert raw_posts<br/>with provenance_fingerprint and ingest_mv_id"]:::done
+    T1["21 · storeRawPost(): strip NUL, drop PII_FIELDS,<br/>SHA-256 content hash, dedupe on<br/>(source_id, external_id), insert raw_posts (text only<br/>in content) with provenance_fingerprint, ingest_mv_id<br/>and admission_mv_id, plus one data_retention_log<br/>row 'collected' in the same statement"]:::done
     T2{"new post?"}:::done
-    T3["22 · join the cycle job: cycle.currentCycleJob()<br/>advisory lock; the running cron job of this<br/>window or a new one; inflight_runs + 1"]:::done
-    T4["23 · scorePost(): sentiment, relevance, discourse;<br/>each writes its *_results row and one<br/>decision_audit_log row (current methodology)"]:::done
-    T5["scoring failed → reserveRetry + ingest job;<br/>enqueue failed → run error, the 24 h<br/>unscored sweep re-queues the post"]:::done
+    T3["22 · the run's job: a scheduled run joins the cycle job<br/>(cycle.currentCycleJob(), advisory lock; the running<br/>cron job of this window or a new one; inflight_runs + 1);<br/>a refresh uses its pre-created job; npm run collect<br/>and standup create theirs at the first new post"]:::done
+    T7{"scoreVia?"}:::done
+    T4["23 · queue (scheduled and refresh runs):<br/>reserveRetry (inflight_runs + 1), then one<br/>ingest job per new post (id score-#lt;post#gt;);<br/>ingest.worker scores it under its own job,<br/>releases the slot, applies the embed gate"]:::done
+    T8["23 · inline (npm run collect, standup):<br/>scorePost(): sentiment, relevance, discourse;<br/>each writes its *_results row and one<br/>decision_audit_log row (current methodology)"]:::done
+    T5["inline scoring failed → reserveRetry + ingest<br/>retry job; an enqueue failed (either mode) →<br/>slot released, run error, the 24 h<br/>unscored sweep re-queues the post"]:::done
     T6["store failed → restore the route's cursor<br/>and HTTP validators, run error"]:::done
     T1 --> T2
-    T2 -- yes --> T3 --> T4
+    T2 -- yes --> T3 --> T7
+    T7 -- queue --> T4
+    T7 -- inline --> T8
   end
 
   subgraph RECORD["Record the run · state.js, runner.js"]
     direction TB
     V1["24 · classify errors: error_kind + http_status only;<br/>error text scrubbed of every secret (redact.js)"]:::done
-    V2["25 · saveOutcome() on source_collection_state:<br/>cursor, HTTP validators, last success / error,<br/>consecutive_failures"]:::done
+    V2["25 · saveOutcome() on source_collection_state:<br/>cursor, HTTP validators, last success / error,<br/>last_new_post_at, consecutive_failures"]:::done
     V3["26 · refused → recordRefusal(): refused_until,<br/>refusal_count + 1, one critical source_refused<br/>alert; a successful probe clears it;<br/>then unchanged run → unchanged_runs + 1,<br/>else one source_runs row"]:::done
-    V4["27 · embed gate: relevance ≥ 1/20 (one lexicon<br/>match) → one embed job per new post"]:::done
-    V5["28 · leaveCycle(): counts added, inflight_runs − 1<br/>(always, in finally) → part 3"]:::done
+    V4["27 · inline runs: embed gate relevance ≥ 1/21<br/>(relevance@1.2.0, one of its 21 terms) → one<br/>embed job per new post (queued runs: the<br/>ingest worker applies the same gate)"]:::done
+    V5["28 · scheduled run: leaveCycle(): counts added,<br/>inflight_runs − 1 (always, in finally); a one-shot<br/>job touches last_progress_at before and after<br/>every source, then completes or awaits<br/>its scoring retries → part 3"]:::done
     V1 --> V2 --> V3 --> V4 --> V5
   end
 
-  W1["collect stores and hands scoring<br/>to the ingest queue (new topology)"]:::wip
-
   subgraph LEGEND["Status legend"]
-    L1["done: on master or ships in this PR"]:::done
-    L2["wip: PR #10 Part 2, in flight"]:::wip
+    L1["all done (every element is on master)"]:::done
   end
 
   F5 -- yes --> V1
@@ -56,10 +57,11 @@ flowchart LR
   N4 --> T1
   T1 -. "insert error" .-> T6 --> V1
   T2 -- "no, duplicate" --> V1
-  T4 -. "error" .-> T5 --> V1
+  T8 -. "error" .-> T5
+  T4 -. "enqueue error" .-> T5
+  T5 --> V1
   T4 --> V1
-  T4 -.-> W1
+  T8 --> V1
 
   classDef done fill:#e8f5e9,stroke:#2e7d32,color:#1b3d1f
-  classDef wip fill:#fff8e1,stroke:#b7791f,color:#5c3d00,stroke-dasharray:5 3
   classDef planned fill:#f2f2f2,stroke:#8a8a8a,color:#4a4a4a,stroke-dasharray:2 3

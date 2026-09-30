@@ -29,7 +29,7 @@
 <pre class="mermaid">
 %% Title: State · source gate status
 %% Summary: The runtime status of one registry source, as GET /api/sources, the health drawer and the scheduler see it, and what moves a source between statuses.
-%% Sources: src/config/source-registry.js (GATE_STATUSES, sourceStatus, killReason, openRoutes), src/collectors/status.js (registryFields, isOnline, RUNTIME_STATUSES), src/collectors/refusal.js, src/collectors/state.js, scripts/source-admin.js. Spec: TECHNICAL_SPEC.md section 17; ADR 0001 (gate status, kill switches, the blocked 4, the refused state, D1).
+%% Sources: src/config/source-registry.js (GATE_STATUSES, sourceStatus, killReason, openRoutes, routesAwaitingApproval, namedApproval, isGatedRoute), src/collectors/status.js (registryFields, isOnline, RUNTIME_STATUSES), src/collectors/refusal.js (refusalGate, envReset), src/collectors/state.js, src/collectors/governance.js (recordGateTransitions), scripts/source-admin.js; migrations 018, 020, 035, 056. Spec: TECHNICAL_SPEC.md section 17; ADR 0001 (gate status, kill switches, the blocked 4, the refused state, D1); PR #22 decision G5 (named approval).
 stateDiagram-v2
   direction LR
 
@@ -43,24 +43,25 @@ stateDiagram-v2
   state "collecting" as collecting
   state "blocked_by_source" as blocked_by_source
 
-  disabled --&gt; collecting : contact URL set and a route open
+  disabled --&gt; collecting : contact URL set and a route open (a keyless route, or a gated route with its env set and a valid GATE_APPROVED_BY)
   disabled --&gt; awaiting_key : contact URL set, closedStatus awaiting_key
   disabled --&gt; awaiting_approval : contact URL set, closedStatus awaiting_approval
   disabled --&gt; awaiting_licence : contact URL set, closedStatus awaiting_licence
-  [*] --&gt; blocked : auth kind blocked, no permission route open (reported even without COLLECTOR_CONTACT_URL, only a kill switch overrides it to disabled)
+  [*] --&gt; blocked : auth kind blocked, no permission route open or awaiting approval (reported even without COLLECTOR_CONTACT_URL)
 
-  awaiting_key --&gt; collecting : free key set in env
-  awaiting_approval --&gt; collecting : the route's required env set (approval ref, credentials or dataset path), or the operator ack for a permission-gated feed
-  awaiting_licence --&gt; collecting : the route's required env set (licence ref and/or key or credentials), or the operator ack for a permission-gated feed
-  blocked --&gt; collecting : the official permission env recorded (Tencent, Telegram, ResearchGate, Cato)
+  awaiting_key --&gt; collecting : free key set in env and a valid GATE_APPROVED_BY
+  awaiting_approval --&gt; collecting : the route's required env set (approval ref, credentials or dataset path, or the operator ack for a permission-gated feed) and a valid GATE_APPROVED_BY
+  awaiting_licence --&gt; collecting : the route's required env set (licence ref and/or key or credentials, or the operator ack for a permission-gated feed) and a valid GATE_APPROVED_BY
+  blocked --&gt; collecting : the official permission env recorded (Tencent, Telegram, ResearchGate, Cato), the contact URL set and a valid GATE_APPROVED_BY
+  blocked --&gt; disabled : a kill switch, or the permission env recorded while COLLECTOR_CONTACT_URL is empty
 
   collecting --&gt; disabled : env kill switch (COLLECTORS_ENABLED=false, COLLECTORS_DISABLED, SOURCE_SLUG_ENABLED=false) needs a container recreate
-  collecting --&gt; disabled : database kill switch (source-admin disable), applies before the next run
-  disabled --&gt; collecting : source-admin enable, or the env switch removed
+  collecting --&gt; disabled : database kill switch (source-admin disable, needs GATE_APPROVED_BY), applies before the next run
+  disabled --&gt; collecting : source-admin enable (needs GATE_APPROVED_BY), or the env switch removed
   collecting --&gt; blocked_by_source : 401, 403, 451, bot challenge or robots disallow, cooldown 1 h doubling to 24 h
   blocked_by_source --&gt; collecting : cooldown over and the one probe run succeeds
   blocked_by_source --&gt; blocked_by_source : probe refused again, cooldown doubles
-  blocked_by_source --&gt; collecting : SOURCE_SLUG_RESET date or source-admin reset
+  blocked_by_source --&gt; collecting : SOURCE_SLUG_RESET date on or after the refusal with a valid GATE_APPROVED_BY, or source-admin reset (needs GATE_APPROVED_BY)
 
   state collecting {
     direction LR
@@ -75,8 +76,15 @@ stateDiagram-v2
     resolved when the state clears
   end note
   note left of awaiting_approval
-    Reddit today, until Reddit approves the app
-    and all four REDDIT_* variables are set
+    Reddit today, until Reddit approves the app,
+    all four REDDIT_* variables are set and
+    GATE_APPROVED_BY names the approver.
+    G5: a gated route configured without a valid
+    GATE_APPROVED_BY ("Name YYYY-MM-DD") keeps the
+    source in its closed status (a blocked source
+    stays blocked) with the reason
+    "awaiting named approval"; removing the
+    approval closes an open gated source again
   end note
 
   note left of disabled
@@ -84,15 +92,15 @@ stateDiagram-v2
     npm run source:disable -- slug --reason why
     npm run source:enable -- slug
     npm run source:reset -- slug --note why
+    each needs GATE_APPROVED_BY, its recorded actor;
+    every gate change is appended to source_gate_events
   end note
 
   note right of collecting
-    legend: all done (every status here is on master
-    or ships in this PR)
+    legend: all done (every element is on master)
   end note
 
   classDef done fill:#e8f5e9,stroke:#2e7d32,color:#1b3d1f
-  classDef wip fill:#fff8e1,stroke:#b7791f,color:#5c3d00,stroke-dasharray:5 3
   class disabled, awaiting_key, awaiting_approval, awaiting_licence, blocked, collecting, blocked_by_source done
 </pre>
 <script>mermaid.initialize({ startOnLoad: true, theme: 'forest', securityLevel: 'strict', maxTextSize: 200000 });</script>

@@ -29,7 +29,7 @@
 <pre class="mermaid">
 %% Title: State · processing job lifecycle
 %% Summary: The statuses a processing_jobs row moves through, for scheduled collection cycles and for single jobs (refresh, standup, manual, demo), and when bias checks run.
-%% Sources: src/collectors/cycle.js (currentCycleJob, claimDueCycles, closeCycles), src/collectors/runner.js, src/routes/refresh.js, src/workers/collect.worker.js, scripts/populate.js, src/db/migrations/001, 019, 021. Spec: TECHNICAL_SPEC.md sections 7 (POST /api/refresh) and 9 (when bias checks run).
+%% Sources: src/collectors/cycle.js (currentCycleJob, claimDueCycles, closeCycles), src/collectors/runner.js (scoreVia, touch), src/collectors/stale-jobs.js (sweepStaleJobs), src/workers/maintenance.worker.js, src/routes/refresh.js, src/workers/{collect,ingest}.worker.js, scripts/populate.js, src/db/migrations/001, 019, 021, 040. Spec: TECHNICAL_SPEC.md sections 7 (POST /api/refresh), 9 (when bias checks run) and 19 (Tier 3); PR #22 decision G4.
 stateDiagram-v2
   direction LR
 
@@ -46,10 +46,10 @@ stateDiagram-v2
   closing --&gt; completed : posts counted from decision_audit_log, bias checks once when posts exist
   closing --&gt; failed : close error (scrubbed)
 
-  running --&gt; completed : single job run finished, bias checks when it stored new posts
-  running --&gt; awaiting : single job with reserved scoring retries still outstanding
+  running --&gt; completed : single job run finished with no reserved scoring slot held, bias checks when it scored new posts inline
+  running --&gt; awaiting : single job still holding reserved scoring slots (a refresh's queued ingest jobs, or scoring retries)
   awaiting --&gt; closing : retries done (inflight_runs 0) or hard cap reached
-  running --&gt; failed : single job only — run threw (a cron cycle stays running), enqueue failed (refresh 503), or a refresh job stale after REFRESH_STALE_MINUTES
+  running --&gt; failed : single job only — run threw (a cron cycle stays running), enqueue failed (refresh 503), or no progress (last_progress_at, else started_at) for REFRESH_STALE_MINUTES (api) or STALE_JOB_MINUTES (30), marked by the refresh route or the stale-job sweeper (maintenance job, every 5 min)
 
   completed --&gt; [*]
   failed --&gt; [*]
@@ -61,8 +61,8 @@ stateDiagram-v2
   end note
 
   note right of completed
-    legend: all done (every state here is on master
-    or ships in this PR)
+    rows are never removed (spec section 19 Tier 3, G4).
+    legend: all done (every element is on master)
   end note
 
   classDef done fill:#e8f5e9,stroke:#2e7d32,color:#1b3d1f
