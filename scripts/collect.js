@@ -37,17 +37,63 @@ function parseArgs(argv) {
 class UsageError extends Error {}
 
 /**
+ * PR #22 security M2: the supervised run's READ-ONLY view of a source's
+ * database governance state — the kill switch (data_sources, F10-10) and
+ * the refusal state (source_collection_state, F10-5). One SELECT; nothing
+ * is written.
+ * @returns {Promise<object|null>} null when the source has no data_sources row
+ */
+async function readGovernance(slug) {
+    const { dbGet } = require('../src/db/connection');
+    const row = await dbGet(
+        `SELECT ds.collection_disabled_at AS disabled_at, ds.collection_disabled_reason AS disabled_reason,
+                ds.collection_disabled_by AS disabled_by,
+                s.access_denied_at, s.access_denied_status, s.access_denied_kind, s.refused_until, s.refusal_count
+         FROM data_sources ds
+         LEFT JOIN source_collection_state s ON s.source_id = ds.id
+         WHERE ds.name = $1`,
+        [slug],
+    );
+    return row || null;
+}
+
+/**
+ * Refuse (UsageError) when the database says this source must not be
+ * contacted: its kill switch is set, or it refused us and its cooldown has
+ * not ended — exactly what the worker's runner honours. Fails closed: a
+ * source with no data_sources row cannot be checked, so it is refused too.
+ */
+function assertDbGatesOpen(slug, gov, env, now = Date.now()) {
+    const { refusalGate } = require('../src/collectors/refusal');
+    if (!gov) {
+        throw new UsageError(`${slug} has no data_sources row, so its kill switch and refusal state cannot be checked `
+            + '— run `npm run seed` first');
+    }
+    if (gov.disabled_at) {
+        throw new UsageError(`${slug} is disabled by the database kill switch`
+            + `${gov.disabled_by ? ` (by ${gov.disabled_by})` : ''}${gov.disabled_reason ? ` — ${gov.disabled_reason}` : ''}`
+            + `; enable it with npm run source:enable -- ${slug} before a supervised run`);
+    }
+    const gate = refusalGate(gov, slug, env, now);
+    if (gate.state === 'cooldown') throw new UsageError(`${slug} is in its refusal cooldown: ${gate.reason}`);
+    return gate;
+}
+
+/**
  * P10-17: the supervised first run of a newly keyed source. Fetches every
  * OPEN route of ONE source through the real collectors and the polite HTTP
  * client (robots, allowed hosts and redaction all apply), prints what it got
  * and a sample of the payloads exactly as they would be stored, and stores
- * NOTHING: no raw_posts, scores, cursor, collection state or job — it does
- * not touch the database. The operator reads the sample and signs off before
+ * NOTHING: no raw_posts, scores, cursor, collection state or job — its only
+ * database access is ONE read of the source's kill switch and refusal state
+ * (PR #22 security M2), which it honours. The operator reads the sample and signs off before
  * the credential goes into the worker's env, which is what schedules the
  * source (README, "Adding a keyed source").
  * @returns {Promise<{ slug, status, routes: object[], sample: object[] }>}
  */
-async function supervisedRun({ slug, env = process.env, transport, out = line => process.stdout.write(line + '\n') }) {
+async function supervisedRun({
+    slug, env = process.env, transport, out = line => process.stdout.write(line + '\n'), governance = readGovernance,
+}) {
     const { getSource, sourceStatus } = require('../src/config/source-registry');
     const { buildCollectors } = require('../src/collectors/index');
     const { HttpClient } = require('../src/collectors/http');
@@ -57,6 +103,9 @@ async function supervisedRun({ slug, env = process.env, transport, out = line =>
     if (st.status !== 'collecting') {
         throw new UsageError(`${slug} is not collecting under this environment (${st.status}): ${st.reason}`);
     }
+    // PR #22 security M2: the database kill switch and the refusal cooldown
+    // apply to a supervised run as to every scheduled one (read-only).
+    assertDbGatesOpen(slug, await governance(slug), env);
     out(`SUPERVISED DRY RUN — ${src.name} (${slug}); routes: ${st.openRoutes.join(', ')}`);
     out('Nothing is stored: no posts, scores, cursors or collection state are written.');
     const http = new HttpClient({ env, transport });
@@ -75,22 +124,25 @@ async function supervisedRun({ slug, env = process.env, transport, out = line =>
         }
     }
     out(`Sample (${sample.length} of what would be stored, text as redacted):`);
+    // PR #22 security L5: the sample lines go through the scrubber like the
+    // warnings and errors above — a feed link or "self" URL can carry a
+    // token or api_key (scrub also redacts credential query parameters).
     for (const p of sample) {
         const text = String(p.text || '').replace(/\s+/g, ' ');
-        out(`  - [${p.published_at || 'no date'}] ${p.id}${p.location ? ` · ${p.location} (${p.location_basis})` : ''}`);
-        out(`    ${text.slice(0, 200)}${text.length > 200 ? '…' : ''}`);
-        if (p.url) out(`    ${p.url}`);
+        out(scrub(`  - [${p.published_at || 'no date'}] ${p.id}${p.location ? ` · ${p.location} (${p.location_basis})` : ''}`, env));
+        out(scrub(`    ${text.slice(0, 200)}${text.length > 200 ? '…' : ''}`, env));
+        if (p.url) out(scrub(`    ${p.url}`, env));
     }
     out('Sign-off: if the sample is on topic and carries no personal data beyond the ingest claim, add the credential to '
         + 'the worker\'s env and recreate it (docker compose up -d worker web) to schedule the source.');
     return { slug, status: st.status, routes, sample };
 }
 
-async function main(argv, out = line => process.stdout.write(line + '\n'), { transport, env } = {}) {
+async function main(argv, out = line => process.stdout.write(line + '\n'), { transport, env, governance } = {}) {
     const parsed = parseArgs(argv);
     if (parsed.error) throw new UsageError(parsed.error);
     const { slugs } = parsed;
-    if (parsed.supervised) return supervisedRun({ slug: slugs[0], out, transport, env });
+    if (parsed.supervised) return supervisedRun({ slug: slugs[0], out, transport, env, governance });
     const s = await runCollection({ slugs, triggeredBy: 'manual', log: out });
     out(`job ${s.jobId}: ${s.sourcesQueried} sources queried, ${s.postsCollected} items collected, `
         + `${s.postsProcessed} new posts scored, ${s.embedQueued} embed jobs queued, `
@@ -122,7 +174,7 @@ if (require.main === module) {
         })
         .catch(async (err) => {
             if (err instanceof UsageError) {
-                process.stderr.write(`${err.message}\n`);
+                process.stderr.write(`${scrub(err.message)}\n`);
                 await db.closePool().catch(() => {});
                 process.exit(2);
             }
@@ -133,4 +185,6 @@ if (require.main === module) {
         });
 }
 
-module.exports = { main, parseArgs, supervisedRun, closeQueuesIfOpened, UsageError, USAGE, SAMPLE_SIZE };
+module.exports = {
+    main, parseArgs, supervisedRun, readGovernance, assertDbGatesOpen, closeQueuesIfOpened, UsageError, USAGE, SAMPLE_SIZE,
+};

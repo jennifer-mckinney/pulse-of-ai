@@ -492,7 +492,7 @@ describe('migration 028 ↔ methodology registry (bias@1.3.0, P10-5)', () => {
     });
 
     test('bias@1.3.0 (superseded by 1.4.0, never edited); 1.2.0 carries no minimum', () => {
-        expect(['1.3.0', '1.4.0']).toContain(latest('bias').version);
+        expect(['1.3.0', '1.4.0', '1.5.0']).toContain(latest('bias').version);
         expect(registry('bias', '1.2.0').config.location_min_sample).toBeUndefined();
         const reg = registry('bias', '1.3.0');
         const prev = registry('bias', '1.2.0');
@@ -575,14 +575,40 @@ describe('migration 032 ↔ methodology registry (bias@1.4.0, minimum samples)',
         expect(SQL_032).not.toMatch(/DO UPDATE|UPDATE methodology_versions|DELETE|DROP|TRUNCATE/);
     });
 
-    test('bias@1.4.0 is current; every check has a minimum; the SQL uses the registered numbers', () => {
+    test('bias@1.4.0 (superseded by 1.5.0, never edited); every check has a minimum; the SQL uses the registered numbers', () => {
         const reg = registry('bias', '1.4.0');
-        expect(latest('bias').version).toBe('1.4.0');
+        expect(['1.4.0', '1.5.0']).toContain(latest('bias').version);
         expect(reg.config).toMatchObject({ location_min_sample: 30, parity_min_per_category: 10, negative_min_sample: 30 });
         expect(reg.config.sample_rules.basis).toMatch(/n >= 30/);
         expect(SQL_032).toMatch(/p\.n >= 10\b/);
         expect(SQL_032).toMatch(/l\.sample < 30\b/);
         expect(SQL_032).toMatch(/n\.sample < 30\b/);
         expect(registry('bias', '1.3.0').config.parity_min_per_category).toBeUndefined();
+    });
+});
+
+// PR #22 decision G2: the rolling 24 h window (bias@1.5.0, migration 060).
+describe('migration 060 ↔ methodology registry (bias@1.5.0, rolling window)', () => {
+    const { generate } = require('../../../scripts/generate-methodology-migration');
+    const SQL_060 = fs.readFileSync(path.join(__dirname, '../../../src/db/migrations/060_bias_rolling_window.sql'), 'utf8');
+
+    test('060 ends with exactly the generated bias@1.5.0 row, is additive and deletes nothing', () => {
+        expect(SQL_060.endsWith(generate(['bias@1.5.0']))).toBe(true);
+        expect((SQL_060.match(/INSERT INTO methodology_versions/g) || []).length).toBe(1);
+        expect(SQL_060).not.toMatch(/DO UPDATE|UPDATE [a-z_]+ SET|DELETE FROM|DROP TABLE|TRUNCATE/);
+        expect(SQL_060).toMatch(/CREATE TABLE IF NOT EXISTS bias_window_runs/);
+        expect(SQL_060).toMatch(/CREATE TABLE IF NOT EXISTS bias_window_assessments/);
+        expect(SQL_060).toMatch(/bias_window_assessments_append_only BEFORE UPDATE OR DELETE/);
+    });
+
+    test('bias@1.5.0 is current: bias@1.4.0 plus the 24 h window; every per-cycle rule unchanged', () => {
+        expect(latest('bias').version).toBe('1.5.0');
+        const reg = registry('bias', '1.5.0');
+        const prev = registry('bias', '1.4.0');
+        for (const k of Object.keys(prev.config)) expect(reg.config[k]).toEqual(prev.config[k]);
+        expect(reg.config.rolling_window).toMatchObject({ hours: 24 });
+        expect(reg.config.rolling_window.decision).toMatch(/G2.*Jennifer McKinney 2026-09-29/);
+        expect(reg.justification).toMatch(/rolling 24-hour window/);
+        expect(reg.model_name).toBe(prev.model_name);
     });
 });

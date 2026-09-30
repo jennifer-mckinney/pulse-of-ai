@@ -195,3 +195,35 @@ test('health reports failed collection cycles of the last hour (failed_jobs_abno
     await wd.init();
     expect((await poll(wd)).opened).toEqual(['failed_jobs_abnormal']);
 });
+
+// PR #22 integration (alerting × governance × bias-security): every
+// maintenance scheduler the worker registers — retention, daily (which runs
+// the G2 rolling bias window as a step) and terms — is watched. A task whose
+// latest run failed opens maintenance_failing naming it, and a clean run
+// clears it, so no scheduler can be added to maintenance.worker.js TASKS
+// without the watchdog seeing it.
+test('the watchdog watches every maintenance scheduler, including the daily bias_window step', async () => {
+    const { processMaintenanceJob, TASKS, defaultSteps } = require('../../src/workers/maintenance.worker');
+    expect(Object.keys(TASKS).sort()).toEqual(['daily', 'retention', 'terms']);
+    expect(defaultSteps({ task: 'daily' }).map(([name]) => name)).toContain('bias_window');
+
+    const wd = watchdog();
+    await wd.init();
+    for (const task of Object.keys(TASKS)) {
+        const steps = task === 'daily'
+            ? [['compaction', async () => 0], ['source_runs', async () => 0],
+                ['bias_window', async () => { throw new Error('window query failed'); }]]
+            : [[`${task}_step`, async () => { throw new Error('boom'); }]];
+        await expect(processMaintenanceJob({ data: { task } }, { steps, logError: () => {} })).rejects.toThrow();
+        expect((await poll(wd)).opened).toEqual(['maintenance_failing']);
+        const alert = await dbGet(`SELECT details FROM alert_events
+                                   WHERE alert_type = 'watchdog_maintenance_failing' AND resolved_at IS NULL`);
+        expect(alert.details.summary).toBe(`${task}: latest run failed`);
+        if (task === 'daily') expect(JSON.stringify(alert.details)).toMatch(/bias_window: window query failed/);
+
+        // A clean run of the same task clears the condition.
+        t = new Date(t.getTime() + 1000);
+        await processMaintenanceJob({ data: { task } }, { steps: [['ok', async () => 0]] });
+        expect((await poll(wd)).cleared).toEqual(['maintenance_failing']);
+    }
+});

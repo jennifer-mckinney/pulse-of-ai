@@ -32,7 +32,8 @@
     "verify": "bash scripts/test/run-all.sh",
     "collect:smoke": "node scripts/collect-smoke.js",
     "collect": "node scripts/collect.js",
-    "terms:snapshot": "node scripts/terms-snapshot.js"
+    "terms:snapshot": "node scripts/terms-snapshot.js",
+    "bias:window": "node scripts/bias-window.js"
   },
   "keywords": [
     "ai",

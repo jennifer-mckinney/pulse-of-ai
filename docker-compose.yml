@@ -14,8 +14,10 @@ x-logging: &logging
     max-file: "5"
 
 # Environment of every Node role (migrate, web, worker, populate): the
-# database, Redis, and the two base secrets (AUDIT_HASH_KEY,
-# CORRELATION_SALT). Container-side connection settings are fixed to the
+# database, Redis, and the base secret AUDIT_HASH_KEY (with PROVENANCE_KEY).
+# CORRELATION_SALT is NOT here: only the worker computes pseudonyms, so only
+# the worker gets it; web gets a presence flag (PR #22 security L1).
+# Container-side connection settings are fixed to the
 # compose network; the host-side .env values (POSTGRES_HOST=localhost,
 # POSTGRES_PORT=5434, ...) are for `npm run dev` on the host and are
 # deliberately overridden here.
@@ -41,7 +43,7 @@ x-app-env: &app-env
   AUDIT_HASH_KEY: ${AUDIT_HASH_KEY:-}
   # D2 provenance fingerprint key; empty falls back to AUDIT_HASH_KEY.
   PROVENANCE_KEY: ${PROVENANCE_KEY:-}
-  CORRELATION_SALT: ${CORRELATION_SALT:-}
+  CORRELATION_MIN_CONFIDENCE: ${CORRELATION_MIN_CONFIDENCE:-0.85}
   # Spec §20 DPIA gate: correlation stays off until a completed DPIA is
   # recorded AND the operator enables it (src/pipeline/correlation-gate.js).
   CORRELATION_DPIA_REF: ${CORRELATION_DPIA_REF:-}
@@ -350,7 +352,15 @@ services:
       PULSE_BIND_ADDR: ${PULSE_BIND_ADDR:-127.0.0.1}
       # The process listens on every container interface behind Docker's
       # port publish; the published address decides exposure (src/server.js).
+      # PR #22 security M4: the published address is trusted for the
+      # wildcard listen only in THIS container — PULSE_IN_CONTAINER=1 plus
+      # the runtime's /.dockerenv (src/routes/refresh.js). It can only make
+      # the refresh guard stricter anywhere else.
       HOST: 0.0.0.0
+      PULSE_IN_CONTAINER: "1"
+      # PR #22 security L1: a presence flag, never the salt. The worker
+      # publishes whether the salt is usable (src/workers/heartbeat.js).
+      CORRELATION_SALT_SET: ${CORRELATION_SALT:+set}
       PULSE_CONTAINER_PUBLISHED_ADDR: ${PULSE_BIND_ADDR:-127.0.0.1}
       REFRESH_TOKEN: ${REFRESH_TOKEN:-}
       REFRESH_STALE_MINUTES: ${REFRESH_STALE_MINUTES:-30}
@@ -389,6 +399,9 @@ services:
       # env file above carries it, so it is blanked here (environment wins
       # over env_file). scripts/test/check-compose.sh enforces it.
       SMTP_PASSWORD: ""
+      # PR #22 security L1: the per-deployment correlation salt goes to the
+      # worker ONLY (the embed and correlate jobs compute pseudonyms).
+      CORRELATION_SALT: ${CORRELATION_SALT:-}
     # Healthy = the worker's heartbeat file is fresh (P9-7). It is written
     # every 15 s only after the heartbeat reached Redis, so a stuck worker or
     # one that lost Redis turns unhealthy (src/workers/heartbeat.js).

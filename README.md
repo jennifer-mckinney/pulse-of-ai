@@ -180,7 +180,7 @@ POSTGRES_PORT=5534 POSTGRES_TEST_PORT=5533 REDIS_PORT=6479 npm run standup
 
 ### Live vs demo data
 
-**Standup collects live data first.** The source registry of record is the workbook's 52 sources (`src/config/source-registry.js`, ADR 0001 in `docs/adr/`; Rev. 4 added Reddit as #52 in Forums). The population step runs one real collection job; the worker then collects every *collecting* source on its 2–3 minute schedule (stretched where a documented rate limit needs it), and `POST /api/refresh` enqueues a real collection job to the worker (409 while one is running; `REFRESH_TOKEN` required when the site is bound beyond loopback). Per-source status (collecting, awaiting key / approval / licence, blocked, disabled) is in the health drawer, in `GET /api/sources` and in the smoke check. `.env.example` lists every key, where to get it, and the per-source kill switches (`SOURCE_<SLUG>_ENABLED=false`).
+**Standup collects live data first.** The source registry of record is the workbook's 52 sources (`src/config/source-registry.js`, ADR 0001 in `docs/adr/`; Rev. 4 added Reddit as #52 in Forums). The population step runs one real collection job; the worker then collects every *collecting* source on its 2–3 minute schedule (stretched where a documented rate limit needs it), and `POST /api/refresh` enqueues a real collection job to the worker (409 while one is running; `REFRESH_TOKEN` required when the site is bound beyond loopback or sits behind a reverse proxy). Per-source status (collecting, awaiting key / approval / licence, blocked, disabled) is in the health drawer, in `GET /api/sources` and in the smoke check. `.env.example` lists every key, where to get it, and the per-source kill switches (`SOURCE_<SLUG>_ENABLED=false`).
 
 **Live collection is off on a fresh clone** (ADR 0001, decision D1 "Off for others, on for you"). `COLLECTOR_CONTACT_URL` ships empty: without it every source is disabled and standup populates demo data only, and says so. Collection goes out under the operator's identity, so each operator sets their own contact URL — a page where publishers can reach them. The 8 permission-gated news feeds (BBC, NYT, Guardian, Al Jazeera, WSJ, NBC News, Washington Post, Ars Technica) additionally need `PERMISSION_GATED_FEEDS_ACCEPTED_BY="<your name> <YYYY-MM-DD>"`, which records that you accept the legal risk of reading them (their terms require permission for automated analysis). Run on a terminal, `npm run standup` asks for both; `npm run standup -- --yes` never asks. With the contact URL alone, 23 of the 51 sources collect with no keys; with both and a named approval (below), 31.
 
@@ -208,9 +208,22 @@ When demo data is used, it is honest about what it is:
 
 A source whose key, licence or approval arrives later is not scheduled blind (PR #10 review P10-17):
 
-1. Put the new credential in your shell only (not yet in `.env`) and run a supervised dry run of that one source:
-   `GUARDIAN_API_KEY=... GUARDIAN_COMMERCIAL_LICENSE_REF=... npm run collect -- --supervised --only guardian`
-2. It fetches every open route through the real collectors (robots, allowed hosts, quotas and redaction all apply), prints what each route returned and a sample of up to 5 payloads exactly as they would be stored, and stores nothing: no posts, scores, cursors, collection state or job (it does not touch the database).
+1. Keep the new credential out of `.env` for now, and run a supervised dry run of that one source. **Never type a key on the command line** (a `NAME=value` prefix in front of a command): the whole line is saved in your shell history (`~/.zsh_history`, `~/.bash_history`), which persists, is often backed up or synced, and is outside every log-scrubbing control. Use one of these instead:
+   - Prompt for it. `read -rs` does not echo the key and nothing reaches the history; unset it afterwards:
+     ```bash
+     read -rs -p 'Guardian API key: ' GUARDIAN_API_KEY; echo; export GUARDIAN_API_KEY
+     read -r -p 'Guardian licence reference: ' GUARDIAN_COMMERCIAL_LICENSE_REF; export GUARDIAN_COMMERCIAL_LICENSE_REF
+     npm run collect -- --supervised --only guardian
+     unset GUARDIAN_API_KEY GUARDIAN_COMMERCIAL_LICENSE_REF
+     ```
+     (In zsh, `read -rs` takes the prompt as `read -rs 'GUARDIAN_API_KEY?Guardian API key: '`.)
+   - Or write it with an editor into a private env file outside the repository, readable only by you, load it for this one run, then delete it:
+     ```bash
+     umask 077 && "${EDITOR:-vi}" ~/guardian-trial.env        # GUARDIAN_API_KEY=… and GUARDIAN_COMMERCIAL_LICENSE_REF=…
+     node --env-file="$HOME/guardian-trial.env" scripts/collect.js --supervised --only guardian
+     rm ~/guardian-trial.env
+     ```
+2. It fetches every open route through the real collectors (robots, allowed hosts, quotas and redaction all apply), prints what each route returned and a sample of up to 5 payloads exactly as they would be stored, and stores nothing: no posts, scores, cursors, collection state or job. Its only database access is one read of the source's kill switch and refusal state: a source disabled with `npm run source:disable` or still in its refusal cooldown is refused before any request, exactly as the worker would refuse it.
 3. Sign off if the sample is on topic and carries no personal data beyond the ingest claim. Then add the credential to `.env` and recreate the containers (`docker compose up -d worker web`); the worker schedules the source on its next reschedule.
 
 ### Embeddings
@@ -227,7 +240,7 @@ Every other alert (freshness, retention, bias) is evaluated inside the worker, s
 | Database unreachable | the watchdog's own `SELECT 1` fails, or health reports `db_connected: false` |
 | Valkey unreachable | health reports `redis.reachable: false` |
 | Worker down | Valkey answers but the worker heartbeat is missing or older than 90 s |
-| Maintenance failing or overdue | a maintenance task's latest run failed, or its last success is older than 30 min (retention), 26 h (daily) or 8 days (terms) |
+| Maintenance failing or overdue | a maintenance task's latest run failed, or its last success is older than 30 min (retention), 26 h (daily: compaction, run rollups and the rolling 24 h bias window) or 8 days (terms) |
 | Text retention overdue | text is stored past its retention window, or the window setting is invalid |
 | Collection failing | sources are enabled but none collected successfully in the last hour |
 | Queue backlog abnormal | a queue holds more than 5000 waiting + delayed jobs |
@@ -402,6 +415,7 @@ The schema includes the following core tables:
 | `discourse_scores` | DQI scores per post |
 | `audit_log` | Immutable inference provenance records |
 | `bias_assessments` | Bias evaluations and violation flags |
+| `bias_window_runs` / `bias_window_assessments` | The rolling 24 h bias checks (bias@1.5.0): one run per day or on demand, and its assessments |
 | `methodology_versions` | Versioned algorithm configs with justification |
 | `data_sources` | Registry of the 50 monitored sources |
 | `cross_platform_users` | Pseudonymous verb-noun correlation IDs |
@@ -415,7 +429,7 @@ All endpoints are prefixed `/api`.
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/health` | System health, active alerts (watchdog alerts flagged `system`), data freshness, the watchdog's status (`watchdog`, including e-mail) |
+| `GET` | `/api/health` | System health, active alerts (watchdog alerts flagged `system`), data freshness, the watchdog's status (`watchdog`, including e-mail), the bias insufficient-sample share (`bias_sample`); cached for 5 s (it fans out to Redis and Postgres) |
 | `GET` | `/api/config` | Public config (Mapbox token) for the frontend |
 | `GET` | `/api/posts` | Paginated post list with sentiment |
 | `GET` | `/api/sentiment` | Aggregated sentiment by geography / source |
@@ -445,6 +459,7 @@ ingest → sentiment → relevance → discourse → embeddings → correlation
 | `discourse.js` | DQI scoring across posts |
 | `embeddings.js` | Calls Python service; stores vectors in pgvector |
 | `bias.js` | Demographic-parity / equalized-odds checks; fires alerts |
+| `bias-window.js` | The same checks over a rolling 24 h window, daily and on demand (`npm run bias:window`); the insufficient-sample share per check in `/api/bias/latest` and `/api/health` |
 | `correlation.js` | Cross-platform user clustering by writing style + timing |
 
 ---

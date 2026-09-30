@@ -238,7 +238,11 @@ log(
 const heartbeatRedis = createRedisClient();
 heartbeatRedis.on('error', () => {});
 let lastBeatError = '';
+// PR #22 security L1: the worker (the only role holding CORRELATION_SALT)
+// publishes its correlation gate status for /api/health.
+const { correlationStatus } = require('../pipeline/correlation-gate');
 const stopHeartbeat = startHeartbeat(heartbeatRedis, {
+    correlation: () => correlationStatus(),
     onError: (err) => {
         if (err.message !== lastBeatError) logError(`[heartbeat] ${err.message}`);
         lastBeatError = err.message;

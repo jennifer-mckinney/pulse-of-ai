@@ -10,7 +10,11 @@
 //     assessed_at: ISO8601 | null,
 //     violations: [ { assessment_type, group_field, group_value,
 //                     metric_name, metric_value, threshold, severity } ],
-//     all_assessments: [ ... same shape ... ]
+//     all_assessments: [ ... same shape ... ],
+//     insufficient_sample: { per_cycle: { last_24h, last_7d }, rolling_window:
+//                            { latest_run, last_7d } } — per check
+//                            { assessments, insufficient, share } (PR #22
+//                            principal #11; src/pipeline/bias-window.js)
 //   }
 //
 // GET /api/bias/history
@@ -39,11 +43,11 @@
 //
 // Returns:
 //   200 { window_hours, window_start, generated_at,
-//         total_count, alert_count, pass_count, truncated, alert_cap,
+//         total_count, alert_count, pass_count, insufficient_count, truncated, alert_cap,
 //         alerts: [ { id, time, severity, layer, assessment_type, group_value,
 //                     metric_name, value, threshold, detail, citation,
 //                     model_name, version, lineage } ],
-//         pass_summary: [ { severity: 'pass', layer, assessment_type, count,
+//         pass_summary: [ { severity: 'pass', layer, assessment_type, count, insufficient,
 //                           first_time, last_time, metric_name, latest_value,
 //                           threshold, detail, citation,
 //                           model_name, version, lineage } ] }
@@ -60,6 +64,7 @@ const {
     severityLabel, layerName, citationFor, alertDetail, canonicalAssessmentType,
 } = require('../config/bias-vocabulary');
 const { resolveBiasLineage, loadBiasVersions } = require('../config/bias-lineage');
+const { insufficientSampleReport } = require('../pipeline/bias-window');
 
 const router = Router();
 
@@ -67,6 +72,9 @@ const router = Router();
 // are summarized, never listed), so this only bites in a pathological window;
 // when it does, the response says so (truncated + alert_count).
 const HISTORY_ALERT_CAP = 500;
+
+// group_value of a check below its minimum sample (src/pipeline/bias.js).
+const { INSUFFICIENT_SAMPLE } = require('../pipeline/bias');
 
 /** Lineage-resolved methodology fields for one stored row. */
 function lineageFields(row, versions) {
@@ -90,7 +98,7 @@ function foldPassSummaries(rows, versions) {
         const type = canonicalAssessmentType(r.assessment_type);
         const prev = byType.get(type);
         if (!prev) {
-            byType.set(type, { ...r, assessment_type: type, n: Number(r.n) });
+            byType.set(type, { ...r, assessment_type: type, n: Number(r.n), insufficient: Number(r.insufficient) || 0 });
             continue;
         }
         const newer = new Date(r.last_time) > new Date(prev.last_time) ? r : prev;
@@ -98,6 +106,7 @@ function foldPassSummaries(rows, versions) {
             ...newer,
             assessment_type: type,
             n:          prev.n + Number(r.n),
+            insufficient: prev.insufficient + (Number(r.insufficient) || 0),
             first_time: new Date(r.first_time) < new Date(prev.first_time)
                 ? r.first_time : prev.first_time,
         });
@@ -115,13 +124,19 @@ function foldPassSummaries(rows, versions) {
                 layer:           layerName(r.assessment_type, lin.config),
                 assessment_type: r.assessment_type,
                 count:           r.n,
+                insufficient:    r.insufficient,
                 first_time:      r.first_time,
                 last_time:       r.last_time,
                 metric_name:     r.metric_name,
                 latest_value:    r.metric_value,
                 threshold:       r.threshold,
                 // Deterministic, built only from stored fields.
-                detail: `${r.n} passing check${r.n === 1 ? '' : 's'} in the window · `
+                // PR #22 principal #11: rows below the minimum sample are
+                // not passes; the detail says how many there were.
+                detail: (r.insufficient > 0
+                    ? `${r.n - r.insufficient} passing check${r.n - r.insufficient === 1 ? '' : 's'} and `
+                        + `${r.insufficient} with an insufficient sample in the window · `
+                    : `${r.n} passing check${r.n === 1 ? '' : 's'} in the window · `)
                     + `latest ${r.metric_name} `
                     + `${Number.isFinite(value) ? value.toFixed(3) : 'n/a'} `
                     + `(τ = ${r.threshold}).`,
@@ -158,10 +173,11 @@ router.get('/bias/history', async (req, res) => {
         const counts = await dbGet(
             `SELECT COUNT(*)::int                                  AS total_count,
                     COUNT(*) FILTER (WHERE is_violation)::int      AS alert_count,
-                    COUNT(*) FILTER (WHERE NOT is_violation)::int  AS pass_count
+                    COUNT(*) FILTER (WHERE NOT is_violation)::int  AS pass_count,
+                    COUNT(*) FILTER (WHERE NOT is_violation AND group_value = $3)::int AS insufficient_count
              FROM bias_assessments
              WHERE ${WINDOW}`,
-            params,
+            [...params, INSUFFICIENT_SAMPLE],
         );
 
         const flagged = await dbAll(
@@ -184,11 +200,12 @@ router.get('/bias/history', async (req, res) => {
                     methodology_version_id,
                     created_at                                         AS last_time,
                     COUNT(*)        OVER (PARTITION BY assessment_type) AS n,
+                    COUNT(*) FILTER (WHERE group_value = $3) OVER (PARTITION BY assessment_type) AS insufficient,
                     MIN(created_at) OVER (PARTITION BY assessment_type) AS first_time
              FROM bias_assessments
              WHERE NOT is_violation AND ${WINDOW}
              ORDER BY assessment_type, created_at DESC, id DESC`,
-            params,
+            [...params, INSUFFICIENT_SAMPLE],
         );
 
         const versions = await loadBiasVersions(dbAll);
@@ -221,6 +238,9 @@ router.get('/bias/history', async (req, res) => {
             total_count:  counts.total_count,
             alert_count:  counts.alert_count,
             pass_count:   counts.pass_count,
+            // Of the non-alerting rows, those below their check's minimum
+            // sample (PR #22 principal #11): not evidence of "no bias".
+            insufficient_count: counts.insufficient_count,
             truncated:    alerts.length < counts.alert_count,
             alert_cap:    HISTORY_ALERT_CAP,
             alerts,
@@ -250,12 +270,18 @@ router.get('/bias/latest', async (req, res) => {
              LIMIT 1`,
         );
 
+        // PR #22 principal #11 / G2: how often each check could not reach
+        // its minimum sample (per cycle and in the rolling window), so a
+        // monitor that is always "insufficient sample" is visible.
+        const insufficientSample = await insufficientSampleReport();
+
         if (!latestJob) {
             return res.json({
                 job_id:          null,
                 assessed_at:     null,
                 violations:      [],
                 all_assessments: [],
+                insufficient_sample: insufficientSample,
             });
         }
 
@@ -278,6 +304,7 @@ router.get('/bias/latest', async (req, res) => {
             assessed_at,
             violations,
             all_assessments: all,
+            insufficient_sample: insufficientSample,
         });
     /* istanbul ignore start -- Database failure; requires error injection testing infrastructure */
     } catch (err) {

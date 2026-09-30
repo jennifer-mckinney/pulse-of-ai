@@ -43,6 +43,10 @@
 //                  configured" when SMTP is unset: web never holds the SMTP
 //                  settings, the watchdog reports them. Never-run watchdog:
 //                  reporting false, status "watchdog has not reported".
+//   bias_sample    { per_cycle: { last_24h, last_7d }, rolling_window:
+//                    { latest_run, last_7d } } — per bias check
+//                    { assessments, insufficient, share }: how often it could
+//                    not reach its minimum sample (PR #22 principal #11, G2)
 //   redis          { reachable } — an authenticated PING answered (P9-7)
 //   worker         { alive, last_heartbeat, queues } — the worker's heartbeat
 //                  (src/workers/heartbeat.js); alive = a beat within its TTL;
@@ -58,6 +62,7 @@
 'use strict';
 
 const { logRouteError } = require('../middleware/log-error');
+const { responseCache } = require('../middleware/response-cache');
 
 const { Router }     = require('express');
 const { isConnected, dbGet, dbAll } = require('../db/connection');
@@ -67,11 +72,12 @@ const { DEMO_SOURCE_TYPE, deriveDataMode } = require('../config/data-mode');
 const { findCity } = require('../../public/js/config/cities.config.js');
 
 const { createRedisClient } = require('../queues/connection');
-const { readHeartbeat } = require('../workers/heartbeat');
-const { correlationStatus } = require('../pipeline/correlation-gate');
+const { readHeartbeat, readCorrelationStatus } = require('../workers/heartbeat');
+const { correlationStatus, saltUsableHere } = require('../pipeline/correlation-gate');
 const { sourceRows, summarize } = require('../collectors/status');
 const { overdueBySource } = require('../collectors/retention-overdue');
 const { scrub } = require('../collectors/redact');
+const { insufficientSampleReport } = require('../pipeline/bias-window');
 
 const router = Router();
 
@@ -168,14 +174,34 @@ async function watchdogStatus(now = new Date()) {
     };
 }
 
-/** { redis: { reachable }, worker: { alive, last_heartbeat } } — never throws. */
+/**
+ * PR #22 security L1: the correlation gate status. The web process does not
+ * hold CORRELATION_SALT, so the worker's published status (Redis, with its
+ * heartbeat) is authoritative; without it, the web process reports what it
+ * can judge from its env (the DPIA and switch, and only a presence flag for
+ * the salt: status 'unverified' when the salt is set for the worker).
+ */
+function correlationReport(published, env = process.env) {
+    if (published) {
+        return { enabled: published.enabled, status: published.status, reason: published.reason,
+            checked_by: 'worker', checked_at: published.checked_at };
+    }
+    const { enabled, status, reason } = correlationStatus(env, { saltUsable: saltUsableHere(env) });
+    return { enabled, status, reason, checked_by: 'web', checked_at: null };
+}
+
+/** { redis: { reachable }, worker: { alive, last_heartbeat, queues }, published } — never throws. */
 async function queueStatus() {
     const client = redis();
     try {
         await withTimeout(Promise.resolve().then(() => client.ping()), REDIS_PROBE_TIMEOUT_MS);
     } catch {
-        return { redis: { reachable: false }, worker: { alive: false, last_heartbeat: null, queues: null } };
+        return { redis: { reachable: false }, worker: { alive: false, last_heartbeat: null, queues: null }, published: null };
     }
+    let published = null;
+    try {
+        published = await withTimeout(Promise.resolve().then(() => readCorrelationStatus(client)), REDIS_PROBE_TIMEOUT_MS);
+    } catch { /* unreadable: the web-side report is used */ }
     let worker = { alive: false, last_heartbeat: null };
     try {
         worker = await withTimeout(readHeartbeat(client), REDIS_PROBE_TIMEOUT_MS);
@@ -191,10 +217,16 @@ async function queueStatus() {
             queues[n] = Object.fromEntries(COUNT_STATES.map(k => [k, Number.isFinite(Number(c[k])) ? Number(c[k]) : 0]));
         }
     } catch { /* counts unavailable */ }
-    return { redis: { reachable: true }, worker: { ...worker, queues } };
+    return { redis: { reachable: true }, worker: { ...worker, queues }, published };
 }
 
-router.get('/health', async (req, res) => {
+// PR #22 security L2: /api/health is public and fans out to Redis (8
+// queues) and Postgres on every call. A 5 s response cache, keyed on the
+// path alone (the route takes no parameters, so a varying query string
+// cannot bypass it), bounds that load; the dashboard polls far less often.
+const HEALTH_CACHE_TTL_MS = 5000;
+
+router.get('/health', responseCache(HEALTH_CACHE_TTL_MS, { key: () => 'GET /api/health' }), async (req, res) => {
     try {
         const dbConnected = await isConnected();
 
@@ -274,6 +306,10 @@ router.get('/health', async (req, res) => {
             `SELECT COUNT(*)::int AS n FROM processing_jobs
              WHERE status = 'failed' AND completed_at >= NOW() - INTERVAL '1 hour'`);
         const watchdog = await watchdogStatus();
+        const queue = await queueStatus();
+        // PR #22 principal #11 / G2: the insufficient-sample share per bias
+        // check, per cycle and in the rolling 24 h window.
+        const biasSample = await insufficientSampleReport();
 
         return res.json({
             status:        dbConnected ? 'healthy' : 'degraded',
@@ -291,14 +327,18 @@ router.get('/health', async (req, res) => {
             },
             active_sources: sourceCounts.active_sources,
             demo_feeds:     sourceCounts.demo_feeds,
-            ...(await queueStatus()),
+            redis:          queue.redis,
+            worker:         queue.worker,
             sources,
             maintenance,
             jobs:           { failed_last_hour: failedCycles.n },
             watchdog,
+            bias_sample: biasSample,
             // Spec §20 DPIA gate: correlation is off (explicitly) until a
             // completed DPIA is recorded and the operator enables it.
-            correlation: (({ enabled, status, reason }) => ({ enabled, status, reason }))(correlationStatus()),
+            // PR #22 security L1: from the worker (which alone holds the
+            // salt) when it has published it; checked_by says which.
+            correlation: correlationReport(queue.published),
         });
     /* istanbul ignore start -- Database failure; requires error injection testing infrastructure */
     } catch (err) {
@@ -313,3 +353,4 @@ module.exports._setRedisClientForTests = _setRedisClientForTests;
 module.exports._setQueueCountsForTests = _setQueueCountsForTests;
 module.exports.QUEUE_NAMES = QUEUE_NAMES;
 module.exports.WATCHDOG_NOT_REPORTED = WATCHDOG_NOT_REPORTED;
+module.exports.HEALTH_CACHE_TTL_MS = HEALTH_CACHE_TTL_MS;

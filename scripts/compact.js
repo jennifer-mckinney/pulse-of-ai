@@ -499,11 +499,14 @@ async function closeQueuesIfLoaded() {
 /* istanbul ignore next -- CLI entry point */
 async function main() {
     targetMonth = process.argv[2] || null;
+    // PR #22 security L3: every CLI line goes through the secret scrubber.
+    const { log } = require('../src/workers/logging');
+    const console = { log };
 
     // P9-3: demo data past the retention boundary is deleted first, so it is
     // never compacted (and never reaches a rollup). The purged posts' pending
     // embed jobs are removed (the queue is opened only when a post was purged).
-    const purge = await purgeDemoPosts({ removeEmbedJobs: defaultRemoveEmbedJobs });
+    const purge = await purgeDemoPosts({ removeEmbedJobs: defaultRemoveEmbedJobs, log });
     await closeQueuesIfLoaded();
     console.log(purge.batches === 0
         ? '✓ No demo data past the retention boundary.'
@@ -522,7 +525,7 @@ async function main() {
     let total = { postsCompacted: 0, embeddingsDeleted: 0, contentNulled: 0 };
 
     for (const month of months) {
-        const result = await dbTransaction(client => compactMonth(client, month));
+        const result = await dbTransaction(client => compactMonth(client, month, { log }));
         total.postsCompacted   += result.postsCompacted;
         total.embeddingsDeleted += result.embeddingsDeleted;
         total.contentNulled     += result.contentNulled;
@@ -540,7 +543,8 @@ async function main() {
 /* istanbul ignore next -- CLI entry point */
 if (require.main === module) {
     main().catch(err => {
-        console.error('✗ Compaction failed:', err.message);
+        // PR #22 security L3: scrubbed (a DB error can carry connection details).
+        require('../src/workers/logging').logError(`✗ Compaction failed: ${err && err.message}`);
         process.exit(1);
     });
 }

@@ -38,9 +38,12 @@ const pool = new Pool({
     ...(isTest || process.env.PG_LOCK_TIMEOUT_MS ? { lock_timeout: msEnv('PG_LOCK_TIMEOUT_MS', 5000) } : {}),
 });
 
-// Log pool errors to stderr — do not crash the process
+// Log pool errors to stderr — do not crash the process. PR #22 security
+// L3: through the secret scrubber like every other error line (a driver
+// message can carry connection details); required lazily so this module
+// stays free of load-time dependencies.
 pool.on('error', (err) => {
-    console.error('[db] Unexpected pool error:', err.message);
+    require('../workers/logging').logError(`[db] Unexpected pool error: ${err && err.message}`);
 });
 
 /**
