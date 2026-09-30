@@ -14,6 +14,8 @@
 - Layered retention: 3-month detail → monthly compaction → permanent topic rollups
 - User interaction + query-driven insight delivery (not passive-only)
 
+**PR #22 amendments (collection hardening; described in the sections they change):** the collection admission filter is versioned methodology (`admission_filter@1.0.0`, §10); bias@1.4.0 minimum samples (§9); the maintenance schedule (retention every 5 min, compaction and rollups daily, terms snapshots weekly), `processing_jobs` kept permanently and the new audit and state tables (§6, §19); the correlation DPIA gate (§20); Valkey 8 as the queue store (§5). The docs branch reconciles its v1.2.0 spec against master after PR #22 merges.
+
 ---
 
 ## Table of Contents
@@ -224,7 +226,8 @@ All thresholds below are stored in the `methodology_versions` table with their a
 | Embed service | Infinity (`infinity-embed`) | latest | Dynamic batching, 30-40% throughput gain over plain FastAPI |
 | Sentiment v1 | `sentiment` npm (AFINN) | 5.0.2 | Already installed, synchronous, no API calls |
 | Sentiment v2 | RoBERTa (Python, Phase 2) | — | 80%+ accuracy target; v1 establishes the audit pattern first |
-| Infrastructure | Docker Compose | — | PostgreSQL + test DB in one command |
+| Infrastructure | Docker Compose | 2.39+ | PostgreSQL + test DB + queue store in one command |
+| Job queue | BullMQ on Valkey 8 | 8.1 (pinned digest) | Redis-protocol queue store under BSD-3-Clause; new `valkey_data` volume (Redis 7.4 RDB files do not load) |
 | Node testing | Jest + supertest | — | Unit + integration, 80%+ coverage required |
 | Python testing | pytest | — | Embedding service tests |
 
@@ -270,6 +273,24 @@ alert_events                                                 │  │
 raw_posts.source_id ────────────────────────────────────────┘  │
 data_sources.id ────────────────────────────────────────────────┘
 ```
+
+### Schema additions of PRs #10 and #22 (migrations 025–042)
+
+| Table / column | Migration | Purpose |
+|---|---|---|
+| `alert_resolutions` | 028 | Append-only record of every alert closure: who, why, evidence (`basis`), optional methodology version |
+| `alert_resolution_approvals`, view `alert_status` | 036 | The named approver of methodology supersessions (G1); `alert_status` tells `superseded` from `resolved` |
+| `methodology_errata` | 030 | Errata attached to released methodology rows, which are never edited |
+| `raw_posts.text_removed_at`, `text_removed_reason`; index `idx_raw_posts_text_live` | 025, 031 | Text retention by blanking; live-text lookups |
+| `source_collection_state.last_new_post_at`, `freshness_anchor_at` | 033, 037 | Source freshness (`source_stale`) from a fixed anchor |
+| `source_runs` (30 days raw) → `source_run_daily` | 034 | Run-table retention: daily rollups, raw rows removed after `SOURCE_RUNS_RAW_DAYS` |
+| `source_gate_events`, `source_terms_snapshots` | 035, 041 | Governance: gate changes with who and when; terms snapshots with normalised text and its hash |
+| unique partial index `uq_alerts_open_source` | 038 | At most one open alert per (type, source) |
+| `maintenance_state` | 039 | Last run, last success and last error per maintenance task (`/api/health`) |
+| `processing_jobs.last_progress_at` | 040 | Progress heartbeat of one-shot jobs (the stale-job sweeper uses it, not age) |
+| `raw_posts.admission_mv_id` | 042 | The admission-filter version a post was stored under |
+
+`alert_resolutions`, `alert_resolution_approvals`, `source_gate_events`, `source_terms_snapshots` and `methodology_errata` are append-only: a trigger rejects UPDATE and DELETE (migration 036). Migrations are numbered uniquely and applied in file-name order; gaps in the numbering are allowed.
 
 ### Migration 001 — Core Schema (`src/db/migrations/001_core_schema.sql`)
 
@@ -494,6 +515,8 @@ Returns system status, last job info, and active unresolved alerts.
 **Response 503:** DB unreachable — `{ "status": "degraded", "db_connected": false }`
 
 ---
+
+**Operational fields (PR #10 / #22).** Alongside the fields above, the response carries `alerts_closed` (`{ resolved, superseded }`), `redis` (`{ reachable }`), `worker` (`{ alive, last_heartbeat, queues }` with waiting / active / delayed / failed per BullMQ queue), `sources` (registry status counts), `maintenance` (`{ tasks: { retention, daily, terms }, retention_overdue }`, §19) and `correlation` (the DPIA gate, §20). Open `retention_overdue` (critical), `source_stale`, `source_failing`, `source_refused` and `terms_changed` alerts appear in `active_alerts`.
 
 ### `GET /api/posts/aggregated-by-location`
 Sentiment breakdown by city for Mapbox. Backed by real PostgreSQL GROUP BY query.
@@ -909,6 +932,8 @@ Threshold: |confidence_A - confidence_B| > 0.05 → flag for review
 
 **Minimum sample (bias@1.3.0, P10-5).** Location concentration needs at least 30 content-located posts in the job; below that the assessment is recorded as "insufficient sample" (share stated, no violation, no alert) and the receipt shows the layer as n-a. Stale alerts are resolved through `alert_resolutions` (migration 028), never deleted.
 
+**A minimum sample for every check (bias@1.4.0, migration 032).** Platform sentiment parity compares only source categories with at least 10 posts in the job (fewer than two such categories: "insufficient sample"); negative dominance needs at least 30 posts; location concentration keeps bias@1.3.0's 30 content-located posts. Below a minimum the value is recorded with no violation and no alert. Open alerts this version would not raise were closed as `superseded` with Jennifer McKinney as the named approver (ADR 0001, decision G1), separate from genuinely `resolved` alerts.
+
 ### Alert Flow
 ```
 bias_assessments.is_violation = TRUE
@@ -953,6 +978,10 @@ raw_posts.id
 | Regulator | "What algorithm made this decision?" | Model name, version, config JSONB, justification, date effective |
 | Internal audit | "Did methodology change between runs?" | methodology_versions.deprecated_at shows when and processing_jobs links each run to its version |
 | Researcher | "Can I reproduce this score?" | input fingerprint (keyed) + model_name + config + output — reproducibility trace. The API exposes `input_hash` as HMAC-SHA256(`AUDIT_HASH_KEY`, stored hash), never the raw content hash (prevents offline hash-confirmation of post content); consumers verify content in their own systems |
+
+### Admission filter as methodology (PR #22, decision G6)
+
+The collection admission filter (`src/collectors/ai-filter.js`) decides which items of a site-wide or technology feed are stored at all, so it is the versioned component `admission_filter` (1.0.0, migration 042). Its registered config is exactly the code's patterns, search terms and scope rule (a unit test fails on any difference); a change is a new version. Every collected post records the version it was admitted under (`raw_posts.admission_mv_id`), shown on the audit receipt as `provenance.admission`.
 
 ### Methodology Seeding
 Before any inference runs, `scripts/seed.js` inserts the initial methodology versions:
@@ -1505,8 +1534,12 @@ TIER 2: Monthly Compaction (3 months → indefinite)
   Raw posts: text replaced by a removal notice (content is NOT NULL; text_removed_at set), embeddings deleted, audit skeleton kept
 
 TIER 3: Permanent Archival (automatic — no expiry)
-  Tables: methodology_versions, processing_jobs (metadata only),
-          bias_assessments (aggregates), alert_events
+  Tables: methodology_versions, methodology_errata,
+          processing_jobs (metadata only; EVERY row, failed ones
+          included — ADR 0001 decision G4), bias_assessments
+          (aggregates), alert_events, alert_resolutions,
+          alert_resolution_approvals, source_gate_events,
+          source_terms_snapshots, source_run_daily
   Granularity: Run-level and methodology-level
   Purpose: Audit compliance, reproducibility, GDPR accountability
   Access: GET /api/methodology, GET /api/audit/:post_id (audit skeleton)
@@ -1565,17 +1598,29 @@ CREATE TABLE compaction_log (
 );
 ```
 
+### Maintenance schedule (`src/workers/maintenance.worker.js`, PR #22)
+
+The worker registers three BullMQ job schedulers on the `maintenance` queue (shared across worker processes; concurrency 1):
+
+| Scheduler | Cadence | Steps |
+|---|---|---|
+| `retention` | `MAINTENANCE_EVERY_MS`, default 5 min | text retention for every source (below); stale one-shot jobs (no progress for `STALE_JOB_MINUTES`) marked failed |
+| `daily` | `MAINTENANCE_DAILY_EVERY_MS`, default 24 h | compaction (below); `source_runs` older than `SOURCE_RUNS_RAW_DAYS` (30) rolled into `source_run_daily` |
+| `terms` | `MAINTENANCE_TERMS_EVERY_MS`, default 7 days | a polite snapshot of every source's terms page; a changed normalised-text hash opens a `terms_changed` alert |
+
+A failing step does not stop the others, but it fails the job (BullMQ failed count) and is logged at error level. Every run writes its outcome to `maintenance_state`; `GET /api/health` reports `maintenance.tasks` (last run, last success, last error per task) and `maintenance.retention_overdue` (posts still holding text past their window). While any post of a source holds text more than `RETENTION_OVERDUE_GRACE_MINUTES` (60) past its window, the worker keeps one critical `retention_overdue` alert open for that source. The schedulers are re-registered on every reschedule, so a queue-store outage at boot is retried. A bad `RETENTION_DETAIL_DAYS` (not a whole number of days from 30 to 3650) fails the retention and compaction steps and changes nothing.
+
 ### Compaction Job Logic (`scripts/compact.js`)
-Runs on the 1st of each month. Compacts all posts older than 3 months:
+Runs in the daily maintenance task (and by hand, `npm run compact`). Compacts every whole month that ended before the detail window (`RETENTION_DETAIL_DAYS`, 90 days); the month holding the cutoff waits until it is whole. Months are found by walking the `collected_at` index month by month; compacted months (`compaction_log`) are skipped.
 
 ```
-1. Identify posts WHERE collected_at < NOW() - INTERVAL '3 months'
-2. Aggregate into monthly_topic_rollups (GROUP BY month, topic, source_category, location)
-3. Aggregate into monthly_source_rollups (GROUP BY month, source_id)
-4. Null out raw_posts.content (keep id, source_id, content_hash, location, collected_at)
-5. Delete post_embeddings rows for compacted posts
-6. Write data_retention_log: action='compacted', reason='3-month detail window expired'
-7. Write compaction_log entry
+1. Purge demo posts past the window (demo data is never rolled up)
+2. For each due month with real posts:
+   a. Aggregate into monthly_topic_rollups and monthly_source_rollups
+   b. Replace any remaining text with the removal notice (text_removed_at set), as retention does
+   c. Delete post_embeddings rows of the month
+   d. Write data_retention_log: action='compacted' with true counts
+   e. Write the compaction_log entry
 ```
 
 **What is preserved after compaction:**
@@ -1634,6 +1679,10 @@ When `POST /api/query` date range falls partly outside the detail window:
 ---
 
 ## 20. Cross-Platform User Correlation
+
+### DPIA gate (PR #22)
+
+Correlation is wired but OFF until a completed DPIA is recorded. `src/pipeline/correlation-gate.js` enables it only when `CORRELATION_DPIA_REF` names the completed DPIA, `CORRELATION_ENABLED=true`, and `CORRELATION_SALT` is a usable per-deployment salt (not empty, not a placeholder such as the `.env.example` value). Otherwise no correlate job is queued, the correlate worker refuses work, and `GET /api/health` reports `correlation: { enabled: false, status, reason }`. While the gate is closed the worker's connection pool does not budget for correlate jobs.
 
 ### Design Principles
 
