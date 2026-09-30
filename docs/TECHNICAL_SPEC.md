@@ -14,7 +14,7 @@
 - Layered retention: 3-month detail → monthly compaction → permanent topic rollups
 - User interaction + query-driven insight delivery (not passive-only)
 
-**PR #22 amendments (collection hardening; described in the sections they change):** the collection admission filter is versioned methodology (`admission_filter@1.0.0`, §10); bias@1.4.0 minimum samples (§9); the maintenance schedule (retention every 5 min, compaction and rollups daily, terms snapshots weekly), `processing_jobs` kept permanently and the new audit and state tables (§6, §19); the correlation DPIA gate (§20); Valkey 8 as the queue store (§5). The docs branch reconciles its v1.2.0 spec against master after PR #22 merges.
+**PR #22 amendments (collection hardening; described in the sections they change):** the collection admission filter is versioned methodology (`admission_filter@1.0.0`, §10); bias@1.4.0 minimum samples and the bias@1.5.0 rolling 24 h window (§9, decision G2); the maintenance schedule (retention every 5 min, compaction and rollups daily, terms snapshots weekly), `processing_jobs` kept permanently and the new audit and state tables (§6, §19); the correlation DPIA gate (§20); Valkey 8 as the queue store (§5). The docs branch reconciles its v1.2.0 spec against master after PR #22 merges.
 
 ---
 
@@ -274,7 +274,7 @@ raw_posts.source_id ────────────────────
 data_sources.id ────────────────────────────────────────────────┘
 ```
 
-### Schema additions of PRs #10 and #22 (migrations 025–042)
+### Schema additions of PRs #10 and #22 (migrations 025–042, 060)
 
 | Table / column | Migration | Purpose |
 |---|---|---|
@@ -289,8 +289,9 @@ data_sources.id ─────────────────────�
 | `maintenance_state` | 039 | Last run, last success and last error per maintenance task (`/api/health`) |
 | `processing_jobs.last_progress_at` | 040 | Progress heartbeat of one-shot jobs (the stale-job sweeper uses it, not age) |
 | `raw_posts.admission_mv_id` | 042 | The admission-filter version a post was stored under |
+| `bias_window_runs`, `bias_window_assessments` | 060 | The rolling 24 h bias checks (bias@1.5.0, G2): one run row per window, its assessments append-only |
 
-`alert_resolutions`, `alert_resolution_approvals`, `source_gate_events`, `source_terms_snapshots` and `methodology_errata` are append-only: a trigger rejects UPDATE and DELETE (migration 036). Migrations are numbered uniquely and applied in file-name order; gaps in the numbering are allowed.
+`alert_resolutions`, `alert_resolution_approvals`, `source_gate_events`, `source_terms_snapshots` and `methodology_errata` are append-only: a trigger rejects UPDATE and DELETE (migration 036); so is `bias_window_assessments` (migration 060). Migrations are numbered uniquely and applied in file-name order; gaps in the numbering are allowed.
 
 ### Migration 001 — Core Schema (`src/db/migrations/001_core_schema.sql`)
 
@@ -485,7 +486,7 @@ CREATE INDEX idx_embeddings_hnsw ON post_embeddings
 All responses: `Content-Type: application/json`. All errors follow: `{ "error": "descriptive message" }`. Stack traces, SQL errors, and file paths are never returned to clients.
 
 ### `GET /api/health`
-Returns system status, last job info, and active unresolved alerts.
+Returns system status, last job info, and active unresolved alerts. The response is cached in process for 5 s, keyed on the path alone (it fans out to the queue store and the database; PR #22 security L2). It also carries `bias_sample` (the insufficient-sample share per bias check, §9) and `correlation` (§20).
 
 **Response 200:**
 ```json
@@ -589,7 +590,7 @@ Requests a collection + processing run over the source registry. The web process
 ```
 **Response 409:** `{ "error": "A refresh collection is already running", "job_id": "uuid" }` while a refresh job is running (migration 019's partial unique index holds this across processes; a row that made no progress (`processing_jobs.last_progress_at`, else `started_at`) for `REFRESH_STALE_MINUTES`, default 30, is marked failed as stale; the refresh run itself has a deadline of 80 % of that bound).
 
-**Response 403 (token):** when `REFRESH_TOKEN` is set, the request must carry it as `X-Refresh-Token`; when the site is bound beyond loopback (`PULSE_BIND_ADDR` or `HOST` not a loopback address) a token is required and refresh is refused without one.
+**Response 403 (token):** when `REFRESH_TOKEN` is set, the request must carry it as `X-Refresh-Token`; when the site is bound beyond loopback (`PULSE_BIND_ADDR` or `HOST` not a loopback address, or the actual bound address a wildcard) or the request came through a reverse proxy (`Forwarded`, `X-Forwarded-*`, `X-Real-IP`), a token is required and refresh is refused without one. The compose-published address (`PULSE_CONTAINER_PUBLISHED_ADDR`) can only make this stricter; it excuses the wildcard listen only inside the compose web container (`PULSE_IN_CONTAINER=1` and `/.dockerenv`; PR #22 security M4).
 
 **Response 429:** `{ "error": "Rate limit exceeded: 1 refresh per minute (global)", "retry_after_seconds": n }` with `Retry-After`.
 
@@ -932,7 +933,9 @@ Threshold: |confidence_A - confidence_B| > 0.05 → flag for review
 
 **Minimum sample (bias@1.3.0, P10-5).** Location concentration needs at least 30 content-located posts in the job; below that the assessment is recorded as "insufficient sample" (share stated, no violation, no alert) and the receipt shows the layer as n-a. Stale alerts are resolved through `alert_resolutions` (migration 028), never deleted.
 
-**A minimum sample for every check (bias@1.4.0, migration 032).** Platform sentiment parity compares only source categories with at least 10 posts in the job (fewer than two such categories: "insufficient sample"); negative dominance needs at least 30 posts; location concentration keeps bias@1.3.0's 30 content-located posts. Below a minimum the value is recorded with no violation and no alert. Open alerts this version would not raise were closed as `superseded` with Jennifer McKinney as the named approver (ADR 0001, decision G1), separate from genuinely `resolved` alerts.
+**A minimum sample for every check (bias@1.4.0, migration 032).** Platform sentiment parity compares only source categories with at least 10 posts in the job (fewer than two such categories: "insufficient sample"); negative dominance needs at least 30 posts; location concentration keeps bias@1.3.0's 30 content-located posts. Below a minimum the value is recorded with no violation and no alert. Open alerts this version would not raise were closed as `superseded` with Jennifer McKinney as the named approver (ADR 0001, decision G1), separate from genuinely `resolved` alerts. A job with no content-located posts, a single source category or no posts at all is below these minimums too, so it is recorded as "insufficient sample", never as a pass (PR #22 grumpy M5).
+
+**A rolling 24 h window (bias@1.5.0, migration 060; decision G2, Jennifer McKinney 2026-09-29).** A 2–3 minute cycle rarely reaches the minimums, so the same three checks, with the same thresholds and minimums, ALSO run over every post whose sentiment decision was recorded in the previous 24 hours: daily (the `bias_window` step of the maintenance `daily` task) and on demand (`npm run bias:window`). Each run is a `bias_window_runs` row (window, trigger, version, status, posts assessed, violations); its assessments are append-only `bias_window_assessments` rows; a violation opens an alert naming the window run (`details.windowRunId`). The per-cycle checks are unchanged. The share of "insufficient sample" assessments per check (per cycle over 24 h and 7 days; for the rolling window, the latest run and 7 days) is served as `insufficient_sample` by `GET /api/bias/latest` and as `bias_sample` by `GET /api/health`, so a monitor that never reaches its minimum is visible.
 
 ### Alert Flow
 ```
@@ -1605,7 +1608,7 @@ The worker registers three BullMQ job schedulers on the `maintenance` queue (sha
 | Scheduler | Cadence | Steps |
 |---|---|---|
 | `retention` | `MAINTENANCE_EVERY_MS`, default 5 min | text retention for every source (below); stale one-shot jobs (no progress for `STALE_JOB_MINUTES`) marked failed |
-| `daily` | `MAINTENANCE_DAILY_EVERY_MS`, default 24 h | compaction (below); `source_runs` older than `SOURCE_RUNS_RAW_DAYS` (30) rolled into `source_run_daily` |
+| `daily` | `MAINTENANCE_DAILY_EVERY_MS`, default 24 h | compaction (below); `source_runs` older than `SOURCE_RUNS_RAW_DAYS` (30) rolled into `source_run_daily`; the rolling 24 h bias checks (bias@1.5.0, §9) |
 | `terms` | `MAINTENANCE_TERMS_EVERY_MS`, default 7 days | a polite snapshot of every source's terms page; a changed normalised-text hash opens a `terms_changed` alert |
 
 A failing step does not stop the others, but it fails the job (BullMQ failed count) and is logged at error level. Every run writes its outcome to `maintenance_state`; `GET /api/health` reports `maintenance.tasks` (last run, last success, last error per task) and `maintenance.retention_overdue` (posts still holding text past their window). While any post of a source holds text more than `RETENTION_OVERDUE_GRACE_MINUTES` (60) past its window, the worker keeps one critical `retention_overdue` alert open for that source. The schedulers are re-registered on every reschedule, so a queue-store outage at boot is retried. A bad `RETENTION_DETAIL_DAYS` (not a whole number of days from 30 to 3650) fails the retention and compaction steps and changes nothing.
@@ -1682,7 +1685,7 @@ When `POST /api/query` date range falls partly outside the detail window:
 
 ### DPIA gate (PR #22)
 
-Correlation is wired but OFF until a completed DPIA is recorded. `src/pipeline/correlation-gate.js` enables it only when `CORRELATION_DPIA_REF` names the completed DPIA, `CORRELATION_ENABLED=true`, and `CORRELATION_SALT` is a usable per-deployment salt (not empty, not a placeholder such as the `.env.example` value). Otherwise no correlate job is queued, the correlate worker refuses work, and `GET /api/health` reports `correlation: { enabled: false, status, reason }`. While the gate is closed the worker's connection pool does not budget for correlate jobs.
+Correlation is wired but OFF until a completed DPIA is recorded. `src/pipeline/correlation-gate.js` enables it only when `CORRELATION_DPIA_REF` names the completed DPIA, `CORRELATION_ENABLED=true`, and `CORRELATION_SALT` is a usable per-deployment salt (not empty, not a placeholder such as the `.env.example` value). Otherwise no correlate job is queued, the correlate worker refuses work, and `GET /api/health` reports `correlation: { enabled: false, status, reason, checked_by, checked_at }`. `CORRELATION_SALT` reaches the worker container only (PR #22 security L1); web gets the presence flag `CORRELATION_SALT_SET`, the worker publishes its gate status with its heartbeat, and `/api/health` serves that (`checked_by: "worker"`), or `unverified` when web cannot see a salt set for the worker (`checked_by: "web"`). While the gate is closed the worker's connection pool does not budget for correlate jobs.
 
 ### Design Principles
 
