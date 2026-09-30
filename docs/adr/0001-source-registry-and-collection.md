@@ -191,6 +191,25 @@ Research: `docs/research/2026-09-29-reddit-access.md`. Recorded verbatim.
 - **True logs.** Each batch writes one `data_retention_log` row listing exactly the post ids it changed (`blanked_platform_terms` or `text_removed_detail_window`); monthly compaction (`scripts/compact.js`, run by the same job) compacts only months that ended before the cutoff, writes one `compacted` row and a `compaction_log` row with the counts it actually changed. Demo posts keep their full purge (P9-3).
 - Tests: `tests/integration/text.retention.test.js`, `tests/integration/reddit.retention.test.js`, `tests/unit/pure/methodologyRegistry.test.js` (031).
 
+## Decisions of 2026-09-29 (PR #22 review)
+
+Jennifer McKinney's rulings on the PR #22 review (security, principal and grumpy reports). Her rule for the review: "all bugs found must be fixed. no exception."
+
+### G1 — superseded alerts have a named approver
+Alerts closed by migrations 028 and 032 because a later bias version would not raise them name Jennifer McKinney as the approver and have their own status, `superseded` (by a methodology change), separate from `resolved`. Recorded additively (`alert_resolution_approvals`, the `alert_status` view, migration 036); no released row is edited, and migration 032 no longer edits 028's rows. `/api/health` reports `alerts_closed: { resolved, superseded }`.
+
+### G4 — every processing_jobs row is kept
+All `processing_jobs` rows are kept permanently, failed ones included (spec §19 Tier 3). The job-deletion part of P10-9's retention was removed; the `source_runs` rollups stay.
+
+### G6 — the admission filter is versioned methodology
+The collection admission filter (`src/collectors/ai-filter.js`) decides what is stored, so it is a versioned methodology component: `admission_filter@1.0.0` (migration 042) registers exactly the code's patterns, search terms and scope rule, and `tests/unit/pure/admissionFilter.test.js` fails on any difference. Every collected post records the version it was admitted under (`raw_posts.admission_mv_id`, additive); the audit receipt shows it (`provenance.admission`). Posts stored earlier keep NULL ("not recorded"), never a guessed back-fill. Any change is a new version.
+
+### Upgrade runbook — take a pg_dump first
+The first maintenance run after an upgrade permanently removes text past each window and compacts old months. The README's upgrade section tells operators to take a `pg_dump` before the first worker start after upgrading (principal #22).
+
+### Merge order
+PR #22 merges first; the docs branch (`docs/diagrams-and-readme`) then reconciles its v1.2.0 spec against master.
+
 ## Consequences
 
 - With the contact URL and the acknowledgement set, 31 of 52 sources collect with no keys (20 keyless sources, GovInfo's keyless RSS, Stack Overflow and GitLab keyless, and the 8 permission-gated feeds of ruling 4); with the contact URL alone, 23; on a fresh clone, none (D1). CFR waits for confirmation; 4 wait for a free key (YouTube, SpringerLink, Google Scholar mailbox, Congress.gov); 7 for approval (Meta ×3, TikTok, ScienceDirect, JSTOR, Reddit); 5 for a licence (X, CNN, AP, Reuters, IEEE); 4 are blocked.

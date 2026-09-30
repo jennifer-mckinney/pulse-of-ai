@@ -69,6 +69,18 @@ describe('runCollection', () => {
         if (gated.length) expect(queues.enqueueEmbeds).toHaveBeenCalledWith(expect.arrayContaining(gated.map(g => g.raw_post_id)));
     });
 
+    // PR #22 G6: every collected post records the admission-filter version.
+    it('records admission_filter@1.0.0 on every collected post, and the receipt shows it', async () => {
+        await collect(['bbc_news', 'hacker_news']);
+        const rows = await dbAll(`SELECT rp.id, mv.component, mv.version FROM raw_posts rp
+            LEFT JOIN methodology_versions mv ON mv.id = rp.admission_mv_id`);
+        expect(rows.length).toBeGreaterThan(0);
+        for (const r of rows) expect([r.component, r.version]).toEqual(['admission_filter', '1.0.0']);
+        const request = require('supertest');
+        const res = await request(require('../../src/server')).get(`/api/audit/${rows[0].id}`);
+        expect(res.body.provenance.admission).toEqual({ component: 'admission_filter', version: '1.0.0', lineage: 'recorded' });
+    });
+
     it('stores allowlisted payloads with city-level location and no identity fields', async () => {
         await collect(['bbc_news', 'hacker_news']);
         const posts = await dbAll(`SELECT rp.location, rp.raw_payload, ds.name FROM raw_posts rp JOIN data_sources ds ON ds.id = rp.source_id`);
