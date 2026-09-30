@@ -77,6 +77,9 @@ workers.forEach(w => {
         if (w.name.startsWith('collect.') && result && result.slug) {
             log(`[${w.name}] ${result.slug}: ${result.outcome}${result.reason ? ` (${result.reason})` : ''} — `
                 + `fetched ${result.fetched}, kept ${result.kept}, new ${result.newPosts}${result.error ? ` — ${result.error}` : ''}`);
+        } else if (result && result.skipped) {
+            // A no-op with a recorded reason (embed: post purged / text removed).
+            log(`[${w.name}] job ${job.id} completed without work: post ${result.postId} ${result.reason}`);
         } else {
             log(`[${w.name}] job ${job.id} completed`);
         }

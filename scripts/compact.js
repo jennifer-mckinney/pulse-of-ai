@@ -29,6 +29,11 @@
 //     sighting window recomputed from its remaining sightings in the same
 //     transaction. Each purge batch runs in its own transaction and
 //     writes one data_retention_log row (action 'purged_demo').
+//     The log row lists the purged post ids (reason.post_ids), so an embed
+//     job queued before the purge completes as a no-op with that reason
+//     instead of failing with "Post not found" (src/pipeline/embeddings.js),
+//     and after each purge the pending embed jobs of the purged posts are
+//     removed from the queue (src/queues/embed-cleanup.js).
 //     Owner decision 2026-09-29: "Delete demo posts and their rows
 //     (Recommended)". The source_type = 'demo' filter is enforced in the SQL
 //     of EVERY delete, so real collected posts and their audit trails are
@@ -39,7 +44,7 @@
 
 require('dotenv').config();
 const { dbAll, dbTransaction, closePool } = require('../src/db/connection');
-const { DEMO_SOURCE_TYPE } = require('../src/config/data-mode');
+const { DEMO_SOURCE_TYPE, DEMO_PURGE_ACTION } = require('../src/config/data-mode');
 const { getSource } = require('../src/config/source-registry');
 const { removeTextBatch } = require('../src/collectors/retention');
 
@@ -383,49 +388,76 @@ async function purgeDemoBatch(client, { cutoff, batchSize }) {
 
     await client.query(`
         INSERT INTO data_retention_log (raw_post_id, action, reason, legal_basis, performed_by)
-        VALUES (NULL, 'purged_demo', $1, $2, 'scripts/compact.js')
+        VALUES (NULL, $3, $1, $2, 'scripts/compact.js')
     `, [JSON.stringify({
         summary: 'Fictional demo data past the retention boundary deleted.',
         retention_days: RETENTION_DAYS,
         cutoff: cutoffIso,
         window,
         counts,
-    }), DEMO_PURGE_LEGAL_BASIS]);
+        // The ids of the posts deleted (the lookup key for a job that finds
+        // its post gone — src/pipeline/embeddings.js findDemoPurgeRecord).
+        post_ids: posts.map(p => p.id),
+    }), DEMO_PURGE_LEGAL_BASIS, DEMO_PURGE_ACTION]);
 
-    return { counts, window };
+    return { counts, window, postIds: posts.map(p => p.id) };
 }
 
 /**
  * Purge all demo data older than the cutoff, one transaction per bounded
  * batch, until a batch finds nothing. Real (non-demo) data is never touched.
+ * After the batches commit, `removeEmbedJobs(postIds)` (when given) removes
+ * the purged posts' pending embed jobs; a failure there is reported, never
+ * thrown — the purge is already committed and a leftover job no-ops.
  *
- * @param {{ cutoff?: Date, batchSize?: number, log?: Function }} [opts]
- * @returns {Promise<{ batches: number, counts: Record<string, number> }>}
+ * @param {{ cutoff?: Date, batchSize?: number, log?: Function,
+ *           removeEmbedJobs?: (ids: string[]) => Promise<object> }} [opts]
+ * @returns {Promise<{ batches: number, counts: Record<string, number>, embedJobs?: object }>}
  */
-async function purgeDemoPosts({ cutoff = getCutoffDate(), batchSize, log = console.log } = {}) {
+async function purgeDemoPosts({ cutoff = getCutoffDate(), batchSize, log = console.log, removeEmbedJobs } = {}) {
     const requested = batchSize ?? parseInt(process.env.DEMO_PURGE_BATCH_SIZE || '', 10);
     const size = Math.min(Math.max(Number.isInteger(requested) ? requested : DEFAULT_PURGE_BATCH_SIZE, 1),
         MAX_PURGE_BATCH_SIZE);
 
     const totals = {};
+    const purgedIds = [];
     let batches = 0;
     for (;;) {
         const result = await dbTransaction(client => purgeDemoBatch(client, { cutoff, batchSize: size }));
         if (!result) break;
         batches += 1;
+        purgedIds.push(...result.postIds);
         for (const [table, n] of Object.entries(result.counts)) totals[table] = (totals[table] || 0) + n;
         log(`  Demo purge batch ${batches}: ${result.counts.raw_posts} post(s), `
             + `${result.counts.user_platform_sightings} sighting(s) (${result.window.from} – ${result.window.to})`);
     }
-    return { batches, counts: totals };
+    if (!removeEmbedJobs || purgedIds.length === 0) return { batches, counts: totals };
+    let embedJobs;
+    try {
+        embedJobs = await removeEmbedJobs(purgedIds);
+        if (embedJobs.removed || embedJobs.inFlight) {
+            log(`  Demo purge: ${embedJobs.removed} pending embed job(s) of purged posts removed`
+                + (embedJobs.inFlight ? `, ${embedJobs.inFlight} already running (they complete as no-ops)` : ''));
+        }
+    } catch (err) {
+        embedJobs = { error: err.message };
+        log(`  Demo purge: pending embed jobs not removed (${err.message}) — they complete as no-ops`);
+    }
+    return { batches, counts: totals, embedJobs };
+}
+
+/* istanbul ignore next -- binds the real BullMQ embed queue; tests inject */
+function defaultRemoveEmbedJobs(ids) {
+    const { embedQueue } = require('../src/queues/index');
+    return require('../src/queues/embed-cleanup').removePendingEmbedJobs(embedQueue, ids);
 }
 
 /**
  * The whole job without the CLI: demo purge first, then every due month.
  * Used by the worker's maintenance job. @returns {Promise<object>} counts
  */
-async function runCompaction({ log = console.log } = {}) {
-    const purge = await purgeDemoPosts({ log });
+async function runCompaction({ log = console.log, removeEmbedJobs = defaultRemoveEmbedJobs } = {}) {
+    const purge = await purgeDemoPosts({ log, removeEmbedJobs });
     const months = await getMonthsToCompact();
     const total = { months: months.length, postsCompacted: 0, embeddingsDeleted: 0, contentNulled: 0 };
     for (const month of months) {
@@ -437,12 +469,23 @@ async function runCompaction({ log = console.log } = {}) {
     return { demoPurge: purge, ...total };
 }
 
+/* istanbul ignore next -- CLI entry point */
+async function closeQueuesIfLoaded() {
+    const key = require.resolve('../src/queues/index');
+    if (!require.cache[key]) return;
+    const queues = require.cache[key].exports;
+    await Promise.allSettled(Object.values(queues).filter(q => q && typeof q.close === 'function').map(q => q.close()));
+}
+
+/* istanbul ignore next -- CLI entry point */
 async function main() {
     targetMonth = process.argv[2] || null;
 
     // P9-3: demo data past the retention boundary is deleted first, so it is
-    // never compacted (and never reaches a rollup).
-    const purge = await purgeDemoPosts();
+    // never compacted (and never reaches a rollup). The purged posts' pending
+    // embed jobs are removed (the queue is opened only when a post was purged).
+    const purge = await purgeDemoPosts({ removeEmbedJobs: defaultRemoveEmbedJobs });
+    await closeQueuesIfLoaded();
     console.log(purge.batches === 0
         ? '✓ No demo data past the retention boundary.'
         : `✓ Demo purge: ${purge.counts.raw_posts} post(s) in ${purge.batches} batch(es).`);

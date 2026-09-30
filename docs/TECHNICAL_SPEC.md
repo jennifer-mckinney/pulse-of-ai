@@ -1604,10 +1604,22 @@ and any `pseudonymous_users` profile those rows referenced that has no sighting
 or post left. The purge runs in bounded batches (`DEMO_PURGE_BATCH_SIZE`,
 default 500, max 5000), one transaction per batch, and writes one
 `data_retention_log` row per batch: `action = 'purged_demo'`, `raw_post_id`
-NULL, a JSON `reason` with the per-table counts, the time window and the
-cutoff, and a `legal_basis` stating that the data was fictional demo data. The
+NULL, a JSON `reason` with the per-table counts, the time window, the
+cutoff and the purged `post_ids`, and a `legal_basis` stating that the data was
+fictional demo data. The
 `source_type = 'demo'` filter is in the SQL of every delete, so posts from real
 sources and their audit trails are never deleted.
+
+**Embed jobs of removed posts.** After the purge commits, the pending
+(`wait`, `paused`, `prioritized`, `delayed`) embed jobs of the purged posts are
+removed from the queue (`src/queues/embed-cleanup.js`). An embed job that still
+runs for a purged post — one already taken by a worker — completes as a no-op
+with `{ skipped: true, reason: 'purged_demo' }`, matched through the purge
+row's `post_ids`; a post whose text was removed completes the same way with
+`reason: 'text_removed'`, and the removal notice is never embedded (the vector
+is stored only while the post exists with its text). A post that is missing
+with no purge record is a real error: the job fails with `Post not found`.
+The standup smoke check requires 0 failed jobs on every worker queue.
 
 ### API Behavior for Historical Queries
 When `POST /api/query` date range falls partly outside the detail window:

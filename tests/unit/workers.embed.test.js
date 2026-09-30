@@ -35,6 +35,25 @@ describe('processEmbedJob()', () => {
         expect(result).toEqual({ ...mockResult, correlation: { queued: false, status: 'awaiting_dpia' } });
     });
 
+    it('a post purged or blanked after the job was queued: completes as a no-op, reason kept, no correlation', async () => {
+        for (const reason of ['purged_demo', 'text_removed']) {
+            const skip = { postId: 'post-uuid-abc', skipped: true, reason, at: '2026-09-29T10:00:00.000Z' };
+            embedPost.mockResolvedValue(skip);
+            const enqueueCorrelate = jest.fn();
+            const buildSignals = jest.fn();
+            const OPEN = { CORRELATION_DPIA_REF: 'DPIA-1', CORRELATION_ENABLED: 'true', CORRELATION_SALT: 'embed-test-deployment-salt-01' };
+            const r = await processEmbedJob(makeJob(), { env: OPEN, enqueueCorrelate, buildSignals });
+            expect(r).toEqual({ ...skip, correlation: { queued: false, status: 'skipped' } });
+            expect(buildSignals).not.toHaveBeenCalled();
+            expect(enqueueCorrelate).not.toHaveBeenCalled();
+        }
+    });
+
+    it('a genuinely missing post still fails the job loudly', async () => {
+        embedPost.mockRejectedValue(new Error('Post not found: post-uuid-abc'));
+        await expect(processEmbedJob(makeJob())).rejects.toThrow('Post not found: post-uuid-abc');
+    });
+
     it('propagates errors so BullMQ can retry the job', async () => {
         embedPost.mockRejectedValue(new Error('Python service unavailable'));
         await expect(processEmbedJob(makeJob())).rejects.toThrow('Python service unavailable');

@@ -6,6 +6,13 @@
 //
 // Errors propagate upward — BullMQ retries with exponential backoff per the
 // embedQueue configuration in src/queues/index.js (2s, 4s, 8s, 16s, 32s).
+//
+// A job whose post was legitimately removed after it was queued — a demo
+// post purged at the retention boundary, or a post whose text retention
+// replaced by a notice — COMPLETES as a no-op: its return value (kept on the
+// completed job) is { skipped: true, reason, at } and the worker logs the
+// reason. No correlation is queued for it. A post missing with no purge
+// record is a real error: "Post not found" is thrown and the job fails.
 
 'use strict';
 
@@ -25,6 +32,7 @@ const { dbGet } = require('../db/connection');
 async function processEmbedJob(job, { env = process.env, enqueueCorrelate = defaultEnqueueCorrelate, buildSignals = buildCorrelationSignals } = {}) {
     const { rawPostId } = job.data;
     const result = await embedPost(rawPostId);
+    if (result.skipped) return { ...result, correlation: { queued: false, status: 'skipped' } };
     // Spec §20: correlation is the background step after the embedding is
     // stored — enqueued only while the DPIA gate is open
     // (src/pipeline/correlation-gate.js); otherwise the reason is returned.

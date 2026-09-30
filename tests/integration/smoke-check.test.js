@@ -99,6 +99,17 @@ describe('scripts/smoke-check.js', () => {
             lines = [];
             await run({ baseUrl, expectEmbeddings: false, expectWorker: true }, l => lines.push(l));
             expect(lines.join('\n')).toContain(`[PASS] worker heartbeat — redis reachable, last beat ${at}`);
+            expect(lines.join('\n')).toMatch(/\[PASS\] worker failed jobs — 0 failed jobs on \d+ queues/);
+
+            // A failed job on any queue fails the standup's smoke check.
+            health._setQueueCountsForTests(async () => ({ embed: { failed: 9 } }));
+            lines = [];
+            const failedCode = await run({ baseUrl, expectEmbeddings: false, expectWorker: true }, l => lines.push(l));
+            expect(failedCode).toBe(1);
+            expect(lines.join('\n')).toContain('[FAIL] worker failed jobs — embed: 9 failed');
+            lines = [];
+            await run({ baseUrl, expectEmbeddings: false }, l => lines.push(l));
+            expect(lines.join('\n')).toContain('[WARN] worker failed jobs — embed: 9 failed');
         } finally {
             health._setRedisClientForTests(null);
             health._setQueueCountsForTests(null);
