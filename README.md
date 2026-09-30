@@ -231,6 +231,7 @@ Both act on one compose project only: `COMPOSE_PROJECT_NAME` if it's set, otherw
 
 ### Upgrading an existing dev database
 
+- **Take a `pg_dump` before the first worker start after upgrading.** The worker's maintenance job runs as soon as it starts: it permanently removes post text past each source's window (a platform's terms where they set one, such as Reddit's 48 h; otherwise the 90-day detail window, `RETENTION_DETAIL_DAYS`) and compacts every whole month older than that into rollups. On a database that has not run it before, that is all old data at once, and it cannot be undone. Back up first, before `npm run standup` (or before starting the worker by hand): `docker compose up -d postgres`, then `docker compose exec postgres pg_dump -U pulse_user pulse_of_ai > backup-before-upgrade.sql`.
 - **Standup applies migrations for you.** The `migrate` job runs every pending migration and the idempotent seed before web and the worker start, on every `npm run standup`.
 - **Host-side development (`npm run dev`)**: after pulling, run `npm run migrate && npm run seed` against your dev database.
 - **Migrations are forward-only.** There are no down migrations, and older code isn't guaranteed to run against a newer schema. Take a backup first if you may need to go back: `docker compose exec postgres pg_dump -U pulse_user pulse_of_ai > backup.sql`.
