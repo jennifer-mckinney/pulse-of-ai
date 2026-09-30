@@ -1,14 +1,14 @@
 # The Pulse of AI — Technical Specification
-**Version:** 1.2.0
-**Date:** 2026-09-29
-**Status:** Implemented through PR #22 (`master` @ `973cad8`). PR #10 Part 2 landed as PR #22; nothing described here is in flight.
+**Version:** 1.2.1
+**Date:** 2026-09-30
+**Status:** Implemented through PR #34 (`master` @ `7291490`). PR #10 Part 2 landed as PR #22; nothing described here is in flight.
 **Maps to:** `pulse-of-ai-mvp-v1-final-requirements.pdf`, `pulse-of-ai-evidence-based-thresholds.pdf`, `pulse-of-ai-model-health-dashboard.pdf`
 
 **Authority.** The code on `master` is the authority for what exists; this specification is the source of truth for names and intent. Legal and product decisions belong to `docs/adr/0001-source-registry-and-collection.md` (ADR 0001); this document references them and does not restate them differently.
 
 **Status markers used in this document:**
-- **PLANNED — not implemented as of v1.2.0**: designed intent that is kept on purpose. Nothing on `master` implements it.
-- Anything without a marker describes `master` @ `973cad8`. The v1.2.0 draft also used **IN FLIGHT (PR #10 Part 2)** and **KNOWN DEFECT (fix pending)**; PR #22 merged that work and fixed those defects, so neither marker is used any more.
+- **PLANNED — not implemented as of v1.2.0**: designed intent that is kept on purpose. Nothing on `master` implements it (still true at v1.2.1; the marker keeps its v1.2.0 wording).
+- Anything without a marker describes `master` @ `7291490`. The v1.2.0 draft also used **IN FLIGHT (PR #10 Part 2)** and **KNOWN DEFECT (fix pending)**; PR #22 merged that work and fixed those defects, so neither marker is used any more.
 
 ### v1.2.0 changelog (2026-09-29): aligned to code per independent audit, 2026-09-29
 Every section below changed because the independent diagram-accuracy audit (round 1) confirmed drift between v1.1.0 and the code on `master`. Section-by-section:
@@ -44,6 +44,14 @@ PR #22 (PR #10 Part 2, `973cad8`) merged after the v1.2.0 draft. Every IN FLIGHT
 - **§19**: the maintenance schedule (text retention every 5 min, compaction, run rollups and the rolling bias window daily, terms snapshots weekly); retention by blanking for every source; `processing_jobs` kept permanently.
 - **§20**: the correlation DPIA gate; `correlateUser()` throws and the correlate worker refuses every job; the salt is required.
 - **§21**: the licence scope names `master` @ `973cad8`.
+
+### v1.2.1 changelog (2026-09-30): reconciliation with PRs #24–#34 and documentation audit round 3
+PRs #24–#34 merged after v1.2.0 (`master` @ `7291490`); PRs #13–#21, #23, #27, #28 and #31 are dependency bumps with no effect on this text. A patch version: the sections below are brought back in line with the code, and no design intent changes. Section by section:
+- **§3, §6, §7, §9, §10**: bias@1.6.0 (migration 061: the platform-parity "insufficient sample" row states its value; errata for bias 1.4.0 and 1.5.0); a refresh, standup or manual job that ends with no scoring outstanding is finalized by the runner (posts counted from `decision_audit_log`, bias checks when any); `scripts/seed-demo.js` removed.
+- **§5, §6, §12**: sentence-transformers 6.1.0 as `embedding@1.1.0` (migration 065); 49 migrations (001–065).
+- **§6, §7, §17**: refusal probation (migration 062: `probation_until`, `access_denied_headers`, `last_refused_at`, `source_runs.response_headers`; `/api/sources` serves `probation_until`).
+- **§11, §13, §21**: the master SHA 7291490; the status line names PRs #24–#34.
+- **Audit round 3 corrections (no code change behind them):** §2 text retention also blanks on the Reddit deletion re-check; §5 compose profiles per service and the model's disk size; §6 the migration index, the schema sketch's foreign keys, the provenance id format, the migration gaps (063–064), DDL comments (`decision_audit_log`, `alert_events`, `data_retention_log`, `source_type`, `source_runs.job_id`) and the index note; §7 the health queue list, the proxy headers of the refresh token rule, the bias layer status `n-a`, the served error fields and `retired_note` of `/api/sources`; §8 the SSRF refusal list, the safe-id rule and the `verify-provenance` exit codes; §9 the window-run alert and lineage columns; §12 the embedding code comments; §13 the PRs after #22; §17 the cadence band (120–180 s) and the Stack Overflow / GitLab cadences; §19 the retention tiers, the Reddit re-check's refusal condition and the rollup coverage example; §20 the pseudonym history and the HMAC signal hash.
 
 **v1.1.0 Amendments (historical record; v1.2.0 supersedes the source count and categories, the pseudonym format and the retention schedule where the sections below say so):**
 - Scope: Global (not US-only)
