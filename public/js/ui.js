@@ -577,6 +577,23 @@
             };
         }
         const plural = hs.alerts === 1 ? '' : 's';
+        // PR #22 principal #12: a watchdog (system) alert leads the banner —
+        // the worker, database or maintenance behind this dashboard is down,
+        // so everything below it may be stale.
+        const sys = Array.isArray(hs.systemAlerts) ? hs.systemAlerts : [];
+        if (sys.length > 0) {
+            const others = hs.alerts - sys.length;
+            return {
+                state: 'red',
+                system: true,
+                title: 'Red — SYSTEM ALERT: ' + sys.map((a) => a.title).join(' · '),
+                sub: sys.map((a) => a.title + ': ' + (a.summary || 'detected by the watchdog')
+                    + (a.since ? ' (since ' + fmtAlertTime(a.since) + ')' : '')).join(' — ')
+                    + (others > 0 ? ' — plus ' + others + ' other active alert'
+                        + (others === 1 ? '' : 's') + '.' : '')
+                    + ' Detected by the external watchdog; the figures on this page may be stale.',
+            };
+        }
         if (hs.state === 'red') {
             return {
                 state: 'red',
@@ -605,6 +622,36 @@
             title: 'Green — no active alerts',
             sub: HEALTH_SUB,
         };
+    }
+
+    // watchdogModel: /api/health `watchdog` block → the drawer's SYSTEM
+    // WATCHDOG rows (PR #22 principal #12). null when health is unreachable
+    // or predates the watchdog. `warn` marks a row the operator must act on:
+    // a silent watchdog, or e-mail alerting that is off or failing.
+    function watchdogModel(health) {
+        const w = health && typeof health === 'object' ? health.watchdog : null;
+        if (!w || typeof w !== 'object') return null;
+        const rows = [];
+        const last = fmtAlertTime(w.last_poll_at);
+        if (!w.last_poll_at) {
+            rows.push({ k: 'watchdog', v: 'has not reported — is the watchdog service running?', warn: true });
+        } else if (w.reporting === true) {
+            rows.push({ k: 'watchdog', v: 'reporting · last poll ' + last
+                + (w.poll_interval_s ? ' · every ' + w.poll_interval_s + ' s' : ''), warn: false });
+        } else {
+            rows.push({ k: 'watchdog', v: 'NOT REPORTING since ' + last
+                + ' — the watchdog service is down or cannot reach the database', warn: true });
+        }
+        const open = Array.isArray(w.open) ? w.open : [];
+        rows.push({ k: 'open conditions', v: open.length === 0 ? 'none'
+            : open.map((c) => String((c && c.title) || (c && c.condition) || '?')).join(' · '), warn: open.length > 0 });
+        const email = w.email && typeof w.email === 'object' ? w.email : {};
+        rows.push({ k: 'e-mail alerts', v: String(email.status || 'unknown'), warn: email.configured !== true });
+        if (email.last_error) rows.push({ k: 'last e-mail error', v: String(email.last_error), warn: true });
+        else if (email.last_sent_at) rows.push({ k: 'last e-mail', v: fmtAlertTime(email.last_sent_at), warn: false });
+        const errs = Array.isArray(w.config_errors) ? w.config_errors : [];
+        for (const e of errs) rows.push({ k: 'config', v: String(e), warn: true });
+        return { rows };
     }
 
     // sourcesStat: GET /api/sources?include_inactive=true rows →
@@ -1090,6 +1137,7 @@
         mapPassSummary,
         historyNotice,
         healthBanner,
+        watchdogModel,
         sourcesStat,
         sourceStatusLabel,
         sourceListModel,
@@ -1925,6 +1973,9 @@
         const hs = utils.healthState(health);
         els.healthChip.classList.remove('h-green', 'h-yellow', 'h-red');
         els.healthChip.classList.add('h-' + hs.state);
+        // Watchdog (system) alert: the emphasized chip (PR #22 principal #12).
+        const system = Array.isArray(hs.systemAlerts) && hs.systemAlerts.length > 0;
+        els.healthChip.classList.toggle('h-system', system);
         if (label) label.textContent = hs.label;
     }
 
@@ -1956,7 +2007,10 @@
 
         // Status banner from /api/health.
         const banner = healthBanner(health);
-        const bannerEl = el('div', 'health-banner');
+        // A watchdog (system) alert gets the emphasized banner (role=alert,
+        // so assistive tech announces it) — PR #22 principal #12.
+        const bannerEl = el('div', 'health-banner' + (banner.system ? ' hb-system' : ''));
+        if (banner.system) bannerEl.setAttribute('role', 'alert');
         const light = el('span', 'health-light'
             + (banner.state === 'green' ? '' : ' ' + banner.state));
         bannerEl.appendChild(light);
@@ -1965,6 +2019,21 @@
         bannerBody.appendChild(el('div', 'hb-sub', banner.sub));
         bannerEl.appendChild(bannerBody);
         inner.appendChild(bannerEl);
+
+        // SYSTEM WATCHDOG — the external watchdog's own status: is it
+        // polling, what it holds open, and whether e-mail alerts go out.
+        const wd = liveHealth ? watchdogModel(health) : null;
+        if (wd) {
+            inner.appendChild(el('div', 'sec-lbl mono', 'SYSTEM WATCHDOG'));
+            const wkv = el('div', 'kv mono watchdog-kv');
+            for (const r of wd.rows) {
+                const row = el('div', 'kv-row' + (r.warn ? ' kv-warn' : ''));
+                row.appendChild(el('span', 'kv-k', r.k));
+                row.appendChild(el('span', 'kv-v', r.v));
+                wkv.appendChild(row);
+            }
+            inner.appendChild(wkv);
+        }
 
         // Sources — the registry of record with each source's live status
         // (/api/sources). "Sources online N/<registry size>" counts ONLY sources that

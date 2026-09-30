@@ -31,6 +31,18 @@
 //                  the last successful maintenance run per task
 //                  (maintenance_state, migration 039) and text held past
 //                  its window (src/collectors/retention-overdue.js)
+//   jobs           { failed_last_hour } — collection cycles (processing_jobs)
+//                  that failed in the last hour (the watchdog's
+//                  failed_jobs_abnormal condition reads it)
+//   watchdog       { reporting, last_poll_at, poll_interval_s, open,
+//                    email: { configured, status, last_sent_at, last_error },
+//                    config_errors } — the external watchdog
+//                  (scripts/watchdog.js, migration 050). reporting = it
+//                  polled within 3 poll intervals; open = the conditions it
+//                  holds open. email.status is "email alerting not
+//                  configured" when SMTP is unset: web never holds the SMTP
+//                  settings, the watchdog reports them. Never-run watchdog:
+//                  reporting false, status "watchdog has not reported".
 //   redis          { reachable } — an authenticated PING answered (P9-7)
 //   worker         { alive, last_heartbeat, queues } — the worker's heartbeat
 //                  (src/workers/heartbeat.js); alive = a beat within its TTL;
@@ -131,6 +143,31 @@ async function maintenanceStatus() {
     return { tasks, retention_overdue: overdue };
 }
 
+const WATCHDOG_NOT_REPORTED = 'watchdog has not reported';
+
+/** PR #22 principal #12: what the external watchdog last reported. */
+async function watchdogStatus(now = new Date()) {
+    const row = await dbGet(
+        `SELECT last_poll_at, poll_interval_s, open_conditions, email_configured, email_status,
+                last_email_at, last_email_error, config_errors
+         FROM watchdog_state WHERE id = 1`);
+    if (!row) {
+        return { reporting: false, last_poll_at: null, poll_interval_s: null, open: [],
+            email: { configured: false, status: WATCHDOG_NOT_REPORTED, last_sent_at: null, last_error: null },
+            config_errors: [] };
+    }
+    const age = now.getTime() - new Date(row.last_poll_at).getTime();
+    return {
+        reporting: age <= 3 * row.poll_interval_s * 1000,
+        last_poll_at: row.last_poll_at,
+        poll_interval_s: row.poll_interval_s,
+        open: Array.isArray(row.open_conditions) ? row.open_conditions : [],
+        email: { configured: row.email_configured, status: row.email_status,
+            last_sent_at: row.last_email_at, last_error: row.last_email_error },
+        config_errors: Array.isArray(row.config_errors) ? row.config_errors : [],
+    };
+}
+
 /** { redis: { reachable }, worker: { alive, last_heartbeat } } — never throws. */
 async function queueStatus() {
     const client = redis();
@@ -169,9 +206,14 @@ router.get('/health', async (req, res) => {
              LIMIT 1`,
         ) || null;
 
-        // Unresolved alert events for the active_alerts field
+        // Unresolved alert events for the active_alerts field. The watchdog's
+        // alerts (source_table 'watchdog') carry their one-line summary so
+        // the dashboard can name them (principal #12).
         const activeAlerts = await dbAll(
-            `SELECT id, alert_type, severity, created_at
+            `SELECT id, alert_type, severity, created_at,
+                    CASE WHEN source_table = 'watchdog' THEN details->>'title' END   AS title,
+                    CASE WHEN source_table = 'watchdog' THEN details->>'summary' END AS summary,
+                    (source_table = 'watchdog')                                      AS system
              FROM alert_events
              WHERE resolved_at IS NULL
              ORDER BY created_at DESC`,
@@ -228,6 +270,10 @@ router.get('/health', async (req, res) => {
 
         const sources = summarize(await sourceRows());
         const maintenance = await maintenanceStatus();
+        const failedCycles = await dbGet(
+            `SELECT COUNT(*)::int AS n FROM processing_jobs
+             WHERE status = 'failed' AND completed_at >= NOW() - INTERVAL '1 hour'`);
+        const watchdog = await watchdogStatus();
 
         return res.json({
             status:        dbConnected ? 'healthy' : 'degraded',
@@ -248,6 +294,8 @@ router.get('/health', async (req, res) => {
             ...(await queueStatus()),
             sources,
             maintenance,
+            jobs:           { failed_last_hour: failedCycles.n },
+            watchdog,
             // Spec §20 DPIA gate: correlation is off (explicitly) until a
             // completed DPIA is recorded and the operator enables it.
             correlation: (({ enabled, status, reason }) => ({ enabled, status, reason }))(correlationStatus()),
@@ -264,3 +312,4 @@ module.exports = router;
 module.exports._setRedisClientForTests = _setRedisClientForTests;
 module.exports._setQueueCountsForTests = _setQueueCountsForTests;
 module.exports.QUEUE_NAMES = QUEUE_NAMES;
+module.exports.WATCHDOG_NOT_REPORTED = WATCHDOG_NOT_REPORTED;

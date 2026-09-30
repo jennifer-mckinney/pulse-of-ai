@@ -247,6 +247,21 @@ async function run(opts, out) {
         (verdict.ok ? r.pass : (opts.expectWorker ? r.fail : r.warn))('worker failed jobs', verdict.detail);
     });
 
+    // PR #22 principal #12: the external watchdog. WARN only — its first
+    // poll comes WATCHDOG_INITIAL_DELAY_S after it starts, and host-side
+    // `npm run dev` runs no watchdog at all.
+    await check(r, 'watchdog', async () => {
+        const { body } = await getJson(base, '/api/health');
+        const wd = body && body.watchdog;
+        if (!wd) { r.warn('watchdog', '/api/health has no watchdog block'); return; }
+        const email = (wd.email && wd.email.status) || 'unknown';
+        if (wd.reporting) {
+            r.pass('watchdog', `reporting (last poll ${wd.last_poll_at}); ${(wd.open || []).length} open condition(s); e-mail ${email}`);
+        } else {
+            r.warn('watchdog', `not reporting yet (last poll ${wd.last_poll_at || 'never'}); e-mail ${email}`);
+        }
+    });
+
     // ── Source registry + per-source collection status ─────────────────────
     await check(r, 'source registry', async () => {
         const { status, body } = await getJson(base, '/api/sources');
