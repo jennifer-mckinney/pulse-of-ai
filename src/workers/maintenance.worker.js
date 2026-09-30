@@ -16,7 +16,9 @@
 //        (spec §19 "monthly" — a new month becomes due at most once a
 //        month, so a daily check is enough);
 //     2. source_runs: raw rows older than 30 days rolled up into
-//        source_run_daily and removed (src/collectors/run-retention.js).
+//        source_run_daily and removed (src/collectors/run-retention.js);
+//     3. bias_window: the fairness checks over the rolling 24 h window
+//        (bias@1.5.0, PR #22 decision G2; src/pipeline/bias-window.js).
 //   'terms'      every MAINTENANCE_TERMS_EVERY_MS (default 7 days; PR #22
 //                P1-13): a polite snapshot of every source's terms page with
 //                its normalised text (src/collectors/governance.js); a changed
@@ -92,6 +94,9 @@ function defaultSteps({ log, task = 'retention' }) {
             // P10-9: 30 days of raw source_runs, then daily rollups. Jobs
             // are kept permanently (G4).
             ['source_runs', () => rollupSourceRuns()],
+            // PR #22 G2 (bias@1.5.0): the fairness checks over the rolling
+            // 24 h window, so their minimum samples are reachable.
+            ['bias_window', () => require('../pipeline/bias-window').runBiasWindow({ triggeredBy: 'schedule' })],
         ];
     }
     return [

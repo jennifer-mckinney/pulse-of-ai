@@ -28,6 +28,8 @@ const TABLES = [
     'alert_resolution_approvals',
     'alert_resolutions',
     'alert_events',
+    'bias_window_assessments',
+    'bias_window_runs',
     'bias_assessments',
     'source_gate_events',
     'source_terms_snapshots',

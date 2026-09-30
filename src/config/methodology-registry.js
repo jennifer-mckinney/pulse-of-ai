@@ -583,6 +583,47 @@ const METHODOLOGY_VERSIONS = [
     });
 })();
 
+// bias@1.5.0 — PR #22 decision G2 (Jennifer McKinney, 2026-09-29): the
+// per-cycle checks can rarely reach their minimum samples (principal #11),
+// so the SAME three checks ALSO run over a rolling 24 h window of scored
+// posts, daily (the maintenance `daily` task) and on demand
+// (`npm run bias:window`). Per-cycle checks, thresholds and minimums are
+// bias@1.4.0's, unchanged (src/pipeline/bias.js, src/pipeline/bias-window.js).
+(() => {
+    const prev = METHODOLOGY_VERSIONS.find(m => m.component === 'bias' && m.version === '1.4.0');
+    METHODOLOGY_VERSIONS.push({
+        component: 'bias',
+        version: '1.5.0',
+        model_name: prev.model_name,
+        config: {
+            ...prev.config,
+            // Read by src/pipeline/bias-window.js
+            rolling_window: {
+                hours: 24,
+                schedule: 'daily (maintenance task "daily") and on demand (npm run bias:window)',
+                scope: 'every post whose sentiment decision was recorded in the 24 hours before the run',
+                checks: ['location_concentration', 'platform_sentiment_parity', 'negative_dominance'],
+                rules: 'the per-cycle thresholds and minimum samples (sample_rules), applied to the window instead of one cycle',
+                per_cycle: 'the per-cycle checks still run after every collection cycle, unchanged',
+                decision: 'PR #22 G2, approved by Jennifer McKinney 2026-09-29 (ADR 0001)',
+            },
+            insufficient_sample_reporting: 'the share of "insufficient sample" assessments per check (per cycle over the last 24 hours '
+                + 'and 7 days; rolling window: the latest run and the last 7 days) is served by GET /api/bias/latest and GET /api/health',
+        },
+        justification: 'bias@1.5.0 adds a rolling 24-hour window to the fairness checks (PR #22 decision G2, approved by Jennifer '
+            + 'McKinney on 2026-09-29). The per-cycle checks run over the posts scored in one 2–3 minute collection cycle, which '
+            + 'rarely reaches bias@1.4.0\'s minimum samples (30 content-located posts, 10 posts per category, 30 posts), so the '
+            + 'monitor could report "insufficient sample" indefinitely. The same three checks (location concentration and '
+            + 'negative dominance, Suresh & Guttag 2021; platform sentiment parity, Barocas & Selbst 2016) now ALSO run once a '
+            + 'day and on demand over every post whose sentiment decision was recorded in the previous 24 hours, with the same '
+            + 'thresholds and minimum samples, so the minimums are reachable. Each window run is recorded in bias_window_runs '
+            + 'and its assessments in bias_window_assessments, linked to this version; a violation raises an alert like a '
+            + 'per-cycle one. The per-cycle checks are unchanged. The share of "insufficient sample" assessments per check is '
+            + 'reported by GET /api/bias/latest and GET /api/health, so a monitor that never reaches its minimum is visible. '
+            + 'Thresholds, names, citations and planned layers are as in bias@1.1.0 (AI Act Article 13).',
+    });
+})();
+
 // ─── Errata (P10-16) ─────────────────────────────────────────────────────────
 // A released methodology row is never edited, even when it turns out not to
 // describe the code that ran. An erratum is a NEW row in

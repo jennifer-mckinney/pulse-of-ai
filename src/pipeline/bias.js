@@ -13,6 +13,10 @@
 // recording the biasMvId it ran with in methodology_version_id (migration 010)
 // so receipts and history resolve the exact version that produced each row.
 // Violations additionally write to alert_events to surface on the health dashboard.
+//
+// bias@1.5.0 (PR #22 decision G2): the same checks also run over a rolling
+// 24 h window (src/pipeline/bias-window.js); a check's TARGET is then a
+// window scope and its rows go to bias_window_assessments (see scopeOf).
 
 'use strict';
 
@@ -21,6 +25,45 @@ const { dbGet, dbAll, dbRun } = require('../db/connection');
 // group_value of a location-concentration assessment whose located sample is
 // below the version's location_min_sample (bias@1.3.0): no violation.
 const INSUFFICIENT_SAMPLE = 'insufficient sample';
+
+// ─── Scope: one processing job, or a rolling window (bias@1.5.0, G2) ─────────
+//
+// Every check takes a TARGET: a processing_jobs id (the per-cycle checks —
+// the posts whose sentiment decision was recorded under that job) or a
+// window scope { windowRunId, start, end } (src/pipeline/bias-window.js — the
+// posts whose sentiment decision was recorded in [start, end)). The rules
+// are identical; only the post set and the table the assessment is written
+// to differ (bias_assessments vs bias_window_assessments).
+
+/**
+ * @param {string|{ windowRunId: string, start: Date|string, end: Date|string }} target
+ * @returns {{ kind: 'job'|'window', posts: string, params: Array, next: number, id: string }}
+ *   posts: SQL selecting the scope's raw_post ids, using $1..$(next-1)
+ */
+function scopeOf(target) {
+    if (typeof target === 'string') {
+        return {
+            kind: 'job',
+            id: target,
+            posts: `SELECT DISTINCT raw_post_id FROM decision_audit_log
+                    WHERE job_id = $1 AND decision_type = 'sentiment'`,
+            params: [target],
+            next: 2,
+        };
+    }
+    if (!target || !target.windowRunId || !target.start || !target.end) {
+        throw new Error('bias check target must be a job id or { windowRunId, start, end }');
+    }
+    return {
+        kind: 'window',
+        id: target.windowRunId,
+        posts: `SELECT DISTINCT raw_post_id FROM decision_audit_log
+                WHERE decision_type = 'sentiment'
+                  AND created_at >= $1::timestamptz AND created_at < $2::timestamptz`,
+        params: [target.start, target.end],
+        next: 3,
+    };
+}
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -47,7 +90,7 @@ async function getBiasConfig(biasMvId) {
  * @param {object} params
  */
 async function writeBiasAssessment({
-    jobId,
+    scope,
     assessmentType,
     groupField,
     groupValue,
@@ -59,14 +102,18 @@ async function writeBiasAssessment({
     evidence,
     biasMvId,                  // lineage: the methodology row this run used (migration 010)
 }) {
+    // bias_assessments (job_id) for a cycle; bias_window_assessments
+    // (window_run_id, migration 060) for a rolling window run.
+    const [table, idColumn] = scope.kind === 'window'
+        ? ['bias_window_assessments', 'window_run_id'] : ['bias_assessments', 'job_id'];
     await dbRun(
-        `INSERT INTO bias_assessments
-            (job_id, assessment_type, group_field, group_value,
+        `INSERT INTO ${table}
+            (${idColumn}, assessment_type, group_field, group_value,
              metric_name, metric_value, threshold, is_violation, severity, evidence,
              methodology_version_id)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11)`,
         [
-            jobId,
+            scope.id,
             assessmentType,
             groupField,
             groupValue,
@@ -87,11 +134,18 @@ async function writeBiasAssessment({
  *
  * @param {object} params
  */
-async function writeAlertEvent({ alertType, severity, details }) {
+async function writeAlertEvent({ scope, alertType, severity, details }) {
+    // A cycle alert names its job (details.jobId, as before); a window alert
+    // names its window run instead (details.windowRunId + the window), and
+    // points at bias_window_assessments.
+    const table = scope.kind === 'window' ? 'bias_window_assessments' : 'bias_assessments';
+    const ref = scope.kind === 'window'
+        ? { windowRunId: scope.id, scope: 'rolling_window', windowStart: scope.params[0], windowEnd: scope.params[1] }
+        : { jobId: scope.id };
     await dbRun(
         `INSERT INTO alert_events (alert_type, severity, source_table, details)
-         VALUES ($1, $2, 'bias_assessments', $3::jsonb)`,
-        [alertType, severity, JSON.stringify(details || {})],
+         VALUES ($1, $2, $3, $4::jsonb)`,
+        [alertType, severity, table, JSON.stringify({ ...ref, ...(details || {}) })],
     );
 }
 
@@ -104,11 +158,12 @@ async function writeAlertEvent({ alertType, severity, details }) {
  * Query strategy: use IN-subquery to find posts for this job, then GROUP BY location.
  * Avoids JOIN fan-out from posts having multiple audit entries (sentiment + relevance + DQI).
  *
- * @param {string} jobId     UUID of the processing_jobs row
+ * @param {string|object} target  a processing_jobs id, or a window scope (see scopeOf)
  * @param {string} biasMvId  UUID of the bias methodology_versions row
  * @returns {Promise<{ isViolation: boolean, metricValue: number, groupValue: string|null }>}
  */
-async function checkLocationConcentration(jobId, biasMvId) {
+async function checkLocationConcentration(target, biasMvId) {
+    const scope     = scopeOf(target);
     const config    = await getBiasConfig(biasMvId);
     const threshold = config.location_concentration_max;
     // D3 (ADR 0001, Jennifer 2026-09-29: "Separate layer, excluded from
@@ -126,31 +181,23 @@ async function checkLocationConcentration(jobId, biasMvId) {
     const rows = await dbAll(
         `SELECT rp.location, COUNT(*)::int AS post_count
          FROM raw_posts rp
-         WHERE rp.id IN (
-             SELECT DISTINCT raw_post_id
-             FROM decision_audit_log
-             WHERE job_id = $1 AND decision_type = 'sentiment'
-         )
+         WHERE rp.id IN (${scope.posts})
            AND rp.location IS NOT NULL
            AND rp.location != ''
-           AND NOT (COALESCE(rp.raw_payload->>'location_basis', 'content') = ANY($2::text[]))
+           AND NOT (COALESCE(rp.raw_payload->>'location_basis', 'content') = ANY($${scope.next}::text[]))
          GROUP BY rp.location
          ORDER BY post_count DESC`,
-        [jobId, excludedBases],
+        [...scope.params, excludedBases],
     );
     // How many located posts the exclusion removed (evidence, never hidden).
     const excluded = excludedBases.length === 0 ? 0 : (await dbGet(
         `SELECT COUNT(*)::int AS n
          FROM raw_posts rp
-         WHERE rp.id IN (
-             SELECT DISTINCT raw_post_id
-             FROM decision_audit_log
-             WHERE job_id = $1 AND decision_type = 'sentiment'
-         )
+         WHERE rp.id IN (${scope.posts})
            AND rp.location IS NOT NULL
            AND rp.location != ''
-           AND COALESCE(rp.raw_payload->>'location_basis', 'content') = ANY($2::text[])`,
-        [jobId, excludedBases],
+           AND COALESCE(rp.raw_payload->>'location_basis', 'content') = ANY($${scope.next}::text[])`,
+        [...scope.params, excludedBases],
     )).n;
     const exclusion = excludedBases.length === 0 ? {} : { excluded_location_bases: excludedBases, excluded_posts: excluded };
 
@@ -165,7 +212,7 @@ async function checkLocationConcentration(jobId, biasMvId) {
     if (rows.length === 0) {
         const insufficient = minSample > 0;
         await writeBiasAssessment({
-            jobId,
+            scope,
             assessmentType: 'location_concentration',
             groupField:     'location',
             groupValue:     insufficient ? INSUFFICIENT_SAMPLE : 'none',
@@ -197,7 +244,7 @@ async function checkLocationConcentration(jobId, biasMvId) {
     // minimum, so their replays are unchanged.
     if (total < minSample) {
         await writeBiasAssessment({
-            jobId,
+            scope,
             assessmentType: 'location_concentration',
             groupField:     'location',
             groupValue:     INSUFFICIENT_SAMPLE,
@@ -223,7 +270,7 @@ async function checkLocationConcentration(jobId, biasMvId) {
         : null;
 
     await writeBiasAssessment({
-        jobId,
+        scope,
         assessmentType: 'location_concentration',
         groupField:     'location',
         groupValue:     dominant.location,
@@ -238,10 +285,10 @@ async function checkLocationConcentration(jobId, biasMvId) {
 
     if (isViolation) {
         await writeAlertEvent({
+            scope,
             alertType: 'location_concentration',
             severity,
             details: {
-                jobId,
                 location:  dominant.location,
                 share:     metricValue,
                 threshold,
@@ -263,11 +310,12 @@ async function checkLocationConcentration(jobId, biasMvId) {
  * show consistently negative, that indicates platform selection bias rather than
  * genuine discourse differences.
  *
- * @param {string} jobId     UUID of the processing_jobs row
+ * @param {string|object} target  a processing_jobs id, or a window scope (see scopeOf)
  * @param {string} biasMvId  UUID of the bias methodology_versions row
  * @returns {Promise<{ isViolation: boolean, metricValue: number, groupValue: string|null }>}
  */
-async function checkPlatformSentimentParity(jobId, biasMvId) {
+async function checkPlatformSentimentParity(target, biasMvId) {
+    const scope     = scopeOf(target);
     const config    = await getBiasConfig(biasMvId);
     const threshold = config.platform_parity_max_diff;
 
@@ -277,13 +325,9 @@ async function checkPlatformSentimentParity(jobId, biasMvId) {
          FROM sentiment_results sr
          JOIN raw_posts rp     ON rp.id      = sr.raw_post_id
          JOIN data_sources ds  ON ds.id      = rp.source_id
-         WHERE sr.raw_post_id IN (
-             SELECT DISTINCT raw_post_id
-             FROM decision_audit_log
-             WHERE job_id = $1 AND decision_type = 'sentiment'
-         )
+         WHERE sr.raw_post_id IN (${scope.posts})
          GROUP BY ds.category`,
-        [jobId],
+        scope.params,
     );
     // bias@1.4.0: only categories with at least parity_min_per_category
     // posts are compared (an average over three posts is noise); with fewer
@@ -297,7 +341,7 @@ async function checkPlatformSentimentParity(jobId, biasMvId) {
     const rows = allRows.filter(r => r.n >= minPer);
     if (minPer > 0 && rows.length < 2) {
         await writeBiasAssessment({
-            jobId,
+            scope,
             assessmentType: 'platform_sentiment_parity',
             groupField:     'platform',
             groupValue:     INSUFFICIENT_SAMPLE,
@@ -315,7 +359,7 @@ async function checkPlatformSentimentParity(jobId, biasMvId) {
     // Parity requires at least two distinct platforms to compare
     if (rows.length < 2) {
         await writeBiasAssessment({
-            jobId,
+            scope,
             assessmentType: 'platform_sentiment_parity',
             groupField:     'platform',
             groupValue:     rows.length === 1 ? rows[0].category : 'none',
@@ -347,7 +391,7 @@ async function checkPlatformSentimentParity(jobId, biasMvId) {
     const severity    = isViolation ? 'warning' : null;
 
     await writeBiasAssessment({
-        jobId,
+        scope,
         assessmentType: 'platform_sentiment_parity',
         groupField:     'platform',
         groupValue:     worstPair || 'unknown',
@@ -362,10 +406,10 @@ async function checkPlatformSentimentParity(jobId, biasMvId) {
 
     if (isViolation) {
         await writeAlertEvent({
+            scope,
             alertType: 'platform_sentiment_parity',
             severity,
             details: {
-                jobId,
                 pair:      worstPair,
                 diff:      maxDiff,
                 threshold,
@@ -385,11 +429,12 @@ async function checkPlatformSentimentParity(jobId, biasMvId) {
  * Rationale: a feed that is overwhelmingly negative may reflect collection bias
  * (e.g., only controversy-driven posts being ingested) rather than true discourse.
  *
- * @param {string} jobId     UUID of the processing_jobs row
+ * @param {string|object} target  a processing_jobs id, or a window scope (see scopeOf)
  * @param {string} biasMvId  UUID of the bias methodology_versions row
  * @returns {Promise<{ isViolation: boolean, metricValue: number }>}
  */
-async function checkNegativeDominance(jobId, biasMvId) {
+async function checkNegativeDominance(target, biasMvId) {
+    const scope     = scopeOf(target);
     const config    = await getBiasConfig(biasMvId);
     const threshold = config.negative_dominance_max;
 
@@ -397,13 +442,9 @@ async function checkNegativeDominance(jobId, biasMvId) {
     const rows = await dbAll(
         `SELECT sr.indicator, COUNT(DISTINCT sr.raw_post_id)::int AS count
          FROM sentiment_results sr
-         WHERE sr.raw_post_id IN (
-             SELECT DISTINCT raw_post_id
-             FROM decision_audit_log
-             WHERE job_id = $1 AND decision_type = 'sentiment'
-         )
+         WHERE sr.raw_post_id IN (${scope.posts})
          GROUP BY sr.indicator`,
-        [jobId],
+        scope.params,
     );
 
     // bias@1.4.0: a negative share over a handful of posts is noise —
@@ -415,7 +456,7 @@ async function checkNegativeDominance(jobId, biasMvId) {
     if (rows.length === 0) {
         const insufficient = minNeg > 0;
         await writeBiasAssessment({
-            jobId,
+            scope,
             assessmentType: 'negative_dominance',
             groupField:     'global',
             groupValue:     insufficient ? INSUFFICIENT_SAMPLE : 'all',
@@ -436,7 +477,7 @@ async function checkNegativeDominance(jobId, biasMvId) {
     const metricValue = negCount / total;
     if (total < minNeg) {
         await writeBiasAssessment({
-            jobId,
+            scope,
             assessmentType: 'negative_dominance',
             groupField:     'global',
             groupValue:     INSUFFICIENT_SAMPLE,
@@ -454,7 +495,7 @@ async function checkNegativeDominance(jobId, biasMvId) {
     const severity    = isViolation ? 'warning' : null;
 
     await writeBiasAssessment({
-        jobId,
+        scope,
         assessmentType: 'negative_dominance',
         groupField:     'global',
         groupValue:     'all',
@@ -469,10 +510,10 @@ async function checkNegativeDominance(jobId, biasMvId) {
 
     if (isViolation) {
         await writeAlertEvent({
+            scope,
             alertType: 'negative_dominance',
             severity,
             details: {
-                jobId,
                 negativeShare: metricValue,
                 total,
                 threshold,
@@ -517,6 +558,7 @@ async function runBiasChecks(jobId, biasMvId) {
 
 module.exports = {
     INSUFFICIENT_SAMPLE,
+    scopeOf,
     runBiasChecks,
     checkLocationConcentration,
     checkPlatformSentimentParity,

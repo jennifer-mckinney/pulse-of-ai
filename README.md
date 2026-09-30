@@ -355,6 +355,7 @@ The schema includes the following core tables:
 | `discourse_scores` | DQI scores per post |
 | `audit_log` | Immutable inference provenance records |
 | `bias_assessments` | Bias evaluations and violation flags |
+| `bias_window_runs` / `bias_window_assessments` | The rolling 24 h bias checks (bias@1.5.0): one run per day or on demand, and its assessments |
 | `methodology_versions` | Versioned algorithm configs with justification |
 | `data_sources` | Registry of the 50 monitored sources |
 | `cross_platform_users` | Pseudonymous verb-noun correlation IDs |
@@ -398,6 +399,7 @@ ingest → sentiment → relevance → discourse → embeddings → correlation
 | `discourse.js` | DQI scoring across posts |
 | `embeddings.js` | Calls Python service; stores vectors in pgvector |
 | `bias.js` | Demographic-parity / equalized-odds checks; fires alerts |
+| `bias-window.js` | The same checks over a rolling 24 h window, daily and on demand (`npm run bias:window`); the insufficient-sample share per check in `/api/bias/latest` and `/api/health` |
 | `correlation.js` | Cross-platform user clustering by writing style + timing |
 
 ---

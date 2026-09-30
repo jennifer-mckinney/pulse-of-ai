@@ -31,6 +31,10 @@
 //                  the last successful maintenance run per task
 //                  (maintenance_state, migration 039) and text held past
 //                  its window (src/collectors/retention-overdue.js)
+//   bias_sample    { per_cycle: { last_24h, last_7d }, rolling_window:
+//                    { latest_run, last_7d } } — per bias check
+//                    { assessments, insufficient, share }: how often it could
+//                    not reach its minimum sample (PR #22 principal #11, G2)
 //   redis          { reachable } — an authenticated PING answered (P9-7)
 //   worker         { alive, last_heartbeat, queues } — the worker's heartbeat
 //                  (src/workers/heartbeat.js); alive = a beat within its TTL;
@@ -60,6 +64,7 @@ const { correlationStatus } = require('../pipeline/correlation-gate');
 const { sourceRows, summarize } = require('../collectors/status');
 const { overdueBySource } = require('../collectors/retention-overdue');
 const { scrub } = require('../collectors/redact');
+const { insufficientSampleReport } = require('../pipeline/bias-window');
 
 const router = Router();
 
@@ -228,6 +233,9 @@ router.get('/health', async (req, res) => {
 
         const sources = summarize(await sourceRows());
         const maintenance = await maintenanceStatus();
+        // PR #22 principal #11 / G2: the insufficient-sample share per bias
+        // check, per cycle and in the rolling 24 h window.
+        const biasSample = await insufficientSampleReport();
 
         return res.json({
             status:        dbConnected ? 'healthy' : 'degraded',
@@ -248,6 +256,7 @@ router.get('/health', async (req, res) => {
             ...(await queueStatus()),
             sources,
             maintenance,
+            bias_sample: biasSample,
             // Spec §20 DPIA gate: correlation is off (explicitly) until a
             // completed DPIA is recorded and the operator enables it.
             correlation: (({ enabled, status, reason }) => ({ enabled, status, reason }))(correlationStatus()),
