@@ -29,7 +29,7 @@
 <pre class="mermaid">
 %% Title: Data model 1 of 4 · sources, collection state, jobs, alerts, Reddit
 %% Summary: The tables that describe the 52 registry sources, their collection state and runs, the processing jobs every score belongs to, alerts, and Reddit's selection, budget and maintenance state.
-%% Sources: src/db/migrations/001, 003, 013, 016, 018, 019, 020, 021, 023, 025, 033, 037, 038, 040, 050. Alert writers: src/pipeline/bias.js (writeAlertEvent), src/collectors/source-alerts.js, source-health.js, retention-overdue.js, state.js, governance.js, src/watchdog/store.js and conditions.js. raw_posts is shown with its keys only (full columns in data model 2); alert resolutions, run rollups, gate events and the watchdog tables are in data model 4. Dotted lines are logical links without a foreign key. NOTE_alert_type_values is a legend box, not a table.
+%% Sources: src/db/migrations/001, 003, 013, 016, 018, 019, 020, 021, 023, 025, 033, 037, 038, 040, 050, 062. Alert writers: src/pipeline/bias.js (writeAlertEvent), src/collectors/source-alerts.js, source-health.js, retention-overdue.js, state.js, governance.js, src/watchdog/store.js and conditions.js. raw_posts is shown with its keys only (full columns in data model 2); alert resolutions, run rollups, gate events and the watchdog tables are in data model 4. Dotted lines are logical links without a foreign key. NOTE_alert_type_values is a legend box, not a table.
 erDiagram
 
   data_sources {
@@ -65,7 +65,10 @@ erDiagram
     int access_denied_status
     text access_denied_kind
     timestamptz refused_until
-    int refusal_count
+    int refusal_count "kept through probation (062)"
+    timestamptz probation_until "062"
+    jsonb access_denied_headers "062: allow-listed, scrubbed"
+    timestamptz last_refused_at "062"
     bigint unchanged_runs "023"
     timestamptz last_unchanged_at
     timestamptz last_new_post_at "033: newest stored post; source_stale clock"
@@ -78,20 +81,21 @@ erDiagram
     uuid source_id FK
     uuid job_id FK "nullable"
     text gate_status
-    text outcome "ok | error | skipped"
+    text outcome "ok | error (a skipped source writes no row)"
     int items_fetched
     int posts_new
     int requests
     text error "scrubbed"
     text error_kind "016"
     int http_status "016"
+    jsonb response_headers "062: refusal runs only"
     timestamptz started_at
     timestamptz finished_at
   }
 
   processing_jobs {
     uuid id PK
-    text triggered_by "cron | api | standup | manual | demo | seed-demo"
+    text triggered_by "cron | api | standup | manual | demo"
     text status "running | closing | awaiting_retries | completed | failed"
     int posts_collected
     int posts_processed
@@ -100,7 +104,7 @@ erDiagram
     timestamptz started_at
     timestamptz completed_at
     int inflight_runs "021"
-    timestamptz last_progress_at "040: stale refresh after 30 min without progress"
+    timestamptz last_progress_at "040: an api, standup, demo or manual job is failed after 30 min without progress"
   }
 
   alert_events {

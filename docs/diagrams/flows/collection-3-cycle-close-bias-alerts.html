@@ -24,11 +24,11 @@
 </head>
 <body>
 <h1>Collection cycle · part 3 of 3 · cycle close, bias checks, embeddings, alerts</h1>
-<p class="summary">How a collection cycle&#x27;s job is closed and its job-level bias checks (bias@1.5.0, with minimum samples) run once, how the rolling 24 h window checks run daily, how scoring, retries and embeddings are processed, which source-health and retention alerts the cycle timer raises, and how alerts reach the page.</p>
+<p class="summary">How a collection cycle&#x27;s job is closed and its job-level bias checks (bias@1.6.0, with minimum samples) run once, how the rolling 24 h window checks run daily, how scoring, retries and embeddings are processed, which source-health and retention alerts the cycle timer raises, and how alerts reach the page.</p>
 <p class="source">Canonical source: <code>collection-3-cycle-close-bias-alerts.mmd</code> · index: <code>docs/diagrams/README.md</code></p>
 <pre class="mermaid">
 %% Title: Collection cycle · part 3 of 3 · cycle close, bias checks, embeddings, alerts
-%% Summary: How a collection cycle's job is closed and its job-level bias checks (bias@1.5.0, with minimum samples) run once, how the rolling 24 h window checks run daily, how scoring, retries and embeddings are processed, which source-health and retention alerts the cycle timer raises, and how alerts reach the page.
+%% Summary: How a collection cycle's job is closed and its job-level bias checks (bias@1.6.0, with minimum samples) run once, how the rolling 24 h window checks run daily, how scoring, retries and embeddings are processed, which source-health and retention alerts the cycle timer raises, and how alerts reach the page.
 %% Sources: src/workers/start.js (closeDueCyclesOnce, every 30 s), src/workers/maintenance.worker.js (daily task), src/collectors/cycle.js, src/collectors/sweep.js, src/collectors/{source-health,retention-overdue,source-alerts}.js, src/pipeline/bias.js, src/pipeline/bias-window.js, scripts/bias-window.js, src/workers/{ingest,embed}.worker.js, src/pipeline/embeddings.js, python/embeddings_service.py, src/routes/{health,bias}.js, public/js/{main,ui,utils}.js; migrations 027, 028, 032, 036, 038, 060. Spec: TECHNICAL_SPEC.md sections 9 (bias monitoring, alert flow), 12 (embeddings); PR #22 decision G2.
 flowchart LR
 
@@ -37,7 +37,7 @@ flowchart LR
     C1["29 · claimDueCycles(): FOR UPDATE SKIP LOCKED,&lt;br/&gt;status → closing, for every cron job whose window&lt;br/&gt;+ 60 s grace has passed with inflight_runs ≤ 0&lt;br/&gt;(or past the hard cap max(15 min, 4 × window)),&lt;br/&gt;and every awaiting_retries job whose retries are done"]:::done
     C2["30 · posts = COUNT(DISTINCT raw_post_id)&lt;br/&gt;in decision_audit_log for the job"]:::done
     C3{"posts #gt; 0?"}:::done
-    C4["31 · runBiasChecks(job, bias@1.5.0), once:&lt;br/&gt;location_concentration (content-located posts,&lt;br/&gt;publisher-located excluded, min 30) ·&lt;br/&gt;platform_sentiment_parity (categories with ≥ 10&lt;br/&gt;posts, at least 2) · negative_dominance (min 30)&lt;br/&gt;→ 3 bias_assessments rows with methodology_version_id;&lt;br/&gt;below a minimum: #quot;insufficient sample#quot;,&lt;br/&gt;no violation, no alert"]:::done
+    C4["31 · runBiasChecks(job, bias@1.6.0), once:&lt;br/&gt;location_concentration (content-located posts,&lt;br/&gt;publisher-located excluded, min 30) ·&lt;br/&gt;platform_sentiment_parity (categories with ≥ 10&lt;br/&gt;posts, at least 2) · negative_dominance (min 30)&lt;br/&gt;→ 3 bias_assessments rows with methodology_version_id;&lt;br/&gt;below a minimum: #quot;insufficient sample#quot;,&lt;br/&gt;no violation, no alert"]:::done
     C5["32 · each violation → one alert_events row&lt;br/&gt;(alert_type = the check, severity warning / critical,&lt;br/&gt;details.jobId)"]:::done
     C6["33 · job completed with posts_processed;&lt;br/&gt;on error → failed, error text scrubbed"]:::done
     C1 --&gt; C2 --&gt; C3
@@ -47,12 +47,12 @@ flowchart LR
 
   subgraph OTHER["Refresh, standup and manual jobs"]
     direction TB
-    J1["POST /api/refresh (triggered_by api),&lt;br/&gt;populate --once (standup), npm run collect (manual):&lt;br/&gt;one job over every source; bias checks at the end&lt;br/&gt;of a run that scored new posts inline; a job with&lt;br/&gt;reserved scoring slots still held (a refresh's ingest&lt;br/&gt;jobs, retries) → awaiting_retries, closed at 29-33"]:::done
+    J1["POST /api/refresh (triggered_by api),&lt;br/&gt;populate --once (standup), npm run collect (manual):&lt;br/&gt;one job over every source; a run that ends with no&lt;br/&gt;scoring slot held finalizes the job itself: posts counted&lt;br/&gt;from decision_audit_log, bias checks once when &gt; 0;&lt;br/&gt;reserved slots still held (a refresh's ingest jobs,&lt;br/&gt;retries) → awaiting_retries, closed at 29-33"]:::done
   end
 
   subgraph WINDOW["Rolling 24 h window"]
     direction TB
-    B1["bias@1.5.0 · maintenance daily task (every 24 h)&lt;br/&gt;and npm run bias:window:&lt;br/&gt;runBiasWindow() → one bias_window_runs row"]:::done
+    B1["bias@1.6.0 · maintenance daily task (every 24 h)&lt;br/&gt;and npm run bias:window:&lt;br/&gt;runBiasWindow() → one bias_window_runs row"]:::done
     B2["the same three checks, thresholds and&lt;br/&gt;minimums over every post whose sentiment&lt;br/&gt;decision was recorded in the last 24 h&lt;br/&gt;→ bias_window_assessments (append-only)"]:::done
     B3["each violation → one alert_events row&lt;br/&gt;with details.windowRunId"]:::done
     B1 --&gt; B2 --&gt; B3
@@ -76,7 +76,7 @@ flowchart LR
     direction TB
     E1["36 · embed.worker: embedPost(id)&lt;br/&gt;5 attempts, exponential backoff from 2 s"]:::done
     E2["37 · POST embeddings:8000/embeddings&lt;br/&gt;all-MiniLM-L6-v2 at the pinned revision"]:::done
-    E3["38 · upsert post_embeddings VECTOR(384),&lt;br/&gt;methodology_version 1.0.0 only when model&lt;br/&gt;and revision are the registered ones; skipped&lt;br/&gt;when the text was removed (checked FOR SHARE,&lt;br/&gt;G3) or the demo post purged"]:::done
+    E3["38 · upsert post_embeddings VECTOR(384),&lt;br/&gt;methodology_version 1.1.0 only when model&lt;br/&gt;and revision are the registered ones; skipped&lt;br/&gt;when the text was removed (checked FOR SHARE,&lt;br/&gt;G3) or the demo post purged"]:::done
     E1 --&gt; E2 --&gt; E3
   end
 
@@ -103,7 +103,7 @@ flowchart LR
   B3 --&gt; A1
   H1 --&gt; A1
   H2 --&gt; A1
-  J1 -- "inline" --&gt; C4
+  J1 -- "no slot held at run end" --&gt; C4
   J1 -. "awaiting_retries" .-&gt; C1
 
   classDef done fill:#e8f5e9,stroke:#2e7d32,color:#1b3d1f

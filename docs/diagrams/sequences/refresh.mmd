@@ -1,6 +1,6 @@
 %% Title: Sequence · POST /api/refresh
 %% Summary: How an on-demand collection is requested: the same-origin guard, the shared-secret check, the in-flight and debounce guards, the 202 hand-off to the worker, and the worker completing the job row.
-%% Sources: src/routes/refresh.js (refreshTokenCheck, boundBeyondLoopback, viaProxy), src/middleware/same-origin.js, src/server.js (mount order, no CORS, listenHost), src/queues/index.js (collect.refresh, ingest), src/workers/collect.worker.js (processRefreshJob, refreshDeadlineMs), src/collectors/runner.js (scoreVia queue), src/workers/ingest.worker.js, src/collectors/cycle.js (reserveRetry, releaseRetry, closeCycles), src/collectors/stale-jobs.js, src/db/migrations/019_refresh_inflight.sql, 040_job_progress.sql. Updated 2026-09-29. Spec: TECHNICAL_SPEC.md section 7 (POST /api/refresh) and section 8 (rate limiting). The page itself never calls this endpoint.
+%% Sources: src/routes/refresh.js (refreshTokenCheck, boundBeyondLoopback, viaProxy), src/middleware/same-origin.js, src/server.js (mount order, no CORS, listenHost), src/queues/index.js (collect.refresh, ingest), src/workers/collect.worker.js (processRefreshJob, refreshDeadlineMs), src/collectors/runner.js (scoreVia queue), src/workers/ingest.worker.js, src/collectors/cycle.js (reserveRetry, releaseRetry, closeCycles, jobPostsProcessed), src/pipeline/bias.js (runBiasChecks), src/collectors/stale-jobs.js, src/db/migrations/019_refresh_inflight.sql, 040_job_progress.sql. Updated 2026-09-30. Spec: TECHNICAL_SPEC.md section 7 (POST /api/refresh) and section 8 (rate limiting). The page itself never calls this endpoint.
 sequenceDiagram
   autonumber
   actor Caller as Caller (browser tab or script)
@@ -53,6 +53,6 @@ sequenceDiagram
     W->>DB: job awaiting_retries
     Note over DB: cycle closer (every 30 s) finalizes it once every slot is released:<br/>counts from decision_audit_log, bias checks once, completed
   else no slot held
-    W->>DB: completed with the run's counts (no job-level bias checks:<br/>the run scored nothing inline)
+    W->>DB: completed: posts_processed counted from decision_audit_log,<br/>bias checks once when > 0 (cycle.jobPostsProcessed)
   end
   Note over DB: maintenance stale-job sweep (every 5 min) fails an 'api' job<br/>with no progress for REFRESH_STALE_MINUTES

@@ -38,7 +38,7 @@ flowchart LR
     SG["each reschedule also records gate changes:&lt;br/&gt;recordGateTransitions() → append-only&lt;br/&gt;source_gate_events gate_opened / gate_closed,&lt;br/&gt;approved_by = GATE_APPROVED_BY for a gated&lt;br/&gt;opening; the database kill switch counts as closed;&lt;br/&gt;correlation gate changes → correlation_gate_events"]:::done
     S2["2 · cadence: every max(COLLECT_WINDOW_MS,&lt;br/&gt;the source's poll interval), default 150 s;&lt;br/&gt;start times staggered across the window;&lt;br/&gt;schedulers of sources no longer collecting removed"]:::done
     S3["3 · job on collect.rss / collect.api / collect.bulk&lt;br/&gt;processCollectJob(slug) → runCollection&lt;br/&gt;with the cycle option, scoreVia queue,&lt;br/&gt;deadline = half the window"]:::done
-    S4["4 · resolveCurrentMethodology()&lt;br/&gt;sentiment@1.0.0 · relevance@1.2.0&lt;br/&gt;discourse@1.1.0-DQI · bias@1.5.0&lt;br/&gt;ingest@1.7.0 · admission_filter@1.0.0"]:::done
+    S4["4 · resolveCurrentMethodology()&lt;br/&gt;sentiment@1.0.0 · relevance@1.2.0&lt;br/&gt;discourse@1.1.0-DQI · bias@1.6.0&lt;br/&gt;ingest@1.7.0 · admission_filter@1.0.0"]:::done
     S1 --&gt; SG
     S1 --&gt; S2 --&gt; S3 --&gt; S4
   end
@@ -61,7 +61,7 @@ flowchart LR
     R1{"9 · collection deadline&lt;br/&gt;already reached?"}:::done
     R2{"10 · database kill switch?&lt;br/&gt;data_sources.collection_disabled_at&lt;br/&gt;(npm run source:disable, refused&lt;br/&gt;without GATE_APPROVED_BY)"}:::done
     R3{"11 · refused state?&lt;br/&gt;source_collection_state&lt;br/&gt;access_denied_at, refused_until"}:::done
-    R4["SOURCE_#lt;SLUG#gt;_RESET date newer than the&lt;br/&gt;refusal and a valid GATE_APPROVED_BY:&lt;br/&gt;clearRefusal() + source_gate_events&lt;br/&gt;refusal_reset, one transaction"]:::done
+    R4["SOURCE_#lt;SLUG#gt;_RESET date at or after the&lt;br/&gt;last refusal and a valid GATE_APPROVED_BY:&lt;br/&gt;clearRefusal() + source_gate_events&lt;br/&gt;refusal_reset, one transaction"]:::done
     R5{"12 · claim: last attempt older than&lt;br/&gt;the poll interval? (state.claim,&lt;br/&gt;atomic across worker and refresh)"}:::done
     R1 -- no --&gt; R2
     R2 -- no --&gt; R3
