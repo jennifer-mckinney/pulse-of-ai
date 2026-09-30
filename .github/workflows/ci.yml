@@ -110,7 +110,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
           cache: pip
@@ -126,7 +126,7 @@ jobs:
 
       # Cache the Hugging Face model download between runs.
       - name: Cache Hugging Face models
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/huggingface
           key: hf-${{ runner.os }}-${{ hashFiles('python/requirements.txt') }}
@@ -154,7 +154,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Python 3.13
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.13"
 
@@ -164,7 +164,7 @@ jobs:
           python -m pip install pytest pytest-asyncio httpx
 
       - name: Cache Hugging Face models
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/huggingface
           key: hf-${{ runner.os }}-py313-${{ hashFiles('python/requirements-service.txt') }}
@@ -308,7 +308,7 @@ jobs:
 
       - name: Upload Playwright artifacts on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-results
           path: test-results/
