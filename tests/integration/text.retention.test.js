@@ -71,6 +71,17 @@ describe('ingest@1.6.0: one copy of the text, and a collected row', () => {
         await storeRawPost({ id: 'g-1', text: 'Headline', url: 'https://www.theguardian.com/x' }, ids.guardian);
         expect(await db.dbAll('SELECT id FROM data_retention_log')).toHaveLength(1);
     });
+
+    // PR #22 grumpy NIT 19: a demo post's row states the truth.
+    it('a demo post gets an accurate retention row: no legal basis, purged whole, never blanked', async () => {
+        const demoSrc = (await db.dbRun(`INSERT INTO data_sources (name, display_name, source_type, category, active)
+            VALUES ('demo_nit19', 'Demo feed (fictional)', 'demo', 'social', FALSE) RETURNING id`)).id;
+        const { postId } = await storeRawPost({ id: 'demo-1', text: 'Fictional AI post', demo: true, fictional: true }, demoSrc);
+        const row = await db.dbGet('SELECT reason, legal_basis FROM data_retention_log WHERE raw_post_id = $1', [postId]);
+        expect(row.legal_basis).toBe('Not applicable: fictional demo content, no personal data');
+        expect(JSON.parse(row.reason)).toEqual({ source: 'demo_nit19', text_retention_hours: null,
+            text_retention_basis: expect.stringMatching(/^demo: fictional content, deleted whole .* never blanked$/) });
+    });
 });
 
 describe('text retention: every window, one job, true logs', () => {
