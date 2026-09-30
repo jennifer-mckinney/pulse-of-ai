@@ -1,0 +1,474 @@
+{
+  "captured": "2026-09-29",
+  "method": "npm run terms:snapshot (polite GET through the collector HTTP client: contact User-Agent, robots.txt, allowed host, 5 MB cap); walls, refusals and Reddit recorded, never worked around",
+  "snapshots": [
+    {
+      "slug": "whatsapp",
+      "terms_url": "https://www.whatsapp.com/legal/terms-of-service",
+      "status": "fetched",
+      "sha256": "d41b61d5a1dacdff977ff6f4b8fbfbd5ceb9a4ba945f38d4291ef5a9abbea21c",
+      "http_status": 200,
+      "bytes": 228952,
+      "reason": null
+    },
+    {
+      "slug": "instagram",
+      "terms_url": "https://help.instagram.com/581066165581870",
+      "status": "fetched",
+      "sha256": "583ad187ddf4daf671151c043b4862f81c4dcaeeb9e7a2ec19822e32bf6a71ef",
+      "http_status": 200,
+      "bytes": 764346,
+      "reason": null
+    },
+    {
+      "slug": "youtube",
+      "terms_url": "https://developers.google.com/youtube/terms/developer-policies",
+      "status": "fetched",
+      "sha256": "bf26be5c1f4e1d506e2cad261e74593911c33e51b360609e64bdcf2c3181154b",
+      "http_status": 200,
+      "bytes": 151818,
+      "reason": null
+    },
+    {
+      "slug": "facebook",
+      "terms_url": "https://www.facebook.com/terms.php",
+      "status": "unreachable",
+      "sha256": null,
+      "http_status": null,
+      "bytes": null,
+      "reason": "robots.txt disallows /terms.php (conservative reading)"
+    },
+    {
+      "slug": "tiktok",
+      "terms_url": "https://www.tiktok.com/legal/page/global/terms-of-service-research-api/en",
+      "status": "fetched",
+      "sha256": "f6e5ab394dff8e47fc0b648a73fd07d9914bdb2bb491e91bda96613aa2633130",
+      "http_status": 200,
+      "bytes": 299042,
+      "reason": null
+    },
+    {
+      "slug": "wechat",
+      "terms_url": "https://weixin.qq.com/agreement?lang=en_US",
+      "status": "unreachable",
+      "sha256": null,
+      "http_status": null,
+      "bytes": null,
+      "reason": "blocked source (ADR 0001 ruling 5): its site is walled to automated clients; not fetched, never worked around"
+    },
+    {
+      "slug": "telegram",
+      "terms_url": "https://telegram.org/tos/content-licensing",
+      "status": "unreachable",
+      "sha256": null,
+      "http_status": null,
+      "bytes": null,
+      "reason": "blocked source (ADR 0001 ruling 5): its site is walled to automated clients; not fetched, never worked around"
+    },
+    {
+      "slug": "x",
+      "terms_url": "https://docs.x.com/developer-terms/agreement",
+      "status": "fetched",
+      "sha256": "d34732988517d7a82d73bb95a7b68b15507836e6b1415d7d2ebd8e82e92f63c4",
+      "http_status": 200,
+      "bytes": 891296,
+      "reason": null
+    },
+    {
+      "slug": "bbc_news",
+      "terms_url": "https://www.bbc.co.uk/usingthebbc/terms-of-use",
+      "status": "fetched",
+      "sha256": "30003102641420de2b583054b23c2039c4347e465f498deed4ea99c1c6ed8970",
+      "http_status": 200,
+      "bytes": 351406,
+      "reason": null
+    },
+    {
+      "slug": "nyt",
+      "terms_url": "https://help.nytimes.com/hc/en-us/articles/115014893428-Terms-of-Service",
+      "status": "fetched",
+      "sha256": "d7c860dcead741a731780227ea6158318925b132be38a3b6c396e3762e309129",
+      "http_status": 200,
+      "bytes": 139463,
+      "reason": null
+    },
+    {
+      "slug": "cnn",
+      "terms_url": "https://www.cnn.com/terms",
+      "status": "fetched",
+      "sha256": "7273e94bd027c9cb10eb3d2b2af013780d0f6b6d0760070156c2edd20800d6c6",
+      "http_status": 200,
+      "bytes": 3393544,
+      "reason": null
+    },
+    {
+      "slug": "guardian",
+      "terms_url": "https://www.theguardian.com/open-platform/terms-and-conditions",
+      "status": "fetched",
+      "sha256": "fb02ed719ad60fe0a17fba4c7e571b78eadd4379073053aba8499aebdeb8d239",
+      "http_status": 200,
+      "bytes": 282827,
+      "reason": null
+    },
+    {
+      "slug": "al_jazeera",
+      "terms_url": "https://www.aljazeera.com/terms-and-conditions",
+      "status": "fetched",
+      "sha256": "3b56995f9a2254364ed8c64c3929652673be0463174900fe495f7d21555c7ba7",
+      "http_status": 200,
+      "bytes": 173272,
+      "reason": null
+    },
+    {
+      "slug": "wsj",
+      "terms_url": "https://www.dowjones.com/terms-of-use/",
+      "status": "fetched",
+      "sha256": "2b18f7cfd80ecd5b630a09760debecb66d8f3c3252ee9decd0e03e437f9cf7aa",
+      "http_status": 200,
+      "bytes": 220264,
+      "reason": null
+    },
+    {
+      "slug": "ap",
+      "terms_url": "https://developer.ap.org",
+      "status": "fetched",
+      "sha256": "637aba9f27c81fd525b8c37b01b80521b19a32bd38fb6a7fb23d9bbeec5f935c",
+      "http_status": 200,
+      "bytes": 18239,
+      "reason": null
+    },
+    {
+      "slug": "reuters",
+      "terms_url": "https://www.reutersagency.com/en/terms-of-use/",
+      "status": "unreachable",
+      "sha256": null,
+      "http_status": null,
+      "bytes": null,
+      "reason": "HTTP 404 from https://reutersagency.com/en/terms-of-use/"
+    },
+    {
+      "slug": "nbc_news",
+      "terms_url": "https://www.nbcnews.com/id/wbna5216556",
+      "status": "fetched",
+      "sha256": "cd61f99121c6e47334d41e6a59a1bb46575e695ea274db102ff459b51d7ef552",
+      "http_status": 200,
+      "bytes": 339978,
+      "reason": null
+    },
+    {
+      "slug": "washington_post",
+      "terms_url": "https://www.washingtonpost.com/terms-of-service/",
+      "status": "unreachable",
+      "sha256": null,
+      "http_status": null,
+      "bytes": null,
+      "reason": "request to https://www.washingtonpost.com/terms-of-service/ failed: request timed out"
+    },
+    {
+      "slug": "npr",
+      "terms_url": "https://www.npr.org/about-npr/179876898/terms-of-use",
+      "status": "fetched",
+      "sha256": "2d1f82d1247a4fd279b19f62f4926a4b96bef4123e279527bbf6c17569496b44",
+      "http_status": 200,
+      "bytes": 183500,
+      "reason": null
+    },
+    {
+      "slug": "springerlink",
+      "terms_url": "https://dev.springernature.com/terms-conditions/",
+      "status": "fetched",
+      "sha256": "2426e331cf14654f0142b4a308b616741d2800c5c2597922b5c19bc0c185dd9e",
+      "http_status": 200,
+      "bytes": 94585,
+      "reason": null
+    },
+    {
+      "slug": "arxiv",
+      "terms_url": "https://info.arxiv.org/help/api/tou.html",
+      "status": "fetched",
+      "sha256": "badbec1e87aa317038c3a519a3fad3c4a855ebe019f0e681772d72f6a14f4e49",
+      "http_status": 200,
+      "bytes": 85062,
+      "reason": null
+    },
+    {
+      "slug": "pubmed",
+      "terms_url": "https://support.nlm.nih.gov/kbArticle/?pn=KA-05317",
+      "status": "fetched",
+      "sha256": "475329de1ce9a5cbe8521bbca75d1ac92358120d0b0745f37c99ee4d7fef6b97",
+      "http_status": 200,
+      "bytes": 46160,
+      "reason": null
+    },
+    {
+      "slug": "sciencedirect",
+      "terms_url": "https://dev.elsevier.com/policy.html",
+      "status": "fetched",
+      "sha256": "b4948b3d092a12322d994cba0d5793d07883bb6bf672e4860558f090c1ea6f2a",
+      "http_status": 200,
+      "bytes": 152428,
+      "reason": null
+    },
+    {
+      "slug": "google_scholar",
+      "terms_url": "https://policies.google.com/terms",
+      "status": "fetched",
+      "sha256": "0fae8dc1dfd487344899650dd6bbcb9eb9c74cb1b6fb23518d885306da0f58a4",
+      "http_status": 200,
+      "bytes": 596003,
+      "reason": null
+    },
+    {
+      "slug": "researchgate",
+      "terms_url": "https://www.researchgate.net/terms-of-service",
+      "status": "unreachable",
+      "sha256": null,
+      "http_status": null,
+      "bytes": null,
+      "reason": "blocked source (ADR 0001 ruling 5): its site is walled to automated clients; not fetched, never worked around"
+    },
+    {
+      "slug": "ieee_xplore",
+      "terms_url": "https://developer.ieee.org/API_Terms_of_Use2",
+      "status": "fetched",
+      "sha256": "d37ef3b1d5c3da6f2102b4ec9b605d243dca5a476826e1ab644df7cb06c4c6ec",
+      "http_status": 200,
+      "bytes": 39680,
+      "reason": null
+    },
+    {
+      "slug": "jstor",
+      "terms_url": "https://about.jstor.org/terms/",
+      "status": "fetched",
+      "sha256": "b511038aeea9877e8343fcfe3ded18ee8e4d5c668fa8f9d66edf5c0cc61e4cd6",
+      "http_status": 200,
+      "bytes": 161878,
+      "reason": null
+    },
+    {
+      "slug": "govinfo",
+      "terms_url": "https://api.data.gov/docs/developer-manual/",
+      "status": "fetched",
+      "sha256": "c09641f25041d3c81f39988262f0fef407a166eb9210fbecf04d803afadc0c62",
+      "http_status": 200,
+      "bytes": 24393,
+      "reason": null
+    },
+    {
+      "slug": "congress_gov",
+      "terms_url": "https://github.com/LibraryOfCongress/api.congress.gov",
+      "status": "fetched",
+      "sha256": "14e59d5bb6e1f47306fef3c5f0f426c0146b1de2e1963cd2092c31f239d1a2ce",
+      "http_status": 200,
+      "bytes": 275682,
+      "reason": null
+    },
+    {
+      "slug": "cfr",
+      "terms_url": "https://www.cfr.org/robots.txt",
+      "status": "fetched",
+      "sha256": "f5efeb20ea82761e3413e73df7b5a007490b210e1c8d11ef46f393db076d6be1",
+      "http_status": 200,
+      "bytes": 2649,
+      "reason": null
+    },
+    {
+      "slug": "cato",
+      "terms_url": "https://www.cato.org/",
+      "status": "unreachable",
+      "sha256": null,
+      "http_status": null,
+      "bytes": null,
+      "reason": "blocked source (ADR 0001 ruling 5): its site is walled to automated clients; not fetched, never worked around"
+    },
+    {
+      "slug": "rand",
+      "terms_url": "https://www.rand.org/about/terms.html",
+      "status": "unreachable",
+      "sha256": null,
+      "http_status": null,
+      "bytes": null,
+      "reason": "www.rand.org refused access (HTTP 403) — not retried, not worked around"
+    },
+    {
+      "slug": "urban_institute",
+      "terms_url": "https://www.urban.org/robots.txt",
+      "status": "fetched",
+      "sha256": "bb31d5eb2c0e7db89abef71bde434172a77dacc63e6edfa5908f97244fa963be",
+      "http_status": 200,
+      "bytes": 2107,
+      "reason": null
+    },
+    {
+      "slug": "pew",
+      "terms_url": "https://www.pewresearch.org/about/terms-and-conditions/",
+      "status": "fetched",
+      "sha256": "3d414750c8c3c9b26269e503d8f1314ad9c7bdb6f8faed84f3083fbca6e03b7b",
+      "http_status": 200,
+      "bytes": 321969,
+      "reason": null
+    },
+    {
+      "slug": "wikipedia",
+      "terms_url": "https://www.mediawiki.org/wiki/Wikimedia_APIs/Rate_limits",
+      "status": "fetched",
+      "sha256": "d4fca7e09713ee21a2533c9c4c4c91855a12c616359d364c77710eb4942e1668",
+      "http_status": 200,
+      "bytes": 76646,
+      "reason": null
+    },
+    {
+      "slug": "mozilla",
+      "terms_url": "https://www.mozilla.org/en-US/about/legal/terms/mozilla/",
+      "status": "fetched",
+      "sha256": "264b36c7952de7717e264e361e8b4a4f943d4d092c710d98c4109c4ccc7d05ee",
+      "http_status": 200,
+      "bytes": 48188,
+      "reason": null
+    },
+    {
+      "slug": "khan_academy",
+      "terms_url": "https://www.khanacademy.org/about/tos",
+      "status": "fetched",
+      "sha256": "32ed63159c77e21ee19ca1b9aa3213ccf0218eb59539560b132a8e68ef0e18ea",
+      "http_status": 200,
+      "bytes": 3038,
+      "reason": null
+    },
+    {
+      "slug": "owid",
+      "terms_url": "https://ourworldindata.org/faqs",
+      "status": "fetched",
+      "sha256": "d23d1103f5d0af2c6b0304108a603d42f5fe116a96a6c1a4a0fb63dc42b9bc6f",
+      "http_status": 200,
+      "bytes": 187546,
+      "reason": null
+    },
+    {
+      "slug": "openstreetmap",
+      "terms_url": "https://osmfoundation.org/wiki/Terms_of_Use",
+      "status": "fetched",
+      "sha256": "d96ca01d24c8ba632cc742ac467f1ee10b49095eeb6f15c228cad36a8c562670",
+      "http_status": 200,
+      "bytes": 54516,
+      "reason": null
+    },
+    {
+      "slug": "internet_archive",
+      "terms_url": "https://archive.org/about/terms.php",
+      "status": "fetched",
+      "sha256": "89bef33b2310511643405efb3c9b77661758cbe7c6302d68cf64f91fee6088da",
+      "http_status": 200,
+      "bytes": 1872,
+      "reason": null
+    },
+    {
+      "slug": "github",
+      "terms_url": "https://docs.github.com/en/site-policy/acceptable-use-policies/github-acceptable-use-policies",
+      "status": "fetched",
+      "sha256": "427ccd5fa01e837a3cae7ae9cd1394cc80991f3de1826647ec8aaa4c33323427",
+      "http_status": 200,
+      "bytes": 171698,
+      "reason": null
+    },
+    {
+      "slug": "gitlab",
+      "terms_url": "https://docs.gitlab.com/user/gitlab_com/rate_limits/",
+      "status": "fetched",
+      "sha256": "e5780c50426d21c85157eeadf48d739fb88ba4369398737fa8a2d5d963cecc4f",
+      "http_status": 200,
+      "bytes": 48648,
+      "reason": null
+    },
+    {
+      "slug": "docker_hub",
+      "terms_url": "https://www.docker.com/legal/docker-terms-service/",
+      "status": "fetched",
+      "sha256": "0323e679c79fad8f75d38cde84c2ba71b954b96a3fb231a2a445473ac1d70af2",
+      "http_status": 200,
+      "bytes": 243828,
+      "reason": null
+    },
+    {
+      "slug": "hugging_face",
+      "terms_url": "https://huggingface.co/docs/hub/rate-limits",
+      "status": "fetched",
+      "sha256": "8712b889cecdd6e00e0ea0f7a07727dcf61660fab622407f15e01c76b1bd42cc",
+      "http_status": 200,
+      "bytes": 193754,
+      "reason": null
+    },
+    {
+      "slug": "stack_overflow",
+      "terms_url": "https://stackexchange.com/legal/api-terms-of-use",
+      "status": "unreachable",
+      "sha256": null,
+      "http_status": null,
+      "bytes": null,
+      "reason": "refused: stackoverflow.com is not an allowed host of this source"
+    },
+    {
+      "slug": "hacker_news",
+      "terms_url": "https://github.com/HackerNews/API",
+      "status": "fetched",
+      "sha256": "b32916956ae6b3f873229a1891c867756437bc9be00c92409af9807565a5fdd3",
+      "http_status": 200,
+      "bytes": 387601,
+      "reason": null
+    },
+    {
+      "slug": "reddit",
+      "terms_url": "https://redditinc.com/policies/data-api-terms",
+      "status": "not_fetched",
+      "sha256": null,
+      "http_status": null,
+      "bytes": null,
+      "reason": "Reddit is never contacted before the Data API approval (ADR 0001 ruling 8)"
+    },
+    {
+      "slug": "tldr",
+      "terms_url": "https://tldr.tech/terms",
+      "status": "fetched",
+      "sha256": "a92a9242bd7ee750d9a51e3c3daa94538c3a6ff1bebbf37ed9202a57c7c630e8",
+      "http_status": 200,
+      "bytes": 38151,
+      "reason": null
+    },
+    {
+      "slug": "substack",
+      "terms_url": "https://substack.com/tos",
+      "status": "fetched",
+      "sha256": "45a178f64309596c9983b73e0502e462e9b9507eb5b26e7ad78241fc1492439b",
+      "http_status": 200,
+      "bytes": 307284,
+      "reason": null
+    },
+    {
+      "slug": "ars_technica",
+      "terms_url": "https://www.condenast.com/user-agreement",
+      "status": "fetched",
+      "sha256": "c190a1aa0016016260b8b2542aaf8202371143938c987974a23f4207581dfe1d",
+      "http_status": 200,
+      "bytes": 202917,
+      "reason": null
+    },
+    {
+      "slug": "one_useful_thing",
+      "terms_url": "https://substack.com/tos",
+      "status": "fetched",
+      "sha256": "4b294dcc745d7053c3c870d8f414357a33acb08cbb4c27ea1582241b576eadd1",
+      "http_status": 200,
+      "bytes": 307284,
+      "reason": null
+    },
+    {
+      "slug": "platformer",
+      "terms_url": "https://www.platformer.news/",
+      "status": "fetched",
+      "sha256": "42ce6c0076334210b30d2c92fe0890885d131355fd1f6da2f5f962eb8f0a09fd",
+      "http_status": 200,
+      "bytes": 66989,
+      "reason": null
+    }
+  ]
+}

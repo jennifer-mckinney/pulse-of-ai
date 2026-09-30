@@ -22,6 +22,14 @@ test('src/workers/start.js prints nothing except through the scrubbing logger', 
     expect(src).toMatch(/require\('\.\/logging'\)/);
 });
 
+// PR #22 security L4: upstream text cannot forge worker log lines either.
+test('log and logError escape newlines and control characters', () => {
+    const out = [];
+    log('upstream said: ok\n[maintenance] FAKE success\r', {}, l => out.push(l));
+    logError('bad\u0000byte\u2028sep', {}, l => out.push(l));
+    expect(out).toEqual(['upstream said: ok\\n[maintenance] FAKE success\\r', 'bad\\u0000byte\\u2028sep']);
+});
+
 test('the refresh route scrubs its error logs', () => {
     const src = fs.readFileSync(path.join(__dirname, '../../../src/routes/refresh.js'), 'utf8');
     for (const line of src.split('\n').filter(l => /console\.error\(/.test(l))) expect(line).toMatch(/console\.error\(scrub\(/);

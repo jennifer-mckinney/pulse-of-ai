@@ -182,4 +182,4 @@ async function main() {
     await closePool();
 }
 
-main().catch(err => { console.error(err); process.exit(1); });
+main().catch(err => { console.error(require('../src/collectors/redact').scrub(`seed-demo: ${err && err.message}`)); process.exit(1); });

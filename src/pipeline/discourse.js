@@ -22,6 +22,8 @@
 
 'use strict';
 
+const { loadScorablePost } = require('./scorable');
+
 const crypto = require('crypto');
 const { dbGet, dbTransaction } = require('../db/connection');
 
@@ -159,10 +161,8 @@ function computeDQI(text) {
  * @returns {Promise<object>}  The saved discourse_results row
  */
 async function saveDQI(postId, jobId, mvId) {
-    const post = await dbGet('SELECT content FROM raw_posts WHERE id = $1', [postId]);
-    if (!post || !post.content) {
-        throw new Error(`saveDQI: post ${postId} not found or content already nulled`);
-    }
+    // H1: never score a post whose text retention removed (the notice).
+    const post = await loadScorablePost(postId, 'saveDQI');
 
     // Idempotency check
     const existing = await dbGet(
