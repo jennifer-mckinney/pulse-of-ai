@@ -67,3 +67,11 @@ npm run teardown       # stop it (keeps volumes); `-- --purge` deletes volumes a
 Phase B (pipeline TDD) is implemented — `tests/unit/` covers sentiment, relevance, discourse, ingest, bias, correlation, embeddings, and the ingest/embed/correlate workers; `tests/integration/` covers all API routes. The plan file previously referenced here (`~/.claude/plans/composed-coalescing-duckling.md`) no longer exists.
 
 The storytelling frontend follows the FuN.zip design-handoff prototype (11 beats, Canvas-2D globe), the master contract by Jennifer's ruling of 2026-09-28. PRD §4.3 (FR-17 to FR-25, rewritten to that design in PRD v1.1 on 2026-09-29) is the requirement of record, and `docs/TECHNICAL_SPEC.md` v1.2.0 §11 describes the shipped frontend; `docs/plans/2026-07-05-globe-storytelling-design.md` (globe.gl / Mapbox era) is superseded.
+
+## Agent Workflow Principles
+- **Pipeline audits into fixes (2026-09-30):** as soon as one audit slice's report is final, start a fixer for that slice's files on its own sub-branch (e.g. `docs/r4-diagrams`); don't wait for the consolidated report. Later slices' findings go to the right fixer by message.
+- **Run independent slices concurrently:** about 3 audit agents plus 2 fixers stays within the ~5-agent limit.
+- **The orchestrator relays completions:** a coordinator's monitor loop doesn't receive its sub-agents' completion notices; the main session tells it the moment a slice finishes, so it doesn't idle-poll.
+- **Role separation stays:** the auditor verifies only and fixers never audit. One integrator merges the fixer sub-branches with merge commits (no rebase, no force-push) and runs `render.sh --check`, `npm run test:diagrams` and `npm run test:pure` once.
+- **Re-audit scope:** after one full fresh audit, re-check only the fixed lines and their surroundings, unless master has moved materially.
+- **Standing rules:** fix every finding ("all failed checks need to be addressed. no exception"); an inaccurate observation or an unsourced external figure is a FAIL; security findings are mandatory; released migrations and released methodology rows are never edited; test only on throwaway compose projects with non-default ports, never the live `pulse-of-ai` stack or the shared 5433 test DB; never pattern-kill processes.
