@@ -54,7 +54,7 @@ new_case() {
 # depend on it (stack_cmd).
 HERMETIC_UNSET=(COMPOSE_PROJECT_NAME WEB_PORT POSTGRES_PORT POSTGRES_TEST_PORT REDIS_PORT
     PULSE_BIND_ADDR POSTGRES_PASSWORD REDIS_PASSWORD AUDIT_HASH_KEY CORRELATION_SALT
-    COLLECTOR_CONTACT_URL PERMISSION_GATED_FEEDS_ACCEPTED_BY npm_lifecycle_event)
+    COLLECTOR_CONTACT_URL PERMISSION_GATED_FEEDS_ACCEPTED_BY GATE_APPROVED_BY npm_lifecycle_event)
 HERMETIC_ENV_U=()
 for v in "${HERMETIC_UNSET[@]}"; do HERMETIC_ENV_U+=(-u "$v"); done
 
@@ -403,6 +403,21 @@ d=$(new_case); : > "$d/.env"
 out=$(lib_run "$d" 'COLLECTOR_CONTACT_URL=https://shell.example/; collector_operator_setup 0; echo "live=$STACK_LIVE_COLLECTION"' < /dev/null)
 assert_eq "D1 shell env: contact URL from the shell turns collection on" "live=1" "$(printf '%s\n' "$out" | tail -n 1)"
 assert_eq "D1 shell env: nothing written" "" "$(cat "$d/.env")"
+
+# PR #22 decision G5: the feeds (and every gated source) wait for a named
+# approval; standup says so, never asks for it and never writes it.
+d=$(new_case); printf 'COLLECTOR_CONTACT_URL=https://keep.example/\nPERMISSION_GATED_FEEDS_ACCEPTED_BY=Kept 2026-01-01\n' > "$d/.env"
+before=$(cat "$d/.env")
+out=$(lib_run "$d" 'collector_operator_setup 1' < /dev/null 2>&1)
+assert_eq "G5 no approval: says awaiting named approval" "yes" \
+    "$( { cat "$d/stderr" 2>/dev/null; printf '%s' "$out"; } | grep -q 'awaiting named approval (GATE_APPROVED_BY is not set)' && echo yes || echo no)"
+assert_eq "G5 no approval: never claims the feeds are open" "no" \
+    "$( { cat "$d/stderr" 2>/dev/null; printf '%s' "$out"; } | grep -q 'permission-gated news feeds open' && echo yes || echo no)"
+assert_eq "G5 no approval: env file unchanged" "$before" "$(cat "$d/.env")"
+d=$(new_case); printf 'COLLECTOR_CONTACT_URL=https://keep.example/\nPERMISSION_GATED_FEEDS_ACCEPTED_BY=Kept 2026-01-01\nGATE_APPROVED_BY=Kept Person 2026-01-01\n' > "$d/.env"
+out=$(lib_run "$d" 'collector_operator_setup 1' < /dev/null 2>&1)
+assert_eq "G5 approval set: feeds open" "yes" \
+    "$( { cat "$d/stderr" 2>/dev/null; printf '%s' "$out"; } | grep -q 'feeds open (acknowledgement and named approval recorded)' && echo yes || echo no)"
 
 # Quotes, backslashes and '#' round-trip through set_env_value.
 d=$(new_case); : > "$d/.env"

@@ -269,7 +269,7 @@ describe('buildCollectors (registry-wide)', () => {
     test('with every credential set: every source builds, paid tiers replace free feeds', () => {
         const env = { ...TEST_ENV };
         for (const k of registryEnvVars()) {
-            if (/COLLECTORS_ENABLED|COLLECTORS_DISABLED/.test(k)) continue;
+            if (/COLLECTORS_ENABLED|COLLECTORS_DISABLED|GATE_APPROVED_BY/.test(k)) continue;   // G5 approval kept from TEST_ENV
             // Endpoint URLs must be https on a public host (F10-11); WeChat's
             // feed must sit on its authorized host (G10-17).
             // Reddit's User-Agent must follow Reddit's own format.

@@ -20,11 +20,16 @@ async function collect() {
     });
     return { summary, transport };
 }
-const admin = async (argv) => {
+// PR #22 decision G5 / security L6: the actor is the named approval.
+const APPROVER = 'Tess Tester 2026-09-29';
+const admin = async (argv, env = { GATE_APPROVED_BY: APPROVER }, extra = {}) => {
     const lines = [];
-    const code = await adminMain(argv, { db, out: l => lines.push(l), err: l => lines.push(l), who: 'tester' });
+    const code = await adminMain(argv, { db, out: l => lines.push(l), err: l => lines.push(l), env, ...extra });
     return { code, text: lines.join('\n') };
 };
+const killSwitch = async () => db.dbGet(`SELECT collection_disabled_at, collection_disabled_by FROM data_sources WHERE name = 'hacker_news'`);
+const gateEvents = async () => db.dbAll(`SELECT event, actor, approved_by FROM source_gate_events
+                                         WHERE slug = 'hacker_news' AND event <> 'seeded_active' ORDER BY occurred_at, id`);
 
 beforeEach(async () => {
     await seedSources();
@@ -38,10 +43,10 @@ describe('database kill switch (F10-10)', () => {
         const { summary, transport } = await collect();
         expect(transport.calls).toHaveLength(0);
         expect(summary.sources[0]).toMatchObject({ outcome: 'skipped', status: 'disabled',
-            reason: 'kill switch (database): disabled by tester — takedown request 2026-09-29' });
+            reason: `kill switch (database): disabled by ${APPROVER} — takedown request 2026-09-29` });
         const row = (await sourceRows({ env: TEST_ENV })).find(x => x.slug === 'hacker_news');
         expect(row).toMatchObject({ status: 'disabled', online: false,
-            status_reason: 'kill switch (database): disabled by tester — takedown request 2026-09-29' });
+            status_reason: `kill switch (database): disabled by ${APPROVER} — takedown request 2026-09-29` });
         // seed must not silently re-enable it.
         await seedSources();
         expect((await collect()).transport.calls).toHaveLength(0);
@@ -61,5 +66,51 @@ describe('database kill switch (F10-10)', () => {
         expect((await admin(['disable', 'hacker_news'])).code).toBe(2);
         expect((await admin(['frobnicate', 'hacker_news'])).code).toBe(2);
         expect((await admin(['enable', 'nope'])).code).toBe(2);
+    });
+
+    // PR #22 decision G5 / security L6: no self-asserted actor ($USER).
+    it('refuses every command without a valid named approval, changing nothing', async () => {
+        for (const env of [{}, { GATE_APPROVED_BY: '' }, { GATE_APPROVED_BY: 'tester' }, { GATE_APPROVED_BY: '<your name> 2026-09-29' },
+            { GATE_APPROVED_BY: 'Tess 2026-13-01' }, { GATE_APPROVED_BY: 'Name 2026-09-29' }]) {
+            for (const argv of [['disable', 'hacker_news', '--reason', 'x'], ['enable', 'hacker_news'], ['reset', 'hacker_news']]) {
+                const r = await admin(argv, env);
+                expect(r).toEqual({ code: 2, text: expect.stringMatching(/needs a named approval: set GATE_APPROVED_BY="Name YYYY-MM-DD".*Nothing was changed/) });
+            }
+        }
+        expect((await killSwitch()).collection_disabled_at).toBeNull();
+        expect(await gateEvents()).toEqual([]);
+    });
+
+    it('records the named approval as actor and approver of disable / enable', async () => {
+        await admin(['disable', 'hacker_news', '--reason', 'x']);
+        expect((await killSwitch()).collection_disabled_by).toBe(APPROVER);
+        await admin(['enable', 'hacker_news']);
+        expect(await gateEvents()).toEqual([
+            { event: 'disabled', actor: APPROVER, approved_by: APPROVER },
+            { event: 'enabled', actor: APPROVER, approved_by: APPROVER },
+        ]);
+    });
+
+    // Security L6 / grumpy L16: the kill switch and its event are ONE transaction.
+    it('a failed gate-event write rolls the kill switch back (and vice versa)', async () => {
+        const failing = { recordGateEvent: async () => { throw new Error('event insert failed'); } };
+        const r = await admin(['disable', 'hacker_news', '--reason', 'x'], undefined, failing);
+        expect(r).toEqual({ code: 2, text: expect.stringMatching(/database error — event insert failed/) });
+        expect((await killSwitch()).collection_disabled_at).toBeNull();
+        await admin(['disable', 'hacker_news', '--reason', 'x']);
+        expect((await admin(['enable', 'hacker_news'], undefined, failing)).code).toBe(2);
+        expect((await killSwitch()).collection_disabled_at).not.toBeNull();   // still disabled
+        const state = { ...require('../../src/collectors/state'), setDbKillSwitch: async () => { throw new Error('switch failed'); } };
+        expect((await admin(['enable', 'hacker_news'], undefined, { state })).code).toBe(2);
+        expect((await gateEvents()).map(e => e.event)).toEqual(['disabled']);
+    });
+
+    it('the database rejects an operator event without a named approver (migration 056)', async () => {
+        const { id } = await db.dbGet(`SELECT id FROM data_sources WHERE name = 'hacker_news'`);
+        for (const [actor, approved] of [['tester', null], ['tester', 'tester'], [APPROVER, 'Other Person 2026-09-29']]) {
+            await expect(db.dbRun(`INSERT INTO source_gate_events (source_id, slug, event, actor, approved_by)
+                                   VALUES ($1, 'hacker_news', 'disabled', $2, $3)`, [id, actor, approved]))
+                .rejects.toThrow(/source_gate_events_named_approval/);
+        }
     });
 });

@@ -115,15 +115,19 @@ async function dbKillSwitch(sourceId) {
     return row && row.disabled_at ? row : null;
 }
 
-/** Set (disabled=true) or clear the database kill switch. @returns {Promise<boolean>} whether a row changed */
-async function setDbKillSwitch(sourceId, disabled, { reason = null, by = null } = {}) {
-    const row = disabled
-        ? await dbGet(
-            `UPDATE data_sources SET collection_disabled_at = NOW(), collection_disabled_reason = $2, collection_disabled_by = $3
-             WHERE id = $1 RETURNING id`, [sourceId, reason, by])
-        : await dbGet(
-            `UPDATE data_sources SET collection_disabled_at = NULL, collection_disabled_reason = NULL, collection_disabled_by = NULL
-             WHERE id = $1 RETURNING id`, [sourceId]);
+/**
+ * Set (disabled=true) or clear the database kill switch.
+ * PR #22 L6 / L16: pass `client` to write it in the caller's transaction,
+ * together with its source_gate_events row (scripts/source-admin.js).
+ * @returns {Promise<boolean>} whether a row changed
+ */
+async function setDbKillSwitch(sourceId, disabled, { reason = null, by = null, client = null } = {}) {
+    const [sql, params] = disabled
+        ? [`UPDATE data_sources SET collection_disabled_at = NOW(), collection_disabled_reason = $2, collection_disabled_by = $3
+             WHERE id = $1 RETURNING id`, [sourceId, reason, by]]
+        : [`UPDATE data_sources SET collection_disabled_at = NULL, collection_disabled_reason = NULL, collection_disabled_by = NULL
+             WHERE id = $1 RETURNING id`, [sourceId]];
+    const row = client ? (await client.query(sql, params)).rows[0] : await dbGet(sql, params);
     return !!row;
 }
 
@@ -166,18 +170,18 @@ async function recordRefusal(sourceId, { kind, status = null }, slug) {
 }
 
 /** Leave the refused state and resolve its open alert, recording why. */
-async function clearRefusal(sourceId, resolution) {
-    await dbRun(
-        `UPDATE source_collection_state
+async function clearRefusal(sourceId, resolution, { client = null } = {}) {
+    const sql = `UPDATE source_collection_state
          SET access_denied_at = NULL, access_denied_status = NULL, access_denied_kind = NULL,
              refused_until = NULL, refusal_count = 0, updated_at = NOW()
-         WHERE source_id = $1`,
-        [sourceId],
-    );
-    // P1-6: resolved with an audited alert_resolutions record.
+         WHERE source_id = $1`;
+    if (client) await client.query(sql, [sourceId]);
+    else await dbRun(sql, [sourceId]);
+    // P1-6: resolved with an audited alert_resolutions record (in the
+    // caller's transaction when one is given — PR #22 L16).
     await require('./source-alerts').resolveSourceAlert('source_refused', sourceId, {
         resolvedBy: 'refusal state (src/collectors/state.js clearRefusal)', resolution, basis: { cleared: true },
-    });
+    }, client);
 }
 
 module.exports = {

@@ -27,6 +27,7 @@ const OPEN_ENV = {
     COLLECTOR_CONTACT_URL: 'https://example.org/contact',
     REDDIT_CLIENT_ID: 'id', REDDIT_CLIENT_SECRET: 'secret',
     REDDIT_USER_AGENT: 'server:pulse-of-ai:v1.0.0 (by /u/example_user)', REDDIT_API_APPROVAL_REF: 'RBP-1',
+    GATE_APPROVED_BY: 'Test Operator 2026-09-29',   // PR #22 decision G5
 };
 
 let ids;

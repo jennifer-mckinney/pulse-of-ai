@@ -25,7 +25,9 @@ const CSV = path.join(ROOT, 'docs/requirements/Top_52_Global_Online_Sources.rev4
 
 const { SOURCES } = registry;
 const workbook = readWorkbookSources(XLSX);
-const ENV = { COLLECTOR_CONTACT_URL: 'https://example.org/contact' };
+// PR #22 decision G5: every gated route also needs a named approval; the
+// gate tests below run with one (the G5 block tests its absence).
+const ENV = { COLLECTOR_CONTACT_URL: 'https://example.org/contact', GATE_APPROVED_BY: 'Test Operator 2026-09-29' };
 
 describe('workbook (registry of record)', () => {
     test('Rev. 4 has exactly 52 source rows, ranked 1..52 (each rank once)', () => {
@@ -330,7 +332,7 @@ describe('gate status (Jennifer\'s rulings, ADR 0001)', () => {
     // D4 (Jennifer, 2026-09-29: "Keep 2–3 minutes for all") and P10-7.
     describe('D4 cadence band and the keyed-route quota audit', () => {
         const ALL_OPEN = Object.fromEntries(registry.registryEnvVars().map(k => [k, 'x']));
-        const ENV_ALL = { ...ALL_OPEN, COLLECTORS_ENABLED: 'true', COLLECTORS_DISABLED: '', COLLECT_WINDOW_MS: '' };
+        const ENV_ALL = { ...ALL_OPEN, COLLECTORS_ENABLED: 'true', COLLECTORS_DISABLED: '', COLLECT_WINDOW_MS: '', GATE_APPROVED_BY: ENV.GATE_APPROVED_BY };
         // Documented quotas that cannot be met even at 180 s (reported), and
         // IEEE, whose quota is set at key registration and not published.
         const EXCEPTIONS = { youtube: 900, stack_overflow: 900, ieee_xplore: 900 };
@@ -402,5 +404,71 @@ describe('workbook reader internals', () => {
 
     test('a non-zip buffer is rejected', () => {
         expect(() => unzip(Buffer.alloc(40))).toThrow(/not a zip/);
+    });
+});
+
+// PR #22 decision G5 (Jennifer, 2026-09-29): opening any gated source (key,
+// approval, licence or permission) needs a named approval, GATE_APPROVED_BY
+// "Name YYYY-MM-DD"; without it the source stays closed, "awaiting named
+// approval". Keyless routes are not gated.
+describe('G5: named approval of gated routes', () => {
+    const { GATE_APPROVED_BY: _drop, ...NO_APPROVAL } = ENV;
+    const status = (slug, env) => registry.sourceStatus(registry.getSource(slug), env);
+
+    test('namedApproval accepts "Name YYYY-MM-DD" and rejects placeholders, bad dates and bare names', () => {
+        expect(registry.GATE_APPROVAL_ENV).toBe('GATE_APPROVED_BY');
+        expect(registry.namedApproval({ GATE_APPROVED_BY: '  Jennifer   McKinney 2026-09-29 ' }))
+            .toEqual({ ok: true, value: 'Jennifer McKinney 2026-09-29', name: 'Jennifer McKinney', date: '2026-09-29' });
+        expect(registry.namedApproval({ GATE_APPROVED_BY: 'Zoë 2024-02-29' }).ok).toBe(true);
+        for (const bad of [undefined, '', '   ', 'Jennifer', '2026-09-29', 'Name 2026-09-29', '<your name> 2026-09-29',
+            'approver 2026-09-29', 'TODO 2026-09-29', 'J 2026-09-29', '42 2026-09-29', 'Ada 2026-02-30', 'Ada 2026-13-01',
+            'Ada 1999-12-31', 'Ada 29-09-2026', '${USER} 2026-09-29']) {
+            expect([bad, registry.namedApproval({ GATE_APPROVED_BY: bad }).ok]).toEqual([bad, false]);
+        }
+        expect(registry.namedApproval({}).reason).toBe('GATE_APPROVED_BY is not set');
+        expect(registry.namedApproval({ GATE_APPROVED_BY: 'Jennifer' }).reason).toBe('GATE_APPROVED_BY is not "Name YYYY-MM-DD"');
+    });
+
+    test('a keyed route with its key but no approval stays closed, awaiting named approval', () => {
+        const env = { ...NO_APPROVAL, X_BEARER_TOKEN: 't' };
+        const st = status('x', env);
+        expect(st).toMatchObject({ status: 'awaiting_licence', openRoutes: [], awaitingApproval: ['recent-search'], approvedBy: null });
+        expect(st.missing).toEqual(['GATE_APPROVED_BY']);
+        expect(st.reason).toMatch(/^awaiting named approval: recent-search is configured but stays closed until a named person approves opening it in GATE_APPROVED_BY \("Name YYYY-MM-DD"; GATE_APPROVED_BY is not set\)\. PR #22 decision G5\.$/);
+        expect(status('x', { ...env, GATE_APPROVED_BY: 'Name 2026-09-29' }).reason).toMatch(/is not "Name YYYY-MM-DD"/);
+        const open = status('x', { ...env, GATE_APPROVED_BY: 'Ada Lovelace 2026-09-29' });
+        expect(open).toMatchObject({ status: 'collecting', openRoutes: ['recent-search'], awaitingApproval: [], approvedBy: 'Ada Lovelace 2026-09-29' });
+    });
+
+    test('the permission-gated feeds need both the acknowledgement and the approval', () => {
+        const ack = { ...NO_APPROVAL, PERMISSION_GATED_FEEDS_ACCEPTED_BY: 'Ada Lovelace 2026-09-29' };
+        expect(status('bbc_news', ack)).toMatchObject({ status: 'awaiting_approval', awaitingApproval: ['technology-rss'],
+            reason: expect.stringMatching(/^awaiting named approval: technology-rss/) });
+        expect(status('bbc_news', { ...ack, GATE_APPROVED_BY: 'Ada Lovelace 2026-09-29' }).status).toBe('collecting');
+    });
+
+    test('a blocked source configured with its permission waits for the approval (not "blocked")', () => {
+        const env = { ...NO_APPROVAL, WECHAT_TENCENT_AUTHORIZATION_REF: 'r', WECHAT_AUTHORIZED_FEED_URL: 'https://feed.example.org/x',
+            WECHAT_AUTHORIZED_FEED_HOST: 'feed.example.org' };
+        const st = status('wechat', env);
+        expect(st.awaitingApproval.length).toBeGreaterThan(0);
+        expect(st.reason).toMatch(/^awaiting named approval/);
+        expect(status('wechat', NO_APPROVAL).status).toBe('blocked');
+    });
+
+    test('keyless sources are not gated; every configured gated route of a source waits together', () => {
+        expect(status('npr', NO_APPROVAL)).toMatchObject({ status: 'collecting', awaitingApproval: [], approvedBy: null });
+        const nytEnv = { ...NO_APPROVAL, PERMISSION_GATED_FEEDS_ACCEPTED_BY: 'A B 2026-09-29', NYT_API_KEY: 'k', NYT_LICENSE_REF: 'L-1' };
+        const nyt = status('nyt', nytEnv);
+        expect(nyt).toMatchObject({ openRoutes: [], awaitingApproval: ['technology-rss', 'article-search'],
+            reason: expect.stringMatching(/^awaiting named approval: technology-rss, article-search are configured but stay closed until .* approves opening them/) });
+        // Approved: the paid tier replaces the free feed as before.
+        expect(status('nyt', { ...nytEnv, GATE_APPROVED_BY: 'A B 2026-09-29' }).openRoutes).toEqual(['article-search']);
+    });
+
+    test('GATE_APPROVED_BY is a documented setting, never a secret', () => {
+        expect(registry.registryEnvVars()).toContain('GATE_APPROVED_BY');
+        expect(registry.envClass('GATE_APPROVED_BY')).toBe('setting');
+        expect(registry.SETTING_ENV).toContain('GATE_APPROVED_BY');
     });
 });

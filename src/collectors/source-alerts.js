@@ -35,10 +35,12 @@ async function openSourceAlert(type, severity, sourceId, details) {
  * @param {string} type
  * @param {string} sourceId
  * @param {{ resolvedBy: string, resolution: string, basis?: object }} o
+ * @param {import('pg').PoolClient} [outer]  run in the caller's transaction
  * @returns {Promise<string[]>} ids of the alerts resolved
  */
-async function resolveSourceAlert(type, sourceId, { resolvedBy, resolution, basis = {} }) {
-    return dbTransaction(async (client) => {
+async function resolveSourceAlert(type, sourceId, { resolvedBy, resolution, basis = {} }, outer = null) {
+    const inTx = (fn) => (outer ? fn(outer) : dbTransaction(fn));
+    return inTx(async (client) => {
         const ids = (await client.query(
             `UPDATE alert_events
              SET resolved_at = NOW(),

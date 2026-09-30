@@ -75,6 +75,9 @@ test('the contact URL and the permission-gated acknowledgement ship EMPTY (D1)',
     expect(exampleValue('PERMISSION_GATED_FEEDS_ACCEPTED_BY')).toBe('');
     expect(settingsBlock).toContain('  COLLECTOR_CONTACT_URL: ${COLLECTOR_CONTACT_URL:-}\n');
     expect(settingsBlock).toContain('  PERMISSION_GATED_FEEDS_ACCEPTED_BY: ${PERMISSION_GATED_FEEDS_ACCEPTED_BY:-}\n');
+    // PR #22 decision G5: the named gate approval ships empty too.
+    expect(exampleValue('GATE_APPROVED_BY')).toBe('');
+    expect(settingsBlock).toContain('  GATE_APPROVED_BY: ${GATE_APPROVED_BY:-}\n');
     // No contact URL is baked in anywhere the containers or standup read.
     for (const f of ['.env.example', 'docker-compose.yml', 'scripts/standup.sh', 'scripts/lib/stack.sh', 'Dockerfile']) {
         expect([f, fs.readFileSync(path.join(ROOT, f), 'utf8')]).not.toEqual([f, expect.stringMatching(/github\.com\/jennifer-mckinney\/pulse-of-ai/)]);

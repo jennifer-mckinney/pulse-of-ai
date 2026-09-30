@@ -88,6 +88,7 @@ describe('GET /api/sources', () => {
         it('serves every registry source (52: SOURCES.length) in rank order with status and terms citation', async () => {
             setEnv('COLLECTOR_CONTACT_URL', 'https://example.org/c');
             setEnv('PERMISSION_GATED_FEEDS_ACCEPTED_BY', 'Test Operator 2026-09-29');
+            setEnv('GATE_APPROVED_BY', 'Test Operator 2026-09-29');   // PR #22 decision G5
             for (const k of ['X_BEARER_TOKEN', 'YOUTUBE_API_KEY', 'COLLECTORS_DISABLED', 'COLLECTORS_ENABLED',
                 'REDDIT_CLIENT_ID', 'REDDIT_CLIENT_SECRET', 'REDDIT_USER_AGENT', 'REDDIT_API_APPROVAL_REF']) setEnv(k, undefined);
             await seedSources();

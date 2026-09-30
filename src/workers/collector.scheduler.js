@@ -16,7 +16,7 @@
 
 'use strict';
 
-const { recordGateTransitions } = require('../collectors/governance');
+const { recordGateTransitions, recordCorrelationGate } = require('../collectors/governance');
 
 const { dbAll } = require('../db/connection');
 const { COLLECT_QUEUES } = require('../queues/index');
@@ -67,6 +67,10 @@ async function scheduleAllSources({ env = process.env, log = () => {} } = {}) {
         }
     }
 
+    // P10-14 / G5 / principal #19: record every gate change seen under this
+    // env — also when nothing is collecting (a closing must be recorded).
+    await recordGovernance(env, log);
+
     if (schedulable.length === 0) return 0;
     const staggerMs = Math.floor(windowMs / schedulable.length);
     const now = Date.now();
@@ -79,13 +83,24 @@ async function scheduleAllSources({ env = process.env, log = () => {} } = {}) {
         );
     }
     log(`[scheduler] ${schedulable.length} collecting sources scheduled across ${Math.round(windowMs / 1000)}s`);
-    // P10-14: record every gate opening / closing seen under this env.
+    return schedulable.length;
+}
+
+/** Source gate transitions and the correlation gate; a failure is logged, never fatal to scheduling. */
+async function recordGovernance(env, log) {
     try {
-        for (const e of await recordGateTransitions({ env })) log(`[scheduler] ${e.slug}: ${e.event} (${e.gate_status})`);
+        for (const e of await recordGateTransitions({ env })) {
+            log(`[scheduler] ${e.slug}: ${e.event} (${e.gate_status})${e.approved_by ? ` approved by ${e.approved_by}` : ''}`);
+        }
     } catch (err) {
         log(`[scheduler] gate events not recorded: ${err.message}`);
     }
-    return schedulable.length;
+    try {
+        const c = await recordCorrelationGate({ env });
+        if (c) log(`[scheduler] correlation gate: ${c.status}`);
+    } catch (err) {
+        log(`[scheduler] correlation gate event not recorded: ${err.message}`);
+    }
 }
 
 module.exports = { scheduleAllSources, collectWindowMs, COLLECT_WINDOW_MS, QUEUE_BY_TYPE, DEFAULT_COLLECT_WINDOW_MS };
