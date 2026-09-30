@@ -30,7 +30,7 @@ Pulse of AI collects public, AI-related posts from a registry of 52 global onlin
 What works today, stated plainly:
 
 - **The registry has 52 sources** (`src/config/source-registry.js`, which matches the workbook of record `docs/requirements/Top_50_Global_Online_Sources.xlsx` (Rev. 4, exported as `docs/requirements/Top_52_Global_Online_Sources.rev4.csv`), ADR 0001). Each resolves at runtime to a gate status: `collecting`, `awaiting_key`, `awaiting_approval`, `awaiting_licence`, `blocked` or `disabled`.
-- **Live collection is off on a fresh clone.** Without `COLLECTOR_CONTACT_URL` every source is `disabled` except the 4 `blocked` ones, which stay `blocked` with or without the contact URL until an official permission, the contact URL and a named approval (`GATE_APPROVED_BY`) are all recorded (a kill switch reports them `disabled`), and the page runs on clearly labelled demo data. See [Turning on live collection](#turning-on-live-collection).
+- **Live collection is off on a fresh clone.** Without `COLLECTOR_CONTACT_URL` every source is `disabled` except the 4 `blocked` ones, which report `blocked` until they can collect, which takes an official permission, the contact URL and a named approval (`GATE_APPROVED_BY`). A kill switch reports them `disabled`, and so does a recorded permission without the contact URL. The page runs on clearly labelled demo data. See [Turning on live collection](#turning-on-live-collection).
 - **With the contact URL set, 23 sources collect with no keys.** With the contact URL, the operator acknowledgement for the 8 permission-gated news feeds and a named approval (`GATE_APPROVED_BY`, decision G5), **31 collect**. The other 21 wait for something only their operator can provide, and every one of them also needs the named approval to open:
 
   | Status | Count | Sources | What opens them |
@@ -69,8 +69,8 @@ When it finishes, open **http://localhost:3000**: the globe, the eleven chapters
 ### What standup does
 
 1. Creates `.env` from `.env.example` if you don't have one, generating strong random `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `AUDIT_HASH_KEY` and `CORRELATION_SALT` values. It never prints them. An existing `.env` keeps its values: only missing keys are added (standup refuses to add secrets to a group- or world-writable file), and the file is set to mode 600. If a secret is empty or still has its `.env.example` placeholder, standup stops and names it. Run on a terminal, it offers to set the two collection settings described below.
-2. Builds two images: `pulse-of-ai/app` (Node 22; one image for web, worker, migrate and populate) and `pulse-of-ai/embeddings` (Python 3.13, FastAPI and sentence-transformers, CPU only). Both run as non-root users.
-3. Starts the compose `full` profile. A one-shot `migrate` job applies the 46 migrations (001–060; the numbering has gaps) and the seed; web and the worker start only after it exits successfully.
+2. Builds two images: `pulse-of-ai/app` (Node 22; one image for web, worker, watchdog, migrate and populate) and `pulse-of-ai/embeddings` (Python 3.13, FastAPI and sentence-transformers, CPU only). Both run as non-root users.
+3. Starts the compose `full` profile. A one-shot `migrate` job applies the 49 migrations (001–065; the numbering has gaps) and the seed; web, the worker and the watchdog (and populate, in the demo profile) start only after it exits successfully.
 4. Waits for health, with timeouts, and prints a failing service's logs.
 5. Populates data: one real collection run, then demo data only if the trailing hour has no live posts, and starts the `populate` demo-fallback service.
 6. Runs a smoke check: the API, the page and the page's own data calls, population counts, the worker heartbeat, one receipt with its four audience views and bias lineage, and `npm run replay` on that post, which must PASS. It ends with a population summary that labels the hour LIVE, MIXED or DEMO.
@@ -158,7 +158,7 @@ After changing `.env`, recreate the containers (`docker compose up -d worker web
 ```bash
 npm run source:disable -- <slug> --reason "<why>"   # database kill switch, every process, before the next run
 npm run source:enable  -- <slug>
-npm run source:reset   -- <slug> --note "<why>"     # clear the refused state after a 401/403/451 or robots refusal
+npm run source:reset   -- <slug> --note "<why>"     # clear the refused state and its 24 h probation after a 401/403/451 or robots refusal
 ```
 
 All three need `GATE_APPROVED_BY` set, and record it as the actor.
@@ -256,7 +256,7 @@ E-mail is on when `SMTP_HOST`, `SMTP_FROM` and `SMTP_TO` are all set. Without th
 - **Collectors** (`src/collectors/`): one base class per access type (RSS/Atom, JSON API, bulk file) and an adapter per source route. Every HTTP request goes through one guarded HTTP client; bulk-file routes read operator-supplied files and Google Scholar reads its alert mailbox over IMAP.
 - **Pipeline** (`src/pipeline/`): sentiment (AFINN), relevance (a 21-term lexicon matched as whole words), discourse quality (a DQI heuristic) and job-level bias checks, each versioned in `methodology_versions`.
 - **embeddings** (`python/embeddings_service.py`): FastAPI + sentence-transformers, `all-MiniLM-L6-v2` at a pinned revision, 384-dimension vectors stored with pgvector.
-- **PostgreSQL 16 + pgvector**: 46 migrations in `src/db/migrations/` (001–060, with gaps), 34 tables.
+- **PostgreSQL 16 + pgvector**: 49 migrations in `src/db/migrations/` (001–065, with gaps), 34 tables.
 
 The full diagram set (twenty-one diagrams: deployment, trust boundaries, the collection cycle in three parts, data flows, four ERDs, class diagrams, sequences and state diagrams) is indexed in **[docs/diagrams/README.md](docs/diagrams/README.md)**, with each diagram's source files and the notes where the spec and the code differ.
 
@@ -279,7 +279,7 @@ All endpoints are under `/api`. The read-only endpoints send CORS headers; `POST
 | `GET` | `/api/methodology` | Every registered methodology version with its config and justification |
 | `GET` | `/api/sources` | The 52 registry sources with runtime status, terms, attribution and last-run classification (`?include_inactive=true` adds demo feeds and retired rows) |
 | `GET` | `/api/sources/timeseries` | Hourly sentiment volume per category (`?hours=`, default 12, 1–48) |
-| `POST` | `/api/refresh` | Asks the worker for one collection over every source: 202 with a `job_id`; 403 cross-site or without a valid `X-Refresh-Token` where one is required; 409 while one runs; 429 within 60 s of the last; 503 if the queue is down |
+| `POST` | `/api/refresh` | Asks the worker for one collection over every source: 202 with a `job_id`; 403 cross-site, without a valid `X-Refresh-Token` once `REFRESH_TOKEN` is set, or with no `REFRESH_TOKEN` when the site is bound beyond loopback or reached through a proxy; 409 while one runs; 429 within 60 s of the last; 503 if the queue is down; 500 on an unexpected error |
 
 `/api/themes`, `/api/posts/aggregated-by-location` and `/api/sources/timeseries` are cached in-process for 10 seconds. Route errors return `{ "error": "..." }` with no stack traces, and so does a malformed JSON request body (`400 { "error": "invalid JSON body" }`) in every environment.
 
@@ -291,21 +291,25 @@ For host-side development, Node runs on your machine and only the databases and 
 
 ```bash
 npm install
-cp .env.example .env        # then set POSTGRES_PASSWORD and REDIS_PASSWORD (openssl rand -hex 32)
+cp .env.example .env        # then set POSTGRES_PASSWORD, REDIS_PASSWORD, AUDIT_HASH_KEY and CORRELATION_SALT (each: openssl rand -hex 32)
 npm run docker:up           # postgres (POSTGRES_PORT, 5434) + postgres_test (5433) + redis (Valkey, 6379)
 npm run migrate             # apply pending migrations
 npm run seed                # 52 registry sources + methodology versions (idempotent)
 npm run dev                 # Express on http://localhost:3000
 ```
 
-Optional embeddings service on the host (Python 3.10 or newer):
+Optional embeddings service on the host (Python 3.11 or newer; CI tests 3.11 and the image runs 3.13):
 
 ```bash
-python -m venv python/.venv && python/.venv/bin/pip install -r python/requirements.txt
+python3 -m venv python/.venv
+python/.venv/bin/pip install "torch==2.12.1" --index-url https://download.pytorch.org/whl/cpu   # CPU-only torch first; PyPI's default build pulls ~2 GB of CUDA libraries
+python/.venv/bin/pip install -r python/requirements.txt
 bash python/start.sh        # uvicorn on port 8000 (EMBEDDINGS_SERVICE_URL)
 ```
 
-`npm run dev` listens on 127.0.0.1 unless `HOST` or `PULSE_BIND_ADDR` names another address; bound beyond loopback, `POST /api/refresh` requires `X-Refresh-Token`.
+If `python3 --version` is older than 3.11, name a newer interpreter instead (for example `python3.11 -m venv python/.venv`). The torch pin has no `+cpu` suffix on purpose, so the same line works on macOS and Linux: the CPU index serves `torch 2.12.1` on macOS and `2.12.1+cpu` on Linux, and `==2.12.1` matches both. Keep its version equal to the `torch` pin in `python/requirements-service.in`.
+
+`npm run dev` listens on 127.0.0.1 unless `HOST` or `PULSE_BIND_ADDR` names another address. Bound beyond loopback, or reached through a reverse proxy, `POST /api/refresh` is refused until you set `REFRESH_TOKEN`; once it is set, every refresh must send it in `X-Refresh-Token` (see [Security and privacy](#security-and-privacy)).
 
 ### Commands
 
@@ -318,9 +322,10 @@ bash python/start.sh        # uvicorn on port 8000 (EMBEDDINGS_SERVICE_URL)
 | `npm run collect:smoke [-- --only ...] [--json]` | Live-fetch every enabled keyless route once; writes nothing |
 | `npm run source:disable -- <slug> --reason "<why>"` · `source:enable` · `source:reset` | Database kill switch; clear the refused state |
 | `npm run replay -- --post <id>` | Re-run a post's stored decisions and print PASS / DIVERGENCE / NOT RE-RUNNABLE per stage |
-| `npm run verify-provenance -- --post <id> --url <original URL> [--id <original id>]` | Prove a stored post came from a given upstream item (exit 0 MATCH, 1 NO MATCH) |
+| `npm run verify-provenance -- --post <id> --url <original URL> [--id <original id>]` | Prove a stored post came from a given upstream item (exit 0 MATCH, 1 NO MATCH, 2 usage error, unknown post or database failure, 3 no fingerprint or no key) |
 | `npm run compact` | Delete demo posts past the retention window and compact old months into rollups now (the worker also does this daily) |
 | `npm run bias:window` | Run the bias checks over the rolling 24 h window now (the worker also does this daily) |
+| `npm run terms:snapshot [-- --only slug1,slug2] [--json]` | Snapshot every source's terms page now, politely (the worker also does this weekly; needs COLLECTOR_CONTACT_URL) |
 | `npm run seed:e2e` | Load the deterministic fixture dataset the Playwright suite uses |
 
 ---
@@ -331,6 +336,8 @@ bash python/start.sh        # uvicorn on port 8000 (EMBEDDINGS_SERVICE_URL)
 npm run verify             # the full gate: jest with coverage (≥ 80% lines), plus pytest and black when python/.venv exists
 npm run test:unit          # unit tests (needs the test database: npm run docker:up; test:pure needs none)
 npm run test:pure          # pure tests (collectors on recorded fixtures, frontend logic, config)
+npm run test:quick         # unit tests plus a warn-only black check (scripts/test/run-unit.sh)
+npm run test:diagrams      # the diagram PNG hash guard (scripts/test/render-hash.test.sh)
 npm run test:int           # integration tests against the test database (needs npm run docker:up)
 npm run test:cov           # coverage report
 npm run test:e2e           # Playwright, on its own database (pulse_of_ai_e2e) and port 3100
@@ -349,11 +356,11 @@ npm run coverage:frontend  # non-gating coverage of globe / story / ui / main
 What the code does, stated precisely:
 
 - **Browser surface.** Every response carries a strict Content-Security-Policy (`default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'`), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` and `Referrer-Policy: no-referrer`. The frontend uses no CDN and builds the page with `textContent`, never `innerHTML`.
-- **Refresh is guarded against cross-site requests.** CORS is enabled only on the read-only endpoints. `POST /api/refresh` accepts only same-origin requests (by `Sec-Fetch-Site`, or else `Origin` / `Referer` matching the host), answers CORS preflights with 403, and requires an `X-Refresh-Token` (`REFRESH_TOKEN`) when the site is bound beyond loopback.
+- **Refresh is guarded against cross-site requests.** CORS is enabled only on the read-only endpoints. `POST /api/refresh` accepts only same-origin requests (by `Sec-Fetch-Site`, or else `Origin` / `Referer` matching the host), answers CORS preflights with 403, and, once `REFRESH_TOKEN` is set, requires it in `X-Refresh-Token` on every request. With no `REFRESH_TOKEN`, refresh is refused (403) when the site is bound beyond loopback or the request came through a reverse proxy (a `Forwarded`, `X-Forwarded-For`, `X-Forwarded-Host` or `X-Real-IP` header).
 - **Collectors cannot be pointed at internal hosts.** Every request and redirect hop must be https to a public address on the route's allowed hosts; DNS answers are checked and pinned; redirects are followed one hop at a time (at most 4); a request carrying credentials is never sent across origins; responses are size-capped.
 - **Secrets stay out of storage, logs and the API.** Every error the collectors and the worker store or log is scrubbed of credential-shaped URL parameters and of every secret env value, and so is every API route and database pool error line. The public API serves only an error kind and HTTP status. Collector credentials reach only the worker container; the web container gets "set / empty" markers. Valkey requires a password, and published ports bind to 127.0.0.1 by default.
 - **Personal data.** The precise claim (`ingest@1.7.0`): identity fields are never stored; e-mail addresses, handles (including Reddit u/ names), phone numbers, sign-offs and profile links in text are redacted; **free text may still contain names mentioned in the content**. Collectors store an allowlist of content fields, location is kept at city level (from the content, or the publisher's home city for editorial sources), and an upstream id that could identify someone is stored only as a keyed fingerprint.
-- **Politeness and terms.** Every request carries a User-Agent with the operator's contact URL; publisher feeds are checked against `robots.txt`; requests to a host are spaced; a 401, 403 or 451, a bot challenge or a robots refusal is never retried or worked around, and puts the source in a cooldown of 1 hour doubling up to 24 hours. Pulse of AI uses its sources on a non-commercial research basis and shows the attribution their terms require (ADR 0001 ruling 6).
+- **Politeness and terms.** Every request carries a User-Agent with the operator's contact URL; publisher feeds are checked against `robots.txt`; requests to a host are spaced; a 401, 403 or 451, a bot challenge or a robots refusal is never retried or worked around, and puts the source in a cooldown of 1 hour doubling up to 24 hours. After the cooldown one probe run is allowed. A clean probe resumes collection but keeps the refusal count for a 24-hour probation, so a refusal during probation continues the escalation; 24 hours without a refusal resets the count (ADR 0001, dated note of 2026-09-30; migration 062). `npm run source:reset -- <slug>`, or `SOURCE_<SLUG>_RESET=<date>` dated at or after the last refusal together with `GATE_APPROVED_BY`, clears the count and the probation too. Pulse of AI uses its sources on a non-commercial research basis and shows the attribution their terms require (ADR 0001 ruling 6).
 
 Accepted risks are recorded in ADR 0001: the 8 permission-gated feeds (opened only by each operator's acknowledgement and a named approval), and Reddit's display of redacted text and its retention of scores and audit rows after the text is blanked.
 
@@ -366,7 +373,7 @@ Accepted risks are recorded in ADR 0001: the 8 permission-gated feeds (opened on
 - **The receipt.** `GET /api/audit/:post_id` returns the post's provenance, every decision and the ingestion step in four audience views (Public, Journalist, Regulator, Researcher), and the bias layers of the job that scored it, with methodology lineage marked recorded, inferred or current. The input hash is exposed only as an HMAC keyed with `AUDIT_HASH_KEY`.
 - **Reproducible.** `npm run replay -- --post <id>` re-runs every stored decision against the methodology version it references. `npm run verify-provenance` proves a post's origin from its original URL through a keyed provenance fingerprint (`PROVENANCE_KEY`, else `AUDIT_HASH_KEY`).
 - **Bias checks.** Once per collection cycle (and per refresh or standup job), and daily over a rolling 24 h window, three aggregate checks run over the scored posts: location concentration (content-located posts only; publisher-located posts are a separate globe layer), platform sentiment parity and negative dominance. Each needs a minimum sample; below it the check records "insufficient sample" and raises no alert, and the share of such checks is reported. Violations raise alerts that turn the header health chip yellow or red and appear in the health drawer's alert history. No check infers traits of individual users.
-- **Retention is logged.** Every stored post writes a `collected` row, and every text removal, compaction, run rollup and demo purge writes `data_retention_log` rows with their legal basis.
+- **Retention is logged.** Every post stored through the ingest step (`src/pipeline/ingest.js`) writes a `collected` row (the fictional demo batch of `scripts/populate.js` writes none), and every text removal, compaction, run rollup and demo purge writes `data_retention_log` rows with their legal basis.
 
 ---
 
@@ -377,7 +384,7 @@ Accepted risks are recorded in ADR 0001: the 8 permission-gated feeds (opened on
 | [docs/TECHNICAL_SPEC.md](docs/TECHNICAL_SPEC.md) | Technical specification, the requirements source of truth (where it differs from the code, see the spec drift notes in [docs/diagrams/README.md](docs/diagrams/README.md)) |
 | [docs/requirements/PRD.md](docs/requirements/PRD.md) | Product requirements (§4.3: the storytelling frontend follows the FuN.zip design-handoff prototype, 11 beats and a Canvas-2D globe; the globe.gl design is superseded) |
 | [docs/requirements/BRD.md](docs/requirements/BRD.md) | Business requirements |
-| [docs/adr/0001-source-registry-and-collection.md](docs/adr/0001-source-registry-and-collection.md) | ADR 0001: the source registry, collection, rulings 1–9 and decisions D1–D2 |
+| [docs/adr/0001-source-registry-and-collection.md](docs/adr/0001-source-registry-and-collection.md) | ADR 0001: the source registry, collection, rulings 1–9, decisions D1–D4 and the PR #22 decisions G1–G6 |
 | [docs/requirements/Top_52_Global_Online_Sources.rev4.csv](docs/requirements/Top_52_Global_Online_Sources.rev4.csv) | The source workbook of record, exported |
 | [docs/research/](docs/research/) | Source-access and Reddit-access research, and the city-layer research |
 | [docs/diagrams/README.md](docs/diagrams/README.md) | The diagram index |
@@ -395,7 +402,8 @@ Issues and pull requests are welcome.
 - Add tests with every change: unit or pure tests for logic, integration tests for routes and database behaviour, and a Playwright spec for anything visible on the page.
 - Run `npm run verify` (and `npm run test:e2e` for frontend changes) before opening the pull request, and describe the evidence in it.
 - Frontend code builds the DOM with `createElement` and `textContent` only, and adds no inline scripts or `style=` attributes (the CSP forbids them).
-- A change to how a score is computed is a new methodology version and a new migration, never an edit to a released one.
+- A change to how a score is computed is a new methodology version and a new migration, never an edit to a released one. That includes a `sentence-transformers` bump: its pin in `python/requirements.txt` and `python/requirements-service.in` must equal the current embedding methodology row (`embedding@1.1.0`, sentence-transformers 6.1.0; `tests/unit/pure/embeddingLibraryPins.test.js` fails on drift).
+- Dependabot proposes updates for `python/requirements.txt`, the images and the GitHub Actions, but not for the hash-locked embeddings-image lock (`python/requirements-service.in` / `.txt`, CPU-only torch). Refresh that lock by hand with the `pip-compile` command in the header of `requirements-service.in`, and commit the `.in` and `.txt` together.
 - When you change a diagram, edit its `.mmd` and run `bash docs/diagrams/render.sh`.
 - Never commit `.env` or any credential.
 

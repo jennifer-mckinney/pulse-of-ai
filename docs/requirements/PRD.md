@@ -9,7 +9,7 @@
 | **Status** | Approved baseline, aligned with Technical Specification v1.2.0 |
 | **Related documents** | `docs/requirements/BRD.md`, `docs/TECHNICAL_SPEC.md` (v1.2.0), `docs/adr/0001-source-registry-and-collection.md`; superseded: `docs/plans/2026-07-05-globe-storytelling-design.md` |
 
-**v1.1 changes (2026-09-29), aligned to code per independent audit, 2026-09-29:** §1 (52-source registry, 8 categories, Canvas-2D globe); FR-1, FR-2, FR-4, FR-5, FR-6, FR-9, FR-14, FR-15, FR-28 (implementation status noted; unbuilt parts marked PLANNED); §4.3 FR-17 to FR-25 rewritten to the shipped FuN.zip prototype design (11 beats, Canvas-2D globe, demo labelling, legal notices), per Jennifer's ruling of 2026-09-28; §6.3 to §6.6 acceptance criteria; §7 roadmap status; §8 traceability; NFR-3; §10 question 2. Requirements not yet built stay as requirements and are marked **PLANNED — not implemented as of spec v1.2.0**. The status notes were reconciled with PR #22 (`master` @ `973cad8`) on 2026-09-29: FR-2, FR-4, FR-5, FR-28, NFR-10, NFR-11, §6.6, §7 and §10 question 4.
+**v1.1 changes (2026-09-29), aligned to code per independent audit, 2026-09-29:** §1 (52-source registry, 8 categories, Canvas-2D globe); FR-1, FR-2, FR-4, FR-5, FR-6, FR-9, FR-14, FR-15, FR-28 (implementation status noted; unbuilt parts marked PLANNED); §4.3 FR-17 to FR-25 rewritten to the shipped FuN.zip prototype design (11 beats, Canvas-2D globe, demo labelling, legal notices), per Jennifer's ruling of 2026-09-28; §6.3 to §6.6 acceptance criteria; §7 roadmap status; §8 traceability; NFR-3; §10 question 2. Requirements not yet built stay as requirements and are marked **PLANNED — not implemented as of spec v1.2.0**. The status notes were reconciled with PR #22 (`master` @ `973cad8`) on 2026-09-29: FR-2, FR-4, FR-5, FR-28, NFR-10, NFR-11, §6.6, §7 and §10 question 4. Reconciled again with PRs #24–#34 (`master` @ `7291490`) on 2026-09-30: FR-4 and §7. The round-3 audit pass of the same date also corrected FR-1, FR-2, FR-3, NFR-3, §6.1 and §9.
 
 This document specifies WHAT the product must do and for WHOM. HOW it is built — schemas, algorithms, infrastructure — lives in the Technical Specification and is referenced inline by section number, e.g. (spec §9). The business case is in the BRD.
 
@@ -72,10 +72,10 @@ Requirement IDs (FR-x) are referenced by the traceability table in Section 8.
 
 | ID | Requirement |
 |---|---|
-| FR-1 | The system shall collect AI-related posts from the 52 registry sources across 8 categories, each only through its official route and only while its gate is open, on a staggered schedule achieving a 2–3 minute effective refresh window (spec §13 Phase C, §17; ADR 0001). |
-| FR-2 | The system shall strip all PII (usernames, handles, author fields) at ingest, deduplicate, store raw posts immutably, and log each collection action with its legal basis (spec §8). *Status: identity fields dropped and identities redacted in text (`ingest@1.7.0`); deduplication is per source and upstream id; every stored post writes a `collected` retention-log row with its legal basis in the same statement (since `ingest@1.6.0`).* |
-| FR-3 | The system shall score every ingested post for sentiment, AI relevance, and (Phase 2) discourse quality, writing every inference to an immutable audit log linked to a versioned methodology (spec §10, §18). |
-| FR-4 | The system shall run the three-layer bias detection stack (demographic parity, equalized odds, counterfactual fairness sampling) at the end of every processing job and raise alert events on threshold violations (spec §9). *Status: three aggregate checks run (location concentration > 0.35, critical > 0.80; platform sentiment parity > 0.30; negative dominance > 0.60), once per collection cycle or per refresh / standup job and daily over a rolling 24 h window (`bias@1.5.0`), each with a minimum sample below which it records "insufficient sample" and raises no alert; equalized odds, counterfactual fairness and demographic parity over user demographics are PLANNED — not implemented as of spec v1.2.0.* |
+| FR-1 | The system shall collect AI-related posts from the 52 registry sources across 8 categories, each only through its official route and only while its gate is open, on a staggered schedule achieving a 2–3 minute effective refresh window, except the quota-bound routes of ADR 0001 D4 (every 15 min) (spec §13 Phase C, §17; ADR 0001). |
+| FR-2 | The system shall strip all PII (usernames, handles, author fields) at ingest, deduplicate, store raw posts immutably, and log each collection action with its legal basis (spec §8). *Status: identity fields dropped and identities redacted in text (`ingest@1.7.0`); deduplication is per source and upstream id; every post stored through `src/pipeline/ingest.js` writes a `collected` retention-log row with its legal basis in the same statement (since `ingest@1.6.0`); the fictional demo batch of `scripts/populate.js` writes none.* |
+| FR-3 | The system shall score every ingested post for sentiment, AI relevance, and discourse quality (a partial DQI today, discourse@1.1.0-DQI; full DQI in Phase 2), writing every inference to an immutable audit log linked to a versioned methodology (spec §10, §18). |
+| FR-4 | The system shall run the three-layer bias detection stack (demographic parity, equalized odds, counterfactual fairness sampling) at the end of every processing job and raise alert events on threshold violations (spec §9). *Status: three aggregate checks run (location concentration > 0.35, critical > 0.80; platform sentiment parity > 0.30; negative dominance > 0.60), once per collection cycle or per refresh / standup job and daily over a rolling 24 h window (`bias@1.6.0`; the window arrived with `bias@1.5.0`), each with a minimum sample below which it records "insufficient sample" and raises no alert; equalized odds, counterfactual fairness and demographic parity over user demographics are PLANNED — not implemented as of spec v1.2.0.* |
 | FR-5 | The system shall compact post-level detail older than 3 months into permanent monthly topic and source rollups, removing the text and deleting embeddings while preserving the audit skeleton (spec §19). *Status: implemented; the worker's daily maintenance task compacts every month that ended before the detail window (also `npm run compact`); the text is replaced by a removal notice (the column stays NOT NULL), and text retention already removes it at the end of each source's window (Reddit 48 h, YouTube and TikTok 30 days, otherwise 90 days).* |
 
 ### 4.2 API Surface
@@ -127,7 +127,7 @@ The frontend is the primary experience for the journalist (P1) and the general p
 |---|---|---|---|
 | NFR-1 | Performance | Page load under 3 seconds (Lighthouse); globe visible within 1 second | spec §11, §14 |
 | NFR-2 | Performance | Location-aggregation query under 500 ms | spec §14 |
-| NFR-3 | Freshness | Data refresh interval 2–3 minutes across every collecting registry source (52 in the registry) | spec §14, §17 |
+| NFR-3 | Freshness | Data refresh interval 2–3 minutes across every collecting registry source (52 in the registry), except a route whose documented quota cannot sustain it (ADR 0001 D4: YouTube, IEEE Xplore and keyless Stack Overflow run every 15 min) | spec §14, §17 |
 | NFR-4 | Availability | 99% system uptime | spec §2, §14 |
 | NFR-5 | Accuracy | 99% inference accuracy target for all components (sentiment, relevance, demographic inference, cross-platform correlation), validated on labeled benchmarks; the Phase 1 lexicon model is explicitly an audit-pattern foundation that will not meet this bar — the Phase 2 transformer upgrade is the accuracy vehicle | spec §14 |
 | NFR-6 | Accuracy governance | Sentiment benchmark re-run monthly on a hand-labeled 500-post set; relevance precision verified by monthly manual review of 200 random posts | spec §14 |
@@ -141,7 +141,7 @@ The frontend is the primary experience for the journalist (P1) and the general p
 ## 6. Acceptance Criteria by Major Feature
 
 ### 6.1 Real-time monitoring (FR-1..FR-3)
-- A processing run collects from active sources, and newly ingested posts appear in `GET /api/sentiment/latest` within one refresh cycle (2–3 min).
+- A processing run collects from active sources, and newly ingested posts appear in `GET /api/sentiment/latest` within one refresh cycle of their source (2–3 min; 15 min for the D4 quota-bound routes).
 - Every processed post has at least sentiment and relevance decisions in its audit trail.
 - Ingesting the same upstream item twice creates no duplicate post (deduplication per source and upstream id; content-hash deduplication across sources is PLANNED — not implemented as of spec v1.2.0).
 - A sample of stored content contains no @-mentions, usernames, or email patterns (spec §14 ethical gates).
@@ -178,11 +178,11 @@ The frontend is the primary experience for the journalist (P1) and the general p
 
 ## 7. Phase Roadmap
 
-Status reflects `master` @ `973cad8` (PRs #8, #9, #10 and #22) as of 2026-09-29.
+Status reflects `master` @ `7291490` (PRs #8, #9, #10, #22 and #24–#34) as of 2026-09-30.
 
 | Phase | Content | Status |
 |---|---|---|
-| **Phase 1 (A–D): Foundation** | Infrastructure (Docker, migrations, seed, test harness); TDD pipeline (sentiment, relevance, discourse, ingest, bias, correlation modules); API route surface (health, posts, sentiment, refresh, audit, bias, methodology, sources, query); embeddings service and vector storage; real source collection over the 52-source registry (ADR 0001) (spec §13) | **Done** — 46 migrations, pipeline modules, collectors, worker, maintenance schedule, watchdog and 12 routes exist with the 80% coverage gate in force; correlation is gated off pending a DPIA (spec §20) |
+| **Phase 1 (A–D): Foundation** | Infrastructure (Docker, migrations, seed, test harness); TDD pipeline (sentiment, relevance, discourse, ingest, bias, correlation modules); API route surface (health, posts, sentiment, refresh, audit, bias, methodology, sources, query, themes); embeddings service and vector storage; real source collection over the 52-source registry (ADR 0001) (spec §13) | **Done** — 49 migrations, pipeline modules, collectors, worker, maintenance schedule, watchdog and 12 routes exist with the 80% coverage gate in force; correlation is gated off pending a DPIA (spec §20) |
 | **Phase E: Storytelling frontend** | The FuN.zip prototype frontend: Canvas-2D globe, 11-beat scroll story, client-side insight derivation, free-explore with filters, audit and health drawers, demo labelling (spec §11, §13 Phase E) | **Done** on `master`; the legal-notices panel is added with the AGPL licence on `docs/diagrams-and-readme` |
 | **Phase 2: Accuracy and depth** (spec §16) | Transformer sentiment upgrade to the 99% target; demographic inference (99% target); topic clustering; similar-post retrieval endpoint; full DQI discourse scoring; full cross-platform correlation (after a DPIA); D3 demographics/topics/discourse charts. (Automated monthly compaction, listed here before, shipped with PR #22.) | Planned — prerequisites: Phase 1 baselines, labeled benchmark sets |
 | **Phase 3: Reach and hardening** (spec §16) | Topic relationship graph; semantic free-text search; TV/kiosk display mode; full counterfactual fairness; differential privacy on aggregates | Planned — prerequisites: Phase 2 topic and model upgrades, regulatory assessment for differential privacy |
@@ -220,7 +220,7 @@ Status reflects `master` @ `973cad8` (PRs #8, #9, #10 and #22) as of 2026-09-29.
 - Any storage or display of personal identity (see BRD §6.2 and spec §8 for the full exclusion list)
 - Content moderation or platform intervention
 - Editorializing on the discourse being measured
-- External push notifications (alerts are surfaced via dashboard and API only in current phases)
+- External push notifications of bias and source alerts (they are surfaced via dashboard and API only in current phases); the one exception is the operator watchdog, which e-mails its system-health alerts over optional SMTP (spec §9, §14)
 
 ## 10. Open Product Questions
 
