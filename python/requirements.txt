@@ -2,7 +2,7 @@
 # Install: pip install -r requirements.txt
 
 # Core embedding service
-sentence-transformers==2.7.0
+sentence-transformers==6.1.0
 # Infinity (PyPI package: infinity-emb) is the planned Phase-2 embedding server
 # per docs/TECHNICAL_SPEC.md §5 — add the dependency when actually adopted.
 
