@@ -15,6 +15,7 @@
 require('dotenv').config();
 const db = require('../src/db/connection');
 const { readConfig } = require('../src/watchdog/config');
+const { scrub } = require('../src/collectors/redact');
 const { Watchdog } = require('../src/watchdog');
 
 /* istanbul ignore next -- CLI entry point */
@@ -26,7 +27,7 @@ async function main() {
     process.on('SIGINT', shutdown);
     // A stray rejection (e.g. a pg pool error event) must not kill the loop.
     process.on('unhandledRejection', (err) => {
-        console.error('[watchdog] unhandled rejection:', String(err && err.message).slice(0, 300));
+        console.error('[watchdog] unhandled rejection:', scrub(String(err && err.message)).slice(0, 300));
     });
     if (once) {
         await wd.init();
@@ -42,7 +43,7 @@ async function main() {
 /* istanbul ignore next -- CLI entry point */
 if (require.main === module) {
     main().catch((err) => {
-        console.error('[watchdog] fatal:', String(err && err.message).slice(0, 300));
+        console.error('[watchdog] fatal:', scrub(String(err && err.message)).slice(0, 300));
         process.exit(1);
     });
 }

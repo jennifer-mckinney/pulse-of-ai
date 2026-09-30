@@ -139,7 +139,8 @@ describe('supervised dry run honours the database gates (security M2)', () => {
         await admin(['disable', 'hacker_news', '--reason', 'terms review']);
         const { err, transport } = await supervised();
         expect(err).toBeInstanceOf(collectCli.UsageError);
-        expect(err.message).toMatch(/disabled by the database kill switch \(by tester\) — terms review/);
+        // G5: the kill switch records the named approval as its actor.
+        expect(err.message).toMatch(/disabled by the database kill switch \(by Tess Tester 2026-09-29\) — terms review/);
         expect(transport.calls).toHaveLength(0);
     });
 

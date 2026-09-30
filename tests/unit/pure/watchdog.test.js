@@ -263,6 +263,24 @@ describe('Notifier', () => {
         expect(clean(null)).toBe('');
     });
 
+    // PR #22 integration (security L3 × principal #12): what the watchdog
+    // logs, stores for /api/health and e-mails never carries a secret.
+    test('clean scrubs secret env values (SMTP_PASSWORD, POSTGRES_PASSWORD) before storing, logging or sending', () => {
+        const saved = { smtp: process.env.SMTP_PASSWORD, pg: process.env.POSTGRES_PASSWORD };
+        process.env.SMTP_PASSWORD = 'smtp-secret-value-123';
+        process.env.POSTGRES_PASSWORD = 'pg-secret-value-456';
+        try {
+            const out = clean('535 auth failed for smtp-secret-value-123; db pg-secret-value-456 refused');
+            expect(out).not.toMatch(/smtp-secret-value-123|pg-secret-value-456/);
+            expect(out).toBe('535 auth failed for [redacted]; db [redacted] refused');
+            expect(buildMessage({ ...event(), summary: 'x smtp-secret-value-123' }).text).not.toContain('smtp-secret-value-123');
+        } finally {
+            for (const [k, v] of [['SMTP_PASSWORD', saved.smtp], ['POSTGRES_PASSWORD', saved.pg]]) {
+                if (v === undefined) delete process.env[k]; else process.env[k] = v;
+            }
+        }
+    });
+
     test('sends to every recipient and records the outcome', async () => {
         const sent = [];
         const outcomes = [];

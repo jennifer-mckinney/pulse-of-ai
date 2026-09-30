@@ -19,12 +19,22 @@
 
 'use strict';
 
+const { scrub } = require('../collectors/redact');
+
 const MAX_ATTEMPTS = 5;
 const HOUR_MS = 3600000;
 
-/** Strip control characters (header / log injection) and bound the length. */
+/**
+ * Scrub secrets, strip control characters (header / log injection) and bound
+ * the length. PR #22 integration (security L3 × principal #12): every text
+ * the watchdog logs, stores in watchdog_state (served by /api/health) or
+ * e-mails goes through the shared secret scrubber first, so an SMTP or
+ * database error that echoes SMTP_PASSWORD / POSTGRES_PASSWORD, or a URL
+ * with a credential, never leaves the process.
+ */
 function clean(s, max = 500) {
-    return String(s === undefined || s === null ? '' : s).replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, max);
+    const scrubbed = scrub(s === undefined || s === null ? '' : s);
+    return String(scrubbed === null ? '' : scrubbed).replace(/[\u0000-\u001f\u007f]+/g, ' ').trim().slice(0, max);
 }
 
 /**
