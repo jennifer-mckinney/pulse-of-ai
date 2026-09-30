@@ -5,7 +5,11 @@
 
 [tool.black]
 line-length = 100
-target-version = ["py310", "py311", "py312"]
+# py311 is the oldest interpreter the code must parse on: CI's lint-python job
+# runs black and pytest on Python 3.11 (the image runs 3.13, which parses
+# anything formatted for 3.11). Listing py312 made black on 3.11 warn that it
+# cannot parse code formatted for 3.12 and weakened its AST safety check.
+target-version = ["py311"]
 include = '\.pyi?$'
 
 [tool.pytest.ini_options]
