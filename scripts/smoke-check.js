@@ -432,12 +432,12 @@ if (require.main === module) {
     try {
         opts = parseArgs(process.argv.slice(2));
     } catch (err) {
-        process.stderr.write(`smoke-check: ${err.message}\n`);
+        process.stderr.write(require('../src/collectors/redact').scrub(`smoke-check: ${err.message}`) + '\n');
         process.exit(2);
     }
     run(opts, line => process.stdout.write(line + '\n'))
         .catch((err) => {
-            process.stderr.write(`smoke-check: FAILED — ${err.message}\n`);
+            process.stderr.write(require('../src/collectors/redact').scrub(`smoke-check: FAILED — ${err.message}`) + '\n');
             return 1;
         })
         .then(async (code) => {

@@ -171,7 +171,7 @@ if (require.main === module) {
         })
         .catch(async (err) => {
             if (err instanceof UsageError) {
-                process.stderr.write(`${err.message}\n`);
+                process.stderr.write(`${scrub(err.message)}\n`);
                 await db.closePool().catch(() => {});
                 process.exit(2);
             }

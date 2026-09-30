@@ -125,7 +125,7 @@ if (require.main === module) {
     main()
         .then(() => closePool())
         .catch(async (err) => {
-            console.error('✗ Seed failed:', err.message);
+            console.error(require('../src/collectors/redact').scrub(`✗ Seed failed: ${err.message}`));
             await closePool().catch(() => {});
             process.exit(1);
         });

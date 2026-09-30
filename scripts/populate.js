@@ -664,7 +664,7 @@ async function main(argv) {
     try {
         opts = parseArgs(argv);
     } catch (err) {
-        process.stderr.write(`populate: ${err.message}\n`);
+        process.stderr.write(require('../src/collectors/redact').scrub(`populate: ${err.message}`) + '\n');
         return 2;
     }
     if (opts.help) {
@@ -679,7 +679,7 @@ async function main(argv) {
 if (require.main === module) {
     main(process.argv.slice(2))
         .catch((err) => {
-            process.stderr.write(`populate: FAILED — ${err.message}\n`);
+            process.stderr.write(require('../src/collectors/redact').scrub(`populate: FAILED — ${err.message}`) + '\n');
             return 1;
         })
         .then(async (code) => {
