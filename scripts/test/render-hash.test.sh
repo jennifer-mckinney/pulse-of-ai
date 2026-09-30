@@ -89,7 +89,7 @@ import sys; p = sys.argv[1]; s = open(p, encoding="utf-8").read()
 s = s.replace("stored", "kept", 1); open(p, "w", encoding="utf-8").write(s)
 PY
 expect_stale "M2 one-word label edit fails" "$mmd"
-# S1: one number.
+# S1: one number (the first digit run in the file, which is in the %% Sources comment; the hash guard must fail any byte change, rendered or not).
 mmd="$(copy_diagram s1)"
 python3 - "$mmd" <<'PY'
 import re, sys; p = sys.argv[1]; s = open(p, encoding="utf-8").read()
