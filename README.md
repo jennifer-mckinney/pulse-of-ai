@@ -203,7 +203,7 @@ A source whose key, licence or approval arrives later is not scheduled blind (PR
 
 1. Put the new credential in your shell only (not yet in `.env`) and run a supervised dry run of that one source:
    `GUARDIAN_API_KEY=... GUARDIAN_COMMERCIAL_LICENSE_REF=... npm run collect -- --supervised --only guardian`
-2. It fetches every open route through the real collectors (robots, allowed hosts, quotas and redaction all apply), prints what each route returned and a sample of up to 5 payloads exactly as they would be stored, and stores nothing: no posts, scores, cursors, collection state or job (it does not touch the database).
+2. It fetches every open route through the real collectors (robots, allowed hosts, quotas and redaction all apply), prints what each route returned and a sample of up to 5 payloads exactly as they would be stored, and stores nothing: no posts, scores, cursors, collection state or job. Its only database access is one read of the source's kill switch and refusal state: a source disabled with `npm run source:disable` or still in its refusal cooldown is refused before any request, exactly as the worker would refuse it.
 3. Sign off if the sample is on topic and carries no personal data beyond the ingest claim. Then add the credential to `.env` and recreate the containers (`docker compose up -d worker web`); the worker schedules the source on its next reschedule.
 
 ### Embeddings

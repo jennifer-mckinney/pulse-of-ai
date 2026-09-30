@@ -63,3 +63,48 @@ describe('database kill switch (F10-10)', () => {
         expect((await admin(['enable', 'nope'])).code).toBe(2);
     });
 });
+
+// PR #22 security M2: `npm run collect -- --supervised` reads the SAME
+// database state (read-only) and refuses a disabled or cooling-down source
+// before any request.
+describe('supervised dry run honours the database gates (security M2)', () => {
+    const collectCli = require('../../scripts/collect');
+    const supervised = async () => {
+        const transport = fixtureTransport([[/hn\.algolia\.com/, 'recorded/hn-algolia.json']]);
+        const err = await collectCli.supervisedRun({ slug: 'hacker_news', env: TEST_ENV, transport, out: () => {} })
+            .then(() => null, e => e);
+        return { err, transport };
+    };
+
+    it('readGovernance returns the kill switch and refusal columns, and writes nothing', async () => {
+        const before = await db.dbGet('SELECT COUNT(*)::int AS n FROM source_collection_state');
+        const gov = await collectCli.readGovernance('hacker_news');
+        expect(gov).toMatchObject({ disabled_at: null, access_denied_at: null, refused_until: null });
+        expect(await collectCli.readGovernance('no_such_source')).toBeNull();
+        expect(await db.dbGet('SELECT COUNT(*)::int AS n FROM source_collection_state')).toEqual(before);
+    });
+
+    it('refuses a source disabled with source:disable (no request)', async () => {
+        await admin(['disable', 'hacker_news', '--reason', 'terms review']);
+        const { err, transport } = await supervised();
+        expect(err).toBeInstanceOf(collectCli.UsageError);
+        expect(err.message).toMatch(/disabled by the database kill switch \(by tester\) — terms review/);
+        expect(transport.calls).toHaveLength(0);
+    });
+
+    it('refuses a source inside its refusal cooldown (no request); a clean source runs', async () => {
+        const { id } = await db.dbGet(`SELECT id FROM data_sources WHERE name = 'hacker_news'`);
+        await db.dbRun(
+            `INSERT INTO source_collection_state (source_id, access_denied_at, access_denied_status, refused_until, refusal_count)
+             VALUES ($1, NOW(), 403, NOW() + INTERVAL '1 hour', 1)
+             ON CONFLICT (source_id) DO UPDATE SET access_denied_at = NOW(), access_denied_status = 403,
+                 refused_until = NOW() + INTERVAL '1 hour', refusal_count = 1`, [id]);
+        const cooling = await supervised();
+        expect(cooling.err.message).toMatch(/refusal cooldown: the source refused access \(HTTP 403\)/);
+        expect(cooling.transport.calls).toHaveLength(0);
+        await db.dbRun(`UPDATE source_collection_state SET access_denied_at = NULL, refused_until = NULL WHERE source_id = $1`, [id]);
+        const clean = await supervised();
+        expect(clean.err).toBeNull();
+        expect(clean.transport.calls.length).toBeGreaterThan(0);
+    });
+});
