@@ -25,13 +25,21 @@ const nonEmpty = (v) => typeof v === 'string' && v.trim() !== '';
 // characters, a single repeated character (e.g. the CI's 64 zeros), or a
 // known placeholder is not a salt.
 const PLACEHOLDER_SALTS = new Set(['changeme', 'change-me', 'change_me', 'salt', 'secret', 'pulse-of-ai-default-salt',
-    'your-salt-here', 'replace-me', 'example', 'test']);
+    'your-salt-here', 'replace-me', 'example', 'test', 'replace_with_random_64_hex_chars']);
+// PR #22 grumpy M8: placeholder SHAPES, not only exact values — .env.example
+// ships "replace_with_random_64_hex_chars", and hand-written templates use
+// "your_…", "change_me…", "insert…", "…placeholder…", "…example…".
+const PLACEHOLDER_SHAPES = [
+    /^(replace|your|change|insert|put|enter|set|fill)[_\s-]/i,
+    /placeholder|example|changeme|change[_-]me|replace[_-]?me|todo|dummy/i,
+];
 function isUsableSalt(v) {
     if (!nonEmpty(v)) return false;
     const t = v.trim();
     if (t.length < 16) return false;
     if (/^(.)\1*$/.test(t)) return false;
     if (PLACEHOLDER_SALTS.has(t.toLowerCase()) || /^<.*>$/.test(t) || /^\$\{.*\}$/.test(t)) return false;
+    if (PLACEHOLDER_SHAPES.some(re => re.test(t))) return false;
     return true;
 }
 
