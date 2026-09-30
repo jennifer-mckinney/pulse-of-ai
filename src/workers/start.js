@@ -9,23 +9,38 @@
 //   ingest    — scoring retries (ingest.worker.js)
 //   embed     — embeddings via the Python service (embed.worker.js)
 //   correlate — reserved (collectors store no identity signals)
-// and the Reddit maintenance timer (48 h text retention, deletion re-check,
-// subreddit discovery — src/collectors/reddit/maintenance.js),
+//   maintenance — two repeatable jobs (maintenance.worker.js, P10-2, PR #22
+//               P1-7): every MAINTENANCE_EVERY_MS text retention + stale
+//               jobs; every MAINTENANCE_DAILY_EVERY_MS compaction + run rollup
+// and the Reddit maintenance timer (deletion re-check, subreddit
+// discovery — src/collectors/reddit/maintenance.js),
 // and starts the collection scheduler (collector.scheduler.js): at start and
 // every RESCHEDULE_MS it (re)schedules every collecting registry source, so a
 // kill switch or a new credential takes effect without a code change.
 //
 // Concurrency rationale:
 //   collect:   4 per type — I/O-bound; per-host spacing lives in the HTTP client
-//   ingest:   20 — CPU-bound scoring
+//   ingest:    8 — scoring; each job holds up to 3 DB connections (P10-12)
 //   embed:     4 — the Python service is the bottleneck
 //   correlate: 8 — DB-bound
 
 'use strict';
 
+// P10-12: size the PostgreSQL pool against this process's job concurrency
+// BEFORE anything opens the pool (src/db/pool-size.js).
+const { workerPoolSize, workerConcurrency, checkPoolBudget } = require('../db/pool-size');
+const POOL = workerPoolSize();
+// The env as the operator set it (web's PG_POOL_MAX is budgeted from it).
+const HOST_ENV = Object.freeze({ ...process.env });
+// PR #22 P1-21: the worker's pool is ALWAYS its own (WORKER_PG_POOL_MAX or
+// the computed size); a host PG_POOL_MAX in .env never shrinks it.
+process.env.PG_POOL_MAX = String(POOL.size);
+
 const { Worker } = require('bullmq');
-const { connection, ingestQueue } = require('../queues/index');
+const { connection, ingestQueue, maintenanceQueue } = require('../queues/index');
+const { processMaintenanceJob, scheduleMaintenance } = require('./maintenance.worker');
 const { sweepUnscored } = require('../collectors/sweep');
+const { anyPending } = require('../queues/pending');
 const { createRedisClient } = require('../queues/connection');
 const { startHeartbeat } = require('./heartbeat');
 const { processCollectJob, processRefreshJob } = require('./collect.worker');
@@ -35,27 +50,36 @@ const { processCorrelateJob }= require('./correlate.worker');
 const { scheduleAllSources } = require('./collector.scheduler');
 const { collectWindowMs } = require('../config/source-registry');
 const { closeCycles } = require('../collectors/cycle');
+const { evaluateSourceHealth } = require('../collectors/source-health');
+const { evaluateRetentionOverdue } = require('../collectors/retention-overdue');
 const { runRedditMaintenance, MAINTENANCE_MS } = require('../collectors/reddit/maintenance');
+const { nonReentrant } = require('./guard');
 
 const int = (v, d) => { const n = parseInt(v || '', 10); return Number.isFinite(n) && n > 0 ? n : d; };
-const COLLECT_CONCURRENCY   = int(process.env.COLLECT_CONCURRENCY, 4);
-const INGEST_CONCURRENCY    = int(process.env.INGEST_CONCURRENCY, 20);
-const EMBED_CONCURRENCY     = int(process.env.EMBED_CONCURRENCY, 4);
-const CORRELATE_CONCURRENCY = int(process.env.CORRELATE_CONCURRENCY, 8);
+const CONC = workerConcurrency();
+const COLLECT_CONCURRENCY   = CONC.collect;
+const INGEST_CONCURRENCY    = CONC.ingest;     // P10-12: 8 (was 20) — each job holds up to 3 DB connections
+const EMBED_CONCURRENCY     = CONC.embed;
+const CORRELATE_CONCURRENCY = CONC.correlate;
 const RESCHEDULE_MS         = int(process.env.COLLECT_RESCHEDULE_MS, 10 * 60 * 1000);
 
 // Every line is scrubbed of secrets (src/workers/logging.js).
 const { log, logError } = require('./logging');
 
+// PR #22 P1-21: created with autorun off; they start only after the
+// connection-budget check passed (boot, below).
+const W = { connection, autorun: false };
 const workers = [
-    new Worker('collect.rss',  job => processCollectJob(job), { connection, concurrency: COLLECT_CONCURRENCY }),
-    new Worker('collect.api',  job => processCollectJob(job), { connection, concurrency: COLLECT_CONCURRENCY }),
-    new Worker('collect.bulk', job => processCollectJob(job), { connection, concurrency: 1 }),
+    new Worker('collect.rss',  job => processCollectJob(job), { ...W, concurrency: COLLECT_CONCURRENCY }),
+    new Worker('collect.api',  job => processCollectJob(job), { ...W, concurrency: COLLECT_CONCURRENCY }),
+    new Worker('collect.bulk', job => processCollectJob(job), { ...W, concurrency: 1 }),
     // POST /api/refresh collections (F10-3, F10-8): one at a time.
-    new Worker('collect.refresh', job => processRefreshJob(job), { connection, concurrency: 1 }),
-    new Worker('ingest',    processIngestJob,    { connection, concurrency: INGEST_CONCURRENCY }),
-    new Worker('embed',     processEmbedJob,     { connection, concurrency: EMBED_CONCURRENCY }),
-    new Worker('correlate', processCorrelateJob, { connection, concurrency: CORRELATE_CONCURRENCY }),
+    new Worker('collect.refresh', job => processRefreshJob(job), { ...W, concurrency: 1 }),
+    new Worker('ingest',    processIngestJob,    { ...W, concurrency: INGEST_CONCURRENCY }),
+    new Worker('embed',     processEmbedJob,     { ...W, concurrency: EMBED_CONCURRENCY }),
+    new Worker('correlate', processCorrelateJob, { ...W, concurrency: CORRELATE_CONCURRENCY }),
+    // P10-2: text retention + compaction (repeatable, one at a time).
+    new Worker('maintenance', job => processMaintenanceJob(job, { log, logError }), { ...W, concurrency: 1 }),
 ];
 
 workers.forEach(w => {
@@ -64,6 +88,9 @@ workers.forEach(w => {
         if (w.name.startsWith('collect.') && result && result.slug) {
             log(`[${w.name}] ${result.slug}: ${result.outcome}${result.reason ? ` (${result.reason})` : ''} — `
                 + `fetched ${result.fetched}, kept ${result.kept}, new ${result.newPosts}${result.error ? ` — ${result.error}` : ''}`);
+        } else if (result && result.skipped) {
+            // A no-op with a recorded reason (embed: post purged / text removed).
+            log(`[${w.name}] job ${job.id} completed without work: post ${result.postId} ${result.reason}`);
         } else {
             log(`[${w.name}] job ${job.id} completed`);
         }
@@ -85,11 +112,21 @@ async function schedule() {
     } catch (err) {
         logError(`[scheduler] scheduling failed: ${err.message}`);
     }
+    // PR #22 grumpy #6: (re-)register the maintenance schedulers on every
+    // reschedule (upsertJobScheduler is idempotent), so a Redis blip at boot
+    // does not stop retention until the next restart.
+    try {
+        await scheduleMaintenance(maintenanceQueue);
+    } catch (err) {
+        logError(`[maintenance] scheduling failed (retried in ${Math.round(RESCHEDULE_MS / 1000)}s): ${err.message}`);
+    }
 }
 
 // Close collection cycles past their window: bias checks once over every
-// source's posts in the cycle (src/collectors/cycle.js).
-async function closeDueCycles() {
+// source's posts in the cycle (src/collectors/cycle.js). Non-reentrant
+// (PR #22 principal #6): a tick still running makes the next one skip.
+const closeDueCycles = nonReentrant(closeDueCyclesOnce);
+async function closeDueCyclesOnce() {
     try {
         for (const c of await closeCycles(collectWindowMs())) {
             log(`[cycle] job ${c.jobId} closed: ${c.postsProcessed} posts, `
@@ -98,12 +135,32 @@ async function closeDueCycles() {
     } catch (err) {
         logError(`[cycle] closing failed: ${err.message}`);
     }
+    // P10-8: source_stale / source_failing / source_refused alerts, opened
+    // and resolved as each condition starts and clears.
+    try {
+        const h = await evaluateSourceHealth();
+        for (const a of h.opened) log(`[source-health] ${a.slug}: ${a.type} opened`);
+        for (const a of h.resolved) log(`[source-health] ${a.slug}: ${a.type} resolved`);
+    } catch (err) {
+        logError(`[source-health] evaluation failed: ${err.message}`);
+    }
+    // PR #22 P0-1: a critical retention_overdue alert per source while any
+    // post holds text past its window (+ grace); resolved once it is gone.
+    try {
+        const r = await evaluateRetentionOverdue();
+        for (const slug of r.opened) logError(`[retention] ${slug}: retention_overdue opened (text past its window)`);
+        for (const slug of r.resolved) log(`[retention] ${slug}: retention_overdue resolved`);
+    } catch (err) {
+        logError(`[retention] overdue check failed: ${err.message}`);
+    }
     // G10-4: re-queue posts from the last 24 h that were never scored.
     try {
+        // PR #22 P1-5: posts with a scoring job still pending are skipped.
         const s = await sweepUnscored({
             enqueue: (data, key) => ingestQueue.add('ingest-sweep', data, { jobId: key }),
+            isPending: ids => anyPending(ingestQueue, ids),
         });
-        if (s.found) log(`[sweep] ${s.found} unscored post(s): ${s.queued} re-queued, ${s.failed} failed`);
+        if (s.found) log(`[sweep] ${s.found} unscored post(s): ${s.queued} re-queued, ${s.pending} still queued, ${s.failed} failed`);
     } catch (err) {
         logError(`[sweep] failed: ${err.message}`);
     }
@@ -125,14 +182,53 @@ async function redditMaintenance() {
     }
 }
 
-schedule();
-redditMaintenance();
-const timer = setInterval(schedule, RESCHEDULE_MS);
-const cycleTimer = setInterval(closeDueCycles, 30 * 1000);
-const redditTimer = setInterval(redditMaintenance, MAINTENANCE_MS);
+let timer = null;
+let cycleTimer = null;
+let redditTimer = null;
 
+// PR #22 P1-21: fail fast when every process's pool together would exceed
+// PostgreSQL's max_connections; otherwise start the workers and timers.
+async function boot() {
+    const { dbGet } = require('../db/connection');
+    let budget;
+    try {
+        budget = await checkPoolBudget({ env: HOST_ENV, workerPool: POOL.size, get: sql => dbGet(sql) });
+    } catch (err) {
+        logError(`[pool] could not check the connection budget: ${err.message}`);
+        process.exit(1);
+    }
+    if (!budget.ok) {
+        logError(`[pool] ${budget.message}; the worker does not start`);
+        process.exit(1);
+    }
+    log(`[pool] ${budget.message}`);
+    for (const w of workers) w.run().catch(err => logError(`[${w.name}] worker stopped: ${err.message}`));
+    schedule();
+    redditMaintenance();
+    timer = setInterval(schedule, RESCHEDULE_MS);
+    cycleTimer = setInterval(closeDueCycles, 30 * 1000);
+    redditTimer = setInterval(redditMaintenance, MAINTENANCE_MS);
+}
+boot();
+
+// M1: a bad retention window is reported at boot (the maintenance steps
+// that depend on it fail, and change nothing, until it is fixed).
+try {
+    require('../config/source-registry').retentionDetailDays();
+} catch (err) {
+    logError(`[retention] ${err.message}`);
+}
+
+if (POOL.short) {
+    logError(`[pool] the worker pool (${POOL.size}${POOL.explicit ? ', WORKER_PG_POOL_MAX' : ', capped'}) is below the ${POOL.required} `
+        + 'connections this worker\'s concurrency can use; jobs will wait for connections (src/db/pool-size.js)');
+}
+if (POOL.hostPoolMaxIgnored) {
+    log(`[pool] PG_POOL_MAX=${POOL.hostPoolMaxIgnored} applies to web and the CLI only; the worker uses ${POOL.size} `
+        + '(set WORKER_PG_POOL_MAX to size the worker)');
+}
 log(
-    `Workers started — collect:${COLLECT_CONCURRENCY}/type ingest:${INGEST_CONCURRENCY} `
+    `Workers configured (they start once the connection budget is checked) — pg pool ${POOL.size} (needs ${POOL.required}) — collect:${COLLECT_CONCURRENCY}/type ingest:${INGEST_CONCURRENCY} `
     + `embed:${EMBED_CONCURRENCY} correlate:${CORRELATE_CONCURRENCY}; rescheduling every ${Math.round(RESCHEDULE_MS / 1000)}s`,
 );
 
@@ -142,7 +238,11 @@ log(
 const heartbeatRedis = createRedisClient();
 heartbeatRedis.on('error', () => {});
 let lastBeatError = '';
+// PR #22 security L1: the worker (the only role holding CORRELATION_SALT)
+// publishes its correlation gate status for /api/health.
+const { correlationStatus } = require('../pipeline/correlation-gate');
 const stopHeartbeat = startHeartbeat(heartbeatRedis, {
+    correlation: () => correlationStatus(),
     onError: (err) => {
         if (err.message !== lastBeatError) logError(`[heartbeat] ${err.message}`);
         lastBeatError = err.message;
@@ -155,9 +255,9 @@ const stopHeartbeat = startHeartbeat(heartbeatRedis, {
 async function shutdown() {
     log('Shutting down workers...');
     stopHeartbeat();
-    clearInterval(timer);
-    clearInterval(cycleTimer);
-    clearInterval(redditTimer);
+    if (timer) clearInterval(timer);
+    if (cycleTimer) clearInterval(cycleTimer);
+    if (redditTimer) clearInterval(redditTimer);
     await Promise.all(workers.map(w => w.close()));
     await heartbeatRedis.quit().catch(() => {});
     process.exit(0);

@@ -2,10 +2,10 @@
 // The Reddit background jobs, run by the worker every MAINTENANCE_MS
 // (src/workers/start.js):
 //
-//   1. retention (ALWAYS, whatever the gate): blank the text of Reddit posts
-//      collected more than 48 h ago (src/collectors/retention.js). It needs
-//      no API access, so it runs even with the source killed or its
-//      credentials removed.
+//   1. (moved, P10-2) the 48 h text retention now runs for every source in
+//      the worker's repeatable `maintenance` job (src/collectors/retention.js,
+//      src/workers/maintenance.worker.js) — ALWAYS, whatever the gate: it
+//      needs no API access.
 //   2. deletion re-check, every retention.recheckHours (6 h)
 //      (./recheck.js), and
 //   3. subreddit discovery, daily (./discovery.js + selection.saveSnapshot)
@@ -29,7 +29,6 @@ const state = require('../state');
 const { refusalGate } = require('../refusal');
 const { classifyError } = require('../errors');
 const { scrub } = require('../redact');
-const { blankExpired } = require('../retention');
 const { RedditApi } = require('./api');
 const { DbBudget, runAllowance } = require('./budget');
 const { recheckDeletions } = require('./recheck');
@@ -88,7 +87,9 @@ async function apiGateReason(env) {
  * @returns {Promise<object>} what ran
  */
 async function runRedditMaintenance({ env = process.env, transport, log = () => {}, api = null } = {}) {
-    const out = { blanked: await blankExpired({ log }) };
+    // The 48 h text retention runs in the worker's repeatable `maintenance`
+    // job for every source (src/collectors/retention.js, P10-2).
+    const out = {};
     const closed = await apiGateReason(env);
     if (closed) return { ...out, api: `skipped: ${closed}` };
     const src = getSource(SLUG);

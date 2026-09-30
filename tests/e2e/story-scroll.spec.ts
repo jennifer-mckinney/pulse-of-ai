@@ -82,13 +82,16 @@ test('story: 11 beats — cards match resolver, rail advances, CH05 legend flips
     await scrollToBeat(page, 1);
     await expect(page.locator('#legend')).toBeVisible();
     await expect(page.locator('#legend .legend-grad')).toHaveCount(1);
+    // D3: the publisher-location layer has its own key in both flavors.
+    await expect(page.locator('#legend .legend-pub')).toHaveText('publisher location');
 
     await scrollToBeat(page, 5);
     await expect(page.locator('#legend')).toBeVisible();
     await expect(page.locator('#legend .legend-grad')).toHaveCount(0);
     // One swatch per CANONICAL category, always (8 — quiet categories never
     // vanish), labeled with the display name lowercased (prototype casing).
-    const swatches = page.locator('#legend > span');
+    await expect(page.locator('#legend .legend-pub')).toHaveCount(1);
+    const swatches = page.locator('#legend > span:not(.legend-pub)');
     expect(await swatches.count()).toBe(8);
     await expect(swatches.first()).toContainText('●');
     const swatchTexts = (await swatches.allInnerTexts())

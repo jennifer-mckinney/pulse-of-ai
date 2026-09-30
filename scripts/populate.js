@@ -326,7 +326,8 @@ async function closeQueues() {
 /** Enqueue one embed job per post — the worker container does the embedding. */
 async function enqueueEmbeddings(postIds) {
     const { embedQueue } = getQueues();
-    await embedQueue.addBulk(postIds.map(rawPostId => ({ name: 'embed-post', data: { rawPostId } })));
+    // PR #22 P1-5: one embed job per post (deterministic id).
+    await embedQueue.addBulk(require('../src/queues/pending').embedJobs(postIds));
 }
 
 /** Poll post_embeddings until every post is embedded or the timeout passes. */
@@ -358,8 +359,8 @@ async function runDemoBatch({ size, embed, seed, enqueue = enqueueEmbeddings }) 
     const stamp = `${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
 
     const job = await db.dbGet(
-        `INSERT INTO processing_jobs (triggered_by, status, sources_queried)
-         VALUES ('demo', 'running', $1)
+        `INSERT INTO processing_jobs (triggered_by, status, sources_queried, last_progress_at)
+         VALUES ('demo', 'running', $1, NOW())
          RETURNING id`,
         [sources.length],
     );
@@ -417,7 +418,7 @@ async function runDemoBatch({ size, embed, seed, enqueue = enqueueEmbeddings }) 
             `UPDATE processing_jobs
              SET status = 'completed', posts_collected = $1, posts_processed = $1,
                  completed_at = NOW()
-             WHERE id = $2`,
+             WHERE id = $2 AND status = 'running'`,
             [postIds.length, job.id],
         );
 
@@ -430,7 +431,7 @@ async function runDemoBatch({ size, embed, seed, enqueue = enqueueEmbeddings }) 
     } catch (err) {
         await db.dbRun(
             `UPDATE processing_jobs SET status = 'failed', error_details = $1, completed_at = NOW()
-             WHERE id = $2`,
+             WHERE id = $2 AND status = 'running'`,
             [err.message, job.id],
         ).catch(() => {});
         throw err;
@@ -663,7 +664,7 @@ async function main(argv) {
     try {
         opts = parseArgs(argv);
     } catch (err) {
-        process.stderr.write(`populate: ${err.message}\n`);
+        process.stderr.write(require('../src/collectors/redact').scrub(`populate: ${err.message}`) + '\n');
         return 2;
     }
     if (opts.help) {
@@ -678,7 +679,7 @@ async function main(argv) {
 if (require.main === module) {
     main(process.argv.slice(2))
         .catch((err) => {
-            process.stderr.write(`populate: FAILED — ${err.message}\n`);
+            process.stderr.write(require('../src/collectors/redact').scrub(`populate: FAILED — ${err.message}`) + '\n');
             return 1;
         })
         .then(async (code) => {

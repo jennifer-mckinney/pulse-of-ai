@@ -14,9 +14,12 @@
 //      with an explicit 403 and never reaches the read-only surface's cors().
 //   2. Shared secret (F10-8): when REFRESH_TOKEN is set, the request must
 //      carry it in X-Refresh-Token. When the site is bound beyond loopback
-//      (PULSE_BIND_ADDR or HOST not a loopback address) a REFRESH_TOKEN is
+//      (PULSE_BIND_ADDR or HOST not a loopback address, or the actual bound
+//      address a wildcard) or the request came through a reverse proxy
+//      (Forwarded / X-Forwarded-* / X-Real-IP), a REFRESH_TOKEN is
 //      REQUIRED — without one, refresh is refused (403), because the
-//      same-origin headers are unforgeable only from browsers.
+//      same-origin headers are unforgeable only from browsers. The compose
+//      published address can only make this stricter (PR #22 security M4).
 //   3. In flight (F10-8): while a refresh job is running, 409 with its
 //      job_id. A refresh row still 'running' after REFRESH_STALE_MINUTES
 //      (worker crash) is marked failed first. Migration 019's partial unique
@@ -27,12 +30,13 @@
 
 'use strict';
 
+const { logRouteError } = require('../middleware/log-error');
+
 const crypto = require('crypto');
 const { Router } = require('express');
 const { dbGet, dbRun }  = require('../db/connection');
 const { SOURCES } = require('../config/source-registry');
 const { requireSameOrigin } = require('../middleware/same-origin');
-const { scrub } = require('../collectors/redact');
 
 const router = Router();
 
@@ -68,13 +72,57 @@ function _setEnqueue(fn) {
 // ─── Shared secret ───────────────────────────────────────────────────────────
 const LOOPBACK_RE = /^(127(?:\.\d{1,3}){3}|::1|\[::1\]|localhost)$/i;
 
-/** Whether the site is reachable beyond this machine. */
-function boundBeyondLoopback(env = process.env) {
+const LOOPBACK_BOUND_RE = /^(127(?:\.\d{1,3}){3}|::1|::ffff:127(?:\.\d{1,3}){3})$/i;
+
+const WILDCARD_RE = /^(0\.0\.0\.0|::|\[::\]|::ffff:0\.0\.0\.0)$/i;
+
+/**
+ * PR #22 security M4: whether this process really is the compose web
+ * container — the compose-only marker PULSE_IN_CONTAINER=1 (docker-compose.yml)
+ * AND the runtime's /.dockerenv. An env var alone (a host `.env` copied from
+ * a container env) can never make a host process count as a container.
+ */
+function runningInContainer(env = process.env, exists = require('fs').existsSync) {
+    return String(env.PULSE_IN_CONTAINER || '').trim() === '1' && exists('/.dockerenv');
+}
+
+/**
+ * Whether the site is reachable beyond this machine. Every signal can only
+ * make the answer STRICTER (PR #22 security M4):
+ *   1. PULSE_CONTAINER_PUBLISHED_ADDR (compose: the address Docker publishes
+ *      the port on) naming a non-loopback address.
+ *   2. HOST or PULSE_BIND_ADDR naming a non-loopback address.
+ *   3. The ACTUAL address the server bound (app.locals.boundAddress, set by
+ *      src/server.js start()): 0.0.0.0 / :: or any non-loopback address (the
+ *      dev bind gap: bare `npm run dev` used to listen everywhere while
+ *      being treated as loopback).
+ * The one exception: inside the compose web container (runningInContainer)
+ * the process listens on a WILDCARD address behind Docker's port publish,
+ * so a wildcard in 2 or 3 is judged by the loopback published address. A
+ * loopback published address never excuses a wildcard bind anywhere else.
+ * @param {object} [env]
+ * @param {string|null} [boundAddress]
+ * @param {{ inContainer?: boolean }} [o]
+ */
+function boundBeyondLoopback(env = process.env, boundAddress = null, { inContainer = runningInContainer(env) } = {}) {
+    const published = typeof env.PULSE_CONTAINER_PUBLISHED_ADDR === 'string' ? env.PULSE_CONTAINER_PUBLISHED_ADDR.trim() : '';
+    if (published && !LOOPBACK_RE.test(published)) return true;
+    const behindLoopbackPublish = inContainer && !!published;
+    const beyond = (v, loopbackRe) => !loopbackRe.test(v) && !(behindLoopbackPublish && WILDCARD_RE.test(v));
     for (const k of ['PULSE_BIND_ADDR', 'HOST']) {
         const v = typeof env[k] === 'string' ? env[k].trim() : '';
-        if (v && !LOOPBACK_RE.test(v)) return true;
+        if (v && beyond(v, LOOPBACK_RE)) return true;
     }
+    if (typeof boundAddress === 'string' && boundAddress) return beyond(boundAddress, LOOPBACK_BOUND_RE);
     return false;
+}
+
+// A request that came through a reverse proxy: the proxy makes the site
+// reachable beyond this machine whatever this process is bound to, so such
+// a request needs REFRESH_TOKEN (PR #22 security M4).
+const PROXY_HEADERS = Object.freeze(['forwarded', 'x-forwarded-for', 'x-forwarded-host', 'x-real-ip']);
+function viaProxy(req) {
+    return !!(req && typeof req.get === 'function' && PROXY_HEADERS.some(h => req.get(h)));
 }
 
 function sameSecret(a, b) {
@@ -86,8 +134,12 @@ function sameSecret(a, b) {
 /** @returns {null | { status: number, error: string }} */
 function refreshTokenCheck(req, env = process.env) {
     const token = typeof env.REFRESH_TOKEN === 'string' ? env.REFRESH_TOKEN.trim() : '';
+    const bound = req && req.app && req.app.locals ? req.app.locals.boundAddress : null;
     if (!token) {
-        return boundBeyondLoopback(env)
+        if (viaProxy(req)) {
+            return { status: 403, error: 'Refresh is disabled: the request came through a proxy and no REFRESH_TOKEN is set' };
+        }
+        return boundBeyondLoopback(env, bound)
             ? { status: 403, error: 'Refresh is disabled: the site is bound beyond loopback and no REFRESH_TOKEN is set' }
             : null;
     }
@@ -112,9 +164,9 @@ router.post('/refresh', requireSameOrigin, async (req, res) => {
         await dbRun(
             `UPDATE processing_jobs
              SET status = 'failed', completed_at = NOW(),
-                 error_details = 'stale: the refresh job did not complete within ' || $1 || ' minutes'
+                 error_details = 'stale: the refresh job made no progress for ' || $1 || ' minutes'
              WHERE triggered_by = 'api' AND status = 'running'
-               AND started_at < NOW() - make_interval(mins => $1::int)`,
+               AND COALESCE(last_progress_at, started_at) < NOW() - make_interval(mins => $1::int)`,
             [stalenessMinutes()],
         );
         const inflight = await dbGet(
@@ -158,7 +210,8 @@ router.post('/refresh', requireSameOrigin, async (req, res) => {
         try {
             await enqueue(job.id);
         } catch (err) {
-            console.error(scrub(`[refresh] enqueue failed for job ${job.id}: ${err.message}`));
+            // Scrubbed and one line (PR #22 security L4) through the route logger.
+            logRouteError('refresh', `enqueue failed for job ${job.id}: ${err && err.message}`);
             await dbRun(
                 `UPDATE processing_jobs SET status = 'failed', error_details = 'collection queue unavailable', completed_at = NOW() WHERE id = $1`,
                 [job.id],
@@ -174,7 +227,7 @@ router.post('/refresh', requireSameOrigin, async (req, res) => {
         });
     /* istanbul ignore start -- Database failure; requires error injection testing infrastructure */
     } catch (err) {
-        console.error(scrub(`[refresh] Error: ${err.message}`));
+        logRouteError('refresh', err);
         return res.status(500).json({ error: 'Internal server error' });
     }
     /* istanbul ignore end */
@@ -185,3 +238,5 @@ module.exports._resetRateLimiter = _resetRateLimiter;
 module.exports._setEnqueue = _setEnqueue;
 module.exports.boundBeyondLoopback = boundBeyondLoopback;
 module.exports.refreshTokenCheck = refreshTokenCheck;
+module.exports.runningInContainer = runningInContainer;
+module.exports.viaProxy = viaProxy;

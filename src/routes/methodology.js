@@ -10,6 +10,8 @@
 
 'use strict';
 
+const { logRouteError } = require('../middleware/log-error');
+
 const { Router } = require('express');
 const { dbAll }  = require('../db/connection');
 
@@ -17,24 +19,30 @@ const router = Router();
 
 router.get('/methodology', async (req, res) => {
     try {
+        // P10-16: errata (methodology_errata, migration 030) are served with
+        // the version they correct; the corrected row itself is never edited.
         const rows = await dbAll(
             `SELECT
-                component,
-                version,
-                model_name,
-                config,
-                justification,
-                effective_from,
-                deprecated_at
-             FROM methodology_versions
-             WHERE deprecated_at IS NULL
-             ORDER BY component ASC, effective_from DESC`,
+                mv.component,
+                mv.version,
+                mv.model_name,
+                mv.config,
+                mv.justification,
+                mv.effective_from,
+                mv.deprecated_at,
+                COALESCE((SELECT json_agg(json_build_object(
+                              'erratum', e.erratum, 'corrected_by', e.corrected_by, 'recorded_at', e.recorded_at)
+                              ORDER BY e.recorded_at)
+                          FROM methodology_errata e WHERE e.methodology_version_id = mv.id), '[]'::json) AS errata
+             FROM methodology_versions mv
+             WHERE mv.deprecated_at IS NULL
+             ORDER BY mv.component ASC, mv.effective_from DESC`,
         );
 
         return res.json(rows);
     /* istanbul ignore start -- Database failure; requires error injection testing infrastructure */
     } catch (err) {
-        console.error('[methodology] Error:', err.message);
+        logRouteError('methodology', err);
         return res.status(500).json({ error: 'Internal server error' });
     }
     /* istanbul ignore end */

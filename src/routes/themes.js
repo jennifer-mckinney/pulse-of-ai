@@ -23,6 +23,8 @@
 
 'use strict';
 
+const { logRouteError } = require('../middleware/log-error');
+
 const { Router } = require('express');
 const { dbAll }  = require('../db/connection');
 const { responseCache } = require('../middleware/response-cache');
@@ -139,7 +141,7 @@ router.get('/themes', responseCache(10000), async (req, res) => {
         return res.json(themes);
     /* istanbul ignore start -- Database failure; requires error injection testing infrastructure */
     } catch (err) {
-        console.error('[themes] Error:', err.message);
+        logRouteError('themes', err);
         return res.status(500).json({ error: 'Internal server error' });
     }
     /* istanbul ignore end */

@@ -1,0 +1,12 @@
+-- Migration 040: a progress heartbeat for one-shot collection jobs (PR #22
+-- principal P1-4, grumpy #4).
+--
+-- The stale-job sweeper (src/collectors/stale-jobs.js) and POST
+-- /api/refresh used the job's AGE (started_at) to decide that its process
+-- died, so a long but live run (npm run collect over every source, a
+-- standup population, a large refresh) was closed as 'failed' while it kept
+-- working. The runner now touches last_progress_at before and after every
+-- source; the sweeper closes a job only when it has made NO progress for the
+-- staleness bound. Rows from before this migration have NULL and fall back
+-- to started_at. Additive and idempotent.
+ALTER TABLE processing_jobs ADD COLUMN IF NOT EXISTS last_progress_at TIMESTAMPTZ;
