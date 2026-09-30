@@ -17,6 +17,7 @@
 #         none; the base secrets (DB, Redis, AUDIT_HASH_KEY,
 #         CORRELATION_SALT) go to every role
 #   F9-8  the unauthenticated embeddings API publishes no host port
+#   Q     the queue store is valkey/valkey 8.x (same digest in compose and CI)
 #   F9-6  every pulled image (compose services, Dockerfile bases, CI service
 #         containers) is pinned by @sha256 digest
 #   P9-7  every service rotates json-file logs; the worker has a healthcheck
@@ -155,6 +156,16 @@ check "Dockerfile base images are pinned by @sha256 digest" "$unpinned_df"
 unpinned_ci=$(grep -nE '^[[:space:]]+image:' "$ROOT/.github/workflows/ci.yml" \
     | grep -vE '@sha256:[0-9a-f]{64}' | sed 's/^/ci.yml:/' || true)
 check "CI service images are pinned by @sha256 digest" "$unpinned_ci"
+# The queue store is Valkey (BSD-3-Clause), not the source-available Redis
+# image, and CI tests against the exact image compose runs.
+queue_img=$(jq -r '.services.redis.image // ""' <<< "$cfg")
+ci_queue_img=$(awk '/^      redis:/ { f = 1; next } f && /image:/ { print $2; exit }' "$ROOT/.github/workflows/ci.yml")
+check "the queue store is the pinned valkey/valkey 8.x image, in compose and CI alike" "$(
+    [[ "$queue_img" =~ ^valkey/valkey:8\.[0-9.]+-alpine@sha256:[0-9a-f]{64}$ ]] \
+        || echo "compose redis service image is '$queue_img', not valkey/valkey:8.x-alpine@sha256"
+    [[ "$ci_queue_img" == "$queue_img" ]] \
+        || echo "CI redis service image '$ci_queue_img' differs from compose '$queue_img'"
+    grep -nE 'image:[[:space:]]*(docker\.io/)?(library/)?redis[:@]' "$ROOT/docker-compose.yml" "$ROOT/.github/workflows/ci.yml" || true)"
 
 # F9-6: the embeddings image installs a hash-locked requirement set.
 req="$ROOT/python/requirements-service.txt"

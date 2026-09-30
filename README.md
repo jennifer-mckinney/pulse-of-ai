@@ -97,7 +97,7 @@ For the complete technical specification see [`docs/TECHNICAL_SPEC.md`](docs/TEC
 |---|---|
 | Runtime | Node.js (Express) |
 | Database | PostgreSQL 16 + pgvector |
-| Job queue | BullMQ + Redis 7 |
+| Job queue | BullMQ + Valkey 8 (Redis protocol, BSD-3-Clause) |
 | NLP | `natural`, `sentiment` (AFINN) |
 | Embeddings | Python 3 / FastAPI / sentence-transformers |
 | Frontend | Vanilla JS, Mapbox GL JS |
@@ -160,7 +160,9 @@ Re-running is safe. The images come from the build cache, running containers are
 | `migrate` | none | One-shot job: migrations and seed |
 | `postgres` | `5434` in `.env` (`POSTGRES_PORT`) | PostgreSQL 16 + pgvector (`postgres_data` volume) |
 | `postgres_test` | `5433` (`POSTGRES_TEST_PORT`) | Test database (not used by the running app) |
-| `redis` | `6379` (`REDIS_PORT`) | BullMQ queue backend (`redis_data` volume). Password required (`REDIS_PASSWORD`) |
+| `redis` | `6379` (`REDIS_PORT`) | Valkey 8, the BullMQ queue backend (`valkey_data` volume). It speaks the Redis protocol, so the service name and the `REDIS_*` variables keep that name. Password required (`REDIS_PASSWORD`) |
+
+**Upgrading a stack that ran Redis 7.** The queue store is now Valkey 8 on a new `valkey_data` volume. Redis 7.4 writes RDB format 12, which Valkey 8 will not load, so the old `redis_data` volume is left unused rather than reused. Nothing needs migrating because the queue data is transient: the worker re-registers every schedule when it starts. Stop the stack cleanly, bring it back up, and once it is healthy remove the old volume with `docker volume rm <project>_redis_data`.
 
 Every published port (web and the databases and redis) binds to `127.0.0.1` by default (`PULSE_BIND_ADDR`). Setting `PULSE_BIND_ADDR=0.0.0.0` exposes all of them to your network, databases included. To run a second stack beside this one, give it its own project name and ports:
 
@@ -263,7 +265,7 @@ cp .env.example .env
 ### 3 — Start infrastructure
 
 ```bash
-npm run docker:up   # PostgreSQL (5434) + test DB (5433) + Redis (6379)
+npm run docker:up   # PostgreSQL (5434) + test DB (5433) + Valkey (6379)
 ```
 
 ### 4 — Migrate and seed
@@ -315,10 +317,10 @@ Copy `.env.example` to `.env` and fill in the values below.
 | `CORRELATION_SALT` | Yes | 64-hex-char salt for verb-noun pseudonymous IDs — generate once, never change |
 | `CORRELATION_MIN_CONFIDENCE` | No | Min confidence to assign a cross-platform ID (default `0.85`) |
 | `RETENTION_DETAIL_DAYS` | No | Days before compaction (default `90`) |
-| `REDIS_PORT` | No | Redis host port (default `6379`) |
+| `REDIS_PORT` | No | Valkey host port (default `6379`; the `REDIS_*` names refer to the Redis protocol Valkey speaks) |
 | `WEB_PORT` | No | Standup: host port of the web service (default `3000`) |
 | `PULSE_BIND_ADDR` | No | Interface every published port binds to: web, postgres, postgres_test, redis (default `127.0.0.1`) |
-| `REDIS_PASSWORD` | Yes (Docker) | Redis `requirepass`; BullMQ, the worker and `/api/health` authenticate with it. Standup generates it |
+| `REDIS_PASSWORD` | Yes (Docker) | Valkey `requirepass`; BullMQ, the worker and `/api/health` authenticate with it. Standup generates it |
 | `DEMO_FEED_INTERVAL_MS` | No | Standup demo feed: ms between fictional batches (default `150000`) |
 | `DEMO_FEED_BATCH` | No | Standup demo feed: posts per batch (default: two per category, `16`) |
 
@@ -460,7 +462,7 @@ pulse-of-ai/
 │   ├── unit/                   Unit tests (no DB)
 │   └── integration/            API integration tests
 ├── .env.example                Environment variable template
-├── docker-compose.yml          PostgreSQL + test DB + Redis; profile "full" adds web, worker, embeddings, migrate
+├── docker-compose.yml          PostgreSQL + test DB + Valkey; profile "full" adds web, worker, embeddings, migrate
 ├── Dockerfile                  Node 22 app image (web / worker / migrate / populate)
 ├── jest.config.js
 └── package.json
