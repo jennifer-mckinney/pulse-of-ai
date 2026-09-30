@@ -46,12 +46,13 @@ PR #22 (PR #10 Part 2, `973cad8`) merged after the v1.2.0 draft. Every IN FLIGHT
 - **§21**: the licence scope names `master` @ `973cad8`.
 
 ### v1.2.1 changelog (2026-09-30): reconciliation with PRs #24–#34 and documentation audit round 3
-PRs #24–#34 merged after v1.2.0 (`master` @ `7291490`); PRs #13–#21, #23, #27, #28 and #31 are dependency bumps with no effect on this text. A patch version: the sections below are brought back in line with the code, and no design intent changes. Section by section:
+PRs #24–#28 and #31–#34 merged after v1.2.0 (`master` @ `7291490`; #29 and #30 were closed without merging); PRs #13–#21, #23, #27, #28 and #31 are dependency bumps with no effect on this text. A patch version: the sections below are brought back in line with the code, and no design intent changes. Section by section:
 - **§3, §6, §7, §9, §10**: bias@1.6.0 (migration 061: the platform-parity "insufficient sample" row states its value; errata for bias 1.4.0 and 1.5.0); a refresh, standup or manual job that ends with no scoring outstanding is finalized by the runner (posts counted from `decision_audit_log`, bias checks when any); `scripts/seed-demo.js` removed.
 - **§5, §6, §12**: sentence-transformers 6.1.0 as `embedding@1.1.0` (migration 065); 49 migrations (001–065).
 - **§6, §7, §17**: refusal probation (migration 062: `probation_until`, `access_denied_headers`, `last_refused_at`, `source_runs.response_headers`; `/api/sources` serves `probation_until`).
-- **§11, §13, §21**: the master SHA 7291490; the status line names PRs #24–#34.
+- **Header, §11, §13, §21**: the master SHA 7291490 (header, §11, §21); the status line names PR #34; §13 lists the PRs merged after #22.
 - **Audit round 3 corrections (no code change behind them):** §2 text retention also blanks on the Reddit deletion re-check; §5 compose profiles per service and the model's disk size; §6 the migration index, the schema sketch's foreign keys, the provenance id format, the migration gaps (063–064), DDL comments (`decision_audit_log`, `alert_events`, `data_retention_log`, `source_type`, `source_runs.job_id`) and the index note; §7 the health queue list, the proxy headers of the refresh token rule, the bias layer status `n-a`, the served error fields and `retired_note` of `/api/sources`; §8 the SSRF refusal list, the safe-id rule and the `verify-provenance` exit codes; §9 the window-run alert and lineage columns; §12 the embedding code comments; §13 the PRs after #22; §17 the cadence band (120–180 s) and the Stack Overflow / GitLab cadences; §19 the retention tiers, the Reddit re-check's refusal condition and the rollup coverage example; §20 the pseudonym history and the HMAC signal hash.
+- **Audit round 4 corrections (2026-09-30; no code change behind them):** this changelog's PR list (#29 and #30 were closed unmerged); §1 provenance fingerprints need a key and demo posts carry none; §3 the per-source `online` rule; §5 the watchdog shares the app image, and the MongoDB, `all-mpnet-base-v2`, IVFFlat and Infinity rows; §6 `processing_jobs` row creation, `content_hash` (stored and indexed, joined by nothing) and the `alert_resolution_approvals` foreign key; §8 `.env.example` holds defaults and placeholders, `content_hash`, and the error-response rule (environment variable names may be served where they tell the operator what to set; secrets never are; owner ruling, no code change); §9 source health runs on every cycle-timer tick; §12 and §15 every external benchmark figure is now cited to its primary source (sbert.net pretrained-models table, the Tembo pgvector benchmark, the e5-large model card, the `sentiment` README) or corrected, and the unsourced ones (CPU throughput, STS-B 84-85%, 3-4%, Infinity's 30-40% and 2-4x, e5-large 8GB+ RAM, RoBERTa 6GB RAM, "comparable to VADER") are withdrawn; §15 MongoDB has multi-document ACID transactions (since 4.0) and a vector search feature; §16 Discourse forums are collected (four routes); §17 refusal headers stay on the state row only while the refused state lasts; §20 the pseudonym upsert was removed in PR #22.
 
 **v1.1.0 Amendments (historical record; v1.2.0 supersedes the source count and categories, the pseudonym format and the retention schedule where the sections below say so):**
 - Scope: Global (not US-only)
@@ -105,7 +106,7 @@ Every inferred decision — sentiment score, relevance rating, topic classificat
 - Immutable raw data — collected posts are not edited, with one documented exception: text retention, which replaces a post's text with a removal notice when its source's window ends (Reddit 48 h under ADR 0001 ruling 9, YouTube and TikTok 30 days, every other source the detail window), when the 6-hourly Reddit re-check finds a post removed upstream, and at compaction (§19)
 - Auditable inferences — every score is traceable to its methodology version
 - Versioned methodology — algorithms change over time; we track which version produced which decision
-- Privacy-first collection — identity fields are never stored and identities in text are redacted (§8); every post carries a keyed provenance fingerprint instead of an identity
+- Privacy-first collection — identity fields are never stored and identities in text are redacted (§8); every post collected while `PROVENANCE_KEY` or `AUDIT_HASH_KEY` is set (standup generates it) carries a keyed provenance fingerprint instead of an identity; without a key, and for fictional demo posts, none is recorded and the receipt says why
 - Cross-platform correlation — adjective-animal pseudonymous IDs without re-identification (§20). Not implemented: the signal design is pending a DPIA, `correlateUser()` throws and the correlate worker refuses every job
 - Layered retention — detail window (`RETENTION_DETAIL_DAYS`, default 90 days), then monthly rollups; the worker's maintenance queue removes text every 5 minutes and compacts daily (§19)
 - TDD throughout — tests are written before implementation
@@ -183,7 +184,7 @@ Every implemented threshold is stored in the `methodology_versions` table with a
 | Bias alerts | a violating check writes `bias_assessments.is_violation = true` (or a `bias_window_assessments` row for the rolling window) and an `alert_events` row whose `alert_type` is the check name; `bias_sample` reports how often each check stayed below its minimum sample |
 | Source refusals and staleness | one critical `source_refused` alert per refusal episode (§17); `source_stale` and `source_failing` alerts opened and resolved by the worker as each condition starts and clears |
 | Model health | `last_job` (latest `processing_jobs` row), `redis.reachable`, `worker.alive` and per-queue counts from the worker heartbeat, `maintenance` (last run and success per task), `watchdog` (is it reporting, e-mail status) |
-| Data freshness | `data_mode` and `data_window` over the trailing hour; per-source `online` = collecting and a success within the last hour; `retention_overdue` when text is held past its window |
+| Data freshness | `data_mode` and `data_window` over the trailing hour; per-source `online` = collecting and a success within the last hour that is not older than the source's last error; `retention_overdue` when text is held past its window |
 
 ---
 
@@ -290,7 +291,7 @@ The diagram set in `docs/diagrams/` (entry point `docs/diagrams/architecture.*`)
 
 | Layer | Technology | Version | Reason |
 |---|---|---|---|
-| Runtime | Node.js | 22 (`node:22.23.3-bookworm-slim`, pinned by digest in `Dockerfile`) | LTS; one image for web, worker, migrate and populate |
+| Runtime | Node.js | 22 (`node:22.23.3-bookworm-slim`, pinned by digest in `Dockerfile`) | LTS; one image for web, worker, migrate, watchdog and populate |
 | Web framework | Express.js | 4.x | Minimal, existing |
 | Primary DB | PostgreSQL | 16 (`pgvector/pgvector:pg16`, pinned by digest) | JSONB, partial and expression indexes, extensions |
 | Vector search | pgvector | bundled in the image | Integrated with PostgreSQL, no separate service |
@@ -309,14 +310,14 @@ The diagram set in `docs/diagrams/` (entry point `docs/diagrams/architecture.*`)
 | Alternative | Considered For | Why Rejected |
 |---|---|---|
 | SQLite | Primary DB | No pgvector support; no row-level security; single-writer bottleneck; not production-grade |
-| MongoDB | Primary DB | Schema flexibility not needed; poor JOIN performance for audit queries; no native vector support |
+| MongoDB | Primary DB | Schema flexibility not needed; poor JOIN performance for audit queries; vector search is a separate MongoDB Vector Search feature, not part of one relational store with the audit tables (§15) |
 | Chroma / Weaviate | Vector store | Separate service adds ops complexity; pgvector integrates vector + relational in one transaction |
 | Redis | Caching / rate limit | Rejected for the MVP in v1.1 (an in-memory counter was enough for the 1 req/min refresh limit). **Adopted since, then replaced:** a Redis-protocol store backs the BullMQ queues, the per-source job schedulers and the worker heartbeat; PR #22 moved it from Redis 7 to Valkey 8 (BSD-3-Clause). The refresh debounce is still in-process |
 | React / Vue | Frontend framework | Original design decision: Vanilla JS avoids build tooling, keeps deployment simple |
 | OpenAI Embeddings API | Embeddings | API cost at scale; data leaves your infrastructure (GDPR risk); offline not possible |
-| larger sentence-transformers | Embeddings | `all-mpnet-base-v2` is 5x slower for 3-4% gain — not worth it for trend monitoring |
-| IVFFlat | pgvector index | HNSW is 15.5x faster at query time (40.5 vs 2.6 QPS at 0.998 recall); higher build cost is acceptable |
-| Flask/FastAPI | Embedding service | v1.1 preferred Infinity for dynamic batching (30-40% better throughput) and a ctranslate2 backend. **Shipped instead:** FastAPI + sentence-transformers, which is what `master` runs; Infinity stays PLANNED as a drop-in production option |
+| larger sentence-transformers | Embeddings | `all-mpnet-base-v2` encodes about 5x slower (2,800 vs 14,200 sentences/s on a V100 GPU) for 1.51 points on sentence-embedding tasks (69.57 vs 68.06) and 7.48 on semantic search (57.02 vs 49.54) ([sbert.net pretrained models](https://www.sbert.net/docs/sentence_transformer/pretrained_models.html)) — not worth it for trend monitoring |
+| IVFFlat | pgvector index | In a published pgvector benchmark HNSW was about 15.6x faster at query time (40.5 vs 2.6 QPS at 0.998 recall, about 1M vectors of 50 dimensions; [Tembo, 2023-11-14](https://web.archive.org/web/20241206165814/https://tembo.io/blog/vector-indexes-in-pgvector)); higher build cost is acceptable |
+| Flask/FastAPI | Embedding service | v1.1 preferred Infinity for dynamic batching and a ctranslate2 backend. **Shipped instead:** FastAPI + sentence-transformers, which is what `master` runs; Infinity stays PLANNED as a drop-in production option |
 
 ---
 
@@ -330,7 +331,7 @@ The diagram set in `docs/diagrams/` (entry point `docs/diagrams/architecture.*`)
 |---|---|---|---|
 | 1 | `data_sources` | 001 (+013, +020) | One row per registry source (52) plus demo feeds and retired pre-registry rows |
 | 2 | `raw_posts` | 001 (+006, +017, +022, +025, +031, +042) | Collected posts: redacted text (blanked at the end of its window), allowlisted payload, content hash, provenance fingerprint, ingest and admission versions |
-| 3 | `processing_jobs` | 001 (+019, +021, +034, +040) | One row per job that processed posts (refresh, cycle, standup, manual, demo); never removed (G4) |
+| 3 | `processing_jobs` | 001 (+019, +021, +034, +040) | One row per accepted refresh request (created up front, even when it stores nothing), per demo batch, and per collection cycle, standup or manual job once it stores its first new post; never removed (G4) |
 | 4 | `methodology_versions` | 001 | Every algorithm version, registered before it runs |
 | 5 | `decision_audit_log` | 002 | Immutable per-decision audit record |
 | 6 | `sentiment_results` | 002 | Derived sentiment per post |
@@ -379,7 +380,7 @@ processing_jobs ─┬─ decision_audit_log.job_id
 bias_window_runs ── bias_window_assessments ── methodology_versions
 alert_events ── alert_resolutions ── alert_resolution_approvals; alert_events ── watchdog_notifications
 data_sources ── source_gate_events · source_run_daily · source_terms_snapshots
-methodology_versions ── methodology_errata; raw_posts.admission_mv_id · raw_posts.ingest_mv_id · alert_resolutions.methodology_version_id
+methodology_versions ── methodology_errata; raw_posts.admission_mv_id · raw_posts.ingest_mv_id · alert_resolutions.methodology_version_id · alert_resolution_approvals.methodology_version_id
 data_retention_log · compaction_log · monthly_topic_rollups
 maintenance_state · watchdog_state
 correlation_gate_events · reddit_subreddit_rankings · reddit_api_budget · reddit_maintenance
@@ -440,7 +441,7 @@ CREATE TABLE raw_posts (                                     -- 001
                                               -- ('<route>:<sha256>' when no provenance key is set; §8)
     content         TEXT NOT NULL,            -- redacted text; replaced by a removal notice at the end of its window (§19)
     raw_payload     JSONB,                    -- allowlisted content fields only
-    content_hash    TEXT NOT NULL,            -- SHA-256(normalized content): join key, not the dedup key
+    content_hash    TEXT NOT NULL,            -- SHA-256(normalized content), indexed (idx_raw_posts_hash); not the dedup key, and no query reads it
     location        TEXT DEFAULT '',          -- city-level only
     language        TEXT DEFAULT 'en',
     collected_at    TIMESTAMPTZ DEFAULT NOW(),
@@ -1132,7 +1133,7 @@ Kept as intent; none is mounted on `master`:
 
 ### Secrets Management
 - All credentials in `.env` only — never in code, comments, or git history
-- `.env.example` committed (structure only, no values)
+- `.env.example` committed: every variable with its default or a placeholder (`replace_with_random_64_hex_chars`, `changeme_before_production`), never a real secret
 - `.env` in `.gitignore`
 - `process.env` is the only access point — values are never returned in API responses. `GET /api/sources` serves env var **names** (`missing_env`) and presence booleans only
 - Every error the collectors and the worker store or log is scrubbed of credential-shaped URL parameters and of every non-empty secret env value (`src/collectors/redact.js`, `src/workers/logging.js`). Every API route handler logs its errors through `logRouteError` (`src/middleware/log-error.js`: the same scrubber, plus control characters escaped so one error is one log line), and the database pool logs through `src/workers/logging.js` (PR #22 security L3/L4)
@@ -1156,7 +1157,7 @@ Location: city level only (content-level city, else the publisher's home
           city for editorial sources; basis recorded)
         │
         ▼
-content_hash = SHA-256(normalized content)   ← join key, not the dedup key
+content_hash = SHA-256(normalized content)   ← stored and indexed; not the dedup key
         │
         ▼
 INSERT INTO raw_posts … ON CONFLICT (source_id, external_id) DO NOTHING
@@ -1212,9 +1213,9 @@ res.status(500).json({ error: 'Internal server error' });
 // - Stack traces
 // - SQL error messages (contain table/column names)
 // - File paths
-// - Environment variable names
+// - Secrets, including the value of any secret environment variable
 ```
-Every route follows this, and so does the JSON error handler after the routers (`jsonErrorHandler`, `src/server.js`): a malformed or oversized body gets a JSON 400 or 413, never Express's HTML stack page (§7).
+Environment variable **names** may appear where they tell the operator what to set: the refresh 403 names `REFRESH_TOKEN` (§7), `/api/sources` serves `missing_env`, `kill_switch_env` and `reset_env` and names variables in `status_reason` (§17), and `/api/health`'s `correlation.reason` names the correlation switches and serves the non-secret DPIA reference (§20). No secret value is ever served. Every route follows this, and so does the JSON error handler after the routers (`jsonErrorHandler`, `src/server.js`): a malformed or oversized body gets a JSON 400 or 413, never Express's HTML stack page (§7).
 
 ### HTTP security headers and CORS
 Every response, static assets included, carries `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` and `Referrer-Policy: no-referrer` (`src/server.js`). No inline script or `style=` attribute is allowed in `index.html`, and client code builds the DOM with `createElement` + `textContent` (no `innerHTML`). CORS (`cors()`) is applied to the read-only routers only; `POST /api/refresh` serves no CORS headers, answers its `OPTIONS` preflight with 403 and checks `Sec-Fetch-Site` / `Origin` / `Referer` itself (§7).
@@ -1252,7 +1253,7 @@ Three aggregate checks. None of them infers a trait of a person; they measure th
 - **Rolling 24 h window (introduced by bias@1.5.0; runs the current bias version):** the same three checks over every post whose sentiment decision was recorded in the previous 24 hours, daily (the maintenance `daily` task, §19) and on demand (`npm run bias:window`), whatever the cycles did (`src/pipeline/bias-window.js`). Details at the end of this section.
 
 ### Source health alerts (`source_refused`, `source_stale`, `source_failing`)
-Not bias checks, but they share the alert path (`src/collectors/source-health.js`, run with every cycle close). A source that refuses access puts itself in the refused state (§17) and opens one **critical** `source_refused` alert per refusal episode (`src/collectors/state.js`). A collecting source with no new post for longer than its registry's `expectedNewWithinHours` (measured from `last_new_post_at`, else the fixed `freshness_anchor_at`, migrations 033 and 037) opens a `source_stale` **warning**; three or more consecutive failed runs open a `source_failing` **warning**. Each has `source_table = 'data_sources'` and `source_id` = the source, at most one open per type and source (migration 038), and is resolved with an `alert_resolutions` row as soon as its condition clears or the source stops collecting.
+Not bias checks, but they share the alert path (`src/collectors/source-health.js`, run on every 30 s tick of the worker's cycle timer, after the cycle-close pass). A source that refuses access puts itself in the refused state (§17) and opens one **critical** `source_refused` alert per refusal episode (`src/collectors/state.js`). A collecting source with no new post for longer than its registry's `expectedNewWithinHours` (measured from `last_new_post_at`, else the fixed `freshness_anchor_at`, migrations 033 and 037) opens a `source_stale` **warning**; three or more consecutive failed runs open a `source_failing` **warning**. Each has `source_table = 'data_sources'` and `source_id` = the source, at most one open per type and source (migration 038), and is resolved with an `alert_resolutions` row as soon as its condition clears or the source stops collecting.
 
 ### Alert Flow
 ```
@@ -1508,9 +1509,9 @@ Themes (default "Midnight") and the 8 category colours are defined in the same f
 | Dimensions | 384 |
 | Parameters | 22M |
 | Disk size | ~91 MB (float32 weights, `model.safetensors` 90,868,376 bytes at the pinned revision) |
-| CPU throughput | ~1000 sentences/sec |
-| STS-B accuracy | 84-85% |
-| Chosen over `all-mpnet-base-v2` | 5x faster, 3-4% accuracy trade-off — acceptable for trend monitoring |
+| Encoding speed | 14,200 sentences/s on a V100 GPU ([sbert.net pretrained models](https://www.sbert.net/docs/sentence_transformer/pretrained_models.html)); no CPU figure is published by that source or measured by this project |
+| Benchmark quality | 68.06 average over 14 sentence-embedding tasks, 49.54 over 6 semantic-search tasks ([sbert.net pretrained models](https://www.sbert.net/docs/sentence_transformer/pretrained_models.html)); the Hugging Face model card at the pinned revision publishes no benchmark score |
+| Chosen over `all-mpnet-base-v2` | About 5x faster (14,200 vs 2,800 sentences/s, V100) for 1.51 points on sentence embeddings (68.06 vs 69.57) and 7.48 on semantic search (49.54 vs 57.02), same source — acceptable for trend monitoring |
 
 ### Deployment: the embeddings service (`python/embeddings_service.py`)
 
@@ -1520,7 +1521,7 @@ A FastAPI app over sentence-transformers, built as the compose service `embeddin
 - The model is loaded at a pinned Hugging Face commit (`EMBED_MODEL_REVISION`, default `1110a243fdf4706b3f48f1d95db1a4f5529b4d41`) with sentence-transformers 6.1.0 (transformers 5.18.0, huggingface_hub 1.33.0, tokenizers 0.23.2, torch 2.12.1+cpu; hash-locked in `python/requirements-service.txt`), registered as `embedding@1.1.0` (migration 065; it supersedes `embedding@1.0.0` of migration 012, sentence-transformers 2.7.0, whose vectors were bit-identical on the comparison set and are not re-embedded). Every new vector records `1.1.0` in `post_embeddings.methodology_version` (NULL when `EMBED_MODEL` / `EMBED_MODEL_REVISION` override the registered model or revision); vectors stored earlier keep `1.0.0`.
 - Host development: `python/start.sh` runs uvicorn on port 8000 (on `0.0.0.0`, see §8).
 
-**PLANNED — not implemented as of v1.2.0: Infinity (`infinity-emb`) as the production server.** v1.1 chose it for dynamic batching (30-40% throughput), a ctranslate2 backend (2-4x faster inference) and the same OpenAI-compatible API, so it can replace the FastAPI service without Node changes:
+**PLANNED — not implemented as of v1.2.0: Infinity (`infinity-emb`) as the production server.** v1.1 chose it for dynamic batching, a ctranslate2 backend ([Infinity README](https://github.com/michaelfeil/infinity)) and the same OpenAI-compatible API, so it can replace the FastAPI service without Node changes:
 ```bash
 pip install infinity-emb
 infinity_emb start \
@@ -1538,14 +1539,15 @@ The code comments name the FastAPI service that runs and describe Infinity as th
 ### Vector Index: HNSW
 
 ```sql
--- HNSW chosen over IVFFlat
--- Benchmark: HNSW achieves 40.5 QPS vs IVFFlat's 2.6 QPS at 0.998 recall (15.5x faster)
+-- HNSW chosen over IVFFlat (external benchmark, source below; not measured here)
+-- Benchmark: HNSW achieves 40.5 QPS vs IVFFlat's 2.6 QPS at 0.998 recall (about 15.6x faster)
 -- Build time trade-off: HNSW ~4065s vs IVFFlat ~128s (acceptable: one-time cost)
--- Storage trade-off: HNSW ~729MB vs IVFFlat ~257MB (acceptable for 1M rows)
+-- Storage trade-off: HNSW ~729MB vs IVFFlat ~257MB (on the benchmark's 1M 50-dimension vectors)
 CREATE INDEX idx_embeddings_hnsw ON post_embeddings
     USING hnsw (embedding vector_cosine_ops)
     WITH (m = 16, ef_construction = 400);
 ```
+Source of the benchmark figures: [Tembo, "Vector Indexes in Postgres using pgvector: IVFFlat vs HNSW", 2023-11-14](https://web.archive.org/web/20241206165814/https://tembo.io/blog/vector-indexes-in-pgvector) (archived copy; the original tembo.io URL no longer serves the post): about 1M vectors of 50 dimensions, 10K queries for the 10 nearest neighbours, one query thread; IVFFlat `lists = 200`, `probes = 100`; HNSW `m = 24`, `ef_construction = 200`, `ef_search = 800`. The post rounds 40.5 / 2.6 to "15.5X"; the quotient is 15.6. The times and sizes hold for that dataset and those parameters, not for this table's 384-dimension vectors or its `m = 16`, `ef_construction = 400`. Migration `004_vector_support.sql` repeats the QPS and build-time figures in its header comment without the source (released migrations are not edited).
 
 ### Use Cases for Vector Search
 Nothing on `master` queries the vectors yet; they are stored for the uses below.
@@ -1666,7 +1668,7 @@ The "99% uptime" target is watched from outside the processes it watches. The `w
 | Alternative | Why Considered | Why Not Chosen |
 |---|---|---|
 | SQLite | Existing in project, zero setup | No pgvector; no row-level security; no concurrent writes; not production-grade |
-| MongoDB | Flexible JSONB-like documents | Poor JOIN performance for audit queries; no native vector index; no ACID transactions across collections |
+| MongoDB | Flexible JSONB-like documents | Poor JOIN performance for audit queries; vector search is a separate MongoDB Vector Search feature ([MongoDB Vector Search overview](https://www.mongodb.com/docs/atlas/atlas-vector-search/vector-search-overview/)), not an extension inside one relational store with the audit tables. (v1.1 also said "no ACID transactions across collections"; that was wrong: MongoDB supports multi-document ACID transactions across collections and databases, on replica sets since 4.0 and sharded clusters since 4.2, [MongoDB transactions](https://www.mongodb.com/docs/manual/core/transactions/).) |
 | MySQL + separate Pinecone | Familiar + managed vector | Pinecone sends data to external API (GDPR risk); MySQL lacks JSONB; additional infrastructure |
 | Neo4j | Graph relationships between topics | Excellent for Phase 2 topic graphs; too complex for Phase 1 foundation; add later |
 
@@ -1674,7 +1676,7 @@ The "99% uptime" target is watched from outside the processes it watches. The `w
 
 | Alternative | Why Considered | Why Not Chosen |
 |---|---|---|
-| IVFFlat | Faster to build (~128s vs ~4065s) | 15.5x slower at query time (2.6 vs 40.5 QPS at 0.998 recall); acceptable build cost |
+| IVFFlat | Faster to build (~128s vs ~4065s) | About 15.6x slower at query time (2.6 vs 40.5 QPS at 0.998 recall); HNSW's build cost is acceptable. Figures from [Tembo, 2023-11-14](https://web.archive.org/web/20241206165814/https://tembo.io/blog/vector-indexes-in-pgvector), about 1M 50-dimension vectors (§12) |
 | Chroma | Popular open-source vector DB | Separate service adds ops complexity; pgvector puts vector + relational in one transaction boundary |
 | Weaviate | Production-grade vector search | Significant ops overhead; overkill for MVP data volumes |
 
@@ -1682,16 +1684,16 @@ The "99% uptime" target is watched from outside the processes it watches. The `w
 
 | Alternative | Why Considered | Why Not Chosen |
 |---|---|---|
-| `all-mpnet-base-v2` (768-dim) | 3-4% better accuracy | 5x slower inference; 2x more storage; marginal gain for trend monitoring |
+| `all-mpnet-base-v2` (768-dim) | Better quality: 69.57 vs 68.06 on sentence embeddings, 57.02 vs 49.54 on semantic search ([sbert.net pretrained models](https://www.sbert.net/docs/sentence_transformer/pretrained_models.html)) | About 5x slower inference (2,800 vs 14,200 sentences/s on a V100 GPU, same source); 2x the vector storage (768 vs 384 dimensions); marginal gain for trend monitoring |
 | OpenAI `text-embedding-3-small` | High quality, easy API | Data leaves infrastructure (GDPR risk); API cost at scale; offline impossible |
-| `e5-large` (1024-dim) | State of the art | Too slow for real-time; 8GB+ RAM required; extreme overkill for discourse trends |
+| `e5-large` (1024-dim) | Strong retrieval model | 24 layers, 1024-dim embeddings ([model card](https://huggingface.co/intfloat/e5-large)); 335M parameters in a 1.34 GB float32 `model.safetensors`, about 15x the 22.7M parameters of `all-MiniLM-L6-v2` (Hugging Face model metadata), so slower and larger than discourse-trend monitoring needs |
 
 ### Sentiment Analysis
 
 | Alternative | Why Considered | Why Not Chosen |
 |---|---|---|
-| VADER (Python) | Designed for social media | Requires Python subprocess call; `sentiment` npm achieves comparable results synchronously |
-| RoBERTa (Phase 1) | 80%+ accuracy target | Too slow for MVP; 6GB RAM; methodology_versions allows upgrade without code changes |
+| VADER (Python) | Designed for social media | Requires Python subprocess call; `sentiment` npm runs synchronously in Node. No VADER comparison has been run for this project; `sentiment` publishes its own accuracy on the UCI labelled sentences: Amazon 0.726, IMDB 0.765, Yelp 0.696 ([sentiment README, Validation](https://github.com/thisandagain/sentiment#validation)) |
+| RoBERTa (Phase 1) | The pre-v1.1 80% accuracy target (v1.1 raised every target to 99%) | Deferred to Phase 2: it needs a Python inference service, and no RoBERTa model has been chosen or measured for this project, so no speed or memory figure is claimed; methodology_versions allows upgrade without code changes |
 | AWS Comprehend | Managed, accurate | Data leaves infrastructure; per-request cost at scale |
 | TextBlob | Simple Python NLP | Requires Python service for Phase 1; not worth the overhead vs `sentiment` npm |
 
@@ -1708,7 +1710,7 @@ The "99% uptime" target is watched from outside the processes it watches. The `w
 
 ### Open Questions (to resolve before Phase B)
 1. **Location inference**: Reddit posts don't include location metadata. Inference approach options: (a) user flair text extraction, (b) subreddit geography mapping (r/unitedkingdom → UK), (c) content NLP for mentioned locations, (d) IP geolocation at collection time (GDPR risk). Recommended: (b) + (c) as GDPR-safe combination.
-2. **Discourse API vs "discourse"**: The existing `discourse.db` refers to the project name, not the Discourse platform. Confirmed: no Discourse instance to scrape. All sources defined in §17.
+2. **Discourse API vs "discourse"**: Resolved. The legacy `discourse.db` (`scripts/init-database.js`, `scripts/load-data-to-db.js`) refers to the project name, not the Discourse platform. Discourse forums are collected: the registry has four keyless `discourse` routes (`DiscourseCollector`, `src/collectors/adapters/developer.js`) on OpenStreetMap (`community.openstreetmap.org`, tag `ai`), GitLab (`forum.gitlab.com`), Docker Hub (`forums.docker.com`) and Hugging Face (`discuss.huggingface.co`); usernames and avatars are dropped. All sources defined in §17.
 3. **Academic source access**: ✅ Resolved by the registry (§17): arXiv and PubMed are open; SpringerLink needs a free key; ScienceDirect and JSTOR need approval; IEEE Xplore needs a licence; ResearchGate is blocked. Semantic Scholar and the ACM Digital Library are not in the workbook.
 4. **Twitter/X API cost**: ✅ Resolved by the registry (§17): X (#8) stays in the registry, built on the paid recent-search route and closed (`awaiting_licence`) until its key is set. Mastodon and Bluesky are not in the workbook.
 5. **Cross-platform correlation cold start**: intended position: single-platform authors receive no pseudonymous ID and are counted as unlinked in analytics (the ≥ 2-sighting and ≥ 0.85 confidence rules of §20). Not implemented: correlation is gated off pending a DPIA of the signal design, `correlateUser()` throws and no profile is ever created (§20).
@@ -1853,7 +1855,7 @@ A route is **open** when every env var it `requires` is set and, if it requires 
 
 **Kill switches.** Env switches apply when the containers are recreated (`docker compose up -d worker web`). The database switch applies at once in every process: `npm run source:disable -- <slug> --reason "<why>"` sets it and `npm run source:enable -- <slug>` clears it; the runner checks it before every run.
 
-**The refused state (ruling 5, F10-5).** A run refused by the source (401 / 403 / 451, a bot challenge, or a robots.txt disallow) records `access_denied_*` and `refused_until` on `source_collection_state` (migration 018). The source is skipped for a cooldown of 1 h, doubling per refusal up to 24 h; after it, one probe run is allowed. A successful probe ends the refused state (the source collects again) but keeps the refusal count: the source is on probation for 24 h (`probation_until`, migration 062), a refusal during probation continues the count so the cooldown keeps escalating to 24 h, and only 24 h without a refusal decays the count to 0 (ADR 0001 dated note of 2026-09-30). Each refusal episode opens one critical `source_refused` alert; a further refusal while it is open updates it to the current count, and it is resolved when the refused state ends (§9). The allow-listed, scrubbed response headers of the latest refusal are kept in `source_collection_state.access_denied_headers` and on the run's `source_runs.response_headers` (migration 062). `SOURCE_<SLUG>_RESET=<ISO date>` (dated at or after the last refusal, with the named approval `GATE_APPROVED_BY`) or `npm run source:reset -- <slug> --note "<why>"` clears it by hand, count and probation included. Nothing ever retries around a refusal.
+**The refused state (ruling 5, F10-5).** A run refused by the source (401 / 403 / 451, a bot challenge, or a robots.txt disallow) records `access_denied_*` and `refused_until` on `source_collection_state` (migration 018). The source is skipped for a cooldown of 1 h, doubling per refusal up to 24 h; after it, one probe run is allowed. A successful probe ends the refused state (the source collects again) but keeps the refusal count: the source is on probation for 24 h (`probation_until`, migration 062), a refusal during probation continues the count so the cooldown keeps escalating to 24 h, and only 24 h without a refusal decays the count to 0 (ADR 0001 dated note of 2026-09-30). Each refusal episode opens one critical `source_refused` alert; a further refusal while it is open updates it to the current count, and it is resolved when the refused state ends (§9). The allow-listed, scrubbed response headers of the latest refusal are kept in `source_collection_state.access_denied_headers` while the refused state lasts (a successful probe or a reset clears them) and, permanently, on the refused run's `source_runs.response_headers` (migration 062). `SOURCE_<SLUG>_RESET=<ISO date>` (dated at or after the last refusal, with the named approval `GATE_APPROVED_BY`) or `npm run source:reset -- <slug> --note "<why>"` clears it by hand, count and probation included. Nothing ever retries around a refusal.
 
 **Politeness.** Every request goes through one HTTP client: User-Agent `PulseOfAI/<version> (+<COLLECTOR_CONTACT_URL>; non-commercial AI discourse research)`, robots.txt checked before every request to publisher-site routes (redirects included, conservative matching), per-host spacing, conditional GET, at most 2 retries on 429 / 5xx honouring `Retry-After` (capped at 60 s), and the network guard of §8. Bulk-file routes read operator-supplied files and Google Scholar reads its alert mailbox over IMAP.
 
@@ -2215,7 +2217,7 @@ seed_int  = first 4 bytes of SHA-256(seed), as an unsigned 32-bit integer
 pseudo_id = uniqueNamesGenerator({ dictionaries: [adjectives, animals],
                                    separator: '-', style: 'lowerCase', seed: seed_int })
 ```
-The same seed always gives the same ID; the seed is never stored. `pseudonymous_users.pseudo_id` is `UNIQUE`, so an ID that already exists is treated as the same pseudonymous user (its `platform_count` and `last_sighted_at` are updated and a sighting is added).
+The same seed always gives the same ID; the seed is never stored. `pseudonymous_users.pseudo_id` is `UNIQUE`. In the design, an ID that already exists is the same pseudonymous user (its `platform_count` and `last_sighted_at` updated and a sighting added); that code was removed in PR #22 (grumpy M7) and nothing writes these tables today, so of this ID system only `generatePseudoId` is implemented (with `computeSignalHash`, above).
 
 **Superseded:** v1.1's verb-noun scheme (`running-tiger`; 500 verbs × 500 nouns = 250,000 IDs, indexed from the correlation fingerprint). The code first shipped a 20 × 20 = 400-ID verb-noun list and replaced it with the adjective-animal space (426,710 IDs) for its collision rate (`src/pipeline/correlation.js`).
 
