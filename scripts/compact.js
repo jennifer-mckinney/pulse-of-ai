@@ -371,8 +371,9 @@ async function purgeDemoBatch(client, { cutoff, batchSize }) {
     // Surviving profiles that lost sightings: recompute platform_count and
     // the sighting window from the sightings they still have, in this same
     // transaction, so no profile keeps a count that includes purged demo
-    // evidence. correlateUser() maintains platform_count as one per sighting
-    // row (1 at creation, +1 per repeat), so the recount is COUNT(*) of the
+    // evidence. platform_count is one per sighting row (1 at creation, +1
+    // per repeat — migration 006's model; correlation itself is not
+    // implemented, PR #22 grumpy M7), so the recount is COUNT(*) of the
     // remaining rows; a profile kept alive only by a post has 0. The
     // timestamps keep their old value when no sighting is left.
     counts.pseudonymous_users_recounted = profileIds.length === 0 ? 0 : (await client.query(`

@@ -1635,6 +1635,8 @@ When `POST /api/query` date range falls partly outside the detail window:
 
 ## 20. Cross-Platform User Correlation
 
+> **Implementation status: not implemented — signal design pending DPIA (PR #22 grumpy M7).** Collectors store no author (ADR 0001 D2), so the only signal on identity-free data is post-level (a post's topics plus its posting hour), which is not an identity signal. `src/pipeline/correlation-gate.js` reports `awaiting_dpia`, `disabled`, `misconfigured` or, with every switch set, `not_implemented`; it never reports `enabled`. Nothing enqueues correlate jobs, the correlate worker refuses any job, and `correlateUser` throws, so no `pseudonymous_users` row can be written. The design below is the target a DPIA must approve before any of it is built.
+
 ### Design Principles
 
 Cross-platform user correlation is the most privacy-sensitive feature in the system. The goal is to identify when the same person appears on multiple platforms so that their discourse contribution can be analyzed as a coherent voice — without ever storing who that person is.

@@ -81,7 +81,8 @@ describe('pool sizing (src/db/pool-size.js)', () => {
         expect(requiredWorkerPool(c)).toBe(2 * 4 + 2 + 24 + 4 + 8 + 1 + 2);
         expect(requiredWorkerPool(c, { correlation: false })).toBe(41);
         expect(workerPoolSize({})).toMatchObject({ size: 41, required: 41, explicit: false, short: false, correlation: false });
-        expect(workerPoolSize(OPEN)).toMatchObject({ size: 49, required: 49, correlation: true });
+        // PR #22 grumpy M7: correlation is not implemented, so even with every switch set the gate stays shut and correlate needs no connections.
+        expect(workerPoolSize(OPEN)).toMatchObject({ size: 41, required: 41, correlation: false });
         expect(workerPoolSize({ INGEST_CONCURRENCY: '40' }).size).toBe(60);   // capped
     });
 

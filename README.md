@@ -320,7 +320,6 @@ Copy `.env.example` to `.env` and fill in the values below.
 | `SEMANTIC_SCHOLAR_API_KEY` | No | Semantic Scholar API key |
 | `AUDIT_HASH_KEY` | No | 64-hex-char key for HMAC-SHA256 audit hashes |
 | `CORRELATION_SALT` | Yes | 64-hex-char salt for verb-noun pseudonymous IDs — generate once, never change |
-| `CORRELATION_MIN_CONFIDENCE` | No | Min confidence to assign a cross-platform ID (default `0.85`) |
 | `RETENTION_DETAIL_DAYS` | No | Days before compaction (default `90`) |
 | `REDIS_PORT` | No | Valkey host port (default `6379`; the `REDIS_*` names refer to the Redis protocol Valkey speaks) |
 | `WEB_PORT` | No | Standup: host port of the web service (default `3000`) |

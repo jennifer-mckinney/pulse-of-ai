@@ -42,7 +42,6 @@ x-app-env: &app-env
   # D2 provenance fingerprint key; empty falls back to AUDIT_HASH_KEY.
   PROVENANCE_KEY: ${PROVENANCE_KEY:-}
   CORRELATION_SALT: ${CORRELATION_SALT:-}
-  CORRELATION_MIN_CONFIDENCE: ${CORRELATION_MIN_CONFIDENCE:-0.85}
   # Spec §20 DPIA gate: correlation stays off until a completed DPIA is
   # recorded AND the operator enables it (src/pipeline/correlation-gate.js).
   CORRELATION_DPIA_REF: ${CORRELATION_DPIA_REF:-}

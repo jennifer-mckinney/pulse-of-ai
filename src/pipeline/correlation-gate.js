@@ -9,11 +9,18 @@
 //     'true' (the operator's switch);
 //   - status 'misconfigured': enabled with a DPIA but no deployment salt
 //     (CORRELATION_SALT) — the spec forbids a default salt;
-//   - status 'enabled': all three set.
-// The trigger (the embed worker, after a post's embedding is stored — spec
-// §20 "a background step after embeddings are stored") enqueues a correlate
-// job only when enabled; the correlate worker re-checks and refuses
-// otherwise; GET /api/health serves the status and reason.
+//   - status 'not_implemented': all three set — and still OFF (PR #22
+//     grumpy M7). Collectors store no author (ADR 0001 D2), so the only
+//     signal on identity-free data is post-level (a post's topics plus its
+//     posting hour). That is NOT an identity signal: linking on it would
+//     merge unrelated posts into fabricated "users". No identity signal is
+//     designed and the design needs the DPIA, so
+//     correlation cannot be enabled: "not implemented: signal design pending
+//     DPIA". There is no 'enabled' status until a signal design lands.
+// Nothing enqueues correlate jobs (src/workers/embed.worker.js); the
+// correlate worker refuses any job with this status and reason, and
+// correlateUser (src/pipeline/correlation.js) throws it; GET /api/health
+// serves the status and reason.
 
 'use strict';
 
@@ -43,6 +50,10 @@ function isUsableSalt(v) {
     return true;
 }
 
+const NOT_IMPLEMENTED_REASON = 'not implemented: signal design pending DPIA. Collectors store no author, so the only '
+    + 'signal available (a post\'s topics plus its posting hour) is not an identity signal; cross-platform correlation '
+    + 'cannot be enabled until the DPIA approves an identity-signal design and it is implemented (spec §20; PR #22 grumpy M7).';
+
 /** @returns {{ enabled: boolean, status: string, reason: string }} */
 function correlationStatus(env = process.env) {
     if (!nonEmpty(env.CORRELATION_DPIA_REF)) {
@@ -61,7 +72,13 @@ function correlationStatus(env = process.env) {
             reason: 'CORRELATION_SALT (the per-deployment salt) is unset or a placeholder; correlation stays off and no pseudonym is computed (spec §20).',
         };
     }
-    return { enabled: true, status: 'enabled', reason: `enabled under DPIA ${env.CORRELATION_DPIA_REF.trim()}` };
+    // M7: every switch is set, but no identity signal exists — never
+    // enabled. Implementing a DPIA-approved signal design is what adds an
+    // 'enabled' status here, with its own tests.
+    return {
+        enabled: false, status: 'not_implemented',
+        reason: `${NOT_IMPLEMENTED_REASON} (DPIA ${env.CORRELATION_DPIA_REF.trim()} recorded; switch and salt set.)`,
+    };
 }
 
-module.exports = { correlationStatus, isUsableSalt };
+module.exports = { correlationStatus, isUsableSalt, NOT_IMPLEMENTED_REASON };

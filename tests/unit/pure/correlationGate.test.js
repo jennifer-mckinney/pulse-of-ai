@@ -39,5 +39,21 @@ describe('isUsableSalt — placeholders fail closed (M8)', () => {
     it('a placeholder salt leaves correlation misconfigured, never enabled', () => {
         const st = correlationStatus({ CORRELATION_DPIA_REF: 'DPIA-1', CORRELATION_ENABLED: 'true', CORRELATION_SALT: exampleSalt() });
         expect(st.enabled).toBe(false);
+        expect(st.status).toBe('misconfigured');
+    });
+});
+
+// PR #22 grumpy M7: the only signal on identity-free data (topics plus
+// hour) is not an identity signal — correlation cannot be enabled at all.
+describe('correlationStatus — not implemented: signal design pending DPIA (M7)', () => {
+    const GOOD = '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08';
+    it('with a DPIA, the switch on and a real salt, the status is not_implemented and it is off', () => {
+        const st = correlationStatus({ CORRELATION_DPIA_REF: 'DPIA-7', CORRELATION_ENABLED: 'true', CORRELATION_SALT: GOOD });
+        expect(st).toMatchObject({ enabled: false, status: 'not_implemented' });
+        expect(st.reason).toMatch(/^not implemented: signal design pending DPIA\..*not an identity signal/);
+    });
+    it('no environment yields enabled', () => {
+        const envs = [{}, { CORRELATION_ENABLED: 'true', CORRELATION_SALT: GOOD }, { CORRELATION_DPIA_REF: 'x', CORRELATION_ENABLED: 'on', CORRELATION_SALT: GOOD }];
+        for (const env of envs) expect(correlationStatus(env).enabled).toBe(false);
     });
 });

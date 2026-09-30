@@ -39,13 +39,9 @@ describe('processEmbedJob()', () => {
         for (const reason of ['purged_demo', 'text_removed']) {
             const skip = { postId: 'post-uuid-abc', skipped: true, reason, at: '2026-09-29T10:00:00.000Z' };
             embedPost.mockResolvedValue(skip);
-            const enqueueCorrelate = jest.fn();
-            const buildSignals = jest.fn();
             const OPEN = { CORRELATION_DPIA_REF: 'DPIA-1', CORRELATION_ENABLED: 'true', CORRELATION_SALT: 'embed-test-deployment-salt-01' };
-            const r = await processEmbedJob(makeJob(), { env: OPEN, enqueueCorrelate, buildSignals });
+            const r = await processEmbedJob(makeJob(), { env: OPEN });
             expect(r).toEqual({ ...skip, correlation: { queued: false, status: 'skipped' } });
-            expect(buildSignals).not.toHaveBeenCalled();
-            expect(enqueueCorrelate).not.toHaveBeenCalled();
         }
     });
 
@@ -60,26 +56,24 @@ describe('processEmbedJob()', () => {
     });
 });
 
-describe('correlation trigger after the embedding (spec §20, DPIA-gated)', () => {
+describe('correlation is never enqueued after the embedding (spec §20; PR #22 grumpy M7)', () => {
     const OPEN = { CORRELATION_DPIA_REF: 'DPIA-1', CORRELATION_ENABLED: 'true', CORRELATION_SALT: 'embed-test-deployment-salt-01' };
 
-    it('never enqueues a correlate job while the gate is closed', async () => {
+    it('reports the gate status at every step and queues nothing, even with every switch set', async () => {
         embedPost.mockResolvedValue({ postId: 'p', embeddingId: 'e', dimensions: 384 });
-        const enqueueCorrelate = jest.fn();
-        for (const env of [{}, { CORRELATION_DPIA_REF: 'D' }, { CORRELATION_DPIA_REF: 'D', CORRELATION_ENABLED: 'true' }]) {
-            await processEmbedJob(makeJob(), { env, enqueueCorrelate, buildSignals: jest.fn() });
+        const seen = [];
+        for (const env of [{}, { CORRELATION_DPIA_REF: 'D' }, { CORRELATION_DPIA_REF: 'D', CORRELATION_ENABLED: 'true' }, OPEN]) {
+            seen.push((await processEmbedJob(makeJob(), { env })).correlation);
         }
-        expect(enqueueCorrelate).not.toHaveBeenCalled();
+        expect(seen).toEqual([
+            { queued: false, status: 'awaiting_dpia' },
+            { queued: false, status: 'disabled' },
+            { queued: false, status: 'misconfigured' },
+            { queued: false, status: 'not_implemented' },
+        ]);
     });
 
-    it('with the gate open, enqueues the post-level signals after the embedding is stored', async () => {
-        embedPost.mockResolvedValue({ postId: 'p', embeddingId: 'e', dimensions: 384 });
-        const signals = { rawPostId: 'post-uuid-abc', sourceId: 's', topicAffinity: ['llm'], signalHash: 'h', confidence: 0 };
-        const enqueueCorrelate = jest.fn().mockResolvedValue();
-        const buildSignals = jest.fn().mockResolvedValue(signals);
-        const r = await processEmbedJob(makeJob(), { env: OPEN, enqueueCorrelate, buildSignals });
-        expect(buildSignals).toHaveBeenCalledWith('post-uuid-abc', OPEN);
-        expect(enqueueCorrelate).toHaveBeenCalledWith(signals);
-        expect(r.correlation).toEqual({ queued: true, status: 'enabled' });
+    it('the worker exposes no signal builder or enqueue hook to inject around the gate', () => {
+        expect(Object.keys(require('../../src/workers/embed.worker'))).toEqual(['processEmbedJob']);
     });
 });
