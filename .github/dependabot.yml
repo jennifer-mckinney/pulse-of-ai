@@ -11,10 +11,18 @@ updates:
     directory: "/python"
     schedule:
       interval: weekly
+  # The queue store (compose service `redis`) is valkey/valkey 8.x. Dependabot
+  # proposes 8.x updates; a major bump (9.x) is a reviewed decision, not a
+  # weekly PR. The CI service container (.github/workflows/ci.yml) is not a
+  # Dependabot ecosystem: bump it by hand to the same digest in the same PR
+  # (scripts/test/check-compose.sh fails if the two differ).
   - package-ecosystem: docker-compose
     directory: "/"
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: "valkey/valkey"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: pip
     directory: "/python"
     schedule:

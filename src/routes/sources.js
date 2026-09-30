@@ -59,6 +59,8 @@
 
 'use strict';
 
+const { logRouteError } = require('../middleware/log-error');
+
 const { Router } = require('express');
 const { dbAll }  = require('../db/connection');
 const clock      = require('../db/clock');
@@ -74,7 +76,7 @@ router.get('/sources', async (req, res) => {
         return res.json(rows);
     /* istanbul ignore start -- Database failure; requires error injection testing infrastructure */
     } catch (err) {
-        console.error('[sources] Error:', err.message);
+        logRouteError('sources', err);
         return res.status(500).json({ error: 'Internal server error' });
     }
     /* istanbul ignore end */
@@ -245,7 +247,7 @@ router.get('/sources/timeseries', responseCache(10000), async (req, res) => {
         return res.json(byCategory);
     /* istanbul ignore start -- Database failure; requires error injection testing infrastructure */
     } catch (err) {
-        console.error('[sources] Timeseries error:', err.message);
+        logRouteError('sources timeseries', err);
         return res.status(500).json({ error: 'Internal server error' });
     }
     /* istanbul ignore end */

@@ -371,3 +371,25 @@ describe('scripts/compact.js — demo posts are deleted at retention (P9-3)', ()
         expect(result.counts.raw_posts).toBe(2);
     });
 });
+
+// PR #22 principal #7: month discovery walks month to month over the
+// collected_at index; same answer as before — real posts only, whole months
+// before the cutoff, compacted months skipped.
+describe('getMonthsToCompact — indexed month walk', () => {
+    it('returns every due month with real posts, oldest first; skips demo-only, compacted and current months', async () => {
+        const { getMonthsToCompact } = require('../../scripts/compact');
+        const job = await insertJob();
+        const mv = await insertMethodologyVersions();
+        const real = await insertSource('walk-real', 'news');
+        const demo = await insertDemoSource('demo_walk');
+        const at = (iso, src, ext) => insertPostWithFullPipeline(src, job, mv, { externalId: ext, collectedAt: new Date(iso) });
+        await at('2025-01-15T12:00:00Z', real, 'w1');
+        await at('2025-01-20T12:00:00Z', real, 'w2');
+        await at('2025-03-02T12:00:00Z', real, 'w3');
+        await at('2025-04-10T12:00:00Z', demo, 'w4');            // demo only: never compacted
+        await at('2025-06-10T12:00:00Z', real, 'w5');
+        await at(new Date().toISOString(), real, 'w6');          // inside the window
+        await dbRun(`INSERT INTO compaction_log (compacted_month, posts_compacted, content_nulled, rollups_created) VALUES ('2025-03-01', 1, 0, 1)`);
+        expect(await getMonthsToCompact()).toEqual(['2025-01-01', '2025-06-01']);
+    });
+});

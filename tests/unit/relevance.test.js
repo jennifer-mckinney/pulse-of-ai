@@ -194,3 +194,51 @@ describe('saveRelevance()', () => {
         await expect(saveRelevance(fakePostId, jobId, mvId)).rejects.toThrow();
     });
 });
+
+// ─── P10-13: saveRelevance scores under the recorded version ────────────────
+
+describe('saveRelevance() — the recorded version decides the rule (relevance@1.2.0)', () => {
+    async function mvFor(version, model) {
+        return (await dbRun(
+            `INSERT INTO methodology_versions (component, version, model_name, config, justification)
+             VALUES ('relevance', $1, $2, '{}'::jsonb, 'test') RETURNING id`, [version, model])).id;
+    }
+
+    test('a 1.2.0 decision: whole words and upper-case AI — "Robert" is not "bert"', async () => {
+        const postId = await insertPost('Robert says AI is changing schools');
+        const jobId = await insertJob();
+        const row = await saveRelevance(postId, jobId, await mvFor('1.2.0', 'keyword-relevance-v2'));
+        expect(row.matched_keywords).toEqual(['AI']);
+        const audit = await dbGet(`SELECT model_name, output FROM decision_audit_log WHERE raw_post_id = $1`, [postId]);
+        expect(audit.model_name).toBe('keyword-relevance-v2');
+        expect(audit.output.matchedKeywords).toEqual(['AI']);
+    });
+
+    test('a 1.1.0 decision keeps the substring rule it was registered with', async () => {
+        const postId = await insertPost('Robert says AI is changing schools');
+        const jobId = await insertJob();
+        const row = await saveRelevance(postId, jobId, await mvFor('1.1.0', 'keyword-relevance-v1'));
+        expect(row.matched_keywords).toEqual(['bert']);
+        const audit = await dbGet(`SELECT model_name FROM decision_audit_log WHERE raw_post_id = $1`, [postId]);
+        expect(audit.model_name).toBe('keyword-relevance-v1');
+    });
+
+    // PR #22 grumpy M10: never score with a different rule than the one
+    // recorded. A version this build has no scorer for (a newer row
+    // registered by a migration during a rolling deploy) fails loudly.
+    test('an unknown relevance version is rejected and nothing is written', async () => {
+        const postId = await insertPost('AI is changing schools');
+        const jobId = await insertJob();
+        await expect(saveRelevance(postId, jobId, await mvFor('9.9.9', 'keyword-relevance-v9')))
+            .rejects.toThrow(/relevance@9\.9\.9 has no scorer in this build/);
+        const n = await dbGet('SELECT COUNT(*)::int AS n FROM decision_audit_log WHERE raw_post_id = $1', [postId]);
+        expect(n.n).toBe(0);
+    });
+
+    test('an unregistered methodology id is rejected', async () => {
+        const postId = await insertPost('AI is changing schools');
+        const jobId = await insertJob();
+        await expect(saveRelevance(postId, jobId, '00000000-0000-0000-0000-000000000000'))
+            .rejects.toThrow(/not a registered relevance methodology/);
+    });
+});

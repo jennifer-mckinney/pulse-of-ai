@@ -2,7 +2,7 @@
 
 ## Quick Start
 ```bash
-npm run docker:up      # Start compose project `pulse-of-ai`: PostgreSQL (5434) + test DB (5433) + Redis (6379)
+npm run docker:up      # Start compose project `pulse-of-ai`: PostgreSQL (5434) + test DB (5433) + Valkey (6379, Redis protocol)
 npm run migrate        # Run pending SQL migrations against dev DB
 npm run seed           # Data sources + methodology registry (idempotent)
 npm run seed:e2e       # Deterministic e2e fixture dataset (idempotent) — needed by `npm run test:e2e`
@@ -35,8 +35,9 @@ npm run teardown       # stop it (keeps volumes); `-- --purge` deletes volumes a
 - **DB:** PostgreSQL 16 + pgvector — 26 migrations in `src/db/migrations/` (025 Reddit tables + `raw_posts.text_removed_*`, 026 `ingest@1.5.0`) (009 registers the bias / ingest / audit_narration methodology rows; it must stay field-for-field equal to `src/config/methodology-registry.js`; 010 adds per-assessment bias methodology lineage — `bias_assessments.methodology_version_id`, resolved at read time as recorded, inferred or current by `src/config/bias-lineage.js`; 011 registers audit_narration@1.2.0 — 009 is released and never edited, later methodology versions ship as new migrations; 012 registers embedding@1.0.0 — the embedding model pinned to a Hugging Face commit via EMBED_MODEL_REVISION — and adds `post_embeddings.methodology_version`; 013–015 are the source-collection migrations, see Sources above)
 - **Data mode:** `src/config/data-mode.js` classifies posts by source (`data_sources.source_type = 'demo'` = standup demo feed): `/api/health` reports `data_mode` (demo / live / mixed / none, trailing hour), `active_sources` (demo feeds excluded) and `demo_feeds`; aggregated rows carry `demo_posts` + `data_mode`; receipts carry `post.data_origin`. The frontend (`data.js dataModeOf`, `chapters.js resolveIntro`) turns it into the intro kicker (LIVE / DEMO / LIVE + DEMO), interpolated intro numbers and the "— Demo data" markers; `isDemo` still means only the bundled fallback (no fetches)
 - **Pipeline:** `src/pipeline/` — sentiment → relevance → discourse → embeddings → correlation
-- **Workers:** BullMQ queues backed by Redis; worker files mirror pipeline modules
+- **Workers:** BullMQ queues backed by Valkey 8 (Redis protocol; env vars keep the `REDIS_*` names); worker files mirror pipeline modules
 - **Routes:** `src/routes/` — health, posts, sentiment, refresh, audit, bias, methodology, sources, query, themes. `src/server.js` sets the CSP/security headers, applies CORS to the read-only routers only, and mounts `POST /api/refresh` (60 s global debounce) without CORS
+- **Watchdog (alerting):** `scripts/watchdog.js` + `src/watchdog/` — compose service `watchdog` (profile `full`), OUTSIDE the worker. Polls `/api/health` (default every 120 s) and probes the DB; writes one critical `alert_events` row per condition (`source_table 'watchdog'`, unique open index from migration 050), resolves cleared ones with `alert_resolutions`, e-mails each open/clear over SMTP (rate-limited). SMTP settings in `.env`; `SMTP_PASSWORD` reaches the watchdog only (the worker blanks it; `scripts/test/check-compose.sh` enforces). SMTP unset → dashboard only, `/api/health` `watchdog.email.status` = "email alerting not configured". Tests use a fake SMTP server (`smtp-server`, dev dependency) — never real e-mail
 - **Audit replay:** `src/audit/replay.js` + `scripts/replay.js` back the receipt's reproduce command
 - **Frontend:** `public/` — no build step, all assets self-hosted, UMD modules loaded in contract order by `index.html`:
   - `js/config/` — `design.config.js`, `api.config.js`, `story.config.js` (the 11 beats), `cities.config.js` (city registry)

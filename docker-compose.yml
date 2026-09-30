@@ -14,8 +14,10 @@ x-logging: &logging
     max-file: "5"
 
 # Environment of every Node role (migrate, web, worker, populate): the
-# database, Redis, and the two base secrets (AUDIT_HASH_KEY,
-# CORRELATION_SALT). Container-side connection settings are fixed to the
+# database, Redis, and the base secret AUDIT_HASH_KEY (with PROVENANCE_KEY).
+# CORRELATION_SALT is NOT here: only the worker computes pseudonyms, so only
+# the worker gets it; web gets a presence flag (PR #22 security L1).
+# Container-side connection settings are fixed to the
 # compose network; the host-side .env values (POSTGRES_HOST=localhost,
 # POSTGRES_PORT=5434, ...) are for `npm run dev` on the host and are
 # deliberately overridden here.
@@ -30,6 +32,9 @@ x-app-env: &app-env
   REDIS_HOST: redis
   REDIS_PORT: "6379"
   REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required (npm run standup generates it)}
+  # Pinned here for EVERY role (P10-18): the worker also loads the env file,
+  # and web and worker must agree on the logical database the queues use.
+  REDIS_DB: ${REDIS_DB:-}
   EMBEDDINGS_SERVICE_URL: http://embeddings:8000
   EMBED_MODEL: ${EMBED_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
   # Pinned model commit (P9-5); the worker records embedding@<ver> only when
@@ -38,8 +43,11 @@ x-app-env: &app-env
   AUDIT_HASH_KEY: ${AUDIT_HASH_KEY:-}
   # D2 provenance fingerprint key; empty falls back to AUDIT_HASH_KEY.
   PROVENANCE_KEY: ${PROVENANCE_KEY:-}
-  CORRELATION_SALT: ${CORRELATION_SALT:-}
   CORRELATION_MIN_CONFIDENCE: ${CORRELATION_MIN_CONFIDENCE:-0.85}
+  # Spec §20 DPIA gate: correlation stays off until a completed DPIA is
+  # recorded AND the operator enables it (src/pipeline/correlation-gate.js).
+  CORRELATION_DPIA_REF: ${CORRELATION_DPIA_REF:-}
+  CORRELATION_ENABLED: ${CORRELATION_ENABLED:-false}
   RETENTION_DETAIL_DAYS: ${RETENTION_DETAIL_DAYS:-90}
   DEMO_FEED_INTERVAL_MS: ${DEMO_FEED_INTERVAL_MS:-150000}
   DEMO_FEED_BATCH: ${DEMO_FEED_BATCH:-}
@@ -54,6 +62,8 @@ x-collector-settings: &collector-settings
   # until the operator sets their own. See .env.example.
   COLLECTOR_CONTACT_URL: ${COLLECTOR_CONTACT_URL:-}
   PERMISSION_GATED_FEEDS_ACCEPTED_BY: ${PERMISSION_GATED_FEEDS_ACCEPTED_BY:-}
+  # PR #22 decision G5: no default — gated sources stay closed until named.
+  GATE_APPROVED_BY: ${GATE_APPROVED_BY:-}
   COLLECTORS_ENABLED: ${COLLECTORS_ENABLED:-true}
   COLLECTORS_DISABLED: ${COLLECTORS_DISABLED:-}
   COLLECT_WINDOW_MS: ${COLLECT_WINDOW_MS:-150000}
@@ -62,6 +72,7 @@ x-collector-settings: &collector-settings
   TELEGRAM_WRITTEN_PERMISSION_REF: ${TELEGRAM_WRITTEN_PERMISSION_REF:-}
   BBC_LICENSE_REF: ${BBC_LICENSE_REF:-}
   NYT_LICENSE_REF: ${NYT_LICENSE_REF:-}
+  GUARDIAN_COMMERCIAL_LICENSE_REF: ${GUARDIAN_COMMERCIAL_LICENSE_REF:-}
   CNN_LICENSE_REF: ${CNN_LICENSE_REF:-}
   ALJAZEERA_LICENSE_REF: ${ALJAZEERA_LICENSE_REF:-}
   NBC_LICENSE_REF: ${NBC_LICENSE_REF:-}
@@ -131,50 +142,14 @@ x-collector-settings: &collector-settings
   SOURCE_ONE_USEFUL_THING_ENABLED: ${SOURCE_ONE_USEFUL_THING_ENABLED:-}
   SOURCE_PLATFORMER_ENABLED: ${SOURCE_PLATFORMER_ENABLED:-}
 
-# Collector CREDENTIALS — merged into `worker` ONLY (F9-2). web is the
-# internet-facing process: an RCE or debug leak there must not expose paid
-# API keys via /proc/self/environ, and migrate / populate never need them.
-# Collection with credentials runs in the worker; scripts/test/check-compose.sh
-# fails if a credential value reaches another role.
-x-collector-env: &collector-env
-  META_CONTENT_LIBRARY_EXPORT_DIR: ${META_CONTENT_LIBRARY_EXPORT_DIR:-}
-  YOUTUBE_API_KEY: ${YOUTUBE_API_KEY:-}
-  TIKTOK_RESEARCH_CLIENT_KEY: ${TIKTOK_RESEARCH_CLIENT_KEY:-}
-  TIKTOK_RESEARCH_CLIENT_SECRET: ${TIKTOK_RESEARCH_CLIENT_SECRET:-}
-  REDDIT_CLIENT_ID: ${REDDIT_CLIENT_ID:-}
-  REDDIT_CLIENT_SECRET: ${REDDIT_CLIENT_SECRET:-}
-  REDDIT_USER_AGENT: ${REDDIT_USER_AGENT:-}
-  WECHAT_AUTHORIZED_FEED_URL: ${WECHAT_AUTHORIZED_FEED_URL:-}
-  WECHAT_AUTHORIZED_FEED_HOST: ${WECHAT_AUTHORIZED_FEED_HOST:-}
-  TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
-  X_BEARER_TOKEN: ${X_BEARER_TOKEN:-}
-  NYT_API_KEY: ${NYT_API_KEY:-}
-  CNN_FEED_URL: ${CNN_FEED_URL:-}
-  CNN_API_KEY: ${CNN_API_KEY:-}
-  GUARDIAN_API_KEY: ${GUARDIAN_API_KEY:-}
-  DOWJONES_API_KEY: ${DOWJONES_API_KEY:-}
-  DOWJONES_FEED_URL: ${DOWJONES_FEED_URL:-}
-  AP_API_KEY: ${AP_API_KEY:-}
-  REUTERS_CONNECT_CLIENT_ID: ${REUTERS_CONNECT_CLIENT_ID:-}
-  REUTERS_CONNECT_CLIENT_SECRET: ${REUTERS_CONNECT_CLIENT_SECRET:-}
-  SPRINGER_API_KEY: ${SPRINGER_API_KEY:-}
-  NCBI_API_KEY: ${NCBI_API_KEY:-}
-  NCBI_EMAIL: ${NCBI_EMAIL:-}
-  ELSEVIER_API_KEY: ${ELSEVIER_API_KEY:-}
-  SCHOLAR_ALERTS_IMAP_HOST: ${SCHOLAR_ALERTS_IMAP_HOST:-}
-  SCHOLAR_ALERTS_IMAP_USER: ${SCHOLAR_ALERTS_IMAP_USER:-}
-  SCHOLAR_ALERTS_IMAP_PASSWORD: ${SCHOLAR_ALERTS_IMAP_PASSWORD:-}
-  RESEARCHGATE_DATASET_PATH: ${RESEARCHGATE_DATASET_PATH:-}
-  IEEE_API_KEY: ${IEEE_API_KEY:-}
-  JSTOR_DATASET_PATH: ${JSTOR_DATASET_PATH:-}
-  GOVINFO_API_KEY: ${GOVINFO_API_KEY:-}
-  CONGRESS_API_KEY: ${CONGRESS_API_KEY:-}
-  GITHUB_TOKEN: ${GITHUB_TOKEN:-}
-  GITLAB_TOKEN: ${GITLAB_TOKEN:-}
-  HF_TOKEN: ${HF_TOKEN:-}
-  STACKEXCHANGE_KEY: ${STACKEXCHANGE_KEY:-}
-  REUTERS_CONNECT_TOKEN_URL: ${REUTERS_CONNECT_TOKEN_URL:-}
-  REUTERS_CONNECT_API_URL: ${REUTERS_CONNECT_API_URL:-}
+# Collector CREDENTIALS reach `worker` ONLY (F9-2), through env_file (P10-18):
+# the worker loads the operator's env file (PULSE_ENV_FILE, default .env)
+# whole, so no credential is hand-listed here. web is the internet-facing
+# process: an RCE or debug leak there must not expose paid API keys via
+# /proc/self/environ, so web never loads the env file — it gets the settings
+# and a presence marker per credential (below); migrate / populate get
+# neither. scripts/test/check-compose.sh fails if a credential value reaches
+# another role, and tests/unit/pure/sourceEnv.test.js holds the lists.
 
 # Presence markers for web (F9-2): the literal "set" when the credential is
 # set in the env file, empty otherwise — web reports each source's gate
@@ -273,19 +248,42 @@ services:
       timeout: 5s
       retries: 10
 
-  # Redis — BullMQ job queue backend for the event-driven pipeline.
+  # Valkey (Redis protocol) — BullMQ job queue backend for the event-driven
+  # pipeline. The service keeps the name "redis" so REDIS_HOST=redis holds.
   # AOF persistence (appendonly yes) ensures in-flight jobs survive container restarts.
   # At 10K+ events per 2-3 minute cycle across 50 sources, job durability is non-negotiable.
   #
   # Password required (F9-1): REDIS_PASSWORD (generated by npm run standup)
-  # is written to a config file instead of redis-server's argv, so `ps` on
+  # is written to a config file instead of valkey-server's argv, so `ps` on
   # the host never shows it; the image's own entrypoint then starts
-  # redis-server with its usual privilege drop to the `redis` user.
-  # Backslashes and double quotes are escaped for redis.conf quoting.
+  # valkey-server with its usual privilege drop to the `valkey` user.
+  # Backslashes and double quotes are escaped for the config file's quoting.
   redis:
     logging: *logging
-    # redis:7-alpine, pinned by digest (F9-6); bump deliberately.
-    image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    # Valkey (BSD-3-Clause, Linux Foundation) replaces redis:7-alpine, whose
+    # later releases moved to RSALv2/SSPL. It speaks the Redis protocol, so
+    # BullMQ, the REDIS_* variables and the service name "redis" are unchanged.
+    # valkey/valkey:8.1.10-alpine, pinned by digest (F9-6); bump deliberately
+    # (Dependabot proposes 8.x patches; a major bump is a reviewed decision).
+    # Volume note: the data lives in a NEW volume, valkey_data. Redis 7.4
+    # writes RDB format 12, which Valkey 8 refuses to load ("Can't handle RDB
+    # format version 12", even with rdb-version-check relaxed), so reusing
+    # redis_data would crash-loop an upgraded stack. Nothing is lost by
+    # starting empty: the queue data is transient — the worker re-registers
+    # every collection and maintenance schedule when it starts, and the
+    # heartbeat and refresh debounce are short-lived keys. Jobs still waiting
+    # at the moment of the switch ARE dropped, and a later collection does not
+    # re-fetch their items (ingest dedupes stored posts): dropped scoring jobs
+    # are recovered by the unscored-post sweep only for posts collected in the
+    # last 24 h, their cycles close at the 15-minute hard cap, and dropped
+    # embed jobs are lost (nothing re-queues a missing embedding). So drain
+    # first (README, "Upgrading a stack that ran Redis 7"): stop the stack
+    # cleanly (docker stop gives the worker 180 s to finish in-flight jobs)
+    # only when /api/health shows the ingest and embed queues empty, and
+    # upgrade within 24 h of the last collection. The old
+    # <project>_redis_data volume is left in place, unused; remove it by
+    # hand once the stack is healthy (docker volume rm <project>_redis_data).
+    image: valkey/valkey:8.1.10-alpine@sha256:081c2f5cb575efc901aa80ff9cdbd1ec6a301682fd35e1ebb4b0990a4a4a8507
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required (npm run standup generates it)}
     command:
@@ -294,16 +292,17 @@ services:
       - |
         umask 077
         pw=$$(printf '%s' "$$REDIS_PASSWORD" | sed 's/[\\"]/\\&/g')
-        printf 'requirepass "%s"\n' "$$pw" > /tmp/redis-auth.conf
-        chown redis:redis /tmp/redis-auth.conf
-        exec docker-entrypoint.sh redis-server /tmp/redis-auth.conf --appendonly yes --appendfsync everysec
+        printf 'requirepass "%s"\n' "$$pw" > /tmp/valkey-auth.conf
+        chown valkey:valkey /tmp/valkey-auth.conf
+        exec docker-entrypoint.sh valkey-server /tmp/valkey-auth.conf --appendonly yes --appendfsync everysec
     ports:
       - "${PULSE_BIND_ADDR:-127.0.0.1}:${REDIS_PORT:-6379}:6379"
     volumes:
-      - redis_data:/data
-    # Authenticated ping; REDISCLI_AUTH keeps the password out of argv.
+      - valkey_data:/data
+    # Authenticated ping; REDISCLI_AUTH (valkey-cli 8 still reads that name)
+    # keeps the password out of argv.
     healthcheck:
-      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" valkey-cli ping | grep -q PONG"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -351,6 +350,18 @@ services:
       # F10-8: POST /api/refresh requires REFRESH_TOKEN (X-Refresh-Token)
       # when the published address is beyond loopback.
       PULSE_BIND_ADDR: ${PULSE_BIND_ADDR:-127.0.0.1}
+      # The process listens on every container interface behind Docker's
+      # port publish; the published address decides exposure (src/server.js).
+      # PR #22 security M4: the published address is trusted for the
+      # wildcard listen only in THIS container — PULSE_IN_CONTAINER=1 plus
+      # the runtime's /.dockerenv (src/routes/refresh.js). It can only make
+      # the refresh guard stricter anywhere else.
+      HOST: 0.0.0.0
+      PULSE_IN_CONTAINER: "1"
+      # PR #22 security L1: a presence flag, never the salt. The worker
+      # publishes whether the salt is usable (src/workers/heartbeat.js).
+      CORRELATION_SALT_SET: ${CORRELATION_SALT:+set}
+      PULSE_CONTAINER_PUBLISHED_ADDR: ${PULSE_BIND_ADDR:-127.0.0.1}
       REFRESH_TOKEN: ${REFRESH_TOKEN:-}
       REFRESH_STALE_MINUTES: ${REFRESH_STALE_MINUTES:-30}
     ports:
@@ -372,9 +383,25 @@ services:
   worker:
     <<: *app
     command: ["node", "src/workers/start.js"]
-    # The only role with collector credentials (F9-2).
+    # The only role with collector credentials (F9-2): the operator's env
+    # file, whole (P10-18). `environment` below still wins for the container
+    # settings (app-env fixes the database and Redis hosts to the network).
+    # PR #22 grumpy L12: required — a wrong PULSE_ENV_FILE or a missing .env
+    # stops `up` with "env file … not found" instead of booting a worker with
+    # every keyed source silently closed. The long env_file syntax needs
+    # Compose 2.24+; this file already requires 2.39 (build.provenance).
+    env_file:
+      - path: ${PULSE_ENV_FILE:-.env}
+        required: true
     environment:
-      <<: [*app-env, *collector-settings, *collector-env]
+      <<: [*app-env, *collector-settings]
+      # The SMTP password is the WATCHDOG's alone (PR #22 principal #12): the
+      # env file above carries it, so it is blanked here (environment wins
+      # over env_file). scripts/test/check-compose.sh enforces it.
+      SMTP_PASSWORD: ""
+      # PR #22 security L1: the per-deployment correlation salt goes to the
+      # worker ONLY (the embed and correlate jobs compute pseudonyms).
+      CORRELATION_SALT: ${CORRELATION_SALT:-}
     # Healthy = the worker's heartbeat file is fresh (P9-7). It is written
     # every 15 s only after the heartbeat reached Redis, so a stuck worker or
     # one that lost Redis turns unhealthy (src/workers/heartbeat.js).
@@ -421,6 +448,59 @@ services:
     volumes:
       - hf_cache:/home/app/.cache/huggingface
 
+  # External watchdog (PR #22 principal #12, Jennifer's decision "watchdog +
+  # dashboard + email"). Every other alert is evaluated INSIDE the worker, so
+  # this runs in its own container from the same image: every
+  # WATCHDOG_POLL_INTERVAL_S (default 120) it polls web's /api/health and
+  # probes the database, and on worker down, retention overdue, maintenance
+  # failing, collection failing, abnormal queues / failed jobs, or the DB,
+  # Valkey or web API unreachable it writes ONE critical alert per condition
+  # (dashboard health chip + banner) and e-mails SMTP_TO once when it opens
+  # and once when it clears (src/watchdog/, README "Alerting").
+  # Least privilege: the database only (to record alerts) and the SMTP
+  # settings — no Redis password, no audit / correlation key, no collector
+  # credential. It is the ONLY role that receives SMTP_PASSWORD. It depends
+  # on neither web nor worker: either being down is what it reports.
+  watchdog:
+    <<: *app
+    command: ["node", "scripts/watchdog.js"]
+    environment:
+      NODE_ENV: production
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-pulse_of_ai}
+      POSTGRES_USER: ${POSTGRES_USER:-pulse_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      PG_POOL_MAX: "2"
+      WATCHDOG_HEALTH_URL: http://web:3000/api/health
+      WATCHDOG_DASHBOARD_URL: ${WATCHDOG_DASHBOARD_URL:-}
+      WATCHDOG_POLL_INTERVAL_S: ${WATCHDOG_POLL_INTERVAL_S:-}
+      WATCHDOG_INITIAL_DELAY_S: ${WATCHDOG_INITIAL_DELAY_S:-}
+      WATCHDOG_HTTP_TIMEOUT_MS: ${WATCHDOG_HTTP_TIMEOUT_MS:-}
+      WATCHDOG_MAX_QUEUE_DEPTH: ${WATCHDOG_MAX_QUEUE_DEPTH:-}
+      WATCHDOG_MAX_QUEUE_FAILED_PER_HOUR: ${WATCHDOG_MAX_QUEUE_FAILED_PER_HOUR:-}
+      WATCHDOG_MAX_FAILED_CYCLES_PER_HOUR: ${WATCHDOG_MAX_FAILED_CYCLES_PER_HOUR:-}
+      WATCHDOG_RETENTION_MAX_AGE_MIN: ${WATCHDOG_RETENTION_MAX_AGE_MIN:-}
+      WATCHDOG_DAILY_MAX_AGE_H: ${WATCHDOG_DAILY_MAX_AGE_H:-}
+      WATCHDOG_TERMS_MAX_AGE_H: ${WATCHDOG_TERMS_MAX_AGE_H:-}
+      WATCHDOG_EMAIL_MAX_PER_HOUR: ${WATCHDOG_EMAIL_MAX_PER_HOUR:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-}
+      SMTP_SECURE: ${SMTP_SECURE:-}
+      SMTP_REQUIRE_TLS: ${SMTP_REQUIRE_TLS:-}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_TO: ${SMTP_TO:-}
+    # No healthcheck: its liveness is reported by /api/health
+    # (watchdog.reporting, from its last poll) and shown in the health drawer.
+    healthcheck:
+      disable: true
+    stop_grace_period: 20s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
   # Demo FALLBACK loop (profile "demo"). The worker collects live data from
   # the 52-source registry; this loop writes a FICTIONAL demo batch through
   # the real pipeline every DEMO_FEED_INTERVAL_MS ONLY while the trailing
@@ -451,7 +531,8 @@ services:
 volumes:
   postgres_data:
     driver: local
-  redis_data:
+  # Valkey queue data (the old redis_data volume is not reused; see redis).
+  valkey_data:
     driver: local
   # sentence-transformers model cache (embeddings service, profile "full")
   hf_cache:

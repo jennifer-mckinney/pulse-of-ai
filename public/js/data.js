@@ -319,6 +319,11 @@
                     ? { positive: positive / total, neutral: neutral / total, negative: negative / total }
                     : { positive: 0, neutral: 0, negative: 0 },
                 sources: normalizeSources(row.sources),
+                // D3 (ADR 0001): posts of this city placed at their
+                // publisher's home city — the globe's separate
+                // publisher-location layer. Clamped to the total; an older
+                // API without the field serves 0.
+                publisher_posts: Math.min(toCount(row.publisher_posts), total),
                 last_updated: row.last_updated,
             });
         }

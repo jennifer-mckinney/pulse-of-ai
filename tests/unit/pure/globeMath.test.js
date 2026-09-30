@@ -122,7 +122,7 @@ describe('adaptCities', () => {
         }]);
         expect(c).toEqual({
             id: 'sf', name: 'San Francisco', lat: 37.77, lon: -122.42,
-            sentiment: 0.38, volume: 420, top: 'developer',
+            sentiment: 0.38, volume: 420, top: 'developer', publisher: 0,
         });
     });
 
@@ -526,5 +526,29 @@ describe('module surface', () => {
             .toBeCloseTo((2 * Math.PI) / (design.GLOBE.spinPeriodMs / 1000), 12);
         expect(m.RING_RATE_PER_SEC)
             .toBeCloseTo(1000 / design.GLOBE.ringPeriodMs, 12);
+    });
+});
+
+describe('D3 publisher-location layer (publisherCount / publisherLayer / adaptCities)', () => {
+    const g = require('../../../public/js/globe.js');
+    const m = g.math || g;
+
+    test('adaptCities carries the publisher count from the API shape', () => {
+        const [c] = m.adaptCities([{ city: 'London', lat: 51.5, lng: -0.12, total: 5, publisher_posts: 2 }]);
+        expect(c.publisher).toBe(2);
+        const [none] = m.adaptCities([{ city: 'Paris', lat: 48.8, lng: 2.3, total: 5 }]);
+        expect(none.publisher).toBe(0);
+    });
+
+    test('publisherLayer: none, ring (mixed) and only (every post publisher-located)', () => {
+        expect(m.publisherLayer({ volume: 5, publisher: 0 })).toEqual({ mode: 'none', publisher: 0, share: 0 });
+        expect(m.publisherLayer({ volume: 5, publisher: 2 })).toEqual({ mode: 'ring', publisher: 2, share: 0.4 });
+        expect(m.publisherLayer({ volume: 3, publisher: 3 })).toEqual({ mode: 'only', publisher: 3, share: 1 });
+        // clamped to the volume
+        expect(m.publisherLayer({ volume: 3, publisher: 7 }).publisher).toBe(3);
+    });
+
+    test('the layer ink is a neutral (not a sentiment) colour', () => {
+        expect(m.PUBLISHER_RING).toMatch(/^rgba\(234,241,250/);
     });
 });

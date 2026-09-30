@@ -7,6 +7,7 @@
 const request = require('supertest');
 const app     = require('../../src/server');
 const { insertSource, insertJob, insertMethodologyVersions, insertPostWithFullPipeline } = require('./helpers');
+const { dbRun } = require('../../src/db/connection');
 
 describe('GET /api/posts/aggregated-by-location', () => {
     it('returns 200 with an array', async () => {
@@ -41,6 +42,24 @@ describe('GET /api/posts/aggregated-by-location', () => {
             dominant:     expect.any(String),
             last_updated: expect.any(String),
         });
+    });
+
+    it('D3: counts the posts placed at the publisher\'s home city (publisher_posts) inside the city total', async () => {
+        const srcId = await insertSource('loc-posts-src-d3');
+        const jobId = await insertJob();
+        const mvIds = await insertMethodologyVersions();
+        const ids = [];
+        for (let i = 0; i < 3; i++) {
+            ids.push(await insertPostWithFullPipeline(srcId, jobId, mvIds, { location: 'London', externalId: `d3-${i}` }));
+        }
+        await dbRun(`UPDATE raw_posts SET raw_payload = '{"location_basis":"publisher"}'::jsonb WHERE id = ANY($1::uuid[])`,
+            [ids.slice(0, 2).map(x => (typeof x === 'object' ? x.postId || x.id : x))]);
+        await dbRun(`UPDATE raw_posts SET raw_payload = '{"location_basis":"content"}'::jsonb WHERE id = $1`,
+            [typeof ids[2] === 'object' ? ids[2].postId || ids[2].id : ids[2]]);
+
+        const res = await request(app).get('/api/posts/aggregated-by-location');
+        expect(res.body).toHaveLength(1);
+        expect(res.body[0]).toMatchObject({ city: 'London', total: 3, publisher_posts: 2 });
     });
 
     it('aggregates sentiment counts correctly per city', async () => {

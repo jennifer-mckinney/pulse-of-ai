@@ -83,6 +83,9 @@ describe('provenance fingerprint (D2, migration 017)', () => {
             external_id: 'hn-algolia:77',
             fingerprint: payload.provenance_fingerprint,
             verifiable: `verifiable: provide the original URL or id to reproduce the fingerprint: npm run verify-provenance -- --post ${postId} --url <original URL> [--id <original id>]`,
+            // PR #22 G6: stored here without the runner, so no admission version was recorded.
+            admission: { component: 'admission_filter', version: null,
+                lineage: 'not recorded: stored before the admission filter was versioned (migration 042)' },
         });
         // The live ingestion step restates ingest@1.3.0's precise claim.
         expect(res.body.ingest.methodology_version).toBe('1.3.0');

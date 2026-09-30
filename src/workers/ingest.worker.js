@@ -1,28 +1,33 @@
 // src/workers/ingest.worker.js
-// BullMQ worker handler for the 'ingest' queue — the scoring RETRY path.
+// BullMQ worker handler for the 'ingest' queue — where every collected post
+// is SCORED (P10-12).
 //
-// The collection runner (src/collectors/runner.js) stores and scores every
-// collected post inline; when scoring a stored post fails (a transient DB
-// error, say), it queues { rawPostId, sourceId, jobId } here. This worker:
+// The collection runner (src/collectors/runner.js) stores each new post and
+// queues { rawPostId, sourceId, jobId } here (scoreVia 'queue'); scoring
+// retries and the unscored sweep (src/collectors/sweep.js) use the same
+// queue. This worker:
 //   1. runs sentiment + relevance + discourse via scorePost — each stage is
 //      idempotent, so only the missing stages write (with audit rows) under
-//      the CURRENT methodology versions (resolveCurrentMethodology);
-//   2. applies the relevance embed gate (relevance@1.1.0: score >= 1/20, one
-//      lexicon match) and enqueues an embed job for a passing post.
-// Errors propagate so BullMQ retries with backoff.
-//
-// Previously this file imported a saveProcessedPost that never existed and
-// gated on 0.40, which needed 8 of 20 keywords (ADR 0001).
+//      the CURRENT methodology versions (resolveCurrentMethodology), under
+//      the post's own job while it is open, else the current cycle;
+//   2. applies the relevance embed gate (relevance@1.2.0: at least one of
+//      the 21 lexicon terms, score >= 1/21) and enqueues an embed job for a
+//      passing post, keyed embed-<post id> so it is queued at most once.
+// A post whose text retention already removed completes as a recorded
+// no-op ({ skipped: true, reason: 'text_removed' }, PR #22 H1): the notice
+// is never scored. Other errors propagate so BullMQ retries with backoff.
 
 'use strict';
 
 const { scorePost } = require('../pipeline/ingest');
+const { embedJobId } = require('../queues/pending');
 const { passesEmbedGate, EMBED_GATE_MIN_SCORE } = require('../pipeline/relevance');
 const { resolveCurrentMethodology } = require('../pipeline/methodology');
 const { embedQueue } = require('../queues/index');
 const { retryJobFor, leaveCycle, releaseRetry } = require('../collectors/cycle');
 const { dbGet } = require('../db/connection');
 const { collectWindowMs } = require('../config/source-registry');
+const { isTextRemoved } = require('../pipeline/scorable');
 
 /**
  * @param {{ data: { rawPostId: string, sourceId?: string, jobId: string } }} job
@@ -42,7 +47,14 @@ async function processIngestJob(job) {
     if (reserved && jobId) {
         const own = await dbGet('SELECT status FROM processing_jobs WHERE id = $1', [jobId]);
         if (own && (own.status === 'running' || own.status === 'awaiting_retries')) {
-            const { relevance } = await scorePost(rawPostId, jobId, mv);
+            let relevance;
+            try {
+                ({ relevance } = await scorePost(rawPostId, jobId, mv));
+            } catch (err) {
+                if (!isTextRemoved(err)) throw err;
+                await releaseRetry(jobId);
+                return textRemoved(rawPostId);
+            }
             await releaseRetry(jobId);
             return embedIfGated(rawPostId, relevance);
         }
@@ -58,17 +70,26 @@ async function processIngestJob(job) {
     let relevance;
     try {
         ({ relevance } = await scorePost(rawPostId, target.jobId, mv));
+    } catch (err) {
+        if (!isTextRemoved(err)) throw err;
+        return textRemoved(rawPostId);
     } finally {
         if (target.joined) await leaveCycle(target.jobId, {});
     }
     return embedIfGated(rawPostId, relevance);
 }
 
+/** H1: the post's text was removed by retention before it was scored. */
+function textRemoved(rawPostId) {
+    return { rawPostId, skipped: true, reason: 'text_removed', relevance: null, embedJobId: null };
+}
+
 async function embedIfGated(rawPostId, relevance) {
     if (!passesEmbedGate(relevance.score)) {
         return { rawPostId, relevance: Number(relevance.score), embedJobId: null };
     }
-    const embedJob = await embedQueue.add('embed-post', { rawPostId });
+    // PR #22 P1-5: one embed job per post (deterministic id).
+    const embedJob = await embedQueue.add('embed-post', { rawPostId }, { jobId: embedJobId(rawPostId) });
     return { rawPostId, relevance: Number(relevance.score), embedJobId: embedJob.id };
 }
 
