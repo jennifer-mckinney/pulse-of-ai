@@ -156,17 +156,12 @@ async function recordRefusal(sourceId, { kind, status = null }, slug) {
          RETURNING refusal_count, refused_until`,
         [sourceId, status, kind, COOLDOWN_MAX_MS / 1000, COOLDOWN_BASE_MS / 1000],
     );
-    await dbRun(
-        `INSERT INTO alert_events (alert_type, severity, source_table, source_id, details)
-         SELECT 'source_refused', 'critical', 'data_sources', $1::uuid, $2::jsonb
-         WHERE NOT EXISTS (SELECT 1 FROM alert_events
-                           WHERE alert_type = 'source_refused' AND source_id = $1::uuid AND resolved_at IS NULL)`,
-        [sourceId, JSON.stringify({
-            slug, error_kind: kind, http_status: status,
-            refusal_count: row ? row.refusal_count : null,
-            refused_until: row ? row.refused_until : null,
-        })],
-    );
+    // P1-6: atomic one-open-alert rule (migration 038).
+    await require('./source-alerts').openSourceAlert('source_refused', 'critical', sourceId, {
+        slug, error_kind: kind, http_status: status,
+        refusal_count: row ? row.refusal_count : null,
+        refused_until: row ? row.refused_until : null,
+    });
     return row;
 }
 
@@ -179,12 +174,10 @@ async function clearRefusal(sourceId, resolution) {
          WHERE source_id = $1`,
         [sourceId],
     );
-    await dbRun(
-        `UPDATE alert_events
-         SET resolved_at = NOW(), details = COALESCE(details, '{}'::jsonb) || jsonb_build_object('resolution', $2::text)
-         WHERE alert_type = 'source_refused' AND source_id = $1::uuid AND resolved_at IS NULL`,
-        [sourceId, resolution],
-    );
+    // P1-6: resolved with an audited alert_resolutions record.
+    await require('./source-alerts').resolveSourceAlert('source_refused', sourceId, {
+        resolvedBy: 'refusal state (src/collectors/state.js clearRefusal)', resolution, basis: { cleared: true },
+    });
 }
 
 module.exports = {

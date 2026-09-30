@@ -46,6 +46,7 @@ const { collectWindowMs } = require('../config/source-registry');
 const { closeCycles } = require('../collectors/cycle');
 const { evaluateSourceHealth } = require('../collectors/source-health');
 const { runRedditMaintenance, MAINTENANCE_MS } = require('../collectors/reddit/maintenance');
+const { nonReentrant } = require('./guard');
 
 const int = (v, d) => { const n = parseInt(v || '', 10); return Number.isFinite(n) && n > 0 ? n : d; };
 const CONC = workerConcurrency();
@@ -104,8 +105,10 @@ async function schedule() {
 }
 
 // Close collection cycles past their window: bias checks once over every
-// source's posts in the cycle (src/collectors/cycle.js).
-async function closeDueCycles() {
+// source's posts in the cycle (src/collectors/cycle.js). Non-reentrant
+// (PR #22 principal #6): a tick still running makes the next one skip.
+const closeDueCycles = nonReentrant(closeDueCyclesOnce);
+async function closeDueCyclesOnce() {
     try {
         for (const c of await closeCycles(collectWindowMs())) {
             log(`[cycle] job ${c.jobId} closed: ${c.postsProcessed} posts, `

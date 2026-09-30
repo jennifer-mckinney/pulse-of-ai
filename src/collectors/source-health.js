@@ -17,14 +17,17 @@
 //                             opened by state.recordRefusal — the evaluator
 //                             only makes sure it exists
 //
-// One OPEN alert per (type, source) at most; each is RESOLVED (resolved_at,
-// details.resolution) as soon as its condition clears, or when the source
+// One OPEN alert per (type, source) at most, enforced by a unique partial
+// index (migration 038; src/collectors/source-alerts.js); each is RESOLVED
+// (resolved_at, details.resolution, and an alert_resolutions record) as soon
+// as its condition clears, or when the source
 // stops collecting (killed or closed: not a health problem of the source).
 // Nothing is deleted.
 
 'use strict';
 
-const { dbAll, dbRun } = require('../db/connection');
+const { dbAll } = require('../db/connection');
+const { openSourceAlert, resolveSourceAlert } = require('./source-alerts');
 const { getSource, sourceStatus } = require('../config/source-registry');
 const { DEMO_SOURCE_TYPE } = require('../config/data-mode');
 
@@ -87,23 +90,19 @@ async function evaluateSourceHealth({ env = process.env, now = Date.now() } = {}
             const existing = openBy.get(`${type}:${row.id}`);
             if (cond[type] && !existing) {
                 const { severity, ...details } = cond[type];
-                await dbRun(
-                    `INSERT INTO alert_events (alert_type, severity, source_table, source_id, details)
-                     SELECT $1, $2, 'data_sources', $3::uuid, $4::jsonb
-                     WHERE NOT EXISTS (SELECT 1 FROM alert_events
-                                       WHERE alert_type = $1 AND source_id = $3::uuid AND resolved_at IS NULL)`,
-                    [type, severity, row.id, JSON.stringify({ slug: src.slug, ...details })],
-                );
-                opened.push({ slug: src.slug, type });
+                // P1-6: atomic — the unique partial index (migration 038)
+                // makes a concurrent second insert a no-op.
+                if (await openSourceAlert(type, severity, row.id, { slug: src.slug, ...details })) opened.push({ slug: src.slug, type });
             } else if (!cond[type] && existing) {
                 const why = !collecting ? 'the source is no longer collecting (closed or switched off)'
                     : type === 'source_stale' ? 'a new post was stored' : type === 'source_failing' ? 'a run succeeded' : 'the refusal cleared';
-                await dbRun(
-                    `UPDATE alert_events SET resolved_at = NOW(),
-                         details = COALESCE(details, '{}'::jsonb) || jsonb_build_object('resolution', $2::text)
-                     WHERE id = $1 AND resolved_at IS NULL`,
-                    [existing.id, `resolved by the source-health evaluator: ${why}`],
-                );
+                // P1-6: the resolution is an audited alert_resolutions record.
+                await resolveSourceAlert(type, row.id, {
+                    resolvedBy: 'source-health evaluator (src/collectors/source-health.js)',
+                    resolution: `resolved by the source-health evaluator: ${why}`,
+                    basis: { slug: src.slug, collecting, last_new_post_at: row.last_new_post_at || null,
+                        consecutive_failures: row.consecutive_failures || 0, access_denied_at: row.access_denied_at || null },
+                });
                 resolved.push({ slug: src.slug, type });
             }
         }

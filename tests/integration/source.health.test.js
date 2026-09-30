@@ -103,6 +103,57 @@ describe('evaluateSourceHealth', () => {
     });
 });
 
+describe('P1-6: one open alert per (type, source), atomically, with audited resolutions', () => {
+    it('overlapping evaluations open ONE source_stale alert', async () => {
+        const hours = getSource('npr').expectedNewWithinHours;
+        await db.dbRun(`UPDATE source_collection_state SET last_new_post_at = NOW() - make_interval(hours => $2) WHERE source_id = $1`, [npr, hours + 1]);
+        const results = await Promise.all([1, 2, 3, 4].map(() => evaluateSourceHealth({ env: ENV })));
+        expect(results.flatMap(r => r.opened)).toHaveLength(1);
+        expect(await openAlerts()).toHaveLength(1);
+    });
+
+    it('the database refuses a second open alert for the same (type, source)', async () => {
+        const ins = () => db.dbRun(`INSERT INTO alert_events (alert_type, severity, source_table, source_id) VALUES ('source_stale', 'warning', 'data_sources', $1)`, [npr]);
+        await ins();
+        await expect(ins()).rejects.toThrow(/uq_alerts_open_source|duplicate key/);
+    });
+
+    it('a resolution by the evaluator writes an alert_resolutions record', async () => {
+        const hours = getSource('npr').expectedNewWithinHours;
+        await db.dbRun(`UPDATE source_collection_state SET last_new_post_at = NOW() - make_interval(hours => $2) WHERE source_id = $1`, [npr, hours + 1]);
+        await evaluateSourceHealth({ env: ENV });
+        await state.saveOutcome(npr, { ok: true, itemCount: 1, newPosts: 1 });
+        await evaluateSourceHealth({ env: ENV });
+        const r = await db.dbAll(`SELECT r.resolved_by, r.resolution, s.status FROM alert_resolutions r JOIN alert_status s ON s.alert_id = r.alert_id`);
+        expect(r).toEqual([expect.objectContaining({ resolved_by: expect.stringMatching(/source-health evaluator/),
+            resolution: expect.stringMatching(/a new post was stored/), status: 'resolved' })]);
+    });
+
+    it('migration 038 closes existing duplicates (oldest stays open) with records, then enforces uniqueness', async () => {
+        const fs = require('fs');
+        const path = require('path');
+        const SQL = fs.readFileSync(path.join(__dirname, '../../src/db/migrations/038_unique_open_source_alerts.sql'), 'utf8');
+        const out = await db.dbTransaction(async (c) => {
+            await c.query('DROP INDEX uq_alerts_open_source');
+            const ids = [];
+            for (let i = 0; i < 3; i++) {
+                ids.push((await c.query(`INSERT INTO alert_events (alert_type, severity, source_table, source_id, created_at)
+                    VALUES ('source_stale', 'warning', 'data_sources', $1, NOW() - make_interval(mins => $2)) RETURNING id`, [npr, 10 - i])).rows[0].id);
+            }
+            await c.query(SQL);
+            await c.query(SQL);
+            const open = (await c.query(`SELECT id FROM alert_events WHERE resolved_at IS NULL AND source_id = $1`, [npr])).rows.map(r => r.id);
+            const recs = (await c.query(`SELECT alert_id, basis FROM alert_resolutions ORDER BY alert_id`)).rows;
+            const idx = (await c.query(`SELECT 1 FROM pg_indexes WHERE indexname = 'uq_alerts_open_source'`)).rowCount;
+            return { ids, open, recs, idx };
+        });
+        expect(out.open).toEqual([out.ids[0]]);
+        expect(out.recs.map(r => r.alert_id).sort()).toEqual([out.ids[1], out.ids[2]].sort());
+        for (const r of out.recs) expect(r.basis).toEqual({ kept_alert_id: out.ids[0] });
+        expect(out.idx).toBe(1);
+    });
+});
+
 describe('migration 037: last_new_post_at backfilled from stored posts', () => {
     it('sets last_new_post_at to MAX(collected_at) where it is NULL, and leaves set values alone', async () => {
         const fs = require('fs');
