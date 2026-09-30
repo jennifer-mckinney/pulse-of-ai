@@ -271,7 +271,9 @@ services:
     # redis_data would crash-loop an upgraded stack. Nothing is lost by
     # starting empty: the queue data is transient — the worker re-registers
     # every collection and maintenance schedule when it starts, and the
-    # heartbeat and refresh debounce are short-lived keys. Jobs still waiting
+    # worker heartbeat is a short-lived key (the refresh debounce is not in
+    # Valkey at all: it lives in the web process's memory,
+    # src/routes/refresh.js). Jobs still waiting
     # at the moment of the switch ARE dropped, and a later collection does not
     # re-fetch their items (ingest dedupes stored posts): dropped scoring jobs
     # are recovered by the unscored-post sweep only for posts collected in the

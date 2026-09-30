@@ -27,7 +27,7 @@ known:
 - **Certainly killed:** the agent's own demo worker and demo web server
   (worktree above; web on port 3400). PIDs not recorded.
 - **Possibly killed: the session worktree's preview dev server.** The session
-  worktree `/Users/jennifermckinney/Documents/my-projects/pulse-of-ai/sweet-driscoll-118bbf`
+  worktree (a separate checkout of this repository, `<projects-dir>/pulse-of-ai/sweet-driscoll-118bbf`)
   has a `.claude/launch.json` config "Express API (dev)" = `npm run dev` on
   port 3000, which runs `node src/server.js`, so its command line matches the
   second pattern. The coordinator reports that its preview server ran on

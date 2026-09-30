@@ -160,6 +160,19 @@ async function addToCycle(jobId, { collected = 0, processed = 0, sources = 0 }) 
     );
 }
 
+/**
+ * The genuine processed count of a job: the distinct posts scored under it,
+ * from its decision_audit_log rows. The one definition used wherever a job
+ * is finalized (closeCycles for cycles and 'awaiting_retries' jobs, and the
+ * runner for a one-shot job whose scoring all finished before its run
+ * ended), so the count never depends on who scored a post or when.
+ * @returns {Promise<number>}
+ */
+async function jobPostsProcessed(jobId) {
+    return (await dbGet(
+        `SELECT COUNT(DISTINCT raw_post_id)::int AS n FROM decision_audit_log WHERE job_id = $1`, [jobId])).n;
+}
+
 /** Atomically claim the cycles due for closing (status → 'closing'). */
 async function claimDueCycles(windowMs) {
     const dueSec = (windowMs + CYCLE_GRACE_MS) / 1000;
@@ -200,8 +213,7 @@ async function closeCycles(windowMs) {
         let posts = 0;
         try {
             // The genuine count: posts scored under this cycle (audited).
-            posts = (await dbGet(
-                `SELECT COUNT(DISTINCT raw_post_id)::int AS n FROM decision_audit_log WHERE job_id = $1`, [jobId])).n;
+            posts = await jobPostsProcessed(jobId);
             if (posts > 0) {
                 const mv = await resolveCurrentMethodology();
                 violations = (await runBiasChecks(jobId, mv.biasMvId)).violationsFound;
@@ -224,5 +236,6 @@ async function closeCycles(windowMs) {
 
 module.exports = {
     currentCycleJob, joinCycle, retryJobFor, leaveCycle, reserveRetry, releaseRetry, addToCycle, closeCycles, claimDueCycles, hardCapMs,
+    jobPostsProcessed,
     CYCLE_GRACE_MS, CYCLE_LOCK_KEY,
 };

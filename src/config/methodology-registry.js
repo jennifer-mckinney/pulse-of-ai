@@ -665,6 +665,49 @@ const METHODOLOGY_VERSIONS = [
     });
 })();
 
+// bias@1.6.0 — audit drift D-2 (2026-09-30): bias@1.4.0 / 1.5.0 register
+// that below a minimum "the value is stated", but the parity check recorded
+// 0 on its "insufficient sample" rows. 1.6.0 records the computed gap (the
+// largest pairwise difference across ALL the job's categories, small ones
+// included); still no violation, no alert. Everything else is bias@1.5.0.
+// Rows recorded under 1.4.0 / 1.5.0 keep their 0 (reproduced as they ran,
+// src/pipeline/bias.js reads parity_insufficient_value); the errata below
+// say so next to those versions.
+(() => {
+    const prev = METHODOLOGY_VERSIONS.find(m => m.component === 'bias' && m.version === '1.5.0');
+    METHODOLOGY_VERSIONS.push({
+        component: 'bias',
+        version: '1.6.0',
+        model_name: prev.model_name,
+        config: {
+            ...prev.config,
+            // Read by src/pipeline/bias.js checkPlatformSentimentParity
+            parity_insufficient_value: 'max_diff_all_categories',
+            sample_rules: {
+                ...prev.config.sample_rules,
+                platform_sentiment_parity: 'only categories with at least 10 posts are compared (parity_min_per_category); fewer '
+                    + 'than two such categories: insufficient sample, stating the largest pairwise gap in average comparative '
+                    + 'sentiment across all the job\'s categories (0 when it has fewer than two)',
+            },
+            changelog: [
+                'bias@1.6.0 (audit drift D-2, 2026-09-30): a platform-parity "insufficient sample" assessment states its computed '
+                    + 'value (the largest pairwise gap across all categories, small ones included) instead of 0, as '
+                    + 'sample_rules.below_minimum registered since bias@1.4.0; no violation and no alert, as before',
+            ],
+        },
+        justification: 'bias@1.6.0 makes the platform sentiment parity check (Barocas & Selbst 2016) do what bias@1.4.0 and '
+            + 'bias@1.5.0 registered for every check below its minimum sample: "the value is stated". When fewer than two source '
+            + 'categories have at least 10 posts in the job, the assessment is still recorded as "insufficient sample" with no '
+            + 'violation and no alert, but its value is now the largest pairwise difference in average comparative sentiment '
+            + 'across all of the job\'s categories, small ones included (0 when the job has fewer than two categories), with the '
+            + 'pair named in the evidence. Until now the check recorded 0 there, so a reader could not tell a small gap from a '
+            + 'large one. Location concentration and negative dominance already stated their values. Assessments recorded under '
+            + 'bias@1.4.0 and bias@1.5.0 are kept as they ran (0); an erratum on each of those versions records the difference. '
+            + 'Thresholds, minimum samples, the rolling 24-hour window, names, citations and planned layers are as in bias@1.5.0 '
+            + '(AI Act Article 13).',
+    });
+})();
+
 // admission_filter@1.0.0 — PR #22 G6 (Jennifer, 2026-09-29): the collection
 // admission filter (src/collectors/ai-filter.js) decides which items are
 // stored, so it is a versioned methodology component. The config IS the
@@ -723,6 +766,20 @@ const METHODOLOGY_ERRATA = [
             + 'relevance@1.1.0\'s config; `npm run replay` re-runs them with that rule. The 1.0.0 row is kept unedited as it '
             + 'was registered. Found by the replay tool (ADR 0001, methodology alignment); recorded 2026-09-29 (PR #10 review P10-16).',
     },
+    // Audit drift D-2 (2026-09-30), corrected by bias@1.6.0 (migration 061).
+    ...['1.4.0', '1.5.0'].map(version => ({
+        component: 'bias',
+        version,
+        erratum_key: `bias-${version}-parity-insufficient-value`,
+        corrected_by: 'bias@1.6.0',
+        erratum: `bias@${version} registers that an assessment below its minimum sample is recorded as "insufficient sample" `
+            + 'with its value stated. The platform sentiment parity check did not do that: its "insufficient sample" rows '
+            + '(fewer than two categories with at least 10 posts) recorded metric_value 0, not the computed gap between '
+            + 'categories. Read those rows as "insufficient sample, value not recorded"; the category averages are in the '
+            + 'row\'s evidence. Location concentration and negative dominance did state their values. bias@1.6.0 records the '
+            + `gap. The bias@${version} row is kept unedited as it was registered. Found by the documentation audit (drift D-2); `
+            + 'recorded 2026-09-30.',
+    })),
 ];
 
 /**

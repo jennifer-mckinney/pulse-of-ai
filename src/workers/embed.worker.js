@@ -1,7 +1,8 @@
 // src/workers/embed.worker.js
 // BullMQ worker handler for the 'embed' queue.
 //
-// Calls the Python Infinity service (or sentence-transformers fallback) to generate
+// Calls the Python embeddings service (python/embeddings_service.py,
+// FastAPI + sentence-transformers) to generate
 // a 384-dimensional embedding for a raw post, then saves it to post_embeddings.
 //
 // Errors propagate upward — BullMQ retries with exponential backoff per the

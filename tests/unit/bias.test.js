@@ -637,3 +637,76 @@ describe('bias@1.4.0 — minimum samples (parity per category, negative dominanc
         expect((await checkLocationConcentration(job2, biasMv)).isViolation).toBe(true);
     });
 });
+
+// ─── bias@1.6.0: parity "insufficient sample" states its computed value ──────
+// DR / drift D-2: bias@1.4.0 and bias@1.5.0 register that below a minimum
+// "the value is stated", but the parity check recorded 0 for its
+// "insufficient sample" rows. From bias@1.6.0 (config
+// parity_insufficient_value) the row carries the largest pairwise gap
+// across ALL the job's categories, small ones included; still no violation
+// and no alert. Rows under 1.4.0 / 1.5.0 are reproduced as they ran (0).
+
+describe('bias@1.6.0 — parity "insufficient sample" states the computed gap', () => {
+    const { METHODOLOGY_VERSIONS } = require('../../src/config/methodology-registry');
+    const cfg = v => METHODOLOGY_VERSIONS.find(m => m.component === 'bias' && m.version === v).config;
+    const { INSUFFICIENT_SAMPLE } = require('../../src/pipeline/bias');
+
+    async function smallTwoCategoryJob(prefix, devComparative, forumsComparative) {
+        const dev = await insertSource(`${prefix}-dev`, 'developer');
+        const forums = await insertSource(`${prefix}-forums`, 'forums');
+        const jobId = await insertJob();
+        const mvIds = await insertMethodologyVersions();
+        for (let i = 0; i < 4; i++) await insertPostWithSentiment(dev, jobId, mvIds.sentimentMvId, { comparative: devComparative, externalId: `${prefix}d${i}` });
+        for (let i = 0; i < 3; i++) await insertPostWithSentiment(forums, jobId, mvIds.sentimentMvId, { comparative: forumsComparative, externalId: `${prefix}f${i}` });
+        return jobId;
+    }
+
+    it('records the largest pairwise gap over all categories, with no violation and no alert', async () => {
+        const jobId = await smallTwoCategoryJob('v16a', 0.4, -0.1);
+        const biasMv = await insertBiasMv(cfg('1.6.0'));
+        const r = await checkPlatformSentimentParity(jobId, biasMv);
+        expect(r).toMatchObject({ isViolation: false, insufficientSample: true, groupValue: INSUFFICIENT_SAMPLE });
+        expect(r.metricValue).toBeCloseTo(0.5, 5);
+        const a = await dbGet(`SELECT group_value, metric_value, is_violation, severity, evidence FROM bias_assessments WHERE job_id = $1`, [jobId]);
+        expect(a).toMatchObject({ group_value: INSUFFICIENT_SAMPLE, is_violation: false, severity: null });
+        expect(a.metric_value).toBeCloseTo(0.5, 5);
+        expect(a.evidence).toMatchObject({
+            insufficient_sample: true, min_per_category: 10, compared: [],
+            value_basis: 'all_categories', worst_pair: 'developer vs forums',
+        });
+        expect(a.evidence.maxDiff).toBeCloseTo(0.5, 5);
+        expect(await dbAll('SELECT id FROM alert_events')).toEqual([]);
+    });
+
+    it('a gap above the threshold among small categories is stated but still raises nothing', async () => {
+        const jobId = await smallTwoCategoryJob('v16b', 0.9, -0.9);
+        const biasMv = await insertBiasMv(cfg('1.6.0'));
+        const r = await checkPlatformSentimentParity(jobId, biasMv);
+        expect(r.isViolation).toBe(false);
+        expect(r.metricValue).toBeCloseTo(1.8, 5);
+        expect(await dbAll('SELECT id FROM alert_events')).toEqual([]);
+    });
+
+    it('a single-category job has no pair to compare: the stated gap is 0', async () => {
+        const src = await insertSource('v16c-one', 'news');
+        const jobId = await insertJob();
+        const mvIds = await insertMethodologyVersions();
+        for (let i = 0; i < 12; i++) await insertPostWithSentiment(src, jobId, mvIds.sentimentMvId, { comparative: 0.3, externalId: `v16c${i}` });
+        const biasMv = await insertBiasMv(cfg('1.6.0'));
+        const r = await checkPlatformSentimentParity(jobId, biasMv);
+        expect(r).toMatchObject({ isViolation: false, insufficientSample: true, metricValue: 0 });
+        const a = await dbGet(`SELECT metric_value, evidence FROM bias_assessments WHERE job_id = $1`, [jobId]);
+        expect(a.metric_value).toBe(0);
+        expect(a.evidence).toMatchObject({ value_basis: 'all_categories', worst_pair: null, maxDiff: 0 });
+    });
+
+    it('bias@1.5.0 rows are reproduced as they ran (0 recorded), never re-interpreted', async () => {
+        const jobId = await smallTwoCategoryJob('v15', 0.4, -0.1);
+        const biasMv = await insertBiasMv(cfg('1.5.0'));
+        const r = await checkPlatformSentimentParity(jobId, biasMv);
+        expect(r).toMatchObject({ insufficientSample: true, metricValue: 0 });
+        const a = await dbGet(`SELECT metric_value, evidence FROM bias_assessments WHERE job_id = $1`, [jobId]);
+        expect(a.metric_value).toBe(0);
+        expect(a.evidence.value_basis).toBeUndefined();
+    });
+});
