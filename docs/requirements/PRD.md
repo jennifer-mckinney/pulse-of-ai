@@ -5,11 +5,11 @@
 | **Document** | Product Requirements Document |
 | **Product** | The Pulse of AI — global real-time AI discourse dashboard |
 | **Version** | 1.1 |
-| **Date** | 2026-09-30 |
+| **Date** | 2026-09-29 |
 | **Status** | Approved baseline, aligned with Technical Specification v1.2.0 |
 | **Related documents** | `docs/requirements/BRD.md`, `docs/TECHNICAL_SPEC.md` (v1.2.0), `docs/adr/0001-source-registry-and-collection.md`; superseded: `docs/plans/2026-07-05-globe-storytelling-design.md` |
 
-**v1.1 changes (2026-09-30), aligned to code per independent audit, 2026-09-30:** §1 (52-source registry, 8 categories, Canvas-2D globe); FR-1, FR-2, FR-4, FR-5, FR-6, FR-9, FR-14, FR-15, FR-28 (implementation status noted; unbuilt parts marked PLANNED); §4.3 FR-17 to FR-25 rewritten to the shipped FuN.zip prototype design (11 beats, Canvas-2D globe, demo labelling, legal notices), per Jennifer's ruling of 2026-09-28; §6.3 to §6.6 acceptance criteria; §7 roadmap status; §8 traceability; NFR-3; §10 question 2. Requirements not yet built stay as requirements and are marked **PLANNED — not implemented as of spec v1.2.0**.
+**v1.1 changes (2026-09-29), aligned to code per independent audit, 2026-09-29:** §1 (52-source registry, 8 categories, Canvas-2D globe); FR-1, FR-2, FR-4, FR-5, FR-6, FR-9, FR-14, FR-15, FR-28 (implementation status noted; unbuilt parts marked PLANNED); §4.3 FR-17 to FR-25 rewritten to the shipped FuN.zip prototype design (11 beats, Canvas-2D globe, demo labelling, legal notices), per Jennifer's ruling of 2026-09-28; §6.3 to §6.6 acceptance criteria; §7 roadmap status; §8 traceability; NFR-3; §10 question 2. Requirements not yet built stay as requirements and are marked **PLANNED — not implemented as of spec v1.2.0**.
 
 This document specifies WHAT the product must do and for WHOM. HOW it is built — schemas, algorithms, infrastructure — lives in the Technical Specification and is referenced inline by section number, e.g. (spec §9). The business case is in the BRD.
 
@@ -96,7 +96,7 @@ The public API is the product for P2 and the data layer for the frontend. All en
 | FR-15 | `GET /api/config` | Serve non-secret frontend configuration. *Status: retired — removed with the Mapbox map; not mounted on `master`. The frontend reads its configuration from self-hosted `public/js/config/*.js`.* |
 | FR-16 | Error handling: all endpoints validate inputs (UUID, ISO dates, clamped limits, allowlisted enums) and never leak stack traces, SQL errors, or file paths (spec §8). |
 
-### 4.3 Storytelling Frontend (FuN.zip prototype — the requirement of record, revised 2026-09-30)
+### 4.3 Storytelling Frontend (FuN.zip prototype — the requirement of record, revised 2026-09-29)
 
 The frontend is the primary experience for the journalist (P1) and the general public (P4). **Authority:** Jennifer's direction-of-authority ruling of 2026-09-28, verbatim: "what is in the FuN.zip front end prototype needs to be supported in the backend". The FuN.zip design-handoff prototype is the master contract for this section, and the shipped frontend in `public/` implements it (spec §11). The globe.gl design of `docs/plans/2026-07-05-globe-storytelling-design.md` (3D globe, 7 chapters) is superseded.
 
@@ -110,7 +110,7 @@ The frontend is the primary experience for the journalist (P1) and the general p
 | FR-22 | **Demo labelling and fallback:** demo numbers shall never be presented as live. The page shall derive a data mode from the served data (`live`, `demo`, `mixed`, `none`), and when the API is unavailable render an equivalent experience from a bundled deterministic demo set (`fallback`), with insights derived identically. Every mode that includes demo data shall show the "Demo data" markers, and the overview kicker shall state the mode. Demo posts and receipts shall be synthesised locally, never sent to the audit endpoint as if live. |
 | FR-23 | **Explainability in the UI:** featured and city posts shall link to their audit receipt ("Why does it say that?"), rendered in four audience views (Public, Journalist, Regulator, Researcher), so every rendered claim has a "why?" path (spec §10, §11). |
 | FR-24 | **Health visibility:** the header shall show a traffic-light status chip (green / yellow / red) driven by `/api/health` alerts and re-polled on the refresh cadence; it opens a health drawer with sources online, per-source status and the 12-hour alert history (spec §9, §11). |
-| FR-25 | The frontend shall run without a build step, with every asset self-hosted (no external CDN calls) under a strict Content-Security-Policy (no inline script or style); shall provide an informative fallback when canvas rendering is unavailable — a ranked city list (name, volume, sentiment) rendered from the same data — plus a static no-JavaScript notice; and shall display the project's **Appropriate Legal Notices** (copyright, the AGPL section 7(b) attribution "Built on Pulse of AI by Jennifer McKinney" linked to the upstream repository, the AGPL-3.0-or-later licence, the additional terms, a source-code link and the no-warranty statement) in a header "about" panel and in the no-JavaScript notice (spec §21). *Legal notices added 2026-09-30 with the AGPL licence.* |
+| FR-25 | The frontend shall run without a build step, with every asset self-hosted (no external CDN calls) under a strict Content-Security-Policy (no inline script or style); shall provide an informative fallback when canvas rendering is unavailable — a ranked city list (name, volume, sentiment) rendered from the same data — plus a static no-JavaScript notice; and shall display the project's **Appropriate Legal Notices** (copyright, the AGPL section 7(b) attribution "Built on Pulse of AI by Jennifer McKinney" linked to the upstream repository, the AGPL-3.0-or-later licence, the additional terms, a source-code link and the no-warranty statement) in a header "about" panel and in the no-JavaScript notice (spec §21). *Legal notices added 2026-09-29 with the AGPL licence.* |
 
 ### 4.4 Governance and Privacy Features
 
@@ -143,7 +143,7 @@ The frontend is the primary experience for the journalist (P1) and the general p
 ### 6.1 Real-time monitoring (FR-1..FR-3)
 - A processing run collects from active sources, and newly ingested posts appear in `GET /api/sentiment/latest` within one refresh cycle (2–3 min).
 - Every processed post has at least sentiment and relevance decisions in its audit trail.
-- Ingesting the same content twice creates no duplicate post (hash deduplication).
+- Ingesting the same upstream item twice creates no duplicate post (deduplication per source and upstream id; content-hash deduplication across sources is PLANNED — not implemented as of spec v1.2.0).
 - A sample of stored content contains no @-mentions, usernames, or email patterns (spec §14 ethical gates).
 
 ### 6.2 Explainability (FR-10, FR-26, FR-27)
@@ -178,7 +178,7 @@ The frontend is the primary experience for the journalist (P1) and the general p
 
 ## 7. Phase Roadmap
 
-Status reflects `master` @ `20de9e2` (PRs #8, #9 and #10) as of 2026-09-30; PR #10 Part 2 is in flight.
+Status reflects `master` @ `20de9e2` (PRs #8, #9 and #10) as of 2026-09-29; PR #10 Part 2 is in flight.
 
 | Phase | Content | Status |
 |---|---|---|
@@ -191,7 +191,7 @@ Status reflects `master` @ `20de9e2` (PRs #8, #9 and #10) as of 2026-09-30; PR #
 
 | PRD requirement | Technical Specification section |
 |---|---|
-| FR-1 (50-source collection, 2–3 min refresh) | §13 Phase C, §17 |
+| FR-1 (52-source collection, 2–3 min refresh) | §13 Phase C, §17 |
 | FR-2 (PII stripping, immutable ingest, retention log) | §8 |
 | FR-3 (audited inference pipeline) | §10, §18 |
 | FR-4 (three-layer bias stack, alerts) | §9 |
@@ -228,5 +228,5 @@ Carried from spec §16 (must be resolved before the affected work begins):
 
 1. **Location inference** for platforms without location metadata — recommended GDPR-safe combination is community-geography mapping plus content NLP.
 2. **Commercial platform API cost** (~$100/month) — resolved by the registry: X stays a registry source on its paid route, closed until its key is set (spec §16, §17).
-3. **Academic API rate limits** — whether the free tier of the citation-graph source suffices for the polling cadence.
+3. **Academic source access** — resolved by the registry: arXiv and PubMed are open; SpringerLink needs a free key; ScienceDirect and JSTOR need approval; IEEE Xplore needs a licence; ResearchGate is blocked. No citation-graph source (Semantic Scholar, ACM Digital Library) is in the registry (spec §16, §17).
 4. **Correlation cold start** — single-platform authors receive no pseudonymous ID and are counted as unlinked (resolved position, restated for visibility).

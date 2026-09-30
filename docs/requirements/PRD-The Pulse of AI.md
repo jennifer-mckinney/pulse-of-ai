@@ -5,11 +5,11 @@
 | **Document** | Product Requirements Document |
 | **Product** | The Pulse of AI — global real-time AI discourse dashboard |
 | **Version** | 1.1 |
-| **Date** | 2026-09-30 |
+| **Date** | 2026-09-29 |
 | **Status** | Handoff excerpt of `docs/requirements/PRD.md`, aligned with Technical Specification v1.2.0 |
 | **Related documents** | `docs/requirements/PRD.md` (v1.1, the full PRD), `docs/requirements/BRD.md`, `docs/TECHNICAL_SPEC.md` (v1.2.0); superseded: `docs/plans/2026-07-05-globe-storytelling-design.md` |
 
-**v1.1 changes (2026-09-30), aligned to code per independent audit, 2026-09-30:** §1 (52-source registry, 8 categories, Canvas-2D globe); §4.3 FR-17 to FR-25 rewritten to the shipped FuN.zip prototype design (11 beats, Canvas-2D globe, demo labelling, legal notices), identical in substance to PRD.md v1.1 §4.3. Persona numbering in this excerpt differs from PRD.md (here P1 = General Public, P2 = Journalist).
+**v1.1 changes (2026-09-29), aligned to code per independent audit, 2026-09-29:** §1 (52-source registry, 8 categories, Canvas-2D globe); §4.3 FR-17 to FR-25 rewritten to the shipped FuN.zip prototype design (11 beats, Canvas-2D globe, demo labelling, legal notices), identical in substance to PRD.md v1.1 §4.3. Persona numbering in this excerpt differs from PRD.md (here P1 = General Public, P2 = Journalist).
 
 This document specifies WHAT the product must do and for WHOM. HOW it is built — schemas, algorithms, infrastructure — lives in the Technical Specification and is referenced inline by section number, e.g. (spec §9). The business case is in the BRD.
 
@@ -69,7 +69,7 @@ Personas are taken from the MVP requirements as restated in spec §11.
 | US-11 | Regulator (indirect) | confirm that every automated decision has documented provenance and legal basis | compliance review does not require source-code access | spec §8, §10 |
 
 
-### 4.3 Storytelling Frontend (FuN.zip prototype — the requirement of record, revised 2026-09-30)
+### 4.3 Storytelling Frontend (FuN.zip prototype — the requirement of record, revised 2026-09-29)
 
 The frontend is the primary experience for the general public (P1) and the journalist (P2). **Authority:** Jennifer's direction-of-authority ruling of 2026-09-28, verbatim: "what is in the FuN.zip front end prototype needs to be supported in the backend". The FuN.zip design-handoff prototype is the master contract for this section, and the shipped frontend in `public/` implements it (spec §11). The globe.gl design of `docs/plans/2026-07-05-globe-storytelling-design.md` (3D globe, 7 chapters) is superseded.
 
@@ -83,4 +83,4 @@ The frontend is the primary experience for the general public (P1) and the journ
 | FR-22 | **Demo labelling and fallback:** demo numbers shall never be presented as live. The page shall derive a data mode from the served data (`live`, `demo`, `mixed`, `none`), and when the API is unavailable render an equivalent experience from a bundled deterministic demo set (`fallback`), with insights derived identically. Every mode that includes demo data shall show the "Demo data" markers, and the overview kicker shall state the mode. Demo posts and receipts shall be synthesised locally, never sent to the audit endpoint as if live. |
 | FR-23 | **Explainability in the UI:** featured and city posts shall link to their audit receipt ("Why does it say that?"), rendered in four audience views (Public, Journalist, Regulator, Researcher), so every rendered claim has a "why?" path (spec §10, §11). |
 | FR-24 | **Health visibility:** the header shall show a traffic-light status chip (green / yellow / red) driven by `/api/health` alerts and re-polled on the refresh cadence; it opens a health drawer with sources online, per-source status and the 12-hour alert history (spec §9, §11). |
-| FR-25 | The frontend shall run without a build step, with every asset self-hosted (no external CDN calls) under a strict Content-Security-Policy (no inline script or style); shall provide an informative fallback when canvas rendering is unavailable — a ranked city list (name, volume, sentiment) rendered from the same data — plus a static no-JavaScript notice; and shall display the project's **Appropriate Legal Notices** (copyright, the AGPL section 7(b) attribution "Built on Pulse of AI by Jennifer McKinney" linked to the upstream repository, the AGPL-3.0-or-later licence, the additional terms, a source-code link and the no-warranty statement) in a header "about" panel and in the no-JavaScript notice (spec §21). *Legal notices added 2026-09-30 with the AGPL licence.* |
+| FR-25 | The frontend shall run without a build step, with every asset self-hosted (no external CDN calls) under a strict Content-Security-Policy (no inline script or style); shall provide an informative fallback when canvas rendering is unavailable — a ranked city list (name, volume, sentiment) rendered from the same data — plus a static no-JavaScript notice; and shall display the project's **Appropriate Legal Notices** (copyright, the AGPL section 7(b) attribution "Built on Pulse of AI by Jennifer McKinney" linked to the upstream repository, the AGPL-3.0-or-later licence, the additional terms, a source-code link and the no-warranty statement) in a header "about" panel and in the no-JavaScript notice (spec §21). *Legal notices added 2026-09-29 with the AGPL licence.* |

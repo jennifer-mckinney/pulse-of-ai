@@ -1,6 +1,6 @@
 # The Pulse of AI — Technical Specification
 **Version:** 1.2.0
-**Date:** 2026-09-30
+**Date:** 2026-09-29
 **Status:** Implemented through PR #10 (`master` @ `20de9e2`). PR #10 Part 2 is in flight and is not described as done anywhere in this document.
 **Maps to:** `pulse-of-ai-mvp-v1-final-requirements.pdf`, `pulse-of-ai-evidence-based-thresholds.pdf`, `pulse-of-ai-model-health-dashboard.pdf`
 
@@ -12,14 +12,14 @@
 - **KNOWN DEFECT (fix pending)**: current behaviour on `master` that contradicts the intent; the fix is tracked.
 - Anything without a marker describes `master` @ `20de9e2`.
 
-### v1.2.0 changelog (2026-09-30): aligned to code per independent audit, 2026-09-30
+### v1.2.0 changelog (2026-09-29): aligned to code per independent audit, 2026-09-29
 Every section below changed because the independent diagram-accuracy audit (round 1) confirmed drift between v1.1.0 and the code on `master`. Section-by-section:
-- **Header**: version, status and authority line; status markers added.
+- **Header and TOC**: version, status and authority line; status markers added; TOC entry 21 (Licence and Legal Notices) added.
 - **§1, §2, §3**: 52-source registry across 8 categories (not "top 50 across 7"); adjective-animal pseudonyms (not verb-noun); bias thresholds and the Canvas-2D globe; unbuilt thresholds and layers marked PLANNED.
 - **§4**: architecture redrawn from the code: collectors, BullMQ on Redis, the worker, the FastAPI embeddings service, 12 mounted endpoints, the Canvas-2D browser.
 - **§5**: Node 22, Redis 7 + BullMQ adopted, FastAPI + sentence-transformers embeddings; Infinity and RoBERTa marked PLANNED.
 - **§6**: 22 tables across 26 migrations with the real DDL and the value vocabularies actually written.
-- **§7**: all 12 mounted endpoints with their real request and response shapes (health's degraded 200, the three endpoints v1.1 did not document, the audit receipt, the flat `/api/query` body); relevance@1.1.0's 20 keywords and `accuracy_target` 0.99; the grouped query, its rate limit and the rollup note marked PLANNED; the malformed-JSON defect stated.
+- **§7**: all 12 mounted endpoints with their real request and response shapes (health's degraded 200, the three endpoints v1.1 did not document, the audit receipt, the flat `/api/query` body); relevance@1.1.0's 20 keywords; the `sentiment@1.0.0` example's `accuracy_target` 0.99 (was 0.80); the grouped query, its rate limit and the rollup note marked PLANNED; the malformed-JSON defect stated.
 - **§8**: data handling as implemented (dedup on source and external id, no `collected` retention rows, `ingest@1.5.0`, route validation as coded, no mock-data fallback); security controls v1.1 did not cover (CSP, CORS scoping, collector network guard, loopback binding, credential split); two logging and error defects stated.
 - **§9**: the three implemented checks with their real thresholds (0.35 / 0.60 / 0.30), the critical level above 0.80, when they run, per-check alert types, `source_refused` alerts, the drawer's `/api/bias/history`; the v1.1 three-layer stack marked PLANNED.
 - **§10**: the four audience views (Public, Journalist, Regulator, Researcher); the methodology registry and seeding as coded (`accuracy_target` 0.99); provenance and lineage in the explainability chain.
@@ -315,7 +315,7 @@ The diagram set in `docs/diagrams/` (entry point `docs/diagrams/architecture.*`)
 | 21 | `reddit_api_budget` | 025 | The single shared Reddit request budget |
 | 22 | `reddit_maintenance` | 025 | Last run of the Reddit discovery and re-check jobs |
 
-**Migration index.** DDL: 001 core, 002 audit, 003 bias, 004 vectors, 005 retention, 006 correlation, 010 bias lineage column, 012 `post_embeddings.methodology_version` (+ `embedding@1.0.0`), 013 source collection, 016 classified collector errors, 017 provenance fingerprint (+ `ingest@1.3.0`, `audit_narration@1.3.0`), 018 refused state, 019 one refresh in flight (partial unique index), 020 database kill switch, 021 cycle in-flight runs, 022 `raw_posts.ingest_mv_id`, 023 unchanged-run counter, 025 Reddit. Data only: 007 canonical category taxonomy, 008 bias vocabulary conformance, 009 `bias@1.1.0` / `ingest@1.0.0` / `audit_narration@1.1.0`, 011 `audit_narration@1.2.0`, 014 `relevance@1.1.0` / `discourse@1.1.0-DQI` / `ingest@1.1.0`, 015 `ingest@1.2.0`, 024 `ingest@1.4.0`, 026 `ingest@1.5.0`. Released migrations are never edited; a new methodology version ships as a new migration, field-for-field equal to `src/config/methodology-registry.js` (`tests/unit/pure/methodologyRegistry.test.js`).
+**Migration index.** DDL: 001 core, 002 audit, 003 bias, 004 vectors, 005 retention, 006 correlation, 010 bias lineage column, 012 `post_embeddings.methodology_version` (+ `embedding@1.0.0`), 013 source collection, 016 classified collector errors, 017 provenance fingerprint (+ `ingest@1.3.0`, `audit_narration@1.3.0`), 018 refused state, 019 one refresh in flight (partial unique index), 020 database kill switch, 021 cycle in-flight runs, 022 `raw_posts.ingest_mv_id`, 023 unchanged-run counter, 025 Reddit. Data only: 007 canonical category taxonomy, 008 bias vocabulary conformance, 009 `bias@1.1.0` / `ingest@1.0.0` / `audit_narration@1.1.0`, 011 `audit_narration@1.2.0`, 014 `relevance@1.1.0` / `discourse@1.1.0-DQI` / `ingest@1.1.0` (and the released `sentiment@1.0.0`, `relevance@1.0.0`, `discourse@1.0.0-DQI` rows, ON CONFLICT DO NOTHING, so each 1.0.0 row predates its successor on a fresh database), 015 `ingest@1.2.0`, 024 `ingest@1.4.0`, 026 `ingest@1.5.0`. Released migrations are never edited; a new methodology version ships as a new migration, field-for-field equal to `src/config/methodology-registry.js` (`tests/unit/pure/methodologyRegistry.test.js`).
 
 ```
 data_sources ─┬─ raw_posts ─┬─ decision_audit_log ── methodology_versions
@@ -869,7 +869,7 @@ The health drawer's "alert history · last 12 h" (`src/routes/bias.js`). Every q
   "total_count": 900, "alert_count": 3, "pass_count": 897,
   "truncated": false, "alert_cap": 500,
   "alerts": [
-    { "id": "uuid", "time": "…", "severity": "alert", "layer": "Location concentration",
+    { "id": "uuid", "time": "…", "severity": "watch", "layer": "Location concentration",
       "assessment_type": "location_concentration", "group_value": "London", "metric_name": "share_of_total",
       "value": 0.41, "threshold": 0.35, "detail": "…", "citation": "Suresh & Guttag (2021)",
       "model_name": "pulse-bias-monitor-v1", "version": "1.1.0", "lineage": "recorded" }
@@ -944,7 +944,7 @@ The source registry of record with each source's runtime status (`src/routes/sou
   {
     "id": "uuid", "name": "npr", "display_name": "NPR", "source_type": "rss", "category": "news",
     "active": true, "retired": false, "registry": true,
-    "slug": "npr", "rank": 19, "region": "…", "auth_kind": "none", "program": "…", "signup_url": null,
+    "slug": "npr", "rank": 19, "region": "…", "auth_kind": "none", "program": "…", "signup_url": "…",
     "status": "collecting", "status_reason": "collecting via technology-rss",
     "collection_disabled_at": null,
     "missing_env": [], "open_routes": ["technology-rss"], "licence_refs_on_file": {},
@@ -968,7 +968,7 @@ The source registry of record with each source's runtime status (`src/routes/sou
 ### `GET /api/sources/timeseries`
 Hourly sentiment volume per source category for the ribbon sparklines.
 
-**Query params:** `?hours=` integer (default 12, clamped to 1–48); a non-integer → `400 { "error": "hours must be an integer" }`.
+**Query params:** `?hours=` digits only (default 12, clamped to 1–48); anything else, a negative number included → `400 { "error": "hours must be an integer" }`.
 
 **Response 200:** one row per canonical category, always all 8, in canon order:
 ```json
@@ -1093,7 +1093,7 @@ All route inputs are validated before reaching the DB layer:
 | `limit` | `/api/query` (body) | integer, 1–100 | 400 |
 | `limit` | `/api/sentiment/latest` (query) | parseInt, clamped to 1–100 | default 20 when absent or not a number |
 | `location` | `/api/query` | non-empty string, exact match | 400 |
-| `hours` | `/api/bias/history`, `/api/sources/timeseries` | integer (`bias/history`: digits only), clamped to 1–48 | 400 `hours must be an integer` |
+| `hours` | `/api/bias/history`, `/api/sources/timeseries` | digits only (`/^\d+$/`), clamped to 1–48 | 400 `hours must be an integer` |
 
 Every query is parameterised; table names are never taken from input.
 
@@ -1338,16 +1338,16 @@ Modules talk through `pulse:*` DOM events (`pulse:data`, `pulse:exploring-change
 | # | id | Kicker | Colour / bars |
 |---|---|---|---|
 | 0 | `overview` | REFRESH CYCLE 2–3 MIN (by data mode: LIVE · / DEMO · / LIVE + DEMO / NO POSTS IN THE LAST HOUR / DEMO · BUNDLED SAMPLE DATA) | sentiment / volume |
-| 1 | `volume` | CHAPTER 01 · VOLUME LEADERS | |
-| 2 | `divide` | CHAPTER 02 · THE DIVIDE | |
-| 3 | `negativity` | CHAPTER 03 · NEGATIVITY HOTSPOTS | |
-| 4 | `positivity` | CHAPTER 04 · POSITIVITY LEADERS | |
-| 5 | `drivers` | CHAPTER 05 · WHO'S DRIVING | category |
-| 6 | `themes-warm` | CHAPTER 06 · WHAT RUNS WARM | warm half of `/api/themes` |
-| 7 | `themes-cold` | CHAPTER 07 · WHAT RUNS COLD | cold half of `/api/themes` |
-| 8 | `messengers` | CHAPTER 08 · THE MESSENGERS | |
-| 9 | `summary` | CHAPTER 09 · THE HOUR IN REVIEW | |
-| 10 | `explore` | CHAPTER 10 · YOUR TURN · NEXT STEPS | free exploration |
+| 1 | `volume` | CHAPTER 01 · VOLUME LEADERS | sentiment / volume |
+| 2 | `divide` | CHAPTER 02 · THE DIVIDE | sentiment / volume |
+| 3 | `negativity` | CHAPTER 03 · NEGATIVITY HOTSPOTS | sentiment / negativeNet |
+| 4 | `positivity` | CHAPTER 04 · POSITIVITY LEADERS | sentiment / positiveNet |
+| 5 | `drivers` | CHAPTER 05 · WHO’S DRIVING | category / volume |
+| 6 | `themes-warm` | CHAPTER 06 · WHAT RUNS WARM | warm / volume (warm half of `/api/themes`) |
+| 7 | `themes-cold` | CHAPTER 07 · WHAT RUNS COLD | cold / volume (cold half of `/api/themes`) |
+| 8 | `messengers` | CHAPTER 08 · THE MESSENGERS | category / volume |
+| 9 | `summary` | CHAPTER 09 · THE HOUR IN REVIEW | sentiment / volume |
+| 10 | `explore` | CHAPTER 10 · YOUR TURN · NEXT STEPS | sentiment / volume (free exploration) |
 
 Each beat sets a camera intent, a colour mode (`sentiment` | `category` | `warm` | `cold`), a bar metric, a highlight rule, an audit pick and declarative stats; `js/chapters.js` resolves the `{token}` copy from the loaded data, so no insight value is hard-coded. The exact per-beat encodings are in `story.config.js` and are locked by `tests/unit/pure/config.test.js`.
 
@@ -1364,8 +1364,8 @@ The header "about" chip opens a panel with the Appropriate Legal Notices of §21
 
 ```
 Priority 1 (immediate): header, scroll spacer, globe canvas with land geometry
-Priority 2 (on data):   city markers from /api/posts/aggregated-by-location; overview beat copy
-Priority 3 (on demand): /api/themes, /api/sources/timeseries, receipts and drawers
+Priority 2 (on data):   city markers from /api/posts/aggregated-by-location; overview beat copy; then /api/themes and the beats' featured posts (/api/query)
+Priority 3 (on demand): /api/sources/timeseries (explore ribbon), city drill-down, receipts and drawers
 ```
 
 ### Color System (`public/js/config/design.config.js`)
@@ -1409,9 +1409,9 @@ A FastAPI app over sentence-transformers, built as the compose service `embeddin
 - The model is loaded at a pinned Hugging Face commit (`EMBED_MODEL_REVISION`, default `1110a243fdf4706b3f48f1d95db1a4f5529b4d41`), registered as `embedding@1.0.0` (migration 012); every stored vector records that version in `post_embeddings.methodology_version`.
 - Host development: `python/start.sh` runs uvicorn on port 8000 (on `0.0.0.0`, see §8).
 
-**PLANNED — not implemented as of v1.2.0: Infinity (`infinity-embed`) as the production server.** v1.1 chose it for dynamic batching (30-40% throughput), a ctranslate2 backend (2-4x faster inference) and the same OpenAI-compatible API, so it can replace the FastAPI service without Node changes:
+**PLANNED — not implemented as of v1.2.0: Infinity (`infinity-emb`) as the production server.** v1.1 chose it for dynamic batching (30-40% throughput), a ctranslate2 backend (2-4x faster inference) and the same OpenAI-compatible API, so it can replace the FastAPI service without Node changes:
 ```bash
-pip install infinity-embed
+pip install infinity-emb
 infinity_emb start \
   --model-name-or-path sentence-transformers/all-MiniLM-L6-v2 \
   --batch-size 64 \
@@ -1420,8 +1420,8 @@ infinity_emb start \
 Code comments in `src/pipeline/embeddings.js`, `src/workers/embed.worker.js` and `src/queues/index.js` still say "Infinity"; the service that runs is the FastAPI one.
 
 ### Node.js Integration (`src/pipeline/embeddings.js`, `src/workers/embed.worker.js`)
-- The collection runner queues one `embed` job per new post whose relevance score is at least 1/20 (one lexicon match; `relevance@1.1.0` `embed_gate_min_score`). The standup's demo population queues its posts the same way.
-- The `embed` worker (concurrency 4) calls `POST ${EMBEDDINGS_SERVICE_URL}/embeddings` with the registered model and revision and upserts `post_embeddings`. A failure is retried by BullMQ with exponential back-off (5 attempts).
+- The collection runner queues one `embed` job per new post whose relevance score is at least 1/20 (one lexicon match; `relevance@1.1.0` `embed_gate_min_score`). The standup's demo population queues every demo post it writes, without the relevance gate (`scripts/populate.js`), plus any trailing-hour demo post that still has no embedding.
+- The `embed` worker (concurrency 4) calls `POST ${EMBEDDINGS_SERVICE_URL}/embeddings` with the model name (the revision is fixed on the service by `EMBED_MODEL_REVISION`) and upserts `post_embeddings`, recording `embedding@1.0.0` only when its own `EMBED_MODEL` / `EMBED_MODEL_REVISION` are the registered ones. A failure is retried by BullMQ with exponential back-off (5 attempts).
 - There is no in-process embedding cache; the v1.1 `content_hash → vector` cache is not implemented (identical content is already deduplicated per source).
 
 ### Vector Index: HNSW
@@ -1459,7 +1459,7 @@ All of these must be complete before writing a single feature:
 
 1. `docker-compose.yml` — `pgvector/pgvector:pg16` (pinned by digest) + postgres_test (now also redis, migrate, web, worker, embeddings, populate)
 2. `.env.example` + `.env` + `.gitignore` entries
-3. `package.json` — add `pg`, `@pgvector/pg`, `jest`, `supertest`; remove `sqlite3`
+3. `package.json` — add `pg`, `pgvector` (the plan named `@pgvector/pg`), `jest`, `supertest`; remove `sqlite3`
 4. `jest.config.js` + `tests/setup.js` (test DB connection + migration + truncate)
 5. `src/db/migrations/001–004.sql` — the first four migration files (26 today, §6)
 6. `scripts/migrate.js` — runs migrations in order, idempotent
@@ -1488,7 +1488,7 @@ tests/integration/api.sentiment.test.js → src/routes/sentiment.js
 tests/integration/api.refresh.test.js   → src/routes/refresh.js
 tests/integration/api.audit.test.js     → src/routes/audit.js
 tests/integration/api.bias.test.js      → src/routes/bias.js
-tests/integration/api.method.test.js    → src/routes/methodology.js
+tests/integration/api.methodology.test.js → src/routes/methodology.js
 ```
 
 ### Phase D: Embeddings
@@ -1938,6 +1938,10 @@ CREATE TABLE monthly_topic_rollups (
 CREATE UNIQUE INDEX idx_monthly_topic_rollups_uniq ON monthly_topic_rollups(
     rollup_month, topic_label,
     COALESCE(source_category, ''), COALESCE(location, ''), COALESCE(language, ''));
+CREATE INDEX idx_rollup_month    ON monthly_topic_rollups(rollup_month DESC);
+CREATE INDEX idx_rollup_topic    ON monthly_topic_rollups(topic_label);
+CREATE INDEX idx_rollup_category ON monthly_topic_rollups(source_category) WHERE source_category IS NOT NULL;
+CREATE INDEX idx_rollup_location ON monthly_topic_rollups(location) WHERE location IS NOT NULL;
 
 CREATE TABLE monthly_source_rollups (
     id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -1953,6 +1957,8 @@ CREATE TABLE monthly_source_rollups (
     created_at      TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(rollup_month, source_id)
 );
+CREATE INDEX idx_src_rollup_month  ON monthly_source_rollups(rollup_month DESC);
+CREATE INDEX idx_src_rollup_source ON monthly_source_rollups(source_id);
 
 CREATE TABLE compaction_log (
     id                 UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -2103,6 +2109,9 @@ CREATE TABLE pseudonymous_users (
     first_sighted_at        TIMESTAMPTZ DEFAULT NOW(),
     last_sighted_at         TIMESTAMPTZ DEFAULT NOW()
 );
+CREATE INDEX idx_pseudo_id      ON pseudonymous_users(pseudo_id);
+CREATE INDEX idx_pseudo_cluster ON pseudonymous_users(style_cluster_id) WHERE style_cluster_id IS NOT NULL;
+CREATE INDEX idx_pseudo_count   ON pseudonymous_users(platform_count DESC);
 
 CREATE TABLE user_platform_sightings (
     id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -2112,6 +2121,9 @@ CREATE TABLE user_platform_sightings (
     confidence      REAL NOT NULL,
     sighted_at      TIMESTAMPTZ DEFAULT NOW()
 );
+CREATE INDEX idx_sightings_user   ON user_platform_sightings(pseudo_user_id);
+CREATE INDEX idx_sightings_source ON user_platform_sightings(source_id);
+CREATE INDEX idx_sightings_at     ON user_platform_sightings(sighted_at DESC);
 
 -- raw_posts.pseudo_user_id (declared in 001) gets its foreign key here
 ALTER TABLE raw_posts ADD CONSTRAINT fk_raw_posts_pseudo_user

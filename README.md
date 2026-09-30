@@ -373,7 +373,7 @@ Accepted risks are recorded in ADR 0001: the 8 permission-gated feeds (opened on
 | Document | What it is |
 |---|---|
 | [docs/TECHNICAL_SPEC.md](docs/TECHNICAL_SPEC.md) | Technical specification, the requirements source of truth (where it differs from the code, see the spec drift notes in [docs/diagrams/README.md](docs/diagrams/README.md)) |
-| [docs/requirements/PRD.md](docs/requirements/PRD.md) | Product requirements. §4.3 still describes the superseded globe.gl design; the shipped storytelling frontend follows the FuN.zip design-handoff prototype (11 beats, Canvas-2D globe) |
+| [docs/requirements/PRD.md](docs/requirements/PRD.md) | Product requirements (§4.3: the storytelling frontend follows the FuN.zip design-handoff prototype, 11 beats and a Canvas-2D globe; the globe.gl design is superseded) |
 | [docs/requirements/BRD.md](docs/requirements/BRD.md) | Business requirements |
 | [docs/adr/0001-source-registry-and-collection.md](docs/adr/0001-source-registry-and-collection.md) | ADR 0001: the source registry, collection, rulings 1–9 and decisions D1–D2 |
 | [docs/requirements/Top_52_Global_Online_Sources.rev4.csv](docs/requirements/Top_52_Global_Online_Sources.rev4.csv) | The source workbook of record, exported |

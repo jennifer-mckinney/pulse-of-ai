@@ -5,11 +5,11 @@
 | **Document** | Business Requirements Document |
 | **Product** | The Pulse of AI — global real-time AI discourse dashboard |
 | **Version** | 1.1 |
-| **Date** | 2026-09-30 |
+| **Date** | 2026-09-29 |
 | **Status** | Approved baseline, aligned with Technical Specification v1.2.0 |
 | **Related documents** | `docs/TECHNICAL_SPEC.md` (v1.2.0), `docs/requirements/PRD.md` (v1.1), `docs/adr/0001-source-registry-and-collection.md`; superseded: `docs/plans/2026-07-05-globe-storytelling-design.md` |
 
-**v1.1 changes (2026-09-30), aligned to code per independent audit, 2026-09-30:** §2 and §6.1 (52-source registry, 8 categories, the shipped Canvas-2D globe story); §3 (the bias checks that run today); §5 O7 and §7 (pseudonym format, correlation status, source economics); §10 (spec version). Business objectives are unchanged.
+**v1.1 changes (2026-09-29), aligned to code per independent audit, 2026-09-29:** §2 and §6.1 (52-source registry, 8 categories, the shipped Canvas-2D globe story); §3 (the bias checks that run today); §5 O7 and §7 (pseudonym format, correlation status, source economics); §10 (spec version). Business objectives are unchanged.
 
 This document describes the business context: why the product exists, who it serves, what business outcomes it must deliver, and the boundaries within which it must operate. The companion PRD (`docs/requirements/PRD.md`) translates these business requirements into product requirements. The Technical Specification describes how the system is built; this document intentionally does not.
 
@@ -111,7 +111,7 @@ Objectives are taken directly from the specification's objectives table (spec §
 | **Open-source, self-hosted ethos** | No data leaves the operator's infrastructure for inference or embedding; managed AI APIs were explicitly rejected on GDPR and lock-in grounds; the stack is composed of mature open-source components and can run on a single host (spec §5, §15) |
 | **Layered retention** | Post-level detail retained 3 months, then compacted into permanent monthly rollups with content nulled and embeddings deleted — bounding both privacy exposure and storage cost while preserving research-grade trends (spec §19) |
 | **Source economics** | Of the 52 registry sources, 31 collect without keys once the operator opts in; the rest wait for a free key, an approval or a paid licence and stay closed until it is configured, so no recurring data cost is incurred by default (spec §17; ADR 0001, Consequences) |
-| **Quality bar** | Nothing ships without passing tests, 98% coverage, and the ethical quality gates (all thresholds documented, all decisions auditable, no PII in the database, bias assessment on every job) (spec §14) |
+| **Quality bar** | Nothing ships without passing tests, 80% line coverage, and the ethical quality gates (all thresholds documented, all decisions auditable, no PII in the database, bias assessment on every job) (spec §14) |
 
 ## 8. Risks
 

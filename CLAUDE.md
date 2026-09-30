@@ -18,14 +18,15 @@ npm run teardown       # stop it (keeps volumes); `-- --purge` deletes volumes a
 | Command | Purpose |
 |---|---|
 | `npm run db:reset` | Drop + re-migrate + seed dev DB |
-| `npm run seed` | Load 50 data sources + methodology versions (from `src/config/methodology-registry.js`) |
+| `npm run seed` | Load the 52 registry sources (`src/config/source-registry.js`) + methodology versions (`src/config/methodology-registry.js`) |
 | `npm run seed:e2e` | Load the deterministic Playwright fixture dataset (`scripts/test/seed-e2e.js`) |
 | `npm run standup` / `npm run teardown` | One-command Docker standup of the whole solution / stop it (see README "Stand it up") |
 | `npm run replay -- --post <id>` | Re-run a post's stored decisions through `src/pipeline` and print PASS / DIVERGENCE / NOT RE-RUNNABLE per stage |
 | `npm run verify` | Full gate: Jest + coverage, pytest, black (needs `python/.venv`) |
 | `npm run test:e2e` | Playwright suite (dev DB migrated + seeded + `seed:e2e`; globalSetup freshens timestamps) |
 | `npm run coverage:frontend` | Non-gating coverage of the pure namespaces of globe/story/ui/main |
-| `npm run test:unit` | Unit tests (no DB required) |
+| `npm run test:unit` | Unit tests (needs the test DB: `npm run docker:up`; jest's globalSetup migrates and seeds port 5433) |
+| `npm run test:pure` | Pure unit tests under `tests/unit/pure/` (no DB, no Docker) |
 | `npm run test:int` | Integration tests (needs docker:up) |
 | `npm run test:cov` | Coverage report (must be ≥80% lines) |
 | `black python/` | Format Python files |
@@ -65,4 +66,4 @@ npm run teardown       # stop it (keeps volumes); `-- --purge` deletes volumes a
 ## Status
 Phase B (pipeline TDD) is implemented — `tests/unit/` covers sentiment, relevance, discourse, ingest, bias, correlation, embeddings, and the ingest/embed/correlate workers; `tests/integration/` covers all API routes. The plan file previously referenced here (`~/.claude/plans/composed-coalescing-duckling.md`) no longer exists.
 
-The storytelling frontend follows the FuN.zip design-handoff prototype (11 beats, Canvas-2D globe), the master contract by Jennifer's ruling of 2026-09-28. PRD §4.3 (FR-17 to FR-25, rewritten to that design in PRD v1.1 on 2026-09-30) is the requirement of record, and `docs/TECHNICAL_SPEC.md` v1.2.0 §11 describes the shipped frontend; `docs/plans/2026-07-05-globe-storytelling-design.md` (globe.gl / Mapbox era) is superseded.
+The storytelling frontend follows the FuN.zip design-handoff prototype (11 beats, Canvas-2D globe), the master contract by Jennifer's ruling of 2026-09-28. PRD §4.3 (FR-17 to FR-25, rewritten to that design in PRD v1.1 on 2026-09-29) is the requirement of record, and `docs/TECHNICAL_SPEC.md` v1.2.0 §11 describes the shipped frontend; `docs/plans/2026-07-05-globe-storytelling-design.md` (globe.gl / Mapbox era) is superseded.

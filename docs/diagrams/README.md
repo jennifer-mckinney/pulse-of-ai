@@ -75,7 +75,7 @@ The wip tables `source_gate_events` and the terms-snapshot table are named in di
 
 | Spec section | Spec says | Code on master |
 |---|---|---|
-| §4 Architecture overview | Source box lists Reddit, Twitter/X, Mastodon, Bluesky, TechCrunch, LessWrong and others; browser is "Mapbox GL JS + D3.js v7 + Vanilla JS + Scrollama" | The 52-source registry of `src/config/source-registry.js` (§17 is current). The browser is a vanilla Canvas-2D globe with no Mapbox, D3 or Scrollama (the FuN.zip design-handoff prototype; PRD §4.3 still describes the superseded globe.gl design) |
+| §4 Architecture overview | Source box lists Reddit, Twitter/X, Mastodon, Bluesky, TechCrunch, LessWrong and others; browser is "Mapbox GL JS + D3.js v7 + Vanilla JS + Scrollama" | The 52-source registry of `src/config/source-registry.js` (§17 is current). The browser is a vanilla Canvas-2D globe with no Mapbox, D3 or Scrollama (the FuN.zip design-handoff prototype, the requirement of record in PRD §4.3) |
 | §4, §5, §12 | Embeddings are served by Infinity (`infinity-embed`) | A FastAPI + sentence-transformers service, `python/embeddings_service.py` |
 | §5 Alternatives | Redis rejected for the MVP | Redis 7 backs the BullMQ queues and the worker heartbeat |
 | §6 Schema overview | 17 tables across 6 migrations | 26 migrations and 22 tables, plus `schema_migrations` (added: `source_collection_state`, `source_runs`, `reddit_subreddit_rankings`, `reddit_api_budget`, `reddit_maintenance`) |
