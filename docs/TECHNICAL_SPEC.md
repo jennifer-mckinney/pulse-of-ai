@@ -1589,7 +1589,7 @@ Runs on the 1st of each month. Compacts all posts older than 3 months:
 - `post_embeddings` (large, re-computable if needed)
 - the post text: `raw_posts.content` (NOT NULL) is replaced by a removal notice and `text_removed_at` is set (P10-2)
 
-**Text windows (P10-2, ingest@1.6.0).** The text is stored once, in `raw_posts.content`. The worker's repeatable `maintenance` job removes it when its source's window ends: Reddit 48 h, the Guardian 24 h, YouTube and TikTok 30 days (their terms), every other source `RETENTION_DETAIL_DAYS` (90). Each batch writes one `data_retention_log` row listing the post ids it changed; every stored post has a `collected` row.
+**Text windows (P10-2, ingest@1.6.0).** The text is stored once, in `raw_posts.content`. The worker's repeatable `maintenance` job removes it when its source's window ends: Reddit 48 h, YouTube and TikTok 30 days (their terms), every other source `RETENTION_DETAIL_DAYS` (90) — the Guardian included (Jennifer, 2026-09-29: "Use normal retention"; ingest@1.7.0). A platform-terms blanking also deletes the post's embedding in the same transaction (PR #22 decision G3); scores and audit rows stay. Each batch writes one `data_retention_log` row listing the post ids it changed; every stored post has a `collected` row.
 
 **Demo data at the retention boundary (P9-3).** Posts whose source has
 `data_sources.source_type = 'demo'` (the fictional standup population from

@@ -111,8 +111,9 @@ describe('48-hour retention: text blanked, scores and audit rows kept (ruling 9)
         expect(blanked).toEqual([r]);
         expect(await snapshotRows(hn)).toEqual(hnBefore);
         await expect(retention.blankPosts('hacker_news', [hn], { reason: 'x' })).rejects.toThrow(/no platform-terms retention/);
-        // P10-2: the Guardian (24 h), YouTube and TikTok (30 days) have platform windows too.
-        expect(retention.retentionSources().map(s => s.slug).sort()).toEqual(['guardian', 'reddit', 'tiktok', 'youtube']);
+        // P10-2: YouTube and TikTok (30 days) have platform windows too; the
+        // Guardian's was withdrawn ("Use normal retention", 2026-09-29).
+        expect(retention.retentionSources().map(s => s.slug).sort()).toEqual(['reddit', 'tiktok', 'youtube']);
     });
 });
 

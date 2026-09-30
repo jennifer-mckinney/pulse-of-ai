@@ -337,20 +337,20 @@ const SOURCES = [
         ],
         termsUrl: 'https://www.theguardian.com/open-platform/terms-and-conditions',
         termsNote: 'Open Platform §6 bans analysis/mining and ML use on the free key; §5 requires deletion within 24 hours; site terms apply the same to RSS.',
-        // P10-2: the Guardian's terms require deleting content within 24 hours
-        // (Open Platform §5; the termsNote records that the site terms apply
-        // the same to RSS). Applied BY ANALOGY with ruling 9, "Blank text,
-        // keep audit rows": the text is blanked at 24 h, scores and audit rows
-        // are kept — flagged for Jennifer to confirm (ADR 0001).
-        retention: {
-            maxAgeHours: 24,
-            byAnalogy: 'ruling 9 ("Blank text, keep audit rows"), applied by analogy; awaiting Jennifer\'s confirmation',
-            removalNotice: '[removed: Guardian terms retention]',
-            legalBasis: 'Guardian Open Platform terms §5: content must be deleted within 24 hours (the site terms apply the same to '
-                + 'the RSS). Text removed at 24 hours; the score and audit rows are retained, applying ADR 0001 ruling 9 ("Blank '
-                + 'text, keep audit rows") by analogy, pending the owner\'s confirmation.',
-            notice: 'Guardian post text is removed 24 hours after collection because of the Guardian\'s terms; its scores and audit '
-                + 'rows are retained (ADR 0001 ruling 9, applied by analogy).',
+        // GUARDIAN ruling (Jennifer McKinney, 2026-09-29), verbatim: "Use
+        // normal retention". The 24-hour blanking applied by analogy with
+        // ruling 9 (P10-2) is removed: the Guardian has no platform-terms
+        // `retention` block, so its text follows the default §19 detail
+        // window (RETENTION_DETAIL_DAYS). `retentionRuling` records the
+        // ruling and the window it replaced, so receipts of posts already
+        // blanked under that window stay truthful (retention.js).
+        retentionRuling: {
+            by: 'Jennifer McKinney',
+            date: '2026-09-29',
+            verbatim: 'Use normal retention',
+            effect: 'The Guardian uses the default text retention (TECHNICAL_SPEC §19, RETENTION_DETAIL_DAYS); the 24-hour '
+                + 'blanking applied by analogy with ADR 0001 ruling 9 is removed (ADR 0001, "Decisions of 2026-09-29 (PR #22 review)").',
+            former: { maxAgeHours: 24, basis: 'Guardian Open Platform terms §5, applied by analogy with ADR 0001 ruling 9 (PR #10 P10-2)' },
         },
         rateLimit: { minIntervalMs: 1000, note: 'free key 1 call/s, 500/day; commercial per contract' },
         pollIntervalSec: DEFAULT_POLL_SEC,
@@ -1199,8 +1199,9 @@ function sourceStatus(src, env = process.env) {
 
 /**
  * P10-2: hours a source's post TEXT is kept (src/collectors/retention.js).
- * A platform-terms window (Reddit 48 h, Guardian 24 h, YouTube and TikTok
- * 30 days) where the source has one, else the spec §19 detail window:
+ * A platform-terms window (Reddit 48 h, YouTube and TikTok 30 days) where
+ * the source has one, else the spec §19 detail window (the Guardian since
+ * Jennifer's ruling of 2026-09-29, "Use normal retention"):
  * RETENTION_DETAIL_DAYS (default 90) days.
  */
 function retentionHours(src, env = process.env) {

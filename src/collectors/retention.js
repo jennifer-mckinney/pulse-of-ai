@@ -5,11 +5,13 @@
 // Every real (non-demo) source has a window after which a post's TEXT is
 // removed (src/config/source-registry.js retentionHours):
 //   - platform terms (`retention` block): Reddit 48 h (ruling 9, Jennifer:
-//     "Blank text, keep audit rows"), the Guardian 24 h (its terms §5),
-//     YouTube and TikTok 30 days. For the Guardian, YouTube and TikTok the
-//     ruling-9 mechanism is applied BY ANALOGY, for consistency — recorded in
-//     the ADR and flagged for Jennifer's confirmation;
+//     "Blank text, keep audit rows"), YouTube and TikTok 30 days. For
+//     YouTube and TikTok the ruling-9 mechanism is applied BY ANALOGY, for
+//     consistency — recorded in the ADR;
 //   - otherwise the spec §19 detail window, RETENTION_DETAIL_DAYS (90) days.
+//     The Guardian is here since Jennifer's ruling of 2026-09-29, verbatim
+//     "Use normal retention" (its former 24 h blanking by analogy is gone;
+//     the registry's `retentionRuling` keeps the ruling and the old window).
 // Reddit posts are also blanked as soon as the 6-hourly re-check sees them
 // deleted upstream (src/collectors/reddit/recheck.js → blankPosts).
 //
@@ -231,6 +233,21 @@ async function postsWithText(slug) {
 function retentionStatus(slug, { collectedAt, textRemovedAt, textRemovedReason }) {
     const src = getSource(slug);
     const platform = src && src.retention;
+    // A post blanked under a platform window that a later ruling removed
+    // (the Guardian's 24 h, before "Use normal retention") says so, rather
+    // than claiming the §19 window it never reached.
+    const former = !platform && src && src.retentionRuling && src.retentionRuling.former;
+    if (textRemovedAt && former && textRemovedReason === `${former.maxAgeHours}-hour retention window ended`) {
+        const r = src.retentionRuling;
+        return {
+            status: 'text_removed',
+            removed_at: textRemovedAt,
+            reason: textRemovedReason,
+            notice: `Text removed after ${former.maxAgeHours} hours under the window then in force (${former.basis}). `
+                + `That window was withdrawn by ${r.by}'s ruling of ${r.date}, "${r.verbatim}"; later posts follow the `
+                + 'detail retention window. Scores and audit rows are retained.',
+        };
+    }
     if (textRemovedAt) {
         return {
             status: 'text_removed',

@@ -42,7 +42,7 @@ Legal basis relied on: GDPR Article 6(1)(f), legitimate interests (registered in
 **Draft conclusion:** the legitimate interest appears to be balanced **provided** the safeguards above stay in place. Items for review:
 
 1. **Displayed text** (all five sources, Reddit by ruling 8): redaction is not anonymisation; names mentioned in content remain. Counsel to confirm display is proportionate, or that display should be limited (e.g. snippets).
-2. **Retained derived data after text removal** (ruling 9, and applied by analogy to the Guardian, YouTube and TikTok): scores and cue-word fragments stay. Counsel to confirm retention of derived data is compatible with each platform's deletion terms and with Article 5(1)(e).
+2. **Retained derived data after text removal** (ruling 9, and applied by analogy to YouTube and TikTok; the Guardian follows the default window since Jennifer's ruling of 2026-09-29, "Use normal retention"): scores and cue-word fragments stay; embeddings are deleted with the text (decision G3). Counsel to confirm retention of derived data is compatible with each platform's deletion terms and with Article 5(1)(e).
 3. **Wikipedia talk pages and OSM diaries** carry more personal narrative than news items: consider shorter windows.
 4. **Erasure requests:** document the operator procedure (find by provenance fingerprint, blank text, log `erasure_requested`).
 5. **Transparency notice:** publish a short notice naming the sources, purposes, windows and how to object.
