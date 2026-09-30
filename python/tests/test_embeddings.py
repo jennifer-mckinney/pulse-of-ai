@@ -61,6 +61,30 @@ async def test_health_reports_pinned_model_revision(client):
 
 
 @pytest.mark.asyncio
+async def test_health_reports_the_installed_library(client):
+    """/health names the sentence-transformers version it runs, in the form of
+    the embedding methodology row's config.library."""
+    import sentence_transformers
+
+    body = (await client.get("/health")).json()
+    assert body["library"] == f"sentence-transformers=={sentence_transformers.__version__}"
+
+
+@pytest.mark.asyncio
+async def test_health_library_matches_the_pinned_requirement(client):
+    """The installed library is the one python/requirements.txt pins (and
+    tests/unit/pure/embeddingLibraryPins.test.js ties that pin to the current
+    embedding methodology row), so a stale environment fails here."""
+    import pathlib
+    import re
+
+    req = (pathlib.Path(__file__).resolve().parents[1] / "requirements.txt").read_text()
+    pin = re.search(r"^sentence-transformers==(\S+)", req, re.M).group(1)
+    body = (await client.get("/health")).json()
+    assert body["library"] == f"sentence-transformers=={pin}"
+
+
+@pytest.mark.asyncio
 async def test_health_reports_healthy_status(client):
     response = await client.get("/health")
     assert response.json()["status"] == "healthy"

@@ -28,8 +28,10 @@ const { DEMO_PURGE_ACTION } = require('../config/data-mode');
 const EMBEDDINGS_SERVICE_URL = process.env.EMBEDDINGS_SERVICE_URL || 'http://localhost:8000';
 const MODEL_NAME             = process.env.EMBED_MODEL || 'sentence-transformers/all-MiniLM-L6-v2';
 
-// P9-5: the registered embedding methodology (model + pinned revision) —
-// the LAST 'embedding' entry of the registry, as for every component.
+// P9-5: the registered embedding methodology (model + pinned revision +
+// library) — the LAST 'embedding' entry of the registry, as for every
+// component (= CURRENT_VERSIONS.embedding; embedding@1.1.0 since migration
+// 065, sentence-transformers 6.1.0).
 const EMBEDDING_METHODOLOGY = METHODOLOGY_VERSIONS.filter(m => m.component === 'embedding').pop();
 
 /**

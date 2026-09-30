@@ -1,8 +1,11 @@
 # Embedding service dependencies
 # Install: pip install -r requirements.txt
 
-# Core embedding service
-sentence-transformers==2.7.0
+# Core embedding service. Must equal requirements-service.in and the
+# `library` of the current embedding methodology row (embedding@1.1.0);
+# tests/unit/pure/embeddingLibraryPins.test.js fails on drift. A bump is a
+# methodology change: register a new embedding version with it.
+sentence-transformers==6.1.0
 # Infinity (PyPI package: infinity-emb) is the planned Phase-2 embedding server
 # per docs/TECHNICAL_SPEC.md §5 — add the dependency when actually adopted.
 
