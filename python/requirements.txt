@@ -11,7 +11,7 @@ psycopg2-binary>=2.9.13
 pgvector>=0.2.4
 
 # HTTP server for python/embeddings_service.py (the production embedder)
-fastapi>=0.110.0
+fastapi>=0.141.1
 uvicorn>=0.54.0
 
 # Testing
