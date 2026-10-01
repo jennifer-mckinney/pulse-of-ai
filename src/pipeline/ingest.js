@@ -15,6 +15,8 @@
 //
 // Pipeline per post:
 //   1. normalisePost — strip author/PII, build content string, compute content_hash
+//      (SHA-256 of the stored text; an integrity record, not a join or dedup key —
+//      ingest@1.8.0, migration 066)
 //   2. Dedup check — UNIQUE(source_id, external_id) prevents double-ingestion
 //   3. saveSentiment   (src/pipeline/sentiment.js)
 //   4. saveRelevance   (src/pipeline/relevance.js)
@@ -22,7 +24,8 @@
 //
 // GDPR compliance:
 //   - Author fields and usernames are removed in normalisePost before any DB write
-//   - content_hash enables dedup without storing duplicate content
+//   - content_hash records SHA-256 of the stored text; the scoring steps record the
+//     same digest as decision_audit_log.input_hash (dedup is UNIQUE(source_id, external_id))
 //   - raw_payload stores source metadata with PII fields stripped
 
 'use strict';
@@ -96,7 +99,7 @@ function cityLocation(location) {
  * @returns {{
  *   externalId:  string,
  *   content:     string,   // PII-stripped, normalised text
- *   contentHash: string,   // SHA-256(content) for deduplication
+ *   contentHash: string,   // SHA-256(content); not used for deduplication (ingest@1.8.0)
  *   rawPayload:  object    // PII fields removed
  * }}
  */
@@ -123,7 +126,9 @@ function normalisePost(rawPayload, sourceType) {
     // Normalise whitespace for consistent hashing
     const normalised = content.replace(/\s+/g, ' ').trim();
 
-    // SHA-256 of normalised content — used for deduplication across sources
+    // SHA-256 of normalised content. Stored as raw_posts.content_hash; it is the
+    // same digest the scoring steps record as input_hash. No query joins or
+    // deduplicates on it (ingest@1.8.0 corrected the "join key" wording).
     const contentHash = crypto.createHash('sha256').update(normalised).digest('hex');
 
     // Strip PII from raw_payload before storage — GDPR data minimisation
