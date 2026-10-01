@@ -379,6 +379,15 @@ describe('gate status (Jennifer\'s rulings, ADR 0001)', () => {
             expect(a).toMatchObject({ intervalSec: 180, runsPerDay: 480, perDay: 500, fitsQuota: true, inBand: true });
         });
 
+        // Diagnosis 2026-10-01: tldr.tech rate-limits (HTTP 429) a 150 s
+        // poll of its once-a-day AI newsletter feed. Its cadence is the top
+        // of the D4 band (180 s), never outside it.
+        test('TLDR polls at the top of the D4 band (180 s)', () => {
+            const tldr = registry.getSource('tldr');
+            expect(registry.pollIntervalSec(tldr, ENV)).toBe(registry.CADENCE_BAND_SEC.max);
+            expect(registry.pollIntervalSec(tldr, ENV)).toBe(180);
+        });
+
         test('Stack Overflow keyless cannot fit the band (300/day, 2 requests/run needs >= 576 s)', () => {
             const so = registry.getSource('stack_overflow');
             expect(registry.quotaAudit(so, so.routes[0], ENV)).toMatchObject({ minIntervalSec: 576, inBand: false, fitsQuota: true });

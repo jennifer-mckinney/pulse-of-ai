@@ -956,8 +956,11 @@ const SOURCES = [
         routes: [{ id: 'tldr-ai-rss', adapter: 'rss', params: { urls: ['https://tldr.tech/api/rss/ai'], maxAgeDays: 30 }, scope: 'ai' }],
         termsUrl: 'https://tldr.tech/terms',
         termsNote: 'No automated-access clause in the terms text; the 2018 placeholder item is dropped by age.',
-        rateLimit: { minIntervalMs: 1000, note: 'conditional GET' },
-        pollIntervalSec: DEFAULT_POLL_SEC,
+        rateLimit: { minIntervalMs: 1000, note: 'conditional GET; HTTP 429 Retry-After honoured as a hold (src/collectors/http.js)' },
+        // Diagnosis 2026-10-01: tldr.tech rate-limits (HTTP 429, Retry-After
+        // >= 60 s) a 150 s poll of this once-a-day newsletter feed. 180 s is
+        // the top of the D4 band (2–3 minutes), never outside it.
+        pollIntervalSec: 180,
     },
     {
         rank: 48, slug: 'substack', name: 'Substack (platform-level)', category: 'blog', region: 'global', homeCity: null,
