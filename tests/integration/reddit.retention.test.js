@@ -311,6 +311,15 @@ describe('maintenance: retention always, API jobs only behind the open gate', ()
         const again = await maintenance.runRedditMaintenance({ env: OPEN_ENV, api });
         expect(again.recheck).toBeUndefined();
         expect(again.discovery).toBeUndefined();
+        // Migration 073: the database ROUTE kill switch of Reddit's one route
+        // closes the API jobs too (and clearing it reopens them).
+        const { id: redditId } = await db.dbGet("SELECT id FROM data_sources WHERE name = 'reddit'");
+        const state = require('../../src/collectors/state');
+        await state.setRouteKillSwitch(redditId, 'data-api', true, { reason: 'terms review', by: 'Tess Tester 2026-09-30' });
+        expect((await maintenance.runRedditMaintenance({ env: OPEN_ENV, api })).api)
+            .toMatch(/^skipped: every route that would run is switched off by a route kill switch — data-api \(kill switch \(database\): route disabled by Tess Tester 2026-09-30 — terms review\)$/);
+        await state.setRouteKillSwitch(redditId, 'data-api', false);
+        expect((await maintenance.runRedditMaintenance({ env: OPEN_ENV, api })).api).toBeUndefined();
         // The database kill switch closes the API jobs too.
         await db.dbRun("UPDATE data_sources SET collection_disabled_at = NOW() WHERE name = 'reddit'");
         expect((await maintenance.runRedditMaintenance({ env: OPEN_ENV, api })).api).toMatch(/kill switch/);

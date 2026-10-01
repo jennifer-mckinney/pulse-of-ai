@@ -21,7 +21,7 @@ const { recordGateTransitions, recordCorrelationGate } = require('../collectors/
 const { dbAll } = require('../db/connection');
 const { COLLECT_QUEUES } = require('../queues/index');
 const {
-    getSource, sourceStatus, pollIntervalSec, collectWindowMs, DEFAULT_COLLECT_WINDOW_MS,
+    getSource, sourceStatus, pollIntervalSec, collectWindowMs, DEFAULT_COLLECT_WINDOW_MS, parseDisabledRoutes, ROUTE_KILL_ENV,
 } = require('../config/source-registry');
 
 // Collection window: src/config/source-registry.js collectWindowMs (150 s default).
@@ -41,6 +41,15 @@ async function scheduleAllSources({ env = process.env, log = () => {} } = {}) {
          ORDER BY name`,
     ) || [];
     const windowMs = collectWindowMs(env);
+    // Migration 073: COLLECTORS_DISABLED_ROUTES entries that name no registry
+    // source switch nothing off — say so on every reschedule (an entry naming
+    // a registry source with an unknown route holds that source disabled,
+    // which sourceStatus reports).
+    const { invalid } = parseDisabledRoutes(env);
+    if (invalid.length) {
+        log(`[scheduler] ${ROUTE_KILL_ENV}: ignored ${invalid.length} entr${invalid.length > 1 ? 'ies' : 'y'} naming no registry `
+            + `source (${invalid.map(e => JSON.stringify(e)).join(', ')}); entries are "slug/route"`);
+    }
 
     const activeIdsByQueue = new Map();
     const schedulable = [];

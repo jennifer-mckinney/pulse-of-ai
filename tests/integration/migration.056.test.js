@@ -15,10 +15,18 @@ const { insertSource } = require('./helpers');
 const SQL_056 = fs.readFileSync(path.join(__dirname, '../../src/db/migrations/056_named_gate_approval.sql'), 'utf8');
 const APPROVER = 'Jennifer McKinney 2026-09-29';
 
+// Migration 073 rebuilds the two CHECKs 056 re-creates from its own lists
+// (adding the route events). It is re-applied right after 056 is re-run, so
+// the shared test DB stays exactly as the migration runner left it for the
+// files that run after this one (an afterAll would run after setup.js has
+// closed the pool).
+const SQL_073 = fs.readFileSync(path.join(__dirname, '../../src/db/migrations/073_source_route_kill_switch.sql'), 'utf8');
+
 describe('migration 056', () => {
     it('re-runs cleanly and keeps its constraint and trigger', async () => {
         await dbTransaction(c => c.query(SQL_056));
         await dbTransaction(c => c.query(SQL_056));   // idempotent
+        await dbTransaction(c => c.query(SQL_073));   // restore the later migration's CHECKs
         const con = await dbGet(`SELECT convalidated FROM pg_constraint WHERE conname = 'source_gate_events_named_approval'`);
         expect(con).toEqual({ convalidated: false });   // NOT VALID: earlier rows are never rechecked
         const trg = await dbGet(`SELECT COUNT(*)::int AS n FROM pg_trigger WHERE tgname = 'correlation_gate_events_append_only'`);

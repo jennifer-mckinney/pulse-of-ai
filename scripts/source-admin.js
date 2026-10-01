@@ -9,6 +9,13 @@
 //       run in every process; GET /api/sources reports it 'disabled'.
 //   npm run source:enable -- <slug>
 //       clear the database kill switch (env kill switches still apply).
+//   npm run source:disable -- <slug> --route <route_id> --reason "<why>"
+//   npm run source:enable -- <slug> --route <route_id> [--note "<why>"]
+//       the per-ROUTE database kill switch (migration 073): only that route
+//       stops before its next run in every process — the source's other
+//       routes keep collecting; GET /api/sources reports the route
+//       'disabled' with its reason. The route id must be a registry route
+//       of the source (validated, never trusted from input).
 //   npm run source:reset -- <slug> [--note "<why>"]
 //       clear the refused state (F10-5): the source is tried again on its
 //       next poll; its open 'source_refused' alert is resolved with the note.
@@ -16,21 +23,22 @@
 // Every command needs GATE_APPROVED_BY ("Name YYYY-MM-DD", PR #22 decision
 // G5): it is the recorded actor — from the approved config, never a
 // self-asserted $USER (security L6). The state change and its
-// source_gate_events row ('disabled' / 'enabled' / 'refusal_reset') are
+// source_gate_events row ('disabled' / 'enabled' / 'refusal_reset', or
+// 'route_disabled' / 'route_enabled' naming the one route) are
 // written in ONE transaction (security L6, grumpy L16): neither lands
 // without the other.
 //
-// Exit codes: 0 done, 2 usage error / unknown source / no named approval /
-// database failure.
+// Exit codes: 0 done, 2 usage error / unknown source or route / no named
+// approval / database failure.
 
 'use strict';
 
 require('dotenv').config();
-const { getSource, namedApproval, GATE_APPROVAL_ENV } = require('../src/config/source-registry');
+const { getSource, getRoute, namedApproval, GATE_APPROVAL_ENV } = require('../src/config/source-registry');
 
 const USAGE = [
-    'usage: npm run source:disable -- <slug> --reason "<why>"',
-    '       npm run source:enable -- <slug>',
+    'usage: npm run source:disable -- <slug> [--route <route_id>] --reason "<why>"',
+    '       npm run source:enable -- <slug> [--route <route_id>] [--note "<why>"]',
     '       npm run source:reset -- <slug> [--note "<why>"]',
 ].join('\n');
 
@@ -49,10 +57,30 @@ function parseArgs(argv) {
     if (!getSource(slug)) return { error: `unknown source '${slug}' (not a registry slug)\n${USAGE}` };
     const note = flag(args, '--note');
     const reason = flag(args, '--reason');
-    if (note === null || reason === null) return { error: USAGE };
+    const route = flag(args, '--route');
+    if (note === null || reason === null || route === null) return { error: USAGE };
+    // Only known flags, each with its value: a stray word (e.g. a route id
+    // given without --route) is a usage error, never silently ignored.
+    const known = new Set(['--note', '--reason', '--route']);
+    const seen = new Set();
+    for (let i = 2; i < args.length; i += 2) {
+        if (!known.has(args[i])) return { error: `unexpected argument '${args[i]}'\n${USAGE}` };
+        // A repeated flag is ambiguous (which route was meant?): refused,
+        // never resolved silently to the first one.
+        if (seen.has(args[i])) return { error: `${args[i]} is given more than once\n${USAGE}` };
+        seen.add(args[i]);
+    }
+    if (route !== undefined) {
+        // Security: the route id is validated against the registry — an
+        // exact match of one of the source's route ids — never trusted.
+        if (command === 'reset') return { error: `source:reset applies to a whole source; --route is not accepted\n${USAGE}` };
+        if (!getRoute(getSource(slug), route)) {
+            return { error: `unknown route '${route}' of ${slug} (registry routes: ${getSource(slug).routes.map(r => r.id).join(', ')})\n${USAGE}` };
+        }
+    }
     // A takedown is recorded with its reason.
-    if (command === 'disable' && !reason) return { error: `source:disable needs --reason "<why>"\n${USAGE}` };
-    return { command, slug, note: note || null, reason: reason || null };
+    if (command === 'disable' && !(reason && reason.trim())) return { error: `source:disable needs --reason "<why>"\n${USAGE}` };
+    return { command, slug, route: route || null, note: note || null, reason: reason || null };
 }
 
 /**
@@ -79,10 +107,27 @@ async function main(argv, io = {}) {
         const row = await db.dbGet('SELECT id FROM data_sources WHERE name = $1', [parsed.slug]);
         if (!row) { err(`source '${parsed.slug}' has no data_sources row — run npm run seed`); return 2; }
         const recordGateEvent = io.recordGateEvent || require('../src/collectors/governance').recordGateEvent;
-        const event = (client, ev, reason) => recordGateEvent({
-            sourceId: row.id, slug: parsed.slug, event: ev, actor: who, approvedBy: who, reason, client,
+        const event = (client, ev, reason, routes = null) => recordGateEvent({
+            sourceId: row.id, slug: parsed.slug, event: ev, actor: who, approvedBy: who, reason, routes, client,
         });
-        if (parsed.command === 'disable') {
+        if (parsed.route && parsed.command === 'disable') {
+            // Migration 073: the route switch and its 'route_disabled' event
+            // (naming the route) in ONE transaction (L6 / L16).
+            await db.dbTransaction(async (client) => {
+                await state.setRouteKillSwitch(row.id, parsed.route, true, { reason: parsed.reason, by: who, client });
+                await event(client, 'route_disabled', parsed.reason, [parsed.route]);
+            });
+            out(`${parsed.slug}/${parsed.route}: disabled (database route kill switch) — applies before the next run in every `
+                + 'process; the source\'s other routes keep collecting');
+        } else if (parsed.route && parsed.command === 'enable') {
+            let changed = false;
+            await db.dbTransaction(async (client) => {
+                changed = await state.setRouteKillSwitch(row.id, parsed.route, false, { client });
+                await event(client, 'route_enabled', parsed.note || 'database route kill switch cleared', [parsed.route]);
+            });
+            out(`${parsed.slug}/${parsed.route}: database route kill switch cleared${changed ? '' : ' (it was not set)'} `
+                + '(env kill switches, COLLECTORS_DISABLED_ROUTES included, still apply)');
+        } else if (parsed.command === 'disable') {
             // P10-14: every enable / disable is recorded with who and when —
             // in the same transaction as the switch (L6 / L16).
             await db.dbTransaction(async (client) => {

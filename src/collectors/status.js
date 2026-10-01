@@ -13,6 +13,15 @@
 // "Sources online N/<registry size>" counts exactly these: a source the
 // registry would collect but that has not succeeded recently, or has failed
 // since, is not online.
+//
+// Per-route kill switch (migration 073): `routes` lists every registry route
+// with its status ('open' | 'disabled' | 'closed') and reason, and
+// `disabled_routes` the ids switched off (env COLLECTORS_DISABLED_ROUTES or
+// the database switch, npm run source:disable -- <slug> --route <id>). A
+// source with SOME routes off still collects (and counts as collecting /
+// online); its status_reason names the routes that are off. `open_routes`
+// lists only routes that run now: none for a disabled source, and never a
+// disabled route.
 
 'use strict';
 
@@ -21,6 +30,7 @@ const { SOURCES, getSource, sourceStatus, killSwitchEnv, GATE_STATUSES } = requi
 const { DEMO_SOURCE_TYPE } = require('../config/data-mode');
 const { refusalGate, resetEnv, probationOver, BLOCKED_BY_SOURCE } = require('./refusal');
 const { selectionStatus } = require('./reddit/selection');
+const { allRouteKillSwitches } = require('./state');
 
 // Runtime statuses: the registry gate statuses plus 'blocked_by_source' (a
 // collecting source that refused us — F10-5; never online).
@@ -40,11 +50,14 @@ function isOnline(status, lastSuccessAt, now = Date.now(), lastErrorAt = null) {
     return !lastErrorAt || ok >= new Date(lastErrorAt).getTime();
 }
 
-/** Registry fields for one data_sources row (null for non-registry rows). */
-function registryFields(row, env, now) {
+/**
+ * Registry fields for one data_sources row (null for non-registry rows).
+ * @param {object[]} [routeKills]  the source's database route kill switches (state.routeKillSwitches)
+ */
+function registryFields(row, env, now, routeKills = []) {
     const src = getSource(row.name);
     if (!src || row.source_type === DEMO_SOURCE_TYPE) return null;
-    const st = sourceStatus(src, env);
+    const st = sourceStatus(src, env, { routeKills });
     // F10-5: a collecting source in the refused state (cooldown or awaiting
     // its probe) is reported as blocked_by_source until it succeeds again
     // or is reset.
@@ -68,7 +81,15 @@ function registryFields(row, env, now) {
         status_reason: dbReason || (refused ? gate.reason : st.reason),
         collection_disabled_at: row.collection_disabled_at || null,
         missing_env: st.missing,
-        open_routes: st.openRoutes,
+        // Only the routes that run now: a source switched off by the
+        // database kill switch has none (sourceStatus already empties them
+        // for every other non-collecting status), and a disabled route is
+        // never among them.
+        open_routes: dbKilled ? [] : st.openRoutes,
+        disabled_routes: st.disabledRoutes,
+        routes: dbKilled
+            ? st.routes.map(r => (r.status === 'open' ? { ...r, status: 'closed', reason: 'the source is disabled' } : r))
+            : st.routes,
         licence_refs_on_file: st.recorded,
         kill_switch_env: killSwitchEnv(src.slug),
         online: isOnline(status, row.last_success_at, now, row.last_error_at),
@@ -105,6 +126,7 @@ function registryFields(row, env, now) {
  * @returns {Promise<object[]>} data_sources rows (registry rows enriched), registry order first
  */
 async function sourceRows({ includeInactive = false, env = process.env, now = Date.now() } = {}) {
+    const routeKills = await allRouteKillSwitches();
     const rows = await dbAll(
         `SELECT ds.id, ds.name, ds.display_name, ds.source_type, ds.category, ds.active,
                 ds.retired_at, ds.retired_note,
@@ -123,7 +145,7 @@ async function sourceRows({ includeInactive = false, env = process.env, now = Da
             category: r.category, active: r.active, retired: !!r.retired_at,
         };
         if (r.retired_at) base.retired_note = r.retired_note;
-        const reg = registryFields(r, env, now);
+        const reg = registryFields(r, env, now, routeKills.get(r.id) || []);
         return reg ? { ...base, ...reg } : { ...base, registry: false };
     });
     // Reddit's subreddit selection (rule, current list, latest snapshot).

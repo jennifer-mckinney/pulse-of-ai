@@ -59,9 +59,13 @@ async function recordGateTransitions({ env = process.env, actor = SCHEDULER_ACTO
          WHERE ds.name = ANY($1::text[])`,
         [SOURCES.map(s => s.slug)],
     );
+    // Migration 073: the database route kill switches count too — a source
+    // whose every runnable route is switched off is closed, and an open
+    // gate's recorded routes never include a disabled route.
+    const routeKills = await require('./state').allRouteKillSwitches();
     const written = [];
     for (const r of rows) {
-        let st = sourceStatus(getSource(r.name), env);
+        let st = sourceStatus(getSource(r.name), env, { routeKills: routeKills.get(r.id) || [] });
         // Grumpy L14: the database kill switch closes the gate whatever the
         // env says, so the log never shows a disabled source as open.
         if (r.collection_disabled_at && st.status === 'collecting') {

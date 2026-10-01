@@ -137,3 +137,23 @@ test('records source and correlation gate changes even when nothing is collectin
     await scheduleAllSources({ env: ENV, log: l => lines.push(l) });
     expect(lines).toContain('[scheduler] gate events not recorded: db down');
 });
+
+// Migration 073: COLLECTORS_DISABLED_ROUTES. A route switched off by env
+// leaves its source scheduled while another route runs; a source with every
+// route off (or held by a mistyped entry) is not scheduled; an entry naming
+// no registry source switches nothing off and is logged on every reschedule.
+test('per-route kill switch (env): scheduling, and the log of entries naming no registry source', async () => {
+    dbAll.mockResolvedValue(rows(['hugging_face', 'hacker_news', 'gitlab']));
+    const log = jest.fn();
+    const n = await scheduleAllSources({
+        env: { ...ENV, COLLECTORS_DISABLED_ROUTES: 'hugging_face/forum-latest,hacker_news/algolia-search,gitlab/forum,nope/x' }, log,
+    });
+    // hugging_face keeps two routes; hacker_news has none left; gitlab is held by the typo.
+    expect(n).toBe(1);
+    expect(upserts().map(u => u[1])).toEqual(['hugging_face']);
+    expect(log).toHaveBeenCalledWith(
+        '[scheduler] COLLECTORS_DISABLED_ROUTES: ignored 1 entry naming no registry source ("nope/x"); entries are "slug/route"');
+    log.mockClear();
+    await scheduleAllSources({ env: { ...ENV, COLLECTORS_DISABLED_ROUTES: 'hugging_face/forum-latest' }, log });
+    expect(log.mock.calls.flat().join('\n')).not.toMatch(/COLLECTORS_DISABLED_ROUTES/);
+});

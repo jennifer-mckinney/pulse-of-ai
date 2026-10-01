@@ -5,6 +5,8 @@
 //     gate  — sourceStatus(): only 'collecting' sources run (kill switches,
 //             missing credentials, blocked: never fetched), then the
 //             database kill switch (data_sources.collection_disabled_at, F10-10)
+//             and the per-route database kill switch (source_route_state,
+//             migration 073): a disabled route is never fetched
 //     refusal — src/collectors/refusal.js: a source that refused access
 //             (401/403/451, bot wall, robots) is skipped through its
 //             cooldown and reported 'blocked_by_source' (F10-5); a clean
@@ -191,6 +193,16 @@ async function runCollection(o = {}) {
                 row.reason = `kill switch (database): disabled${killed.by ? ` by ${killed.by}` : ''}${killed.reason ? ` — ${killed.reason}` : ''}`;
                 continue;
             }
+            // Migration 073: the per-route database kill switch, read before
+            // every run like the source switch. A disabled route is never
+            // built (no request); when every route that would run is
+            // disabled, the source is skipped as 'disabled'.
+            const routeKills = await state.routeKillSwitches(sourceId);
+            if (routeKills.length) {
+                const rst = sourceStatus(src, env, { routeKills });
+                row.disabledRoutes = rst.disabledRoutes;
+                if (rst.status !== 'collecting') { row.status = rst.status; row.reason = rst.reason; continue; }
+            }
             // F10-5: a source that refused us is not asked again until its
             // cooldown ends (then one probe) or an operator resets it.
             const refusal = await state.getRefusal(sourceId);
@@ -214,7 +226,7 @@ async function runCollection(o = {}) {
                 log(`[collect] ${slug}: refusal cleared by ${resetEnv(slug)} (approved by ${approvedBy})`);
             }
 
-            const claimed = await state.claim(sourceId, pollIntervalSec(src, env), o.cycle ? o.cycle.windowMs : collectWindowMs(env));
+            const claimed = await state.claim(sourceId, pollIntervalSec(src, env, { routeKills }), o.cycle ? o.cycle.windowMs : collectWindowMs(env));
             if (!claimed) { row.reason = 'collected within its poll interval (rate limit)'; continue; }
             queried++;
             http = http || new HttpClient({ env, transport: o.transport, sleep: o.collectorCtx && o.collectorCtx.sleep, signal });
@@ -232,7 +244,7 @@ async function runCollection(o = {}) {
             let queueFailed = false;
             let collectors = [];
             try {
-                collectors = buildCollectors(src, { env, http, cursor, httpCache, now: o.now, ...(o.collectorCtx || {}) });
+                collectors = buildCollectors(src, { env, http, cursor, httpCache, now: o.now, ...(o.collectorCtx || {}), routeKills });
             } catch (err) {
                 fail(err.message, err);
             }
