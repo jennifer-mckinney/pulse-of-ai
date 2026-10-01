@@ -56,6 +56,41 @@ test('legal notice: about chip opens the AGPL notices with the source link', asy
     expectNoConsoleErrors(errors);
 });
 
+// The .stage is fixed and clips overflow, so at a narrow or zoomed viewport
+// the wrapped notice lines must stay reachable: the panel is bounded to the
+// viewport below its top and scrolls (Copilot r4158623080). 320 x 240 CSS px
+// is a phone width at a high zoom.
+test('legal notice: a short viewport bounds the panel and scrolls to the last notice', async ({ page }) => {
+    const errors = consoleErrors(page);
+    await page.setViewportSize({ width: 320, height: 240 });
+    await gotoAndWaitForData(page);
+
+    const chip = page.locator('#about-chip');
+    const panel = page.locator('#about-panel');
+    await chip.click();
+    await expect(panel).toBeVisible();
+
+    const box = await panel.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.y + box!.height).toBeLessThanOrEqual(240);
+    // More notice text than fits: the panel scrolls instead of clipping.
+    const scroll = await panel.evaluate(el => ({
+        overflowY: getComputedStyle(el).overflowY,
+        scrollable: el.scrollHeight > el.clientHeight,
+    }));
+    expect(scroll.overflowY).toBe('auto');
+    expect(scroll.scrollable).toBe(true);
+
+    const warranty = panel.locator('[data-notice="warranty"]');
+    await warranty.scrollIntoViewIfNeeded();
+    const w = await warranty.boundingBox();
+    expect(w).not.toBeNull();
+    expect(w!.y + w!.height).toBeLessThanOrEqual(240);
+    await expect(warranty).toBeInViewport();
+
+    expectNoConsoleErrors(errors);
+});
+
 // A pointer click on the chip closes the panel too. In Safari a click does
 // not move focus to the button, so a link inside the panel that had keyboard
 // focus would stay focused inside the hidden subtree. The click is
