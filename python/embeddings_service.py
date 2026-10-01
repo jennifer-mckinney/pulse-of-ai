@@ -15,7 +15,8 @@ PRODUCTION:
     Node.js change.
 
 DEVELOPMENT:
-    uvicorn python.embeddings_service:app --port 8000
+    bash python/start.sh    # binds 127.0.0.1:8000; EMBEDDINGS_HOST overrides
+    (the API is unauthenticated, so keep it on loopback unless deliberate)
 
 TESTS:
     python -m pytest python/tests/test_embeddings.py -v

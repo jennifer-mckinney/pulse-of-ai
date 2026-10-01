@@ -1,8 +1,10 @@
 // src/collectors/source-health.js
-// Source-health evaluator (PR #10 review P10-8). Run by the worker with
-// every cycle close (src/workers/start.js closeDueCycles, after
-// closeCycles). For every registry source that is COLLECTING (gate open,
-// no database kill switch) and has a collection-state row:
+// Source-health evaluator (PR #10 review P10-8). Run by the worker on
+// every 30 s tick of src/workers/start.js closeDueCycles, after
+// closeCycles, whether or not a cycle closed on that tick (a tick still
+// running makes the next one skip). For every registry source that is
+// COLLECTING (gate open, no database kill switch) and has a
+// collection-state row:
 //
 //   source_stale    warning   no NEW post for longer than the registry's
 //                             expectedNewWithinHours (reference:
