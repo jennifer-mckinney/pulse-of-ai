@@ -1496,7 +1496,7 @@ Themes (default "Midnight") and the 8 category colours are defined in the same f
 ### Accessibility Requirements
 - Colour is never the only indicator: a numeric score sits next to every sentiment colour
 - Pointer Events for drag, hover, tap and pinch; keyboard zoom step; `prefers-reduced-motion` stops auto-spin, drift and pulse rings
-- The health chip and the about chip expose `aria-expanded`; the about panel closes on Escape
+- The health chip and the about chip expose `aria-expanded`; the about panel closes on Escape or a chip click, and focus that was inside it returns to the chip
 - A ranked city list replaces the globe when canvas is unavailable
 - Font contrast ratio ≥ 4.5:1 (AA standard) and screen-reader-compatible structure remain targets; no automated contrast audit runs today
 
@@ -1579,7 +1579,7 @@ All of these must be complete before writing a single feature:
 2. `.env.example` + `.env` + `.gitignore` entries
 3. `package.json` — add `pg`, `pgvector` (the plan named `@pgvector/pg`), `jest`, `supertest`; remove `sqlite3`
 4. `jest.config.js` + `tests/setup.js` (test DB connection + migration + truncate)
-5. `src/db/migrations/001–004.sql` — the first four migration files (49 today, §6)
+5. `src/db/migrations/001–004.sql` — the first four migration files (50 today, 001–066, §6)
 6. `scripts/migrate.js` — runs migrations in order, idempotent
 7. `scripts/seed.js` — inserts data_sources rows + initial methodology_versions
 8. `src/db/connection.js` — pg Pool, `dbAll()`, `dbGet()`, `dbRun()` Promise helpers
@@ -2333,7 +2333,7 @@ Before shipping this feature:
   4. `Additional terms (AGPL section 7(b))` → `ADDITIONAL-TERMS.md`
   5. `Source code` → `SOURCE_URL`
   6. `No warranty: provided "as is", without warranty of any kind (AGPL sections 15 and 16).`
-- **Rendering:** `public/js/main.js` `renderLegalNotice` builds the header "about" panel (`#about-panel`, `role="region"`, hidden by default) with `createElement` + `textContent` only. The about chip toggles it and sets `aria-expanded`; Escape closes it. Links carry `rel="noopener noreferrer"` and no `target`. All hrefs are static https constants; no API data reaches an href.
+- **Rendering:** `public/js/main.js` `renderLegalNotice` builds the header "about" panel (`#about-panel`, `role="region"`, hidden by default) with `createElement` + `textContent` only. The about chip toggles it and sets `aria-expanded`; Escape closes it. Closing it by Escape or by the chip returns focus to the chip when focus was inside the panel (or on the page body), so it never stays in the hidden subtree, including in Safari, where a click does not focus the button; focus elsewhere on the page is left where it is. Links carry `rel="noopener noreferrer"` and no `target`. All hrefs are static https constants; no API data reaches an href.
 - **No-JS:** `public/index.html` repeats the same six lines, texts and links inside `<noscript>`.
 - **CSP:** the config loads as an external `<script src>` before `main.js`; no inline script or style is added, and styling lives in `styles/main.css`.
-- **Tests:** `tests/unit/pure/legalNotice.test.js` pins the literal texts and URLs, the noscript copy, the absence of inline `style=` and of `innerHTML`-family writes, the `LICENSE` header, the package licence and the additional terms. `tests/e2e/legal-notice.spec.ts` asserts the rendered panel, its links and Escape behaviour, with zero console errors.
+- **Tests:** `tests/unit/pure/legalNotice.test.js` pins the literal texts and URLs, the noscript copy, the absence of inline `style=` and of `innerHTML`-family writes, the `LICENSE` header, the package licence and the additional terms. `tests/e2e/legal-notice.spec.ts` asserts the rendered panel, its links, the Escape behaviour and focus return on a chip click that does not move focus, with zero console errors.
