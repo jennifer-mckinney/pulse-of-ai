@@ -6,8 +6,9 @@
 
 'use strict';
 
-const request = require('supertest');
+const { useServer } = require('../helpers/server');
 const app     = require('../../src/server');
+const request = useServer(app);   // one listener per file (tests/helpers/server.js)
 const { insertSource, insertJob, insertMethodologyVersions, insertPostWithFullPipeline } = require('./helpers');
 const { CATEGORY_SLUGS } = require('../../src/config/categories');
 
@@ -28,7 +29,7 @@ describe('GET /api/sources/timeseries', () => {
         // Enumeration comes from the canon config, never SELECT DISTINCT
         // over the data — an empty DB still serves the full taxonomy as
         // honest zeros.
-        const res = await request(app).get('/api/sources/timeseries');
+        const res = await request().get('/api/sources/timeseries');
         expect(res.status).toBe(200);
         expect(res.body.map(e => e.category)).toEqual(CATEGORY_SLUGS);
         for (const entry of res.body) {
@@ -60,7 +61,7 @@ describe('GET /api/sources/timeseries', () => {
         await insertPostWithFullPipeline(news, jobId, mvIds,
             { indicator: 'neutral', externalId: 'ts-n1', collectedAt: recent });
 
-        const res = await request(app).get('/api/sources/timeseries');
+        const res = await request().get('/api/sources/timeseries');
         expect(res.status).toBe(200);
 
         // One row per canonical category, in canon (registry) order
@@ -91,7 +92,7 @@ describe('GET /api/sources/timeseries', () => {
         await insertPostWithFullPipeline(social, jobId, mvIds,
             { indicator: 'positive', externalId: 'ts-zf1', collectedAt: minutesAgo(5) });
 
-        const res = await request(app).get('/api/sources/timeseries');   // default 12h
+        const res = await request().get('/api/sources/timeseries');   // default 12h
         expect(res.status).toBe(200);
 
         const { series } = res.body.find(e => e.category === 'social');
@@ -123,7 +124,7 @@ describe('GET /api/sources/timeseries', () => {
         await insertPostWithFullPipeline(social, jobId, mvIds,
             { indicator: 'negative', externalId: 'ts-w2', collectedAt: minutesAgo(125) });
 
-        const res = await request(app).get('/api/sources/timeseries?hours=2');
+        const res = await request().get('/api/sources/timeseries?hours=2');
         expect(res.status).toBe(200);
 
         const { series } = res.body.find(e => e.category === 'social');
@@ -145,7 +146,7 @@ describe('GET /api/sources/timeseries', () => {
         await insertPostWithFullPipeline(social, jobId, mvIds,
             { externalId: 'ts-o2', collectedAt: minutesAgo(5) });
 
-        const res = await request(app).get('/api/sources/timeseries');
+        const res = await request().get('/api/sources/timeseries');
         expect(res.status).toBe(200);
         expect(res.body.map(e => e.category)).toEqual(CATEGORY_SLUGS);
         const academicEntry = res.body.find(e => e.category === 'academic');
@@ -165,7 +166,7 @@ describe('GET /api/sources/timeseries', () => {
         await insertPostWithFullPipeline(social, jobId, mvIds,
             { externalId: 'ts-fz1', collectedAt: minutesAgo(5) });
 
-        const res = await request(app).get('/api/sources/timeseries');
+        const res = await request().get('/api/sources/timeseries');
         expect(res.status).toBe(200);
         const forums = res.body.find(e => e.category === 'forums');
         expect(forums).toBeDefined();
@@ -192,7 +193,7 @@ describe('GET /api/sources/timeseries', () => {
         await insertPostWithFullPipeline(social, jobId, mvIds,
             { externalId: 'ts-f2', collectedAt: minutesAgo(5) });
 
-        const res = await request(app).get('/api/sources/timeseries');
+        const res = await request().get('/api/sources/timeseries');
         expect(res.status).toBe(200);
         expect(res.body.map(e => e.category)).toEqual(CATEGORY_SLUGS);
         expect(res.body.some(e => e.category === 'futurecat')).toBe(false);
@@ -205,7 +206,7 @@ describe('GET /api/sources/timeseries', () => {
         await insertPostWithFullPipeline(social, jobId, mvIds,
             { externalId: 'ts-c1', collectedAt: minutesAgo(5) });
 
-        const res = await request(app).get('/api/sources/timeseries?hours=500');
+        const res = await request().get('/api/sources/timeseries?hours=500');
         expect(res.status).toBe(200);
         expect(res.body.find(e => e.category === 'social').series).toHaveLength(48);
     });
@@ -222,22 +223,22 @@ describe('GET /api/sources/timeseries', () => {
         await insertPostWithFullPipeline(social, jobId, mvIds,
             { externalId: 'ts-c2', collectedAt: hourFloor(new Date()) });
 
-        const res = await request(app).get('/api/sources/timeseries?hours=0');
+        const res = await request().get('/api/sources/timeseries?hours=0');
         expect(res.status).toBe(200);
         expect(res.body.find(e => e.category === 'social').series).toHaveLength(1);
     });
 
     it('returns 400 for non-integer hours', async () => {
-        const bad1 = await request(app).get('/api/sources/timeseries?hours=abc');
+        const bad1 = await request().get('/api/sources/timeseries?hours=abc');
         expect(bad1.status).toBe(400);
         expect(bad1.body).toHaveProperty('error');
 
-        const bad2 = await request(app).get('/api/sources/timeseries?hours=1.5');
+        const bad2 = await request().get('/api/sources/timeseries?hours=1.5');
         expect(bad2.status).toBe(400);
         expect(bad2.body).toHaveProperty('error');
 
         // F5: negative windows are malformed, not clampable.
-        const bad3 = await request(app).get('/api/sources/timeseries?hours=-5');
+        const bad3 = await request().get('/api/sources/timeseries?hours=-5');
         expect(bad3.status).toBe(400);
         expect(bad3.body).toHaveProperty('error');
     });
@@ -259,7 +260,7 @@ describe('GET /api/sources/timeseries', () => {
             await insertPostWithFullPipeline(quiet, jobId, mvIds,
                 { externalId: 'tsq-1', collectedAt: minutesAgo(5) });
 
-            const res = await request(app).get('/api/sources/timeseries');
+            const res = await request().get('/api/sources/timeseries');
             const social = res.body.find(e => e.category === 'social');
             // insertSource sets display_name = name
             expect(social.top_site).toBe('ts-site-busy');
@@ -288,7 +289,7 @@ describe('GET /api/sources/timeseries', () => {
                 keywords: ['misc'],
             });
 
-            const res = await request(app).get('/api/sources/timeseries');
+            const res = await request().get('/api/sources/timeseries');
             const news = res.body.find(e => e.category === 'news');
             expect(news.words).toEqual(['regulation', 'safety']);
         });
@@ -322,7 +323,7 @@ describe('GET /api/sources/timeseries', () => {
                 [post.id, audit.id],
             );
 
-            const res = await request(app).get('/api/sources/timeseries');
+            const res = await request().get('/api/sources/timeseries');
             const policy = res.body.find(e => e.category === 'policy');
             expect(policy.top_site).toBe('ts-nokw-src');
             expect(policy.words).toEqual([]);
@@ -373,7 +374,7 @@ describe('GET /api/sources/timeseries', () => {
             }
 
             const spy = jest.spyOn(clock, 'hourAnchor').mockResolvedValue(anchor);
-            const res = await request(app).get(`/api/sources/timeseries?hours=${hours}`);
+            const res = await request().get(`/api/sources/timeseries?hours=${hours}`);
             expect(res.status).toBe(200);
             expect(spy).toHaveBeenCalledTimes(1);
 

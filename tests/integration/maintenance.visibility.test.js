@@ -10,9 +10,10 @@
 
 'use strict';
 
-const request = require('supertest');
+const { useServer } = require('../helpers/server');
 const db = require('../../src/db/connection');
 const app = require('../../src/server');
+const request = useServer(app);   // one listener per file (tests/helpers/server.js)
 const { seedSources } = require('../../scripts/seed');
 const { processMaintenanceJob } = require('../../src/workers/maintenance.worker');
 const overdue = require('../../src/collectors/retention-overdue');
@@ -77,7 +78,7 @@ describe('retention_overdue', () => {
         expect(open[0].severity).toBe('critical');
         expect(open[0].details).toMatchObject({ slug: 'reddit', posts: 1 });
 
-        const health = await request(app).get('/api/health');
+        const health = await request().get('/api/health');
         expect(health.body.maintenance.retention_overdue).toMatchObject({ posts: 1, sources: [{ slug: 'reddit', posts: 1 }] });
         expect(health.body.active_alerts.map(a => a.alert_type)).toContain('retention_overdue');
 
@@ -111,12 +112,12 @@ describe('retention_overdue', () => {
             await post('reddit', 48 + 40 / 60, 'r-grace');
 
             delete process.env.RETENTION_OVERDUE_GRACE_MINUTES;
-            let res = await request(app).get('/api/health');
+            let res = await request().get('/api/health');
             expect(res.body.maintenance.retention_overdue).toEqual({ posts: 0, sources: [] });
             expect(watchdogSees(res.body)).not.toContain('retention_overdue');
 
             process.env.RETENTION_OVERDUE_GRACE_MINUTES = '30';
-            res = await request(app).get('/api/health');
+            res = await request().get('/api/health');
             expect(res.body.maintenance.retention_overdue).toMatchObject({ posts: 1, sources: [{ slug: 'reddit', posts: 1 }] });
             expect(watchdogSees(res.body)).toContain('retention_overdue');
         });
@@ -132,10 +133,10 @@ describe('retention_overdue', () => {
 
 describe('GET /api/health — maintenance block', () => {
     it('reports the last run per task (null before any run)', async () => {
-        let res = await request(app).get('/api/health');
+        let res = await request().get('/api/health');
         expect(res.body.maintenance.tasks).toEqual({ retention: null, daily: null, terms: null });
         await processMaintenanceJob({ data: { task: 'daily' } }, { steps: [['compaction', async () => 0]] });
-        res = await request(app).get('/api/health');
+        res = await request().get('/api/health');
         expect(res.body.maintenance.tasks.daily).toMatchObject({ last_error: null });
         expect(res.body.maintenance.tasks.daily.last_ok_at).not.toBeNull();
     });

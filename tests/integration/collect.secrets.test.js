@@ -13,8 +13,9 @@
 
 'use strict';
 
-const request = require('supertest');
+const { useServer } = require('../helpers/server');
 const app = require('../../src/server');
+const request = useServer(app);   // one listener per file (tests/helpers/server.js)
 const { dbAll } = require('../../src/db/connection');
 const { runCollection } = require('../../src/collectors/runner');
 const { seedSources, seedMethodology } = require('../../scripts/seed');
@@ -122,7 +123,7 @@ describe.each([['a 503', hostile503], ['a timeout', hostileTimeout]])('F10-1: %s
 
             // API: served with the same secrets in the process env.
             Object.assign(process.env, env);
-            const api = await request(app).get('/api/sources');
+            const api = await request().get('/api/sources');
             expect(api.status).toBe(200);
             const served = api.body.find(s => s.slug === slug);
             expect(served).not.toHaveProperty('last_error');
