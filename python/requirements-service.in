@@ -42,5 +42,9 @@ transformers==5.18.0
 huggingface_hub==1.33.0
 tokenizers==0.23.2
 numpy==2.5.1
-fastapi==0.139.0
-uvicorn==0.50.0
+# fastapi / uvicorn: at least the floors of python/requirements.txt, so the
+# dev/test toolchain can install what the image runs. A Dependabot bump of
+# those floors fails tests/unit/pure/embeddingLibraryPins.test.js until this
+# file and the lock are refreshed to match (grumpy final-master #6).
+fastapi==0.141.1
+uvicorn==0.54.0

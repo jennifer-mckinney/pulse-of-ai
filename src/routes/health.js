@@ -13,7 +13,7 @@
 //                  exactly the rows /api/posts/aggregated-by-location places
 //                  and public/js/data.js dataModeOf counts.
 //   data_window    { hours: 1, posts, demo_posts,          ← the globe's rule
-//                    stored_posts, stored_demo_posts }     ← every stored post
+//                    stored_posts, stored_demo_posts }     ← every post stored in the window (hour)
 //   active_sources registry sources flagged active, EXCLUDING demo feeds
 //   demo_feeds     number of demo feed sources (never counted as sources)
 //   sources        { registry: SOURCES.length (52), seeded, collecting, online, by_status }
