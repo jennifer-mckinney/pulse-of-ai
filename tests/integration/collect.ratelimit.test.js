@@ -95,7 +95,8 @@ describe('a GitHub rate limit is a host backoff, not a refusal', () => {
         expect(st).toMatchObject({ refusal_count: 0, refused_until: null, access_denied_at: null, probation_until: null });
         expect(new Date(st.rate_limited_until).getTime()).toBe(Number(reset) * 1000);
         expect(st.rate_limited_hosts).toEqual({
-            'api.github.com': { until: new Date(Number(reset) * 1000).toISOString(), http_status: 403, signal: 'ratelimit_remaining_zero', count: 1, weak: 0 },
+            'api.github.com': { until: new Date(Number(reset) * 1000).toISOString(), http_status: 403, signal: 'ratelimit_remaining_zero', count: 1, weak: 0,
+                at: expect.any(String) },
         });
         // Grumpy #2: the held routes are stored by the worker.
         expect(Object.keys(st.rate_limited_routes)).toEqual(['repo-search', 'issue-search']);
@@ -205,6 +206,45 @@ describe('a GitHub rate limit is a host backoff, not a refusal', () => {
         const [row] = await snapshotTerms({ http: new HttpClient({ env: TEST_ENV, transport, sleep: () => Promise.resolve() }), slugs: ['github'] });
         expect(row.status).toBe('unreachable');
         expect(transport.calls).toHaveLength(0);
+    });
+
+    it('Copilot: a success clears the host\'s EXPIRED copies on every source\'s row (one streak per host); an active newer one is kept (grumpy N5)', async () => {
+        await collect([SEARCH_OK, BLOG_OK]);
+        const copy = (minutes, count) => `jsonb_build_object('hn.algolia.com', jsonb_build_object(
+            'until', to_char((NOW() + make_interval(mins => ${minutes})) AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+            'http_status', 429, 'signal', 'http_429', 'count', ${count}, 'weak', 0,
+            'at', to_char((NOW() - interval '2 hours') AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')))`;
+        // An expired 4-long streak for hn.algolia.com stored on github's row.
+        await dbRun(`UPDATE source_collection_state SET rate_limited_hosts = ${copy(-60, 4)}
+                     WHERE source_id = (SELECT id FROM data_sources WHERE name = 'github')`);
+        const { transport } = await collect([HN], ['hacker_news']);
+        expect(urls(transport)).toHaveLength(1);
+        expect((await stateOf('github')).rate_limited_hosts).toEqual({});
+        expect((await stateOf('hacker_news')).rate_limited_hosts).toEqual({});
+
+        // A copy still IN FORCE elsewhere is never removed by a success.
+        await dbRun(`UPDATE source_collection_state SET rate_limited_hosts = ${copy(30, 2)}
+                     WHERE source_id = (SELECT id FROM data_sources WHERE name = 'github')`);
+        const clear = require('../../src/collectors/state');
+        const hnId = (await dbGet(`SELECT id FROM data_sources WHERE name = 'hacker_news'`)).id;
+        await clear.saveHolds(hnId, { hosts: ['hn.algolia.com'], changes: new Map([['hn.algolia.com', null]]) });
+        expect((await stateOf('github')).rate_limited_hosts).toHaveProperty(['hn.algolia.com']);
+    });
+
+    it('grumpy N2: a rate limit met by the terms fetch is SAVED (on the source whose terms page it is) and honoured next time', async () => {
+        const { snapshotTerms } = require('../../src/collectors/governance');
+        const { HttpClient } = require('../../src/collectors/http');
+        await collect([SEARCH_OK, BLOG_OK]);
+        const t1 = fixtureTransport([[/docs\.github\.com\/robots\.txt/, { status: 404, body: '' }], [/docs\.github\.com/, { status: 429, headers: { 'retry-after': '900' }, body: '' }]]);
+        const [row] = await snapshotTerms({ http: new HttpClient({ env: TEST_ENV, transport: t1, sleep: () => Promise.resolve() }), slugs: ['github'] });
+        expect(row.status).toBe('unreachable');
+        const st = await stateOf('github');
+        expect(st.rate_limited_hosts['docs.github.com']).toMatchObject({ http_status: 429, signal: 'http_429', count: 1 });
+        // The collector's own hosts are untouched (github keeps collecting).
+        expect(st.rate_limited_hosts).not.toHaveProperty(['api.github.com']);
+        const t2 = fixtureTransport([[/./, { body: 'terms' }]]);
+        await snapshotTerms({ http: new HttpClient({ env: TEST_ENV, transport: t2, sleep: () => Promise.resolve() }), slugs: ['github'] });
+        expect(t2.calls).toHaveLength(0);
     });
 
     it('a reset days away is capped at 24 h', async () => {

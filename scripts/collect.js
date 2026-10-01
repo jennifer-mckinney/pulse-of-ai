@@ -54,7 +54,11 @@ async function readGovernance(slug) {
          WHERE ds.name = $1`,
         [slug],
     );
-    return row || null;
+    if (!row) return null;
+    // Security F7 (diagnosis 2026-10-01): every stored rate-limit hold, so a
+    // supervised run never asks a host the worker is backing off from
+    // (read-only — a dry run never saves a hold).
+    return { ...row, holds: await require('../src/collectors/state').loadHolds() };
 }
 
 /**
@@ -85,8 +89,9 @@ function assertDbGatesOpen(slug, gov, env, now = Date.now()) {
  * client (robots, allowed hosts and redaction all apply), prints what it got
  * and a sample of the payloads exactly as they would be stored, and stores
  * NOTHING: no raw_posts, scores, cursor, collection state or job — its only
- * database access is ONE read of the source's kill switch and refusal state
- * (PR #22 security M2), which it honours. The operator reads the sample and signs off before
+ * database access is a read of the source's kill switch and refusal state
+ * (PR #22 security M2) and of the stored rate-limit holds (security F7,
+ * diagnosis 2026-10-01), all of which it honours. The operator reads the sample and signs off before
  * the credential goes into the worker's env, which is what schedules the
  * source (README, "Adding a keyed source").
  * @returns {Promise<{ slug, status, routes: object[], sample: object[] }>}
@@ -105,10 +110,13 @@ async function supervisedRun({
     }
     // PR #22 security M2: the database kill switch and the refusal cooldown
     // apply to a supervised run as to every scheduled one (read-only).
-    assertDbGatesOpen(slug, await governance(slug), env);
+    const gov = await governance(slug);
+    assertDbGatesOpen(slug, gov, env);
     out(`SUPERVISED DRY RUN — ${src.name} (${slug}); routes: ${st.openRoutes.join(', ')}`);
     out('Nothing is stored: no posts, scores, cursors or collection state are written.');
-    const http = new HttpClient({ env, transport });
+    // Security F7: the stored rate-limit holds apply too (a held host is
+    // never asked; the route reports "not requested … backing off").
+    const http = new HttpClient({ env, transport, holds: (gov && gov.holds && typeof gov.holds === 'object') ? { ...gov.holds } : {} });
     const routes = [];
     const sample = [];
     for (const c of buildCollectors(src, { env, http, cursor: {}, httpCache: {} })) {

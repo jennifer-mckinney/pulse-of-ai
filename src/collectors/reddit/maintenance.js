@@ -27,7 +27,7 @@ const { getSource, sourceStatus, collectWindowMs } = require('../../config/sourc
 const { HttpClient } = require('../http');
 const state = require('../state');
 const { refusalGate } = require('../refusal');
-const { classifyError } = require('../errors');
+const { classifyError, AccessDeniedError } = require('../errors');
 const { scrub } = require('../redact');
 const { RedditApi } = require('./api');
 const { DbBudget, runAllowance } = require('./budget');
@@ -130,21 +130,26 @@ async function runRedditMaintenance({ env = process.env, transport, log = () => 
             await finishJob(job, { complete: false, errorKind: cls.error_kind });
             out[job] = { error: cls.error_kind };
             log(`[reddit] ${job} failed: ${scrub(err && err.message, env)}`);
-        }
-    }
-    if (http) {
-        const changes = http.drainHoldChanges();
-        if (changes.size) {
-            const sourceId = (await state.sourceIdsBySlug([SLUG])).get(SLUG);
-            const rl = require('../rate-limit');
-            if (sourceId) {
-                await state.saveHolds(sourceId, {
-                    hosts: rl.sourceHosts(src, env), changes, view: http.holds,
-                    routes: rl.holdGate(src, env, http.holds, Date.now()).routes,
-                });
+            // Grumpy N2: Reddit refused us (a 401/403/451, or the 5th
+            // body-only rate limit escalated by the HTTP client — fail
+            // closed): the refused state applies exactly as in a collection
+            // run, and no further job asks Reddit this tick.
+            if (err instanceof AccessDeniedError) {
+                const sourceId = (await state.sourceIdsBySlug([SLUG])).get(SLUG);
+                if (sourceId) {
+                    // The state row may not exist yet (never collected).
+                    await dbRun('INSERT INTO source_collection_state (source_id) VALUES ($1) ON CONFLICT (source_id) DO NOTHING', [sourceId]);
+                    const r = await state.recordRefusal(sourceId,
+                        { kind: cls.error_kind, status: cls.http_status, headers: err.headers || null }, SLUG);
+                    log(`[reddit] REFUSED by the source during ${job} — refusal ${r.refusal_count}, cooldown until ${new Date(r.refused_until).toISOString()}`);
+                }
+                break;
             }
         }
     }
+    // Grumpy #1 / N2: the hold changes of this run are saved, so the
+    // collector (and the next maintenance tick) honours them.
+    if (http) await state.saveHoldChanges(http.drainHoldChanges(), http.holds, { env });
     return out;
 }
 

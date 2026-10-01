@@ -309,7 +309,7 @@ describe('rate limits are not refusals (diagnosis 2026-10-01)', () => {
         expect(err).toMatchObject({ status: 403, signal: 'ratelimit_remaining_zero', retryAt: RESET * 1000, host: 'api.github.com' });
         expect(classifyError(err)).toEqual({ error_kind: 'rate_limited', http_status: 403 });
         expect(transport.calls).toHaveLength(1);
-        expect(http.holds).toEqual({ 'api.github.com': { until: iso(RESET * 1000), http_status: 403, signal: 'ratelimit_remaining_zero', count: 1, weak: 0 } });
+        expect(http.holds).toEqual({ 'api.github.com': { until: iso(RESET * 1000), http_status: 403, signal: 'ratelimit_remaining_zero', count: 1, weak: 0, at: iso(NOW) } });
         expect([...http.drainHoldChanges().keys()]).toEqual(['api.github.com']);
         // The rate-limit headers are kept (allow-listed, scrubbed); the body never.
         expect(err.headers).toMatchObject({ 'x-ratelimit-limit': '10', 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(RESET),
@@ -319,14 +319,45 @@ describe('rate limits are not refusals (diagnosis 2026-10-01)', () => {
         expect(err.message).toMatch(/api\.github\.com rate-limited us \(HTTP 403, ratelimit_remaining_zero\) — not a refusal.*backing off until 2026-10-01T02:57:54\.000Z/);
     });
 
-    test('403 + a "secondary rate limit" body → weak RateLimitedError; Retry-After lengthens it; the body never kept', async () => {
-        const { http, transport } = at([[/api\.github\.com/, { status: 403, headers: { ...GH, 'retry-after': '90' }, body: SECONDARY }]]);
+    test('403 + a "secondary rate limit" body alone → weak RateLimitedError at the 60 s floor; the body never kept', async () => {
+        const { http, transport } = at([[/api\.github\.com/, { status: 403, headers: GH, body: SECONDARY }]]);
         const err = await http.request(URL_).catch(e => e);
         expect(err).toBeInstanceOf(RateLimitedError);
-        expect(err).toMatchObject({ signal: 'body_rate_limit', retryAt: NOW + 90000 });
+        expect(err).toMatchObject({ signal: 'body_rate_limit', retryAt: NOW + 60000 });
         expect(transport.calls).toHaveLength(1);
         expect(JSON.stringify(err)).not.toContain('secondary rate limit');
         expect(http.holds['api.github.com']).toMatchObject({ count: 1, weak: 1 });
+    });
+
+    test('N1: GitHub\'s secondary-limit body + Retry-After is STRONG — ten in a row never become a refusal; the holds double to the 24 h cap', async () => {
+        let t = NOW;
+        const { http } = client([[/api\.github\.com/, { status: 403, headers: { ...GH, 'retry-after': '60' }, body: SECONDARY }]], { now: () => t });
+        const lengths = [];
+        for (let i = 1; i <= 12; i++) {
+            const err = await http.request(URL_).catch(e => e);
+            expect([i, err.constructor.name, err.signal]).toEqual([i, 'RateLimitedError', 'body_rate_limit_retry_after']);
+            lengths.push(Date.parse(http.holds['api.github.com'].until) - t);
+            t = Date.parse(http.holds['api.github.com'].until);
+        }
+        expect(lengths.slice(0, 4)).toEqual([60000, 120000, 240000, 480000]);
+        expect(lengths[11]).toBe(86400000);
+        expect(http.holds['api.github.com']).toMatchObject({ count: 12, weak: 0 });
+    });
+
+    test('N1: the same response from another host is a REFUSAL (GitHub\'s wording is evidence from api.github.com only)', async () => {
+        const { http } = at([[/gh\.example\.com/, { status: 403, headers: { ...GH, 'retry-after': '60' }, body: SECONDARY }]]);
+        await expect(http.request('https://gh.example.com/search')).rejects.toBeInstanceOf(AccessDeniedError);
+        expect(http.holds).toEqual({});
+    });
+
+    test('N1: the FINAL hostname decides (a redirect to api.github.com answering with the body + Retry-After)', async () => {
+        const { http } = at([
+            [/a\.example\/x/, { status: 302, headers: { location: 'https://api.github.com/search/repositories?q=x' } }],
+            [/api\.github\.com/, { status: 403, headers: { ...GH, 'retry-after': '60' }, body: SECONDARY }],
+        ]);
+        const err = await http.request('https://a.example/x').catch(e => e);
+        expect(err).toBeInstanceOf(RateLimitedError);
+        expect(err).toMatchObject({ host: 'api.github.com', signal: 'body_rate_limit_retry_after' });
     });
 
     test.each(['0', '-5', '0x10', 'Thu, 01 Jan 1970 00:00:00 GMT', '1 2', '60'])(
@@ -475,7 +506,7 @@ describe('rate limits are not refusals (diagnosis 2026-10-01)', () => {
         const err = await http.request('https://a.example/x').catch(e => e);
         expect(classifyError(err)).toEqual({ error_kind: 'http_5xx', http_status: 503 });
         expect(transport.calls).toHaveLength(1);
-        expect(http.holds['a.example']).toMatchObject({ until: iso(NOW + 3600000), http_status: 503, signal: 'retry_after_5xx', count: 1, weak: 0 });
+        expect(http.holds['a.example']).toMatchObject({ until: iso(NOW + 3600000), http_status: 503, signal: 'retry_after_5xx', count: 0, weak: 0 });
         await expect(http.request('https://a.example/x')).rejects.toMatchObject({ held: true });
         expect(transport.calls).toHaveLength(1);
     });

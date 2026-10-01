@@ -36,34 +36,63 @@ describe('rateLimitSignal: positive evidence only', () => {
         expect(rl.rateLimitSignal(res, NOW)).toMatchObject({ signal: 'ratelimit_remaining_zero', retryAt: NOW + 42000 });
     });
 
+    const GH = 'api.github.com';
+    const SECONDARY = json('You have exceeded a secondary rate limit. Please wait a few minutes before you try again.');
+
     test.each([
         'API rate limit exceeded for 203.0.113.7. (But here\'s the good news: Authenticated requests get a higher rate limit.)',
         'You have exceeded a secondary rate limit. Please wait a few minutes before you try again.',
         'You have triggered an abuse detection mechanism. Please wait a few minutes before you try again.',
-    ])('403 whose JSON message is GitHub\'s rate-limit wording (%#) → body_rate_limit (weak)', (msg) => {
-        expect(rl.rateLimitSignal({ status: 403, headers: { 'content-type': 'application/json' }, body: json(msg) }, NOW))
+    ])('a 403 from api.github.com whose JSON message is GitHub\'s rate-limit wording (%#) → body_rate_limit (weak)', (msg) => {
+        expect(rl.rateLimitSignal({ status: 403, headers: { 'content-type': 'application/json' }, body: json(msg) }, NOW, GH))
             .toEqual({ signal: 'body_rate_limit', retryAt: null, weak: true });
     });
 
-    test('security F2: Retry-After LENGTHENS a classified hold but never classifies a 403 on its own', () => {
-        const body = json('You have exceeded a secondary rate limit.');
-        expect(rl.rateLimitSignal({ status: 403, headers: { 'retry-after': '90' }, body }, NOW))
-            .toEqual({ signal: 'body_rate_limit', retryAt: NOW + 90000, weak: true });
-        expect(rl.rateLimitSignal({ status: 403, headers: { 'retry-after': '60' }, body: 'x' }, NOW)).toBeNull();
-        expect(rl.rateLimitSignal({ status: 403, headers: { 'retry-after': new Date(NOW + 90000).toUTCString() }, body: '' }, NOW)).toBeNull();
+    test('security F2 (re-review): GitHub\'s wording is evidence only from api.github.com — any other host (or none) stays a refusal', () => {
+        for (const host of ['gh.example.com', 'github.blog', 'api.github.com.evil.example', undefined]) {
+            expect([host, rl.rateLimitSignal({ status: 403, headers: { 'retry-after': '60' }, body: SECONDARY }, NOW, host)]).toEqual([host, null]);
+        }
+    });
+
+    test('N1: GitHub\'s wording + a strict Retry-After from api.github.com is STRONG (body_rate_limit_retry_after)', () => {
+        expect(rl.rateLimitSignal({ status: 403, headers: { 'retry-after': '90' }, body: SECONDARY }, NOW, GH))
+            .toEqual({ signal: 'body_rate_limit_retry_after', retryAt: NOW + 90000, weak: false });
+        expect(rl.rateLimitSignal({ status: 403, headers: { 'retry-after': new Date(NOW + 120000).toUTCString() }, body: SECONDARY }, NOW, 'API.GitHub.com'))
+            .toEqual({ signal: 'body_rate_limit_retry_after', retryAt: NOW + 120000, weak: false });
+        // The overflow form counts as present and is the cap.
+        expect(rl.rateLimitSignal({ status: 403, headers: { 'retry-after': '1e306' }, body: SECONDARY }, NOW, GH))
+            .toEqual({ signal: 'body_rate_limit_retry_after', retryAt: Infinity, weak: false });
+        expect(rl.SIGNALS).toContain('body_rate_limit_retry_after');
+        expect(rl.WEAK_SIGNALS).toEqual(['body_rate_limit']);
+    });
+
+    test.each(['0', 'Thu, 01 Jan 1970 00:00:00 GMT', '1 2', '-5', '0x10'])(
+        'N1: GitHub\'s wording + an INVALID Retry-After %p stays weak (the strict parse fails)', (ra) => {
+            expect(rl.rateLimitSignal({ status: 403, headers: { 'retry-after': ra }, body: SECONDARY }, NOW, GH))
+                .toEqual({ signal: 'body_rate_limit', retryAt: null, weak: true });
+        });
+
+    test('security F2: Retry-After never classifies a 403 on its own (no body evidence)', () => {
+        expect(rl.rateLimitSignal({ status: 403, headers: { 'retry-after': '60' }, body: 'x' }, NOW, GH)).toBeNull();
+        expect(rl.rateLimitSignal({ status: 403, headers: { 'retry-after': new Date(NOW + 90000).toUTCString() }, body: '' }, NOW, GH)).toBeNull();
     });
 
     test.each(['0', '-5', '0x10', 'Thu, 01 Jan 1970 00:00:00 GMT', '1 2', 'soon', '1.5', ' 60 '])(
         'security F2: a 403 with only Retry-After %p stays a refusal (null)', (ra) => {
-            expect(rl.rateLimitSignal({ status: 403, headers: { 'retry-after': ra }, body: '' }, NOW)).toBeNull();
+            expect(rl.rateLimitSignal({ status: 403, headers: { 'retry-after': ra }, body: '' }, NOW, GH)).toBeNull();
         });
 
     test.each([
         'This IP is permanently banned for rate limit abuse',
         'Forbidden: rate limit policy violation, account suspended',
         'Your access is blocked. API rate limit exceeded is not the reason.',
-    ])('security F2: a 403 message that merely MENTIONS a rate limit stays a refusal (%#)', (msg) => {
-        expect(rl.rateLimitSignal({ status: 403, headers: {}, body: json(msg) }, NOW)).toBeNull();
+    ])('security F2: a 403 message that merely MENTIONS a rate limit stays a refusal, even with Retry-After (%#)', (msg) => {
+        expect(rl.rateLimitSignal({ status: 403, headers: {}, body: json(msg) }, NOW, GH)).toBeNull();
+        expect(rl.rateLimitSignal({ status: 403, headers: { 'retry-after': '60' }, body: json(msg) }, NOW, GH)).toBeNull();
+    });
+
+    test('N1: a challenge still wins over GitHub\'s wording + Retry-After', () => {
+        expect(rl.rateLimitSignal({ status: 403, headers: { 'retry-after': '60', 'cf-mitigated': 'challenge' }, body: SECONDARY }, NOW, GH)).toBeNull();
     });
 
     test('with Retry-After and a spent primary limit, the LATER time wins', () => {
@@ -74,7 +103,7 @@ describe('rateLimitSignal: positive evidence only', () => {
     test('x-ratelimit-reset is ignored while the primary limit is not spent', () => {
         const res = { status: 403, headers: { 'x-ratelimit-remaining': '7', 'x-ratelimit-reset': String(EPOCH_RESET) },
             body: json('You have exceeded a secondary rate limit.') };
-        expect(rl.rateLimitSignal(res, NOW)).toEqual({ signal: 'body_rate_limit', retryAt: null, weak: true });
+        expect(rl.rateLimitSignal(res, NOW, GH)).toEqual({ signal: 'body_rate_limit', retryAt: null, weak: true });
     });
 
     test('a plain 403 with no signal stays a refusal (null) — fail closed', () => {
@@ -204,32 +233,54 @@ describe('nextHold: the per-host streak (security F1)', () => {
 describe('stored holds', () => {
     test('sanitizeHolds keeps streaks (even expired) but drops stale, malformed and invalid-host entries', () => {
         const stored = {
-            'api.github.com': { until: iso(NOW + 60000), http_status: 403, signal: 'body_rate_limit', count: 2, weak: 2 },
+            'api.github.com': { until: iso(NOW + 60000), http_status: 403, signal: 'body_rate_limit', count: 2, weak: 2, at: iso(NOW - 1000) },
             'old.example': { until: iso(NOW - HOUR), http_status: 429, signal: 'http_429', count: 4 },
             'stale.example': { until: iso(NOW - 8 * DAY), http_status: 429, signal: 'http_429', count: 9 },
             'bad.example': { until: 'not a date' },
             'worse.example': 'x',
             'evil host/<x>': { until: iso(NOW + 60000) },
-            'odd.example': { until: iso(NOW + 60000), signal: 'made_up', count: -3, weak: 'x', http_status: 'y' },
+            'odd.example': { until: iso(NOW + 60000), signal: 'made_up', count: -3, weak: 'x', http_status: 'y', at: 'later' },
+            'srv.example': { until: iso(NOW + 60000), http_status: 503, signal: 'retry_after_5xx', count: 0, weak: 0, at: iso(NOW) },
         };
         expect(rl.sanitizeHolds(stored, NOW)).toEqual({
-            'api.github.com': { until: iso(NOW + 60000), http_status: 403, signal: 'body_rate_limit', count: 2, weak: 2 },
-            'old.example': { until: iso(NOW - HOUR), http_status: 429, signal: 'http_429', count: 4, weak: 0 },
-            'odd.example': { until: iso(NOW + 60000), http_status: null, signal: null, count: 1, weak: 0 },
+            'api.github.com': { until: iso(NOW + 60000), http_status: 403, signal: 'body_rate_limit', count: 2, weak: 2, at: iso(NOW - 1000) },
+            // Legacy entries (no count / at): count 1, at = a minute before until.
+            'old.example': { until: iso(NOW - HOUR), http_status: 429, signal: 'http_429', count: 4, weak: 0, at: iso(NOW - HOUR - 60000) },
+            'odd.example': { until: iso(NOW + 60000), http_status: null, signal: null, count: 0, weak: 0, at: iso(NOW) },
+            'srv.example': { until: iso(NOW + 60000), http_status: 503, signal: 'retry_after_5xx', count: 0, weak: 0, at: iso(NOW) },
         });
-        expect(Object.keys(rl.activeHolds(stored, NOW)).sort()).toEqual(['api.github.com', 'odd.example']);
+        expect(Object.keys(rl.activeHolds(stored, NOW)).sort()).toEqual(['api.github.com', 'odd.example', 'srv.example']);
         expect(rl.sanitizeHolds(null, NOW)).toEqual({});
         expect(rl.sanitizeHolds('[]', NOW)).toEqual({});
     });
 
-    test('mergeHolds keeps the later until and the longer streak per host', () => {
-        const a = { 'api.github.com': { until: iso(NOW + 60000), http_status: 403, signal: 'body_rate_limit', count: 1, weak: 1 } };
-        rl.mergeHolds(a, {
-            'api.github.com': { until: iso(NOW + 120000), http_status: 429, signal: 'http_429', count: 3, weak: 0 },
-            'github.blog': { until: iso(NOW + 30000), http_status: 429, signal: 'http_429', count: 1, weak: 0 },
-        }, NOW);
-        expect(a['api.github.com']).toEqual({ until: iso(NOW + 120000), http_status: 429, signal: 'http_429', count: 3, weak: 1 });
+    test('Copilot: mergeHolds takes the NEWEST record of a host whole — a later strong limit\'s reset weak streak is never resurrected', () => {
+        const old = { until: iso(NOW + 600000), http_status: 403, signal: 'body_rate_limit', count: 4, weak: 4, at: iso(NOW - 120000) };
+        const newer = { until: iso(NOW + 60000), http_status: 429, signal: 'http_429', count: 5, weak: 0, at: iso(NOW - 1000) };
+        const a = { 'api.github.com': { ...old } };
+        rl.mergeHolds(a, { 'api.github.com': newer, 'github.blog': { ...newer, until: iso(NOW + 30000) } }, NOW);
+        expect(a['api.github.com']).toEqual(newer);
         expect(Object.keys(a).sort()).toEqual(['api.github.com', 'github.blog']);
+        // And in the other order: the older record never overwrites the newer one.
+        const b = { 'api.github.com': { ...newer } };
+        rl.mergeHolds(b, { 'api.github.com': old }, NOW);
+        expect(b['api.github.com']).toEqual(newer);
+        // The next body-only limit is the FIRST weak one, never the 5th.
+        expect(rl.nextHold(b['api.github.com'], { status: 403, signal: 'body_rate_limit', weak: true }, NOW).escalate).toBe(false);
+    });
+
+    test('grumpy N4 / Copilot: a 5xx\'s Retry-After hold leaves the streaks alone — three never reach the rate-limit warning', () => {
+        let prev = null;
+        for (let i = 0; i < 3; i++) {
+            const n = rl.nextHold(prev, { retryAt: NOW + 3600000, status: 503, signal: 'retry_after_5xx', weak: false }, NOW);
+            expect(n.escalate).toBe(false);
+            prev = n.entry;
+        }
+        expect(prev).toMatchObject({ count: 0, weak: 0, signal: 'retry_after_5xx', until: iso(NOW + 3600000) });
+        const { conditionsFor } = require('../../../src/collectors/source-health');
+        expect(conditionsFor({ rate_limited_hosts: { 'api.github.com': prev } }, getSource('github'), NOW).source_rate_limited).toBeUndefined();
+        // A rate limit after them continues the earlier streak (here: the first).
+        expect(rl.nextHold(prev, { status: 429, signal: 'http_429' }, NOW).entry.count).toBe(1);
     });
 
     test('heldUntil: the active hold of a host (hostname, case-insensitive), else null', () => {
@@ -275,12 +326,31 @@ describe('route / host scoping (GitHub: the api.github.com limit never pauses gi
         expect(rl.holdGate(github, TEST_ENV, apiHeld, NOW + 600000).state).toBe('none');
     });
 
-    test('grumpy #2: Reddit is held by its API host alone (www.reddit.com is only the token host)', () => {
-        const reddit = getSource('reddit');
-        const route = reddit.routes[0];
-        expect(rl.routeRequestHosts(route, TEST_ENV)).toEqual(['oauth.reddit.com']);
-        const holds = { 'oauth.reddit.com': { until: iso(NOW + 60000), http_status: 429, signal: 'http_429', count: 1, weak: 0 } };
-        expect(rl.routeHeld(route, TEST_ENV, holds, NOW)).toBe(true);
+    test('grumpy #2 / Copilot: Reddit\'s token host and API host are BOTH prerequisites — a hold on either holds the route', () => {
+        const route = getSource('reddit').routes[0];
+        expect(rl.routeRequestHosts(route, TEST_ENV)).toEqual({ hosts: ['oauth.reddit.com', 'www.reddit.com'], mode: 'any' });
+        const hold = until => ({ until: iso(until), http_status: 429, signal: 'http_429', count: 1, weak: 0, at: iso(NOW) });
+        expect(rl.routeHeldUntil(route, TEST_ENV, { 'oauth.reddit.com': hold(NOW + 60000) }, NOW)).toBe(iso(NOW + 60000));
+        expect(rl.routeHeldUntil(route, TEST_ENV, { 'www.reddit.com': hold(NOW + 90000) }, NOW)).toBe(iso(NOW + 90000));
+        // Both held: the route frees when the LAST frees.
+        expect(rl.routeHeldUntil(route, TEST_ENV, { 'oauth.reddit.com': hold(NOW + 60000), 'www.reddit.com': hold(NOW + 90000) }, NOW))
+            .toBe(iso(NOW + 90000));
+        expect(rl.holdGate(getSource('reddit'), TEST_ENV, { 'www.reddit.com': hold(NOW + 90000) }, NOW).routes).toEqual({});   // not open under TEST_ENV
+    });
+
+    test('Copilot: Reuters Connect\'s auth host is a prerequisite too', () => {
+        const route = getSource('reuters').routes.find(r => r.adapter === 'reuters-connect');
+        const env = { ...TEST_ENV, REUTERS_CONNECT_API_URL: 'https://api.reutersconnect.com/content/graphql' };
+        expect(rl.routeRequestHosts(route, env).mode).toBe('any');
+        const held = { 'auth.thomsonreuters.com': { until: iso(NOW + 60000), http_status: 429, signal: 'http_429', count: 1, weak: 0, at: iso(NOW) } };
+        expect(rl.routeHeld(route, env, held, NOW)).toBe(true);
+    });
+
+    test('a multi-feed RSS route (alternatives) is held only when EVERY feed host is', () => {
+        const route = { id: 'two', adapter: 'rss', params: { urls: ['https://a.example/f', 'https://b.example/f'] } };
+        const hold = { until: iso(NOW + 60000), http_status: 429, signal: 'http_429', count: 1, weak: 0, at: iso(NOW) };
+        expect(rl.routeHeld(route, TEST_ENV, { 'a.example': hold }, NOW)).toBe(false);
+        expect(rl.routeHeldUntil(route, TEST_ENV, { 'a.example': hold, 'b.example': { ...hold, until: iso(NOW + 30000) } }, NOW)).toBe(iso(NOW + 30000));
     });
 
     test('sourceHosts: every host any route of the source may contact', () => {

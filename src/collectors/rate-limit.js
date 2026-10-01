@@ -9,10 +9,15 @@
 // and fail closed (security review F2 / F6):
 //   HTTP 429                                     'http_429'                  strong
 //   403 with x-ratelimit-remaining: 0            'ratelimit_remaining_zero'  strong
-//   403 whose JSON body `message` STARTS WITH    'body_rate_limit'           WEAK
-//       GitHub's own wording ("API rate limit exceeded", "You have exceeded
-//       a secondary rate limit", "You have triggered an abuse detection
-//       mechanism"). The body is matched, NEVER stored or quoted (F10-13).
+//   403 from api.github.com whose JSON body      'body_rate_limit'           WEAK
+//       `message` STARTS WITH GitHub's own wording ("API rate limit
+//       exceeded", "You have exceeded a secondary rate limit", "You have
+//       triggered an abuse detection mechanism"). From any other host the
+//       wording is no evidence (BODY_HOSTS). The body is matched, NEVER
+//       stored or quoted (F10-13).
+//   the same WITH a strictly parsed Retry-After  'body_rate_limit_retry_after' strong
+//       (GitHub's documented secondary-limit response — two independent
+//       signals; grumpy re-review N1, agreed by the security review)
 // Retry-After never classifies a 403 on its own (F2): it only LENGTHENS the
 // hold of a response already classified. A bot wall (a challenge page, or
 // Cloudflare's `cf-mitigated: challenge` header — F6) is never a rate limit.
@@ -64,8 +69,11 @@ const WARN_AFTER = 3;
 const STALE_MS = 7 * 24 * 60 * 60 * 1000;
 const STREAK_MAX = 1000;
 const RATE_LIMITED = 'rate_limited';
-const SIGNALS = Object.freeze(['http_429', 'ratelimit_remaining_zero', 'body_rate_limit', 'retry_after_5xx']);
+const SIGNALS = Object.freeze(['http_429', 'ratelimit_remaining_zero', 'body_rate_limit', 'body_rate_limit_retry_after', 'retry_after_5xx']);
 const WEAK_SIGNALS = Object.freeze(['body_rate_limit']);
+// GitHub's rate-limit wording is evidence only from GitHub's API host
+// (security re-review of N1): from any other host it is not a rate limit.
+const BODY_HOSTS = Object.freeze(['api.github.com']);
 // Shown on /api/sources instead of a host that came from the env (a contract
 // feed URL — security F3).
 const CONFIGURED_HOST = 'configured host';
@@ -158,26 +166,37 @@ function bodyNamesRateLimit(body) {
 /**
  * Whether a final response is a rate limit, on positive evidence only.
  * @param {{ status: number, headers?: object, body?: string }} res
+ * @param {number} [now]
+ * @param {string} [host]  the FINAL response's hostname: GitHub's wording
+ *        counts only from api.github.com (BODY_HOSTS); without a host the
+ *        body is no evidence at all (fail closed)
  * @returns {{ signal: string, retryAt: number|null, weak: boolean }|null}
  *          retryAt: the source's own time (epoch ms; Infinity = beyond the
  *          cap) or null when it gave none
  */
-function rateLimitSignal(res, now = Date.now()) {
+function rateLimitSignal(res, now = Date.now(), host = null) {
     if (!res || (res.status !== 429 && res.status !== 403)) return null;
     // A bot-wall challenge is a refusal whatever else the response says (F6).
     if (isChallenge(res)) return null;
     const headers = res.headers || {};
     const remaining = header(headers, 'x-ratelimit-remaining');
     const spent = remaining !== null && DECIMAL.test(remaining.trim()) && Number(remaining) === 0;
+    const retryAfter = parseRetryAfter(headers, now);
+    const bodyHost = typeof host === 'string' && BODY_HOSTS.includes(host.toLowerCase());
     let signal = null;
     if (res.status === 429) signal = 'http_429';
     else if (spent) signal = 'ratelimit_remaining_zero';
-    else if (bodyNamesRateLimit(res.body)) signal = 'body_rate_limit';
+    else if (bodyHost && bodyNamesRateLimit(res.body)) {
+        // N1 (grumpy re-review; security agreed): GitHub's documented
+        // secondary-limit response — its wording AND a strictly parsed
+        // Retry-After — is two independent signals: strong, never escalated
+        // (the doubling floor still bounds it). The wording alone is weak.
+        signal = retryAfter !== null ? 'body_rate_limit_retry_after' : 'body_rate_limit';
+    }
     if (!signal) return null;
     // Never earlier than any time the source named (Retry-After only
     // lengthens a classified hold — F2).
     const times = [];
-    const retryAfter = parseRetryAfter(headers, now);
     if (retryAfter !== null) times.push(now + retryAfter);
     if (spent) {
         const reset = parseReset(header(headers, 'x-ratelimit-reset'), now);
@@ -215,12 +234,20 @@ function sanitizeHolds(stored, now = Date.now()) {
         if (!validHost(host) || !h || typeof h !== 'object') continue;
         const until = Date.parse(h.until);
         if (!Number.isFinite(until) || until <= now - STALE_MS) continue;
+        // `at`: when the hold was recorded — the NEWEST record of a host wins
+        // a merge (Copilot review: never a fieldwise maximum, which would
+        // resurrect a weak streak a later strong limit reset). Legacy
+        // entries without it read as recorded a minute before their until.
+        const at = Date.parse(h.at);
         out[host] = {
             until: new Date(until).toISOString(),
             http_status: Number.isInteger(h.http_status) ? h.http_status : null,
             signal: SIGNALS.includes(h.signal) ? h.signal : null,
-            count: Math.max(1, streak(h.count)),
+            // 0 only for a hold that was never a rate limit (a 5xx's
+            // Retry-After — grumpy N4); a legacy entry without one is 1.
+            count: h.count === undefined ? 1 : streak(h.count),
             weak: streak(h.weak),
+            at: new Date(Number.isFinite(at) && at <= until ? at : until - MIN_BACKOFF_MS).toISOString(),
         };
     }
     return out;
@@ -240,25 +267,37 @@ function activeHolds(stored, now = Date.now()) {
  *          ESCALATE_AFTER-th consecutive weak rate limit — treat it as a refusal
  */
 function nextHold(prev, { retryAt = null, status = null, signal = null, weak = false }, now = Date.now()) {
-    const count = Math.min(STREAK_MAX, (prev ? streak(prev.count) : 0) + 1);
-    const weakCount = weak ? Math.min(STREAK_MAX, (prev ? streak(prev.weak) : 0) + 1) : 0;
-    let until = backoffUntil(retryAt, now, count);
+    // Grumpy N4 / Copilot: a 5xx's Retry-After holds the host but is not a
+    // rate limit — it leaves both streaks as they were (no warning, no
+    // doubling, no escalation from server errors).
+    const notLimit = signal === 'retry_after_5xx';
+    const prevCount = prev ? streak(prev.count) : 0;
+    const prevWeak = prev ? streak(prev.weak) : 0;
+    const count = notLimit ? prevCount : Math.min(STREAK_MAX, prevCount + 1);
+    const weakCount = notLimit ? prevWeak : (weak ? Math.min(STREAK_MAX, prevWeak + 1) : 0);
+    let until = backoffUntil(retryAt, now, notLimit ? 1 : count);
     // A later hold already in force is never shortened.
     const prevUntil = prev ? Date.parse(prev.until) : NaN;
     if (Number.isFinite(prevUntil) && prevUntil > until) until = prevUntil;
     return {
-        entry: { until: new Date(until).toISOString(), http_status: status, signal: SIGNALS.includes(signal) ? signal : null, count, weak: weakCount },
-        escalate: weak && weakCount >= ESCALATE_AFTER,
+        entry: { until: new Date(until).toISOString(), http_status: status, signal: SIGNALS.includes(signal) ? signal : null,
+            count, weak: weakCount, at: new Date(now).toISOString() },
+        escalate: !notLimit && weak && weakCount >= ESCALATE_AFTER,
     };
 }
 
-/** Merge `source` holds into `target` per host: the later until, the longer streaks. */
+/**
+ * Merge `source` holds into `target` per host: the NEWEST record (`at`)
+ * wins whole — its until and its streaks (Copilot review: a fieldwise
+ * maximum resurrected a weak streak that a later strong limit had reset).
+ */
 function mergeHolds(target, source, now = Date.now()) {
     for (const [host, h] of Object.entries(sanitizeHolds(source, now))) {
         const t = target[host];
-        if (!t) { target[host] = h; continue; }
-        const later = Date.parse(h.until) > Date.parse(t.until) ? h : t;
-        target[host] = { ...later, count: Math.max(streak(t.count), h.count), weak: Math.max(streak(t.weak), h.weak) };
+        const ta = t ? Date.parse(t.at) : NaN;
+        if (!t || !Number.isFinite(ta) || Date.parse(h.at) > ta || (Date.parse(h.at) === ta && Date.parse(h.until) > Date.parse(t.until))) {
+            target[host] = h;
+        }
     }
     return target;
 }
@@ -271,16 +310,14 @@ function heldUntil(holds, host, now = Date.now()) {
     return Number.isFinite(until) && until > now ? { until, http_status: h.http_status, signal: h.signal } : null;
 }
 
-// The hosts a route's REQUESTS go to, when narrower than the hosts it may
-// contact (grumpy #2): Reddit's www.reddit.com is only its token host, and
-// Reuters Connect's auth host only issues tokens.
-const REQUEST_HOSTS = Object.freeze({
-    reddit: () => ['oauth.reddit.com'],
-    'reuters-connect': (route, env, allowed) => {
-        const { hostOf } = module.exports;
-        const h = hostOf(env && env.REUTERS_CONNECT_API_URL);
-        return h ? [h] : allowed.filter(x => x === 'api.reutersconnect.com');
-    },
+// How a route's hosts combine (grumpy #2, Copilot review):
+//   'all'  ALTERNATIVES (a multi-feed RSS route's feeds): the route is held
+//          only when every host is, and frees when the FIRST frees.
+//   'any'  PREREQUISITES (a token host + an API host): every host is needed,
+//          so a hold on ANY of them holds the route, until the LAST frees.
+const ROUTE_HOST_MODE = Object.freeze({
+    reddit: 'any',              // www.reddit.com (token) + oauth.reddit.com (API)
+    'reuters-connect': 'any',   // auth host (token) + API host
 });
 
 const hostOf = (u) => {
@@ -291,12 +328,10 @@ const hostOf = (u) => {
     }
 };
 
-/** The hosts whose holds stop a route (all of them must be held). */
+/** The hosts whose holds stop a route, and how they combine ('all' | 'any'). */
 function routeRequestHosts(route, env) {
     const { routeAllowedHosts } = require('../config/source-registry');
-    const allowed = routeAllowedHosts(route, env);
-    const narrow = REQUEST_HOSTS[route.adapter];
-    return narrow ? narrow(route, env, allowed) : allowed;
+    return { hosts: routeAllowedHosts(route, env), mode: ROUTE_HOST_MODE[route.adapter] || 'all' };
 }
 
 /** Every host any route of a source may contact (its holds are stored on the source). */
@@ -305,20 +340,23 @@ function sourceHosts(src, env) {
     return [...new Set(src.routes.flatMap(r => routeAllowedHosts(r, env)))].sort();
 }
 
-/** The time a route is held until (ISO; the EARLIEST of its hosts' holds), or null. */
+/**
+ * The time a route is held until (ISO), or null when it is not held:
+ * 'all' — every host held, until the EARLIEST frees; 'any' — any host held,
+ * until the LATEST frees.
+ */
 function routeHeldUntil(route, env, holds, now = Date.now()) {
-    const hosts = routeRequestHosts(route, env);
+    const { hosts, mode } = routeRequestHosts(route, env);
     if (!hosts.length) return null;
-    let min = Infinity;
-    for (const h of hosts) {
-        const hold = heldUntil(holds, h, now);
-        if (!hold) return null;
-        min = Math.min(min, hold.until);
+    const times = hosts.map(h => heldUntil(holds, h, now)).map(h => (h ? h.until : null));
+    if (mode === 'any') {
+        const held = times.filter(t => t !== null);
+        return held.length ? new Date(Math.max(...held)).toISOString() : null;
     }
-    return new Date(min).toISOString();
+    return times.every(t => t !== null) ? new Date(Math.min(...times)).toISOString() : null;
 }
 
-/** A route is held when it has request hosts and every one of them is held. */
+/** Whether a route's hosts' holds stop it (routeHeldUntil). */
 function routeHeld(route, env, holds, now = Date.now()) {
     return routeHeldUntil(route, env, holds, now) !== null;
 }
@@ -369,7 +407,7 @@ function publicHosts(src, holds, now = Date.now()) {
 
 module.exports = {
     MIN_BACKOFF_MS, MAX_BACKOFF_MS, MAX_IN_RUN_WAIT_MS, ESCALATE_AFTER, WARN_AFTER, STALE_MS, RATE_LIMITED, SIGNALS,
-    WEAK_SIGNALS, CONFIGURED_HOST, BODY_RE,
+    WEAK_SIGNALS, BODY_HOSTS, CONFIGURED_HOST, BODY_RE,
     parseRetryAfter, parseReset, bodyNamesRateLimit, rateLimitSignal, backoffUntil,
     sanitizeHolds, activeHolds, nextHold, mergeHolds, heldUntil, hostOf,
     routeRequestHosts, sourceHosts, routeHeldUntil, routeHeld, holdGate, holdReason, publicHosts,

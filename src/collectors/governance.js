@@ -119,11 +119,19 @@ async function recordCorrelationGate({ env = process.env, actor = SCHEDULER_ACTO
  * A host backing off after a rate limit (any source's stored hold —
  * diagnosis 2026-10-01, security F5) is not requested: the HTTP client
  * refuses it unsent and the row says why.
- * @param {{ http: import('./http').HttpClient, slugs?: string[], loadHolds?: Function }} o
- *   loadHolds: the stored holds (default: every source's, from the database)
+ * A rate limit met here (or a success that ends a streak) is saved on the
+ * sources concerned (grumpy N2), so the next run honours it.
+ * @param {{ http: import('./http').HttpClient, slugs?: string[], loadHolds?: Function, saveHoldChanges?: Function }} o
+ *   loadHolds: the stored holds (default: every source's, from the database);
+ *   saveHoldChanges: persists the client's hold changes (default: the database)
  */
-async function snapshotTerms({ http, slugs, log = () => {}, loadHolds = () => require('./state').loadHolds() }) {
+async function snapshotTerms({
+    http, slugs, log = () => {},
+    loadHolds = () => require('./state').loadHolds(),
+    saveHoldChanges = (changes, view) => require('./state').saveHoldChanges(changes, view),
+}) {
     if (typeof http.loadHolds === 'function') http.loadHolds(await loadHolds());
+    if (typeof http.drainHoldChanges === 'function') http.drainHoldChanges();
     const out = [];
     for (const src of SOURCES.filter(s => !slugs || slugs.includes(s.slug))) {
         const row = { slug: src.slug, terms_url: src.termsUrl, status: 'not_fetched', sha256: null, http_status: null, bytes: null, reason: null,
@@ -161,6 +169,7 @@ async function snapshotTerms({ http, slugs, log = () => {}, loadHolds = () => re
         log(`[terms] ${src.slug}: ${row.status}${row.text_sha256 ? ` text ${row.text_sha256.slice(0, 12)}…` : ''}${row.reason ? ` — ${row.reason}` : ''}`);
         out.push(row);
     }
+    if (typeof http.drainHoldChanges === 'function') await saveHoldChanges(http.drainHoldChanges(), http.holds);
     return out;
 }
 

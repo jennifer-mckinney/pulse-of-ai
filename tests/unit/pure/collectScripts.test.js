@@ -26,6 +26,25 @@ test('smoke: `--only` without a value is a usage error (exit 2), not a crash', a
     expect(out.join('\n')).toMatch(/--only needs a comma-separated list[\s\S]*usage: npm run collect:smoke/);
 });
 
+test('smoke honours the stored rate-limit holds (security F7): a held host is reported HELD, never asked', async () => {
+    const holds = { 'hn.algolia.com': { until: new Date(Date.now() + 600000).toISOString(), http_status: 429, signal: 'http_429', count: 1, weak: 0 } };
+    const out = [];
+    // The default transport refuses the network under NODE_ENV=test: had the
+    // held host been asked, the route would report a network error instead.
+    const code = await smoke.main(['--only', 'hacker_news'], TEST_ENV, l => out.push(l), { loadHolds: async () => holds });
+    const text = out.join('\n');
+    expect(text).toMatch(/rate-limit holds honoured: 1 host\(s\) on record/);
+    expect(text).toMatch(/algolia-search: HELD — not requested: hn\.algolia\.com is rate-limiting us/);
+    expect(text).toMatch(/0 HTTP requests/);
+    expect(code).toBe(0);
+});
+
+test('smoke says so when the holds could not be checked (database unreachable)', async () => {
+    const out = [];
+    await smoke.main(['--only', 'youtube'], TEST_ENV, l => out.push(l), { loadHolds: async () => null });
+    expect(out.join('\n')).toMatch(/rate-limit holds NOT checked \(database unreachable\)/);
+});
+
 test('collect: `--only` without a value is a usage error', async () => {
     expect(collect.parseArgs(['--only'])).toEqual({ error: expect.stringMatching(/--only needs/) });
     expect(collect.parseArgs(['--only', ' , '])).toEqual({ error: expect.stringMatching(/--only needs/) });

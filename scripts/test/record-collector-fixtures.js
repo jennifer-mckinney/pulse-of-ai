@@ -96,7 +96,16 @@ const TARGETS = [
 ];
 
 async function main() {
-    const http = new HttpClient();
+    // Security F7 (diagnosis 2026-10-01): never ask a host the worker is
+    // backing off from (the stored rate-limit holds, read only). Without a
+    // reachable database the holds cannot be checked — said so, not hidden.
+    let holds = null;
+    try {
+        holds = await require('../../src/collectors/state').loadHolds();
+    } catch {
+        process.stdout.write('rate-limit holds NOT checked (database unreachable)\n');
+    }
+    const http = new HttpClient({ holds: holds || {} });
     const manifest = { recordedAt: new Date().toISOString(), note: 'Live responses trimmed and identity-redacted by scripts/test/record-collector-fixtures.js', files: {} };
     for (const [file, url, transform] of TARGETS) {
         try {

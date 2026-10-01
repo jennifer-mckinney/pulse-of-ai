@@ -280,9 +280,11 @@ class HttpClient {
      * refusal. The body is matched, never kept.
      */
     rateLimitError(url, res) {
-        const sig = rateLimit.rateLimitSignal(res, this.now());
-        if (!sig) return null;
+        // The FINAL response's hostname (after redirects) decides whether
+        // GitHub's wording is evidence at all (rate-limit.js BODY_HOSTS).
         const host = new URL(url).hostname;
+        const sig = rateLimit.rateLimitSignal(res, this.now(), host);
+        if (!sig) return null;
         const { entry, escalate } = this.recordHold(host, { ...sig, status: res.status });
         if (escalate) {
             return new AccessDeniedError(`${host} refused access (HTTP ${res.status}): ${rateLimit.ESCALATE_AFTER} rate limits in a row`

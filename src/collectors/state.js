@@ -340,13 +340,42 @@ async function saveHolds(sourceId, { hosts, changes = new Map(), view = {}, rout
         const stored = rl.sanitizeHolds(cur.rows[0].rate_limited_hosts, now);
         const viewClean = rl.sanitizeHolds(view, now);
         const later = (a, b) => (a && (!b || Date.parse(a.until) > Date.parse(b.until)) ? a : b);
+        const cleared = [];
         for (const host of hosts) {
             if (changes.has(host)) {
                 const next = changes.get(host);
-                if (next === null) delete stored[host];
-                else stored[host] = later(stored[host], rl.sanitizeHolds({ [host]: next }, now)[host]) || stored[host];
+                if (next === null) {
+                    // Grumpy N5: a success clears the host — but never a newer
+                    // hold another process stored meanwhile (still in force).
+                    if (!stored[host] || Date.parse(stored[host].until) <= now) {
+                        delete stored[host];
+                        cleared.push(host);
+                    }
+                } else {
+                    stored[host] = later(stored[host], rl.sanitizeHolds({ [host]: next }, now)[host]) || stored[host];
+                }
             } else if (viewClean[host]) {
                 stored[host] = later(viewClean[host], stored[host]);
+            }
+        }
+        // Copilot review: a host's streak is ONE streak — a success clears its
+        // expired copies on every other source's row too, or the next run's
+        // merge would bring the old streak back (an active hold is kept).
+        for (const host of cleared) {
+            const others = await client.query(
+                `SELECT source_id, rate_limited_hosts -> $2::text AS hold FROM source_collection_state
+                 WHERE source_id <> $1 AND rate_limited_hosts ? $2::text`,
+                [sourceId, host],
+            );
+            for (const o of others.rows) {
+                const until = Date.parse(o.hold && o.hold.until);
+                if (Number.isFinite(until) && until > now) continue;
+                // Optimistic: only if that copy is still the one read here.
+                await client.query(
+                    `UPDATE source_collection_state SET rate_limited_hosts = rate_limited_hosts - $2::text, updated_at = NOW()
+                     WHERE source_id = $1 AND rate_limited_hosts -> $2::text = $3::jsonb`,
+                    [o.source_id, host, JSON.stringify(o.hold)],
+                );
             }
         }
         const active = Object.values(rl.activeHolds(stored, now)).map(h => h.until).sort();
@@ -366,8 +395,32 @@ async function saveHolds(sourceId, { hosts, changes = new Map(), view = {}, rout
     });
 }
 
+/**
+ * Grumpy N2: persist the hold changes of an HTTP client used OUTSIDE the
+ * runner (the governance terms fetch, Reddit maintenance) on every source
+ * whose hosts — its routes' hosts and its terms page's host — include a
+ * changed host, so the next run honours them (and a success clears them).
+ * @param {Map} changes  http.drainHoldChanges()
+ * @param {object} view  the client's holds map
+ */
+async function saveHoldChanges(changes, view, { env = process.env } = {}) {
+    if (!changes || !changes.size) return;
+    const rl = require('./rate-limit');
+    const { SOURCES } = require('../config/source-registry');
+    const ids = await sourceIdsBySlug(SOURCES.map(s => s.slug));
+    for (const src of SOURCES) {
+        const hosts = new Set(rl.sourceHosts(src, env));
+        const terms = rl.hostOf(src.termsUrl);
+        if (terms) hosts.add(terms);
+        const mine = [...changes.keys()].filter(h => hosts.has(h));
+        const id = ids.get(src.slug);
+        if (!mine.length || !id) continue;
+        await saveHolds(id, { hosts: mine, changes, view, routes: rl.holdGate(src, env, view, Date.now()).routes });
+    }
+}
+
 module.exports = {
     sourceIdsBySlug, claim, saveOutcome, recordRun, countUnchangedRun, getRefusal, recordRefusal, clearRefusal,
-    endCooldown, decayRefusal, loadHolds, saveHolds,
+    endCooldown, decayRefusal, loadHolds, saveHolds, saveHoldChanges,
     dbKillSwitch, setDbKillSwitch, CLAIM_SLACK_SEC, CLAIM_SLACK_FRACTION, claimSlackSec,
 };
