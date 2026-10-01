@@ -8,6 +8,10 @@ npm run seed           # Data sources + methodology registry (idempotent)
 npm run seed:e2e       # Deterministic e2e fixture dataset (idempotent) — `npm run test:e2e` runs it itself in its own database
 npm run dev            # Express server on port 3000
 npm run standup        # OR the whole solution in Docker, one command: build, profile "full" (web/worker/embeddings/watchdog/migrate), demo population, smoke check
+npm run dev            # Express server on port 3000
+# (no `seed:e2e` here: the e2e globalSetup loads the fixture into its own pulse_of_ai_e2e DB;
+#  the fixture scripts refuse the dev DB — scripts/lib/fixture-db-guard.js, FIXTURE_DB_ALLOW)
+npm run standup        # OR the whole solution in Docker, one command: build, profile "full" (web/worker/embeddings/migrate), demo population, smoke check
 npm run teardown       # stop it (keeps volumes); `-- --purge` deletes volumes after confirmation (`--yes` non-interactive)
 ```
 
