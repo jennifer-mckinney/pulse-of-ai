@@ -38,6 +38,9 @@ it('every switch set: embedded, nothing queued, a hand-added job refused, no pro
     const src = await insertSource('m7-src', 'forums');
     const post = await insertPostWithFullPipeline(src, await insertJob(), await insertMethodologyVersions(), { externalId: 'm7-1' });
     jest.spyOn(axios, 'post').mockResolvedValue({ data: { data: [{ index: 0, embedding: Array(EMBEDDING_DIMENSIONS).fill(0.2) }] } });
+    // GET /health: the registered embedding methodology (checked before the stamp).
+    const reg = require('../../src/config/methodology-registry').METHODOLOGY_VERSIONS.filter(m => m.component === 'embedding').pop();
+    jest.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: { model: reg.model_name, revision: reg.config.revision, library: reg.config.library } });
     const before = await queued();
 
     const r = await processEmbedJob({ data: { rawPostId: post } }, { env: OPEN });

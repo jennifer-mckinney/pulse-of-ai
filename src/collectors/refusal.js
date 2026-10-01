@@ -19,11 +19,15 @@
 //   24 h without a refusal  probation is over: the count decays to 0 (at the
 //                           next successful run, or a later refusal counts
 //                           as refusal 1 again)
-//   manual reset            env SOURCE_<SLUG>_RESET=<ISO date> at or after
-//                           the (last) refusal, with its named approval, or
+//   manual reset            env SOURCE_<SLUG>_RESET=<date> at or after
+//                           the (last) refusal AND not in the future (both
+//                           bounds inclusive), with its named approval, or
 //                           `npm run source:reset -- <slug>` — clears
 //                           everything, count and probation too, in the
-//                           refused state AND during probation
+//                           refused state AND during probation. <date> is
+//                           YYYY-MM-DD (00:00 UTC of that day, never the
+//                           host's local time) or an ISO 8601 date-time
+//                           with Z or an offset; see resetDate below
 //
 // Probation (diagnosis 2026-09-30, Jennifer: "Probation + log headers
 // (Recommended)"; ADR 0001 dated note): one clean probe used to zero the
@@ -60,12 +64,58 @@ function cooldownMs(n) {
     return Math.min(COOLDOWN_MAX_MS, COOLDOWN_BASE_MS * 2 ** Math.min(k - 1, 10));
 }
 
-/** Whether the env holds a reset date at or after a refusal recorded at deniedAt. */
-function envResetDate(slug, env, deniedAt) {
+// The accepted SOURCE_<SLUG>_RESET forms (grumpy final #1). Date.parse alone
+// is host-dependent: it reads a zone-less date-time in the host's LOCAL time
+// zone, so the same value would mean different instants on different hosts.
+//   YYYY-MM-DD                         00:00 UTC of that day (never local time)
+//   YYYY-MM-DDThh:mm[:ss[.sss]]Z       an ISO 8601 date-time in UTC, or
+//   YYYY-MM-DDThh:mm[:ss[.sss]]±hh:mm  with an explicit offset
+// Anything else (a zone-less date-time, an impossible date such as
+// 2026-02-30, free text) is not a reset date and is ignored, with a reason.
+const RESET_DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/;
+const RESET_DATE_TIME = /^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/i;
+const RESET_FORMS = 'YYYY-MM-DD, read as 00:00 UTC, or an ISO 8601 date-time with Z or an offset';
+
+/**
+ * The instant (epoch ms) a SOURCE_<SLUG>_RESET value names, or null when it
+ * is not one of the accepted forms above.
+ * @param {string} value
+ * @returns {number|null}
+ */
+function resetDate(value) {
+    if (typeof value !== 'string') return null;
+    const v = value.trim();
+    const dateOnly = v.match(RESET_DATE_ONLY);
+    const m = dateOnly || v.match(RESET_DATE_TIME);
+    if (!m) return null;
+    // Reject impossible calendar dates (Date.UTC would roll 02-30 into March).
+    const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+    const day = new Date(Date.UTC(y, mo - 1, d));
+    if (day.getUTCFullYear() !== y || day.getUTCMonth() !== mo - 1 || day.getUTCDate() !== d) return null;
+    const t = dateOnly ? day.getTime() : Date.parse(v.toUpperCase());
+    return Number.isFinite(t) ? t : null;
+}
+
+/**
+ * The env reset for a refusal recorded at deniedAt, judged at `now`:
+ *   'unset'   no value
+ *   'invalid' not an accepted reset date
+ *   'before'  older than the refusal (it was set for an earlier refusal)
+ *   'future'  later than now: ignored until then (grumpy final #1 — a
+ *             future date would otherwise also "reset" every refusal
+ *             recorded before it, so the source was re-requested on every
+ *             poll right after refusing, against ADR 0001 ruling 5)
+ *   'valid'   at or after the refusal and not after now (both inclusive)
+ * @returns {{ status: string, at?: number }}
+ */
+function envResetStatus(slug, env, deniedAt, now = Date.now()) {
     const v = env && env[resetEnv(slug)];
-    if (typeof v !== 'string' || !v.trim()) return false;
-    const t = Date.parse(v.trim());
-    return Number.isFinite(t) && !!deniedAt && t >= new Date(deniedAt).getTime();
+    if (typeof v !== 'string' || !v.trim()) return { status: 'unset' };
+    const t = resetDate(v);
+    if (t === null) return { status: 'invalid' };
+    if (!deniedAt || t < new Date(deniedAt).getTime()) return { status: 'before', at: t };
+    if (t > now) return { status: 'future', at: t };
+    return { status: 'valid', at: t };
 }
 
 /**
@@ -74,9 +124,18 @@ function envResetDate(slug, env, deniedAt) {
  * needs a named approval (GATE_APPROVED_BY), the recorded actor of its
  * 'refusal_reset' gate event. Without one the refusal stands.
  */
-function envReset(slug, env, deniedAt) {
+function envReset(slug, env, deniedAt, now = Date.now()) {
     const { namedApproval } = require('../config/source-registry');
-    return envResetDate(slug, env, deniedAt) && namedApproval(env || {}).ok;
+    return envResetStatus(slug, env, deniedAt, now).status === 'valid' && namedApproval(env || {}).ok;
+}
+
+/** Why an env reset that is set did not clear the refusal ('' when nothing to say). */
+function envResetNote(slug, reset) {
+    const name = resetEnv(slug);
+    if (reset.status === 'invalid') return `; ${name} is not a valid reset date (${RESET_FORMS}) and is ignored`;
+    if (reset.status === 'future') return `; ${name} (${new Date(reset.at).toISOString()}) is in the future and is ignored until then`;
+    if (reset.status === 'valid') return `; ${name} is set but awaiting named approval (GATE_APPROVED_BY "Name YYYY-MM-DD")`;
+    return '';
 }
 
 /**
@@ -88,16 +147,17 @@ function refusalGate(row, slug, env = process.env, now = Date.now()) {
     if (!row) return { state: 'none' };
     if (!row.access_denied_at) {
         // Grumpy #3 (option b): an approved SOURCE_<SLUG>_RESET at or after
-        // the last refusal also clears a PROBATION (the count), exactly as
-        // it clears the refused state.
+        // the last refusal (and not in the future) also clears a PROBATION
+        // (the count), exactly as it clears the refused state.
         const onProbation = (row.refusal_count || 0) > 0 && !probationOver(row, now);
-        return onProbation && row.last_refused_at && envReset(slug, env, row.last_refused_at) ? { state: 'reset' } : { state: 'none' };
+        return onProbation && row.last_refused_at && envReset(slug, env, row.last_refused_at, now) ? { state: 'reset' } : { state: 'none' };
     }
-    if (envReset(slug, env, row.access_denied_at)) return { state: 'reset' };
+    if (envReset(slug, env, row.access_denied_at, now)) return { state: 'reset' };
     const until = row.refused_until ? new Date(row.refused_until).getTime() : 0;
     const status = row.access_denied_status ? `HTTP ${row.access_denied_status}` : (row.access_denied_kind === 'robots' ? 'robots.txt' : 'access denied');
-    const held = envResetDate(slug, env, row.access_denied_at)
-        ? `; ${resetEnv(slug)} is set but awaiting named approval (GATE_APPROVED_BY "Name YYYY-MM-DD")` : '';
+    // Why a set SOURCE_<SLUG>_RESET did not apply: not a valid date, in the
+    // future, or valid but awaiting its named approval.
+    const held = envResetNote(slug, envResetStatus(slug, env, row.access_denied_at, now));
     const reason = `the source refused access (${status}) at ${new Date(row.access_denied_at).toISOString()}`
         + ` — refusal ${row.refusal_count || 1}; reset with ${resetEnv(slug)}=<date> or npm run source:reset -- ${slug}${held}`;
     if (now < until) return { state: 'cooldown', reason: `${reason}; cooldown until ${new Date(until).toISOString()}`, until: new Date(until).toISOString() };
@@ -128,5 +188,5 @@ function refusalOf(classified) {
 
 module.exports = {
     BLOCKED_BY_SOURCE, REFUSED_KINDS, COOLDOWN_BASE_MS, COOLDOWN_MAX_MS, PROBATION_MS,
-    resetEnv, cooldownMs, envReset, refusalGate, refusalOf, probationOver,
+    resetEnv, resetDate, cooldownMs, envReset, refusalGate, refusalOf, probationOver,
 };

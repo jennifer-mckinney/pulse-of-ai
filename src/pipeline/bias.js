@@ -184,7 +184,10 @@ async function checkLocationConcentration(target, biasMvId) {
     const excludedBases = Array.isArray(config.location_basis_excluded)
         ? config.location_basis_excluded.filter(b => typeof b === 'string') : [];
 
-    // Count distinct posts per non-null location for this job
+    // Count distinct posts per non-null location for this job. rows[0] is
+    // the dominant location; grumpy final #5 (same family): ties on the top
+    // count go to the location name, so the named location never depends
+    // on the query plan.
     const rows = await dbAll(
         `SELECT rp.location, COUNT(*)::int AS post_count
          FROM raw_posts rp
@@ -193,7 +196,7 @@ async function checkLocationConcentration(target, biasMvId) {
            AND rp.location != ''
            AND NOT (COALESCE(rp.raw_payload->>'location_basis', 'content') = ANY($${scope.next}::text[]))
          GROUP BY rp.location
-         ORDER BY post_count DESC`,
+         ORDER BY post_count DESC, rp.location`,
         [...scope.params, excludedBases],
     );
     // How many located posts the exclusion removed (evidence, never hidden).
@@ -347,14 +350,19 @@ async function checkPlatformSentimentParity(target, biasMvId) {
     const config    = await getBiasConfig(biasMvId);
     const threshold = config.platform_parity_max_diff;
 
-    // Average comparative sentiment per source category for posts in this job
+    // Average comparative sentiment per source category for posts in this job.
+    // Grumpy final #5: ORDER BY ds.category — PostgreSQL does not guarantee
+    // GROUP BY output order, and the row order decides the stored
+    // evidence.rows, the pair maxPairwiseGap names (worst_pair / the
+    // violation's group_value) and which pair is kept on an exact tie.
     const allRows = await dbAll(
         `SELECT ds.category, AVG(sr.comparative) AS avg_comparative, COUNT(DISTINCT sr.raw_post_id)::int AS n
          FROM sentiment_results sr
          JOIN raw_posts rp     ON rp.id      = sr.raw_post_id
          JOIN data_sources ds  ON ds.id      = rp.source_id
          WHERE sr.raw_post_id IN (${scope.posts})
-         GROUP BY ds.category`,
+         GROUP BY ds.category
+         ORDER BY ds.category`,
         scope.params,
     );
     // bias@1.4.0: only categories with at least parity_min_per_category
@@ -467,12 +475,14 @@ async function checkNegativeDominance(target, biasMvId) {
     const config    = await getBiasConfig(biasMvId);
     const threshold = config.negative_dominance_max;
 
-    // Count posts per sentiment indicator for this job
+    // Count posts per sentiment indicator for this job (ordered, grumpy
+    // final #5: the stored evidence.rows must not follow the query plan).
     const rows = await dbAll(
         `SELECT sr.indicator, COUNT(DISTINCT sr.raw_post_id)::int AS count
          FROM sentiment_results sr
          WHERE sr.raw_post_id IN (${scope.posts})
-         GROUP BY sr.indicator`,
+         GROUP BY sr.indicator
+         ORDER BY sr.indicator`,
         scope.params,
     );
 

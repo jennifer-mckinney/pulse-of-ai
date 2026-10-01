@@ -60,14 +60,44 @@ async def test_health_reports_pinned_model_revision(client):
     assert all(c in "0123456789abcdef" for c in MODEL_REVISION)
 
 
+# The current embedding methodology row's config.library (embedding@1.1.0,
+# src/config/methodology-registry.js). A fixed value on purpose: deriving it
+# from sentence_transformers.__version__ would repeat the service's own
+# expression and could never fail. tests/unit/pure/embeddingLibraryPins.test.js
+# holds this constant, the registry and every requirement file to the same
+# string, so a library bump (a new embedding version) has to update it here too.
+REGISTERED_LIBRARY = "sentence-transformers==6.1.0"
+# config.library_dependencies.torch of the same row, held to the registry by
+# the same JS test. macOS has no +cpu wheel, so there only the release is
+# compared (python/requirements.txt pins the plain build of it).
+REGISTERED_TORCH = "2.12.1+cpu"
+
+
 @pytest.mark.asyncio
-async def test_health_reports_the_installed_library(client):
-    """/health names the sentence-transformers version it runs, in the form of
-    the embedding methodology row's config.library."""
-    import sentence_transformers
+async def test_health_reports_the_registered_library(client):
+    """/health names the library of the current embedding methodology row, and
+    the installed distribution (read from its package metadata, not from the
+    module the service imports) is that version."""
+    from importlib.metadata import version
 
     body = (await client.get("/health")).json()
-    assert body["library"] == f"sentence-transformers=={sentence_transformers.__version__}"
+    assert body["library"] == REGISTERED_LIBRARY
+    assert f"sentence-transformers=={version('sentence-transformers')}" == REGISTERED_LIBRARY
+
+
+def test_installed_torch_is_the_registered_build():
+    """The environment runs the torch build embedding@1.1.0 registers (the
+    +cpu build; on macOS, which has no +cpu wheel, the same release), so a
+    venv resolved to another torch fails here instead of storing vectors
+    that claim the registered library stack."""
+    import sys
+    from importlib.metadata import version
+
+    installed = version("torch")
+    if sys.platform == "darwin":
+        assert installed == REGISTERED_TORCH.split("+")[0]
+    else:
+        assert installed == REGISTERED_TORCH
 
 
 @pytest.mark.asyncio
