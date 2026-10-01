@@ -5,7 +5,10 @@
 
 'use strict';
 
-const { HttpClient, HostLimiter, userAgent, defaultTransport, retryAfterMs } = require('../../../src/collectors/http');
+const {
+    HttpClient, HostLimiter, userAgent, defaultTransport, retryAfterMs,
+    MAX_IN_RUN_WAIT_MS, MAX_HOLD_MS, DEFAULT_RATE_LIMIT_HOLD_MS,
+} = require('../../../src/collectors/http');
 const { parseRobots, isAllowed, RobotsPolicy } = require('../../../src/collectors/robots');
 const { AccessDeniedError, RobotsDisallowedError, HttpError } = require('../../../src/collectors/errors');
 const { fixtureTransport, readFixture, TEST_ENV } = require('../../helpers/fixtureTransport');
@@ -62,9 +65,12 @@ describe('refusals and retries', () => {
         expect(transport.calls).toHaveLength(3);
     });
 
-    test('Retry-After is honoured but capped; absent → exponential', () => {
+    // The in-run wait is capped at MAX_IN_RUN_WAIT_MS; a longer Retry-After
+    // is never slept through and retried early — it becomes a hold
+    // (see 'Retry-After holds' below).
+    test('the in-run wait honours a short Retry-After, capped; absent → exponential', () => {
         expect(retryAfterMs({ 'retry-after': '5' }, 0)).toBe(5000);
-        expect(retryAfterMs({ 'retry-after': '99999' }, 0)).toBe(60000);
+        expect(retryAfterMs({ 'retry-after': '99999' }, 0)).toBe(MAX_IN_RUN_WAIT_MS);
         expect(retryAfterMs({}, 2)).toBe(4000);
     });
 
@@ -92,6 +98,168 @@ describe('refusals and retries', () => {
         expect(n).toBe(1);
         expect(http.requests).toBe(1);
         expect(sleeps).toEqual([]);
+    });
+});
+
+// Diagnosis 2026-10-01 (TLDR deadline): tldr.tech answered HTTP 429 with a
+// Retry-After of a minute or more. The client capped it at 60 s, slept the
+// 60 s INSIDE the run and asked again; two of those overran the run's 120 s
+// deadline, so about half the runs were recorded as 'deadline' (hiding the
+// 429), and every run re-asked the source sooner than it had told us to.
+// Now a Retry-After longer than MAX_IN_RUN_WAIT_MS ends the request at once
+// (HTTP 429, http_4xx) and holds the URL until the source's time — in this
+// process (all hosts) AND in the route's persisted HTTP cache (so another
+// worker replica or a restart honours it too).
+describe('Retry-After holds (diagnosis 2026-10-01, TLDR deadline)', () => {
+    const URL_ = 'https://feed.example/rss';
+    const T0 = Date.parse('2026-10-01T02:00:00Z');
+    const { classifyError } = require('../../../src/collectors/errors');
+
+    function holdClient(routes, { now = () => T0, holds = new Map(), sleeps = [], signal } = {}) {
+        const transport = fixtureTransport(routes);
+        const http = new HttpClient({
+            transport, env: TEST_ENV, now, rateLimitHolds: holds, signal,
+            sleep: (ms) => { sleeps.push(ms); return Promise.resolve(); },
+        });
+        return { http, transport, holds, sleeps };
+    }
+
+    test('a 429 whose Retry-After is longer than the in-run wait is neither slept on nor retried in the run', async () => {
+        const { http, transport, sleeps } = holdClient([[URL_, { status: 429, headers: { 'retry-after': '120' } }]]);
+        const err = await http.request(URL_).catch(e => e);
+        expect(err).toBeInstanceOf(HttpError);
+        expect(err.status).toBe(429);
+        expect(classifyError(err)).toEqual({ error_kind: 'http_4xx', http_status: 429 });
+        expect(err.message).toMatch(/Retry-After/);
+        expect(err.message).toContain('2026-10-01T02:02:00.000Z');
+        expect(transport.calls).toHaveLength(1);
+        expect(sleeps).toEqual([]);
+    });
+
+    test('the TLDR case: a long Retry-After under a 120 s run deadline is reported as HTTP 429, not as the deadline', async () => {
+        // A simulated clock: every sleep advances it, and the run's deadline
+        // fires once 120 s have been slept (the worker's cycle deadline).
+        const deadline = new AbortController();
+        let slept = 0;
+        const transport = fixtureTransport([[URL_, { status: 429, headers: { 'retry-after': '60' } }]]);
+        const http = new HttpClient({
+            transport, env: TEST_ENV, now: () => T0 + slept, rateLimitHolds: new Map(), signal: deadline.signal,
+            sleep: (ms) => { slept += ms; if (slept >= 120000) deadline.abort(); return Promise.resolve(); },
+        });
+        const err = await http.request(URL_).catch(e => e);
+        expect(classifyError(err)).toEqual({ error_kind: 'http_4xx', http_status: 429 });
+        expect(slept).toBe(0);
+        expect(deadline.signal.aborted).toBe(false);
+        expect(transport.calls).toHaveLength(1);
+    });
+
+    test('the hold is honoured by the next run in the same process: no request is sent before the Retry-After time', async () => {
+        const holds = new Map();
+        let t = T0;
+        const first = holdClient([[URL_, { status: 429, headers: { 'retry-after': '300' } }]], { now: () => t, holds });
+        await first.http.request(URL_).catch(() => {});
+        t = T0 + 150000;   // the next cadence tick, 2.5 min later
+        const next = holdClient([[URL_, { body: '<rss/>' }]], { now: () => t, holds });
+        const err = await next.http.request(URL_).catch(e => e);
+        expect(err).toBeInstanceOf(HttpError);
+        expect(classifyError(err)).toEqual({ error_kind: 'http_4xx', http_status: 429 });
+        expect(err.message).toMatch(/not requested/);
+        expect(next.transport.calls).toHaveLength(0);
+        expect(next.http.requests).toBe(0);
+    });
+
+    test('the hold is persisted in the route HTTP cache, so another process (or a restart) honours it too', async () => {
+        const cache = {};
+        let t = T0;
+        const first = holdClient([[URL_, { status: 429, headers: { 'retry-after': '300' } }]], { now: () => t });
+        await first.http.request(URL_, { cache }).catch(() => {});
+        expect(cache[URL_]).toEqual({ retry_after_until: '2026-10-01T02:05:00.000Z', retry_after_status: 429 });
+        t = T0 + 150000;
+        const other = holdClient([[URL_, { body: '<rss/>' }]], { now: () => t });   // empty in-process holds
+        await expect(other.http.request(URL_, { cache })).rejects.toThrow(/not requested/);
+        expect(other.transport.calls).toHaveLength(0);
+    });
+
+    test('after the hold the request is sent again, and a success clears the hold but keeps the validators', async () => {
+        const holds = new Map();
+        const cache = { [URL_]: { etag: '"v1"', last_modified: null, retry_after_until: '2026-10-01T02:05:00.000Z', retry_after_status: 429 } };
+        holds.set('feed.example', { until: T0 + 300000, status: 429 });
+        const later = holdClient([[URL_, { body: '<rss/>', headers: { etag: '"v2"' } }]], { now: () => T0 + 300001, holds });
+        const res = await later.http.request(URL_, { cache });
+        expect(res.body).toBe('<rss/>');
+        expect(later.transport.calls).toHaveLength(1);
+        expect(cache[URL_]).toEqual({ etag: '"v2"', last_modified: null });
+        expect(holds.has('feed.example')).toBe(false);
+    });
+
+    test('a success without validators drops the cache entry that only held the Retry-After time', async () => {
+        const cache = { [URL_]: { retry_after_until: '2026-10-01T01:00:00.000Z', retry_after_status: 429 } };
+        const { http } = holdClient([[URL_, { body: '<rss/>' }]]);
+        await http.request(URL_, { cache });
+        expect(cache).toEqual({});
+    });
+
+    test('the hold is the source\'s full Retry-After (not the old 60 s cap), as seconds or an HTTP date, at most MAX_HOLD_MS', async () => {
+        const cases = [
+            [{ 'retry-after': '3600' }, T0 + 3600000],
+            [{ 'retry-after': 'Wed, 01 Oct 2026 03:30:00 GMT' }, Date.parse('2026-10-01T03:30:00Z')],
+            [{ 'retry-after': String(10 * 24 * 3600) }, T0 + MAX_HOLD_MS],
+        ];
+        for (const [headers, until] of cases) {
+            const holds = new Map();
+            const { http } = holdClient([[URL_, { status: 429, headers }]], { holds });
+            await http.request(URL_).catch(() => {});
+            expect(holds.get('feed.example')).toEqual({ until, status: 429 });
+        }
+    });
+
+    test('a 429 without Retry-After is retried with backoff, then holds for DEFAULT_RATE_LIMIT_HOLD_MS', async () => {
+        const holds = new Map();
+        const { http, transport, sleeps } = holdClient([[URL_, { status: 429 }]], { holds });
+        const err = await http.request(URL_).catch(e => e);
+        expect(classifyError(err)).toEqual({ error_kind: 'http_4xx', http_status: 429 });
+        expect(transport.calls).toHaveLength(3);
+        expect(sleeps).toEqual([1000, 2000]);
+        expect(holds.get('feed.example')).toEqual({ until: T0 + DEFAULT_RATE_LIMIT_HOLD_MS, status: 429 });
+    });
+
+    test('a 503 with a long Retry-After holds the same way; a 5xx without one does not hold', async () => {
+        const holds = new Map();
+        const a = holdClient([[URL_, { status: 503, headers: { 'retry-after': '600' } }]], { holds });
+        const err = await a.http.request(URL_).catch(e => e);
+        expect(classifyError(err)).toEqual({ error_kind: 'http_5xx', http_status: 503 });
+        expect(a.transport.calls).toHaveLength(1);
+        expect(holds.get('feed.example')).toEqual({ until: T0 + 600000, status: 503 });
+
+        const other = new Map();
+        const b = holdClient([[URL_, { status: 500 }]], { holds: other });
+        await b.http.request(URL_).catch(() => {});
+        expect(other.size).toBe(0);
+    });
+
+    test('a short Retry-After is still waited out inside the run and retried', async () => {
+        let n = 0;
+        const holds = new Map();
+        const { http, sleeps } = holdClient([[URL_, () => (++n === 1
+            ? { status: 429, headers: { 'retry-after': String(MAX_IN_RUN_WAIT_MS / 1000) } } : { body: 'ok' })]], { holds });
+        expect((await http.request(URL_)).body).toBe('ok');
+        expect(sleeps).toEqual([MAX_IN_RUN_WAIT_MS]);
+        expect(holds.size).toBe(0);
+    });
+
+    test('a hold on one host never blocks another host', async () => {
+        const holds = new Map([['feed.example', { until: T0 + 300000, status: 429 }]]);
+        const { http, transport } = holdClient([['https://other.example/rss', { body: 'ok' }]], { holds });
+        expect((await http.request('https://other.example/rss')).body).toBe('ok');
+        expect(transport.calls).toHaveLength(1);
+    });
+
+    test('clients on the default (network) transport share one process-wide hold map', () => {
+        const a = new HttpClient({ env: TEST_ENV });
+        const b = new HttpClient({ env: TEST_ENV });
+        expect(a.holds).toBe(b.holds);
+        const c = new HttpClient({ env: TEST_ENV, transport: fixtureTransport([]) });
+        expect(c.holds).not.toBe(a.holds);
     });
 });
 
