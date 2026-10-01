@@ -39,6 +39,14 @@ const SCHEDULER_ACTOR = 'worker scheduler (runtime env)';
 async function recordGateEvent({
     sourceId, slug, event, gateStatus = null, actor, reason = null, approvedBy = null, routes = null, client = null,
 }) {
+    // Copilot round 2: migration 073's CHECK accepts ARRAY[NULL] (a NULL
+    // regex result passes a CHECK). Until a follow-up migration closes that,
+    // a route event must name exactly one well-formed route id here.
+    if ((event === 'route_disabled' || event === 'route_enabled')
+        && !(Array.isArray(routes) && routes.length === 1 && typeof routes[0] === 'string'
+             && require('../config/source-registry').ROUTE_ID_PATTERN.test(routes[0]))) {
+        throw new Error(`a ${event} event names exactly one route id`);
+    }
     const sql = `INSERT INTO source_gate_events (source_id, slug, event, gate_status, actor, reason, approved_by, routes)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8::text[])`;
     const params = [sourceId, slug, event, gateStatus, actor, reason, approvedBy, routes];

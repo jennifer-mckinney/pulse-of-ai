@@ -185,6 +185,15 @@ async function allRouteKillSwitches() {
  *   was never disabled changes nothing)
  */
 async function setRouteKillSwitch(sourceId, routeId, disabled, { reason = null, by = null, client = null } = {}) {
+    // Copilot round 2: the database CHECK of migration 073 accepts a NULL
+    // approver (a NULL regex result passes a CHECK). Until a follow-up
+    // migration closes that, the write path refuses it here: a takedown
+    // always records why and the named approval behind it.
+    if (disabled) {
+        const { namedApproval } = require('../config/source-registry');
+        if (typeof reason !== 'string' || !reason.trim()) throw new Error('a route takedown needs a reason');
+        if (!namedApproval({ GATE_APPROVED_BY: by }).ok) throw new Error('a route takedown needs a named approval ("Name YYYY-MM-DD") as `by`');
+    }
     const [sql, params] = disabled
         ? [`INSERT INTO source_route_state (source_id, route_id, collection_disabled_at, collection_disabled_reason, collection_disabled_by, updated_at)
             VALUES ($1, $2, NOW(), $3, $4, NOW())

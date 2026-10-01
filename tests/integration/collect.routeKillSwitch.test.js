@@ -265,6 +265,22 @@ describe('per-route switch: review hardening', () => {
         expect(transport.calls.filter(c => FORUM.test(c.url))).toHaveLength(0);
     });
 
+    // Copilot round 2: the write paths refuse what 073's CHECKs let through
+    // (a NULL approver; a route event naming no well-formed route).
+    it('the write paths refuse a takedown without reason or named approver, and a route event without one route id', async () => {
+        const id = await sourceId('hugging_face');
+        for (const [reason, by] of [['x', null], ['x', 'tester'], ['  ', APPROVER], [null, APPROVER]]) {
+            await expect(state.setRouteKillSwitch(id, 'forum-latest', true, { reason, by })).rejects.toThrow(/needs a (reason|named approval)/);
+        }
+        const { recordGateEvent } = require('../../src/collectors/governance');
+        for (const routes of [null, [], [null], ['forum-latest', 'blog-rss'], ['Forum Latest']]) {
+            await expect(recordGateEvent({ sourceId: id, slug: 'hugging_face', event: 'route_disabled', actor: APPROVER,
+                approvedBy: APPROVER, reason: 'x', routes })).rejects.toThrow(/names exactly one route id/);
+        }
+        expect(await routeRows()).toEqual([]);
+        expect(await gateEvents()).toEqual([]);
+    });
+
     it('the database refuses a reason with control characters', async () => {
         const id = await sourceId('hugging_face');
         await expect(db.dbRun(`INSERT INTO source_route_state (source_id, route_id, collection_disabled_at, collection_disabled_reason, collection_disabled_by)
