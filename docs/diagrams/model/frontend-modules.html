@@ -121,8 +121,9 @@ classDiagram
   class PulseUI {
     &lt;&lt;ui.js&gt;&gt;
     +init()
-    +openAudit(post) audit drawer, 4 audiences
-    +openHealth() health drawer, SYSTEM WATCHDOG section
+    +openAudit(post, opener) audit drawer, 4 audiences
+    +openHealth(opener) health drawer, SYSTEM WATCHDOG section
+    closing a drawer returns focus to its opener
     healthBanner() SYSTEM ALERT banner, watchdogModel()
     publisherTipText() tooltip line
     explore filters, city detail, tooltip, source ribbon

@@ -1520,7 +1520,7 @@
             }
             const why = el('button', 'btn-why mono', 'why?');
             why.type = 'button';
-            why.addEventListener('click', () => openAudit(p));
+            why.addEventListener('click', () => openAudit(p, why));
             row.appendChild(why);
             post.appendChild(row);
             wrap.appendChild(post);
@@ -1744,23 +1744,39 @@
 
     // ── Audit drawer ────────────────────────────────────────────────────────
 
-    // The control that had keyboard focus when each drawer opened, so
-    // closing can hand focus back to it instead of leaving it on the × in a
-    // now-hidden (aria-hidden) drawer.
+    // The control that opened each drawer, so closing can hand focus back
+    // to it instead of leaving it on the × in a now-hidden (aria-hidden)
+    // drawer.
     const drawerOpeners = new WeakMap();
 
-    // setDrawerOpen(drawer, open, fallback): show/hide a drawer. Opening
-    // remembers the focused opener; closing returns focus to it (or to
-    // `fallback` when the opener is gone or was never focused, e.g. Safari
-    // does not focus buttons on click) whenever focus sits inside the
-    // drawer or was lost to <body>. Focus the user moved elsewhere stays.
-    function setDrawerOpen(drawer, open, fallback) {
+    // isElementOutside(node, drawer): a real element that is not <body> and
+    // not inside the drawer — the only kind of opener worth refocusing.
+    function isElementOutside(node, drawer) {
+        return !!node && typeof node.focus === 'function'
+            && node !== document.body && !drawer.contains(node);
+    }
+
+    // setDrawerOpen(drawer, open, control): show/hide a drawer.
+    // Opening: `control` is the element that opened the drawer, passed
+    // explicitly by every click handler — Safari does not focus a button on
+    // a mouse click, so document.activeElement cannot be trusted to name
+    // the opener (Copilot review on PR #40). Only when no control is passed
+    // (a programmatic open) is the focused element remembered instead.
+    // Closing: `control` is the fallback (the drawer's controlling element)
+    // used when the opener is unknown or gone. Focus returns to the opener
+    // (or fallback) whenever it sits inside the drawer or was lost to
+    // <body>; focus the user moved elsewhere stays where it is.
+    function setDrawerOpen(drawer, open, control) {
         if (!drawer) return;
         const wasOpen = drawer.classList.contains('open');
         const active = typeof document !== 'undefined' ? document.activeElement : null;
-        if (open && !wasOpen && active && active !== document.body
-            && !drawer.contains(active)) {
-            drawerOpeners.set(drawer, active);
+        if (open && isElementOutside(control, drawer)) {
+            // An explicit opener always wins, also when a second "why?"
+            // re-targets an already open drawer.
+            drawerOpeners.set(drawer, control);
+        } else if (open && !wasOpen) {
+            if (isElementOutside(active, drawer)) drawerOpeners.set(drawer, active);
+            else drawerOpeners.delete(drawer);
         }
         drawer.classList.toggle('open', open);
         drawer.setAttribute('aria-hidden', open ? 'false' : 'true');
@@ -1771,7 +1787,7 @@
         const focusLost = !active || active === document.body || drawer.contains(active);
         if (!focusLost) return;
         const target = opener && opener.isConnected ? opener
-            : (fallback && fallback.isConnected ? fallback : null);
+            : (control && control.isConnected ? control : null);
         if (target && typeof target.focus === 'function') {
             target.focus();
         } else if (active && drawer.contains(active) && typeof active.blur === 'function') {
@@ -1780,11 +1796,14 @@
         }
     }
 
-    // openAudit(post): the receipt. `post` is a raw /api/query result row
-    // (live) or a demo row from demoPostsForCity. Called by the detail
-    // panel's "why?" buttons and DIRECTLY by story.js's featured-post
-    // button (C3 contract). Freezes the header timer on the FIRST receipt.
-    function openAudit(post) {
+    // openAudit(post, opener): the receipt. `post` is a raw /api/query
+    // result row (live) or a demo row from demoPostsForCity. Called by the
+    // detail panel's "why?" buttons and DIRECTLY by story.js's featured-post
+    // button (C3 contract); each passes its own button as `opener` so focus
+    // returns to it when the drawer closes (optional: a caller without one
+    // falls back to the focused element). Freezes the header timer on the
+    // FIRST receipt.
+    function openAudit(post, opener) {
         if (!post || typeof post !== 'object') return;
         if (window.PulseMain
             && typeof window.PulseMain.freezeInsightTimer === 'function') {
@@ -1792,7 +1811,7 @@
         }
         state.auditModel = null;
         renderAuditLoading(post);
-        setDrawerOpen(els.auditDrawer, true);
+        setDrawerOpen(els.auditDrawer, true, opener);
 
         if (state.isDemo || isDemoPostId(post.id) || typeof fetch !== 'function') {
             state.auditModel = demoAuditModel(post);
@@ -1985,8 +2004,10 @@
 
     // ── Health drawer ───────────────────────────────────────────────────────
 
-    function openHealth() {
-        setDrawerOpen(els.healthDrawer, true);
+    // openHealth(opener): `opener` is the control that opened the drawer
+    // (the header chip's click handler passes the chip).
+    function openHealth(opener) {
+        setDrawerOpen(els.healthDrawer, true, opener);
         if (els.healthChip) els.healthChip.setAttribute('aria-expanded', 'true');
         renderHealthLoading();
         if (typeof fetch !== 'function') {
@@ -2323,7 +2344,7 @@
             // enterExplore via consumePendingCity().
         });
         document.addEventListener('pulse:trace', (e) => {
-            if (e.detail && e.detail.post) openAudit(e.detail.post);
+            if (e.detail && e.detail.post) openAudit(e.detail.post, e.detail.opener);
         });
         document.addEventListener('pulse:data', (e) => {
             if (e.detail) onCitiesData(e.detail.cities, e.detail.isDemo, e.detail.dataMode);
@@ -2336,7 +2357,7 @@
                     && els.healthDrawer.classList.contains('open')) {
                     closeHealth();
                 } else {
-                    openHealth();
+                    openHealth(els.healthChip);
                 }
             });
         }

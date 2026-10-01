@@ -3,10 +3,10 @@
 // table ≠ Researcher mono repro), bias layers render PASS / N-A rows with τ
 // values, the header timer freezes to "first receipt ✓" on the FIRST open,
 // and closing restores the prior view.
-import { test, expect } from '@playwright/test';
+import { test, expect, Page, Locator } from '@playwright/test';
 import {
     consoleErrors, expectNoConsoleErrors, gotoAndWaitForData,
-    scrollToBeat, stabilizeSnapshot, evidence,
+    scrollToBeat, stabilizeSnapshot, evidence, enterExplore,
 } from './helpers';
 
 test('audit drawer: audiences, bias layers, timer freeze, close restores view', async ({ page }) => {
@@ -118,6 +118,56 @@ test('audit drawer: audiences, bias layers, timer freeze, close restores view', 
     // Keyboard focus returns to the button that opened the receipt instead
     // of staying on the × inside the now-hidden drawer.
     await expect(opener).toBeFocused();
+
+    expectNoConsoleErrors(errors);
+});
+
+// Safari (and some assistive tech) do not focus a button on a mouse click,
+// so document.activeElement stays <body> when the receipt opens. The drawer
+// must still hand focus back to the button that opened it on close: each
+// opener passes itself explicitly instead of the drawer inferring it from
+// activeElement (Copilot thread on public/js/ui.js setDrawerOpen).
+// dispatchEvent('click') fires the click WITHOUT moving focus, reproducing
+// that browser behaviour in Chromium.
+async function openWithoutFocus(page: Page, opener: Locator) {
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await opener.dispatchEvent('click');
+    expect(await page.evaluate(() => document.activeElement === document.body),
+        'the synthetic click must leave focus on <body>').toBe(true);
+}
+
+test('audit drawer: focus returns to an opener the click never focused', async ({ page }) => {
+    const errors = consoleErrors(page);
+    await stabilizeSnapshot(page);
+    await gotoAndWaitForData(page);
+    const drawer = page.locator('#audit-drawer');
+
+    // 1. The CH04 featured-post button (story.js → PulseUI.openAudit).
+    await scrollToBeat(page, 4);
+    const card = page.locator('#card-col .chapter-card').nth(4);
+    await expect(card.locator('.mini-post')).toBeVisible({ timeout: 15000 });
+    const trace = card.locator('.btn-trace');
+    await openWithoutFocus(page, trace);
+    await expect(drawer).toHaveClass(/open/);
+    await drawer.locator('.drawer-x').click();
+    await expect(drawer).not.toHaveClass(/open/);
+    await expect(trace).toBeFocused();
+
+    // 2. An explore detail panel "why?" button (ui.js renderDetailPosts).
+    await enterExplore(page);
+    const target: string = await page.evaluate(() => {
+        const cities = (window as any).PulseStory.getCities().slice();
+        cities.sort((a: any, b: any) => b.total - a.total);
+        return cities[0].city;
+    });
+    await page.locator('#exp-filters .city-row', { hasText: target }).first().click();
+    const why = page.locator('#exp-detail .det-posts .btn-why').first();
+    await expect(why).toBeVisible({ timeout: 15000 });
+    await openWithoutFocus(page, why);
+    await expect(drawer).toHaveClass(/open/);
+    await drawer.locator('.drawer-x').click();
+    await expect(drawer).not.toHaveClass(/open/);
+    await expect(why).toBeFocused();
 
     expectNoConsoleErrors(errors);
 });

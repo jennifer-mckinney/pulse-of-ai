@@ -20,7 +20,7 @@
 //         fired when a story-card drill chip is clicked; the same id is
 //         also held until consumePendingCity() is called, so ui.js can pick
 //         it up after its own init even if it missed the event.
-//   - CustomEvent 'pulse:trace'              detail {post: apiQueryRow}
+//   - CustomEvent 'pulse:trace'              detail {post: apiQueryRow, opener: HTMLButtonElement}
 //         fired by the featured-post "Why does it say that? →" button when
 //         window.PulseUI.openAudit is absent; when present it is called
 //         directly with the same post row instead.
@@ -427,12 +427,14 @@
 
     // openTrace: featured-post receipt hand-off — call the C4 hook when it
     // exists, otherwise fire the event so a later-loaded ui.js can replay it.
-    function openTrace(post) {
+    // `opener` is the button clicked, handed on so the drawer returns focus
+    // to it on close (a click does not focus a button in Safari).
+    function openTrace(post, opener) {
         const ui = window.PulseUI;
         if (ui && typeof ui.openAudit === 'function') {
-            ui.openAudit(post);
+            ui.openAudit(post, opener);
         } else {
-            dispatch('pulse:trace', { post });
+            dispatch('pulse:trace', { post, opener });
         }
     }
 
@@ -487,7 +489,7 @@
         row.appendChild(pill);
         const btn = el('button', 'btn-trace', 'Why does it say that? →');
         btn.type = 'button';
-        btn.addEventListener('click', () => openTrace(post));
+        btn.addEventListener('click', () => openTrace(post, btn));
         row.appendChild(btn);
         wrap.appendChild(row);
         wrap.hidden = false;
