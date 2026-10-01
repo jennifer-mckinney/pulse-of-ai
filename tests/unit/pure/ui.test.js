@@ -306,7 +306,7 @@ describe('mapAuditResponse — served audit shape → drawer model', () => {
         expect(P.fmtHashPrefix(m.inputHash)).toBe('a'.repeat(16) + '…');
     });
 
-    test('fmtHashPrefix passes pre-truncated demo hashes through unchanged', () => {
+    test('fmtHashPrefix passes pre-truncated hashes through unchanged', () => {
         expect(P.fmtHashPrefix('sha256:0123456789abcdef…'))
             .toBe('sha256:0123456789abcdef…');
     });
@@ -844,12 +844,15 @@ describe('demoAuditModel — prototype buildAudit receipt', () => {
         expect(m.footer).toContain('fictional demo data');
     });
 
-    test('deterministic input hash + bias layers incl. the N/A planned layer', () => {
+    // A bundled demo post is never stored or hashed, so its receipt carries
+    // no input fingerprint (spec §1: demo posts carry none); a fabricated
+    // "input sha256:…" would contradict the Researcher text that says this
+    // receipt has no hash (Copilot r4151336195).
+    test('no input hash (never faked) + bias layers incl. the N/A planned layer', () => {
         const post = P.demoPostsForCity(posCity(), NOW)[0];
         const m1 = P.demoAuditModel(post);
-        const m2 = P.demoAuditModel(post);
-        expect(m1.inputHash).toBe(m2.inputHash);
-        expect(m1.inputHash).toMatch(/^sha256:[0-9a-f]{16}…$/);
+        expect(m1.inputHash).toBeNull();
+        expect(P.fmtHashPrefix(m1.inputHash)).toBeNull();
         const bias = m1.steps[3];
         expect(bias.layers).toHaveLength(3);
         expect(bias.layers[2].status).toBe('n-a');
@@ -862,6 +865,17 @@ describe('demoAuditModel — prototype buildAudit receipt', () => {
         expect(m.steps[1].scoreKind).toBe('sentiment');
         expect(m.steps[2].score).toBe(post.relevance);
         expect(m.steps[2].scoreKind).toBe('percent');
+    });
+
+    // No demo step may hand out a replay command for its own fictional post
+    // as if it would run: the replay rule is stated for live posts only.
+    test('no demo step offers a runnable replay of the fictional post', () => {
+        const post = P.demoPostsForCity(posCity(), NOW)[0];
+        for (const s of P.demoAuditModel(post).steps) {
+            const r = s.audiences.researcher;
+            expect(r).not.toContain('npm run replay -- --post ' + post.id);
+            if (/replay/.test(r)) expect(r).toMatch(/nothing to replay/);
+        }
     });
 
     // The offline demo receipt must describe the real ingest system:

@@ -276,8 +276,8 @@
     }
 
     // fmtHashPrefix: long HMAC hex → first 16 chars + ellipsis (the
-    // prototype showed a truncated fingerprint). Demo hashes arrive already
-    // truncated with a trailing '…' and pass through unchanged.
+    // prototype showed a truncated fingerprint). A value that is already
+    // truncated (trailing '…') passes through unchanged.
     function fmtHashPrefix(hash) {
         const s = String(hash === null || hash === undefined ? '' : hash);
         if (s === '') return null;
@@ -1044,9 +1044,11 @@
                         intensifier_cap: 1.6,
                         benchmark_accuracy: '87.4% (labeled set n=4,120)',
                     },
+                    // Live receipts give a runnable replay command; this
+                    // fictional demo post was never stored, so it has none.
                     researcher: 'Cue weights: ' + cueLines.join(' · ')
-                        + '. Reproduce: npm run replay -- --post ' + post.id
-                        + ' (fictional demo post — nothing stored to replay)',
+                        + '. For a live post, npm run replay -- --post <post id> re-runs this step; '
+                        + 'this fictional demo post was never stored, so there is nothing to replay.',
                 },
                 layers: null,
             },
@@ -1088,7 +1090,9 @@
 
         return {
             postId: post.id,
-            inputHash: 'sha256:' + pseudoHash(String(post.id)) + '…',
+            // A demo post is never stored or hashed: no input fingerprint is
+            // shown (the post block omits it), matching the Researcher text.
+            inputHash: null,
             isDemo: true,
             post: {
                 content_snippet: post.content_snippet || '',
