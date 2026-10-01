@@ -95,6 +95,9 @@ test('demo fallback: /api/** blocked → 30-city demo, DEMO badges, local receip
     await expect(ingestStep.locator('.kv')).toContainText('UNIQUE(source_id, external_id)');
     await tabs.nth(3).click();
     await expect(ingestStep).toContainText('It is an integrity check, not a join key.');
+    // The live-system rule is conditional; this demo receipt has no hash.
+    await expect(ingestStep).toContainText('never stored, so this receipt has no hash and nothing to replay');
+    await expect(ingestStep).not.toContainText('this receipt serves');
     expect(await drawer.locator('.steps').innerText()).not.toMatch(/simhash|immutable join key/i);
     await evidence(page, '09b-demo-fallback-receipt-researcher');
     // Restore the default audience so later drawers open on Public.

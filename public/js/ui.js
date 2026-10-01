@@ -1018,13 +1018,16 @@
                         dedup_strategy: 'unique source + upstream id: UNIQUE(source_id, external_id)',
                         legal_basis: 'legitimate_interest § 6(1)(f)',
                     },
-                    // audit_narration@1.4.0 INGEST_HASH_NOTE verbatim (src/config/
-                    // audit-narration.js): the hash is an integrity check, not a
-                    // join key. Demo suffix mirrors the sentiment step's.
-                    researcher: 'The stored text is SHA-256 hashed at ingest; each scoring step records the same digest of the '
-                        + 'text it scored as input_hash, which npm run replay re-checks against the stored text and this receipt serves '
-                        + 'only keyed (HMAC-SHA256 with AUDIT_HASH_KEY). It is an integrity check, not a join key.'
-                        + ' (fictional demo post — nothing stored to replay)',
+                    // audit_narration@1.4.0 INGEST_HASH_NOTE wording (src/config/
+                    // audit-narration.js), stated conditionally for the demo:
+                    // the live system hashes and serves the digest keyed, but
+                    // a bundled demo post is never stored, so this receipt has
+                    // no hash and no replay. The hash is an integrity check,
+                    // not a join key.
+                    researcher: 'In the live system the stored text is SHA-256 hashed at ingest; each scoring step records the same digest of the '
+                        + 'text it scored as input_hash, which npm run replay re-checks against the stored text, and the live receipt serves it '
+                        + 'only keyed (HMAC-SHA256 with AUDIT_HASH_KEY). It is an integrity check, not a join key. '
+                        + 'This fictional demo post was never stored, so this receipt has no hash and nothing to replay.',
                 },
                 layers: null,
             },

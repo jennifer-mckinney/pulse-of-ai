@@ -868,11 +868,28 @@ describe('demoAuditModel — prototype buildAudit receipt', () => {
     // the content hash is an integrity check (audit_narration@1.4.0
     // INGEST_HASH_NOTE), not a join key, and duplicates are dropped by
     // UNIQUE(source_id, external_id) — there is no simhash anywhere.
+    // The live-system rule is stated conditionally: a bundled demo post is
+    // never stored, hashed or replayable, so this receipt serves no hash
+    // and must not claim that it does (Copilot r4151336195 / audit R6-4).
     test('ingestion step matches the real system (hash wording + dedupe rule)', () => {
         const { INGEST_HASH_NOTE } = require('../../../src/config/audit-narration');
         const post = P.demoPostsForCity(posCity(), NOW)[0];
         const ingest = P.demoAuditModel(post).steps[0];
-        expect(ingest.audiences.researcher.startsWith(INGEST_HASH_NOTE)).toBe(true);
+        const researcher = ingest.audiences.researcher;
+        // Tie the shared wording to the registered narration: the closing
+        // "integrity check, not a join key" sentence is INGEST_HASH_NOTE's.
+        const closing = 'It is an integrity check, not a join key.';
+        expect(INGEST_HASH_NOTE.endsWith(closing)).toBe(true);
+        expect(researcher).toContain(closing);
+        // The keyed-hash mechanics (HMAC-SHA256 with AUDIT_HASH_KEY) also
+        // come from INGEST_HASH_NOTE and must stay in step with it.
+        expect(INGEST_HASH_NOTE).toContain('HMAC-SHA256 with AUDIT_HASH_KEY');
+        expect(researcher).toContain('HMAC-SHA256 with AUDIT_HASH_KEY');
+        // Conditional framing: the live system, not this receipt.
+        expect(researcher.startsWith('In the live system')).toBe(true);
+        expect(researcher).not.toMatch(/this receipt serves/);
+        expect(researcher).toMatch(/never stored, so this receipt has no hash/);
+        expect(researcher).toMatch(/nothing to replay/);
         expect(ingest.audiences.researcher).not.toMatch(/immutable join key|join key across/);
         expect(ingest.audiences.config).not.toHaveProperty('dedupe');
         expect(ingest.audiences.config.dedup_strategy).toMatch(/UNIQUE\(source_id, external_id\)/);
