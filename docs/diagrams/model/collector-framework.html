@@ -234,11 +234,12 @@ classDiagram
   class refusal {
     &lt;&lt;module refusal.js&gt;&gt;
     +refusalGate(row, slug, env, now) reset, cooldown, probe
-    +envReset(slug, env, deniedAt) date AND named approval
+    +envReset(slug, env, deniedAt, now) date ≤ now AND named approval
     +refusalOf(classified)
     +cooldownMs(n)
     +probationOver(row, now)
     +resetEnv(slug)
+    +resetDate(value) YYYY-MM-DD as midnight UTC, or ISO date-time with Z or offset
   }
   class status {
     &lt;&lt;module status.js&gt;&gt;
