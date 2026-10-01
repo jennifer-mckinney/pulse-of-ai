@@ -23,7 +23,7 @@ npm run teardown       # stop it (keeps volumes); `-- --purge` deletes volumes a
 | `npm run standup` / `npm run teardown` | One-command Docker standup of the whole solution / stop it (see README "Stand it up") |
 | `npm run replay -- --post <id>` | Re-run a post's stored decisions through `src/pipeline` and print PASS / DIVERGENCE / NOT RE-RUNNABLE per stage |
 | `npm run verify` | Full gate: Jest + coverage, pytest, black (needs `python/.venv`) |
-| `npm run test:e2e` | Playwright suite (dev DB migrated + seeded + `seed:e2e`; globalSetup freshens timestamps) |
+| `npm run test:e2e` | Playwright suite; globalSetup DROPS + recreates its own `pulse_of_ai_e2e` DB (guarded: e2e names only, never `pulse_of_ai` or the 5433 test DB), then migrates, seeds, `seed:e2e`, freshens timestamps |
 | `npm run coverage:frontend` | Non-gating coverage of the pure namespaces of globe/story/ui/main |
 | `npm run test:unit` | Unit tests (no DB required) |
 | `npm run test:int` | Integration tests (needs docker:up) |

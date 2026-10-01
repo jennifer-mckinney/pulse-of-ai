@@ -272,8 +272,10 @@ jobs:
     runs-on: ubuntu-latest
 
     # Dev-DB service container on the dev port. The Playwright globalSetup
-    # (tests/e2e/global-setup.js) creates the isolated pulse_of_ai_e2e
-    # database on it, then migrates, seeds (sources + methodology registry),
+    # (tests/e2e/global-setup.js) drops and recreates the isolated
+    # pulse_of_ai_e2e database on it (guarded: tests/e2e/e2e-db-guard.js
+    # refuses the dev database pulse_of_ai and the test Postgres port), then
+    # migrates, seeds (sources + methodology registry),
     # loads the deterministic e2e fixture (seed:e2e) and freshens its
     # timestamps before any spec runs.
     services:
