@@ -33,7 +33,11 @@
     "collect:smoke": "node scripts/collect-smoke.js",
     "collect": "node scripts/collect.js",
     "terms:snapshot": "node scripts/terms-snapshot.js",
-    "bias:window": "node scripts/bias-window.js"
+    "bias:window": "node scripts/bias-window.js",
+    "gold:sample": "node scripts/gold-sample.js",
+    "gold:label": "node scripts/gold-label.js",
+    "gold:agreement": "node scripts/gold-agreement.js",
+    "relevance:eval": "node scripts/relevance-eval.js"
   },
   "keywords": [
     "ai",
