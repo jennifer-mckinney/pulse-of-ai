@@ -32,7 +32,7 @@ flowchart LR
     R1{"9 · collection deadline<br/>already reached?"}:::done
     R2{"10 · database kill switch?<br/>data_sources.collection_disabled_at<br/>(npm run source:disable, refused<br/>without GATE_APPROVED_BY)"}:::done
     R3{"11 · refused state?<br/>source_collection_state<br/>access_denied_at, refused_until"}:::done
-    R4["SOURCE_#lt;SLUG#gt;_RESET date at or after the<br/>last refusal and a valid GATE_APPROVED_BY:<br/>clearRefusal() + source_gate_events<br/>refusal_reset, one transaction"]:::done
+    R4["SOURCE_#lt;SLUG#gt;_RESET date at or after the<br/>last refusal, not in the future, and a valid<br/>GATE_APPROVED_BY:<br/>clearRefusal() + source_gate_events<br/>refusal_reset, one transaction"]:::done
     R5{"12 · claim: last attempt older than<br/>the poll interval, less a jitter slack<br/>(at most 20 %)? (state.claim,<br/>atomic across worker and refresh)"}:::done
     R1 -- no --> R2
     R2 -- no --> R3

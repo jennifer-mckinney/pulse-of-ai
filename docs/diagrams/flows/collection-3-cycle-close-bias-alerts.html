@@ -76,7 +76,7 @@ flowchart LR
     direction TB
     E1["36 · embed.worker: embedPost(id)&lt;br/&gt;5 attempts, exponential backoff from 2 s"]:::done
     E2["37 · POST embeddings:8000/embeddings&lt;br/&gt;all-MiniLM-L6-v2 at the pinned revision"]:::done
-    E3["38 · upsert post_embeddings VECTOR(384),&lt;br/&gt;methodology_version 1.1.0 only when model&lt;br/&gt;and revision are the registered ones; skipped&lt;br/&gt;when the text was removed (checked FOR SHARE,&lt;br/&gt;G3) or the demo post purged"]:::done
+    E3["38 · GET embeddings:8000/health, then upsert&lt;br/&gt;post_embeddings VECTOR(384), methodology_version&lt;br/&gt;1.1.0 only when model and revision are the&lt;br/&gt;registered ones and /health reports the registered&lt;br/&gt;model, revision and library, else NULL; /health&lt;br/&gt;unreadable: the job fails and is retried; skipped&lt;br/&gt;when the text was removed (checked FOR SHARE,&lt;br/&gt;G3) or the demo post purged"]:::done
     E1 --&gt; E2 --&gt; E3
   end
 

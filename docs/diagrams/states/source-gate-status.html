@@ -69,7 +69,7 @@ stateDiagram-v2
   collecting --&gt; blocked_by_source : 401, 403, 451, bot challenge or robots disallow, cooldown 1 h doubling to 24 h
   blocked_by_source --&gt; collecting : cooldown over and the one probe run succeeds
   blocked_by_source --&gt; blocked_by_source : probe refused again, cooldown doubles
-  blocked_by_source --&gt; collecting : SOURCE_SLUG_RESET date on or after the refusal with a valid GATE_APPROVED_BY, or source-admin reset (needs GATE_APPROVED_BY)
+  blocked_by_source --&gt; collecting : SOURCE_SLUG_RESET date on or after the refusal and not in the future with a valid GATE_APPROVED_BY, or source-admin reset (needs GATE_APPROVED_BY)
 
   state collecting {
     direction LR
