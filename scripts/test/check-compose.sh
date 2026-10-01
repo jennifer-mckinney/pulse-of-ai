@@ -32,7 +32,9 @@
 #   R4    (docs audit round 4) web receives RETENTION_OVERDUE_GRACE_MINUTES
 #         and PG_POOL_MAX from the operator's settings (the worker gets the
 #         same values; migrate / populate keep the pool default); no role
-#         receives the unused CORRELATION_MIN_CONFIDENCE
+#         receives a value for the removed CORRELATION_MIN_CONFIDENCE, not
+#         even the worker when the operator's env file still carries it
+#         (the worker blanks its env-file copy)
 #
 # CI runs it in the docker-images job (.github/workflows/ci.yml);
 # tests/integration/composeConfig.test.js runs it under jest.
@@ -251,11 +253,15 @@ check "python/Dockerfile installs with --require-hashes" \
 # worker too. Neither is a secret (the F9-2 split is unaffected).
 r4_file=$(mktemp "${TMPDIR:-/tmp}/compose-check-r4.XXXXXX")
 trap 'rm -f "$probe_file" "$r4_file"' EXIT
-printf 'PG_POOL_MAX=99\nRETENTION_OVERDUE_GRACE_MINUTES=99\n' > "$r4_file"
+# The legacy CORRELATION_MIN_CONFIDENCE is in the env file too: an upgraded
+# operator .env still carries it, and the worker loads that file whole. It is
+# in the interpolation env as well (standup's .env is both), so a `KEY:` null
+# entry — which compose re-resolves from there — cannot pass for a blank.
+printf 'PG_POOL_MAX=99\nRETENTION_OVERDUE_GRACE_MINUTES=99\nCORRELATION_MIN_CONFIDENCE=0.85\n' > "$r4_file"
 cfg_r4=$(env -i PATH="$PATH" HOME="$HOME" ${DOCKER_HOST:+DOCKER_HOST="$DOCKER_HOST"} \
     ${DOCKER_CONTEXT:+DOCKER_CONTEXT="$DOCKER_CONTEXT"} \
     POSTGRES_PASSWORD=compose-check REDIS_PASSWORD=compose-check PULSE_ENV_FILE="$r4_file" \
-    RETENTION_OVERDUE_GRACE_MINUTES=37 PG_POOL_MAX=17 \
+    RETENTION_OVERDUE_GRACE_MINUTES=37 PG_POOL_MAX=17 CORRELATION_MIN_CONFIDENCE=0.85 \
     docker compose --project-directory "$ROOT" -f "$ROOT/docker-compose.yml" \
         --env-file /dev/null -p compose-check --profile full --profile demo \
         config --format json)
@@ -276,9 +282,10 @@ r4_unset=$(jq -r '.services as $s | ["web", "worker"][] | . as $n
     | (($e.PG_POOL_MAX // ""), ($e.RETENTION_OVERDUE_GRACE_MINUTES // "")) | select(. != "")
     | "\($n) has the non-empty default \"\(.)\" (unset must mean the code default)"' <<< "$cfg")
 check "unset PG_POOL_MAX / RETENTION_OVERDUE_GRACE_MINUTES resolve empty (code defaults)" "$r4_unset"
-r4_corr=$(jq -r '.services | to_entries[] | select(.value.environment.CORRELATION_MIN_CONFIDENCE != null)
-    | "\(.key) receives the unused CORRELATION_MIN_CONFIDENCE"' <<< "$cfg_r4")
-check "no role receives the unused CORRELATION_MIN_CONFIDENCE" "$r4_corr"
+r4_corr=$(jq -r '.services | to_entries[]
+    | (.value.environment.CORRELATION_MIN_CONFIDENCE // "") as $v | select($v != "")
+    | "\(.key) receives the unused CORRELATION_MIN_CONFIDENCE (\"\($v)\")"' <<< "$cfg_r4")
+check "no role receives the unused CORRELATION_MIN_CONFIDENCE, even from the env file" "$r4_corr"
 
 #@@CHECKS@@
 

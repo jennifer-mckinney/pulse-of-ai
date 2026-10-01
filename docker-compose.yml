@@ -50,9 +50,12 @@ x-app-env: &app-env
   RETENTION_DETAIL_DAYS: ${RETENTION_DETAIL_DAYS:-90}
   # Minutes past a source's retention window before text still stored counts
   # as overdue (default 60, 10..1440; src/collectors/retention-overdue.js).
-  # Every role gets the SAME value: the worker opens the retention_overdue
-  # alert with it, and web reports /api/health's retention_overdue (which the
-  # watchdog's retention_overdue condition reads) with it. Not a secret.
+  # Every role built on this anchor (migrate, web, worker, populate) gets the
+  # SAME value: the worker opens the retention_overdue alert with it, and web
+  # reports /api/health's retention_overdue with it. The watchdog does NOT
+  # receive it (its environment is its own, least privilege): its
+  # retention_overdue condition follows web's verdict through /api/health.
+  # Not a secret.
   RETENTION_OVERDUE_GRACE_MINUTES: ${RETENTION_OVERDUE_GRACE_MINUTES:-}
   DEMO_FEED_INTERVAL_MS: ${DEMO_FEED_INTERVAL_MS:-150000}
   DEMO_FEED_BATCH: ${DEMO_FEED_BATCH:-}
@@ -411,6 +414,13 @@ services:
       # env file above carries it, so it is blanked here (environment wins
       # over env_file). scripts/test/check-compose.sh enforces it.
       SMTP_PASSWORD: ""
+      # Removed setting (PR #37, nothing reads it): an upgraded operator env
+      # file can still carry CORRELATION_MIN_CONFIDENCE, and the worker loads
+      # that file whole. Compose cannot drop an env_file key — a null entry
+      # here is re-resolved from the interpolation env, which under standup
+      # is the same .env — so it is blanked (environment wins over env_file).
+      # scripts/test/check-compose.sh enforces it with a fixture env file.
+      CORRELATION_MIN_CONFIDENCE: ""
       # PR #22 security L1: the per-deployment correlation salt goes to the
       # worker ONLY (the embed and correlate jobs compute pseudonyms).
       CORRELATION_SALT: ${CORRELATION_SALT:-}
