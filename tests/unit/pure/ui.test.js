@@ -863,6 +863,21 @@ describe('demoAuditModel — prototype buildAudit receipt', () => {
         expect(m.steps[2].score).toBe(post.relevance);
         expect(m.steps[2].scoreKind).toBe('percent');
     });
+
+    // The offline demo receipt must describe the real ingest system:
+    // the content hash is an integrity check (audit_narration@1.4.0
+    // INGEST_HASH_NOTE), not a join key, and duplicates are dropped by
+    // UNIQUE(source_id, external_id) — there is no simhash anywhere.
+    test('ingestion step matches the real system (hash wording + dedupe rule)', () => {
+        const { INGEST_HASH_NOTE } = require('../../../src/config/audit-narration');
+        const post = P.demoPostsForCity(posCity(), NOW)[0];
+        const ingest = P.demoAuditModel(post).steps[0];
+        expect(ingest.audiences.researcher.startsWith(INGEST_HASH_NOTE)).toBe(true);
+        expect(ingest.audiences.researcher).not.toMatch(/immutable join key|join key across/);
+        expect(ingest.audiences.config).not.toHaveProperty('dedupe');
+        expect(ingest.audiences.config.dedup_strategy).toMatch(/UNIQUE\(source_id, external_id\)/);
+        expect(JSON.stringify(ingest)).not.toMatch(/simhash/i);
+    });
 });
 
 // ── Misc ────────────────────────────────────────────────────────────────────
