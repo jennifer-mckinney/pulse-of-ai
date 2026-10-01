@@ -29,6 +29,10 @@
 #         containers) is pinned by @sha256 digest
 #   P9-7  every service rotates json-file logs; the worker has a healthcheck
 #         and a stop_grace_period of at least 150 s
+#   R4    (docs audit round 4) web receives RETENTION_OVERDUE_GRACE_MINUTES
+#         and PG_POOL_MAX from the operator's settings (the worker gets the
+#         same values; migrate / populate keep the pool default); no role
+#         receives the unused CORRELATION_MIN_CONFIDENCE
 #
 # CI runs it in the docker-images job (.github/workflows/ci.yml);
 # tests/integration/composeConfig.test.js runs it under jest.
@@ -238,6 +242,43 @@ check "torch is the CPU build from the lock" \
     "$(grep -qE '^torch==[0-9.]+\+cpu' "$req" || echo 'torch is not pinned to a +cpu build')"
 check "python/Dockerfile installs with --require-hashes" \
     "$(grep -qE 'pip install --require-hashes -r requirements-service.txt' "$ROOT/python/Dockerfile" || echo 'no --require-hashes install')"
+
+# ─── R4: web gets the retention grace and its pool size ──────────────────────
+# /api/health's retention_overdue (and the watchdog condition that reads it)
+# uses web's RETENTION_OVERDUE_GRACE_MINUTES, and the worker budgets web's pool
+# from PG_POOL_MAX: both must reach web, with the value the worker sees. The
+# env file carries DIFFERENT values to prove the interpolated ones win on the
+# worker too. Neither is a secret (the F9-2 split is unaffected).
+r4_file=$(mktemp "${TMPDIR:-/tmp}/compose-check-r4.XXXXXX")
+trap 'rm -f "$probe_file" "$r4_file"' EXIT
+printf 'PG_POOL_MAX=99\nRETENTION_OVERDUE_GRACE_MINUTES=99\n' > "$r4_file"
+cfg_r4=$(env -i PATH="$PATH" HOME="$HOME" ${DOCKER_HOST:+DOCKER_HOST="$DOCKER_HOST"} \
+    ${DOCKER_CONTEXT:+DOCKER_CONTEXT="$DOCKER_CONTEXT"} \
+    POSTGRES_PASSWORD=compose-check REDIS_PASSWORD=compose-check PULSE_ENV_FILE="$r4_file" \
+    RETENTION_OVERDUE_GRACE_MINUTES=37 PG_POOL_MAX=17 \
+    docker compose --project-directory "$ROOT" -f "$ROOT/docker-compose.yml" \
+        --env-file /dev/null -p compose-check --profile full --profile demo \
+        config --format json)
+r4_grace=$(jq -r '.services as $s | ["web", "worker", "migrate", "populate"][]
+    | . as $n | ($s[$n].environment.RETENTION_OVERDUE_GRACE_MINUTES // "") as $v
+    | select($v != "37") | "\($n) has RETENTION_OVERDUE_GRACE_MINUTES \"\($v)\", expected \"37\""' <<< "$cfg_r4")
+check "web and worker receive RETENTION_OVERDUE_GRACE_MINUTES (x-app-env)" "$r4_grace"
+r4_pool=$(jq -r '.services as $s
+    | (["web", "worker"][] | . as $n | ($s[$n].environment.PG_POOL_MAX // "") as $v
+        | select($v != "17") | "\($n) has PG_POOL_MAX \"\($v)\", expected \"17\""),
+      (["migrate", "populate"][] | . as $n | ($s[$n].environment.PG_POOL_MAX // "") as $v
+        | select($v != "") | "\($n) has PG_POOL_MAX \"\($v)\" (one-shot roles keep the default)"),
+      (($s.watchdog.environment.PG_POOL_MAX // "") as $v
+        | select($v != "2") | "watchdog has PG_POOL_MAX \"\($v)\", expected \"2\"")' <<< "$cfg_r4")
+check "web and worker receive the same PG_POOL_MAX; the watchdog stays pinned to 2" "$r4_pool"
+r4_unset=$(jq -r '.services as $s | ["web", "worker"][] | . as $n
+    | ($s[$n].environment // {}) as $e
+    | (($e.PG_POOL_MAX // ""), ($e.RETENTION_OVERDUE_GRACE_MINUTES // "")) | select(. != "")
+    | "\($n) has the non-empty default \"\(.)\" (unset must mean the code default)"' <<< "$cfg")
+check "unset PG_POOL_MAX / RETENTION_OVERDUE_GRACE_MINUTES resolve empty (code defaults)" "$r4_unset"
+r4_corr=$(jq -r '.services | to_entries[] | select(.value.environment.CORRELATION_MIN_CONFIDENCE != null)
+    | "\(.key) receives the unused CORRELATION_MIN_CONFIDENCE"' <<< "$cfg_r4")
+check "no role receives the unused CORRELATION_MIN_CONFIDENCE" "$r4_corr"
 
 #@@CHECKS@@
 
