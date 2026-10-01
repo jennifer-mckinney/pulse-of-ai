@@ -73,7 +73,7 @@ When it finishes, open **http://localhost:3000**: the globe, the eleven chapters
 3. Starts the compose `full` profile. A one-shot `migrate` job applies the 49 migrations (001–065; the numbering has gaps) and the seed; web, the worker and the watchdog (and populate, in the demo profile) start only after it exits successfully.
 4. Waits for health, with timeouts, and prints a failing service's logs.
 5. Populates data: one real collection run, then demo data only if the trailing hour has no live posts, and starts the `populate` demo-fallback service.
-6. Runs a smoke check: the API, the page and the page's own data calls, population counts, the worker heartbeat, one receipt with its four audience views and bias lineage, and `npm run replay` on that post, which must PASS. It ends with a population summary that labels the hour LIVE, MIXED or DEMO.
+6. Runs a smoke check: the API, the page and the page's own data calls, population counts, the worker heartbeat, one receipt with its four audience views and bias lineage, and `npm run replay` on that post, which must PASS. It ends with a population summary that labels the trailing hour LIVE, MIXED, DEMO or NONE (NO DATA when nothing is stored at all).
 
 Re-running is safe: images come from the build cache, running containers are kept, and a second demo batch is skipped while the trailing hour is full. Flags: `npm run standup -- --help`. `--yes` never prompts, `--no-build` skips the image build, `--demo` adds a fresh demo batch. Timeouts: `STANDUP_TIMEOUT` (core services, default 300 s) and `STANDUP_EMBEDDINGS_TIMEOUT` (first model download, default 900 s).
 
@@ -199,7 +199,7 @@ Demo data is only the fallback, used when collection yields nothing in the trail
 - **Real pipeline, fictional input.** The posts are invented text with no people, handles or personal data. They go through the real ingest normaliser, the real sentiment, relevance and discourse scorers, the real bias checks and the real embed worker. Every score has a genuine audit trail, and `npm run replay -- --post <id>` reports PASS.
 - **Labelled in the data.** Demo posts belong to inactive `demo_<category>` sources named "Demo feed — <Category> (fictional)", their text starts with `[Demo]`, and their jobs are recorded as `triggered_by = 'demo'`.
 - **Real timestamps.** Each demo post carries the time it was actually ingested; nothing is backdated. The `populate` service adds `DEMO_FEED_BATCH` posts (default 16, two per category) every `DEMO_FEED_INTERVAL_MS` (default 150 s) while the hour has no live posts; stop it and demo posts age out.
-- **Shown as DEMO on the page.** `GET /api/health` reports `data_mode` (`live`, `demo`, `mixed` or `none`) for exactly what the globe shows, every aggregated row carries `demo_posts` / `data_mode`, and every receipt carries `data_origin`. With demo data the intro kicker reads DEMO, chapter titles carry a "— Demo data" marker, and receipts say the post is fictional demo content.
+- **Shown as DEMO on the page.** `GET /api/health` reports `data_mode` (`live`, `demo`, `mixed` or `none`) for exactly what the globe shows, every row of `GET /api/posts/aggregated-by-location` (the globe's city aggregation) carries `demo_posts` / `data_mode`, and every receipt carries `data_origin`. With demo data the intro kicker reads DEMO, chapter titles carry a "— Demo data" marker, and receipts say the post is fictional demo content.
 
 The health drawer counts demo feeds separately from the 52 registry sources.
 
@@ -299,7 +299,7 @@ npm run dev                 # Express on http://localhost:3000
 node --env-file=.env src/workers/start.js   # in a second terminal: the worker (collection, scoring, maintenance)
 ```
 
-`npm run dev` serves the page and the API only. Collection, scoring, the bias checks and the maintenance schedules all run in the worker, so start it too. There is no npm script for it, and it must get `.env` from Node: the worker builds its queue connection from `REDIS_HOST`, `REDIS_PORT` and `REDIS_PASSWORD` before any module loads `.env`, so a plain `node src/workers/start.js` connects without the password. `--env-file=.env` (Node 22) loads the file first. Without `COLLECTOR_CONTACT_URL` it registers the maintenance schedules but closes every source (`gate_closed` in its log); see [Turning on live collection](#turning-on-live-collection). `GET /api/health` shows `worker.alive: true` once its heartbeat is up. Stop it with Ctrl-C; it finishes in-flight jobs first.
+`npm run dev` serves the page and the API only. Collection, scoring, the bias checks and the maintenance schedules all run in the worker, so start it too. There is no npm script for it, and it must get `.env` from Node: the worker builds its queue connection from `REDIS_HOST`, `REDIS_PORT` and `REDIS_PASSWORD` before any module loads `.env`, so a plain `node src/workers/start.js` connects without the password. `--env-file=.env` (Node 22) loads the file first. Without `COLLECTOR_CONTACT_URL` it registers the maintenance schedules but schedules no source (the first time it sees a source closed it logs `[scheduler] <slug>: gate_closed (<status>)`; a database that already recorded them closed, for example after `npm run standup`, logs nothing more); see [Turning on live collection](#turning-on-live-collection). `GET /api/health` shows `worker.alive: true` once its heartbeat is up. Stop it with Ctrl-C; it finishes in-flight jobs first.
 
 Optional embeddings service on the host (Python 3.11 or newer; CI tests 3.11 and the image runs 3.13):
 
@@ -307,10 +307,10 @@ Optional embeddings service on the host (Python 3.11 or newer; CI tests 3.11 and
 python3 -m venv python/.venv
 python/.venv/bin/pip install "torch==2.12.1" --index-url https://download.pytorch.org/whl/cpu   # CPU-only torch first; PyPI's default build pulls ~2 GB of CUDA libraries
 python/.venv/bin/pip install -r python/requirements.txt
-bash python/start.sh        # uvicorn on port 8000 (EMBEDDINGS_SERVICE_URL)
+bash python/start.sh        # uvicorn on 0.0.0.0:8000, ALL interfaces (EMBEDDINGS_SERVICE_URL); the API is unauthenticated
 ```
 
-If `python3 --version` is older than 3.11, name a newer interpreter instead (for example `python3.11 -m venv python/.venv`). The torch pin has no `+cpu` suffix on purpose, so the same line works on macOS and Linux: the CPU index serves `torch 2.12.1` on macOS and `2.12.1+cpu` on Linux, and `==2.12.1` matches both. Keep its version equal to the `torch` pin in `python/requirements-service.in`.
+If `python3 --version` is older than 3.11, name a newer interpreter instead (for example `python3.11 -m venv python/.venv`). The torch pin has no `+cpu` suffix on purpose, so the same line works on macOS and Linux: the CPU index serves `torch 2.12.1` on macOS and `2.12.1+cpu` on Linux, and `==2.12.1` matches both. Keep its version equal to the `torch` pin in `python/requirements-service.in`. `python/start.sh` listens on every interface, so while it runs anyone who can reach this machine on port 8000 can use the unauthenticated embeddings API; run it only on a trusted network or behind a host firewall.
 
 `npm run dev` listens on 127.0.0.1 unless `HOST` or `PULSE_BIND_ADDR` names another address. Bound beyond loopback, or reached through a reverse proxy, `POST /api/refresh` is refused until you set `REFRESH_TOKEN`; once it is set, every refresh must send it in `X-Refresh-Token` (see [Security and privacy](#security-and-privacy)).
 

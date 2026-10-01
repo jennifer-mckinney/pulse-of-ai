@@ -6,8 +6,8 @@
 | **Product** | The Pulse of AI — global real-time AI discourse dashboard |
 | **Version** | 1.1 |
 | **Date** | 2026-09-29 |
-| **Status** | Approved baseline, aligned with Technical Specification v1.2.0 |
-| **Related documents** | `docs/requirements/BRD.md`, `docs/TECHNICAL_SPEC.md` (v1.2.0), `docs/adr/0001-source-registry-and-collection.md`; superseded: `docs/plans/2026-07-05-globe-storytelling-design.md` |
+| **Status** | Approved baseline, aligned with Technical Specification v1.2.1 |
+| **Related documents** | `docs/requirements/BRD.md`, `docs/TECHNICAL_SPEC.md` (v1.2.1), `docs/adr/0001-source-registry-and-collection.md`; superseded: `docs/plans/2026-07-05-globe-storytelling-design.md` |
 
 **v1.1 changes (2026-09-29), aligned to code per independent audit, 2026-09-29:** §1 (52-source registry, 8 categories, Canvas-2D globe); FR-1, FR-2, FR-4, FR-5, FR-6, FR-9, FR-14, FR-15, FR-28 (implementation status noted; unbuilt parts marked PLANNED); §4.3 FR-17 to FR-25 rewritten to the shipped FuN.zip prototype design (11 beats, Canvas-2D globe, demo labelling, legal notices), per Jennifer's ruling of 2026-09-28; §6.3 to §6.6 acceptance criteria; §7 roadmap status; §8 traceability; NFR-3; §10 question 2. Requirements not yet built stay as requirements and are marked **PLANNED — not implemented as of spec v1.2.0**. The status notes were reconciled with PR #22 (`master` @ `973cad8`) on 2026-09-29: FR-2, FR-4, FR-5, FR-28, NFR-10, NFR-11, §6.6, §7 and §10 question 4. Reconciled again with PRs #24–#34 (`master` @ `7291490`) on 2026-09-30: FR-4 and §7. The round-3 audit pass of the same date also corrected FR-1, FR-2, FR-3, NFR-3, §6.1 and §9.
 
@@ -227,6 +227,6 @@ Status reflects `master` @ `7291490` (PRs #8, #9, #10, #22 and #24–#34) as of 
 Carried from spec §16 (must be resolved before the affected work begins):
 
 1. **Location inference** for platforms without location metadata — recommended GDPR-safe combination is community-geography mapping plus content NLP.
-2. **Commercial platform API cost** (~$100/month) — resolved by the registry: X stays a registry source on its paid route, closed until its key is set (spec §16, §17).
+2. **Commercial platform API cost** (~$100/month) — resolved by the registry: X stays a registry source on its paid route, closed until its key and the named approval `GATE_APPROVED_BY` are set (ADR 0001 G5; spec §16, §17).
 3. **Academic source access** — resolved by the registry: arXiv and PubMed are open; SpringerLink needs a free key; ScienceDirect and JSTOR need approval; IEEE Xplore needs a licence; ResearchGate is blocked. No citation-graph source (Semantic Scholar, ACM Digital Library) is in the registry (spec §16, §17).
 4. **Correlation cold start** — intended position: single-platform authors receive no pseudonymous ID and are counted as unlinked. Not implemented: the signal design is pending a DPIA (correlation gate; `correlateUser()` throws and no profile is ever created; spec §16, §20).
