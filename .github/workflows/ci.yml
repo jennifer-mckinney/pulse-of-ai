@@ -325,11 +325,18 @@ jobs:
       - name: Migrate dev DB
         run: npm run migrate
 
+      # The fixture scripts refuse any non-e2e database
+      # (scripts/lib/fixture-db-guard.js); this job's pulse_of_ai is a
+      # disposable service container, so it is named as such.
       - name: Seed dev DB
         run: npm run seed && npm run seed:e2e
+        env:
+          FIXTURE_DB_ALLOW: pulse_of_ai
 
       - name: Freshen seed timestamps
         run: bash scripts/test/freshen-seed.sh
+        env:
+          FIXTURE_DB_ALLOW: pulse_of_ai
 
       - name: Run Playwright
         run: npx playwright test

@@ -531,22 +531,35 @@
     // mapPassSummary: payload.pass_summary → one feed row per layer covering
     // every passing check in the window (count + latest value in the served
     // detail; last pass as the row time, first pass appended).
+    // Grumpy final #2: when the LATEST row is an insufficient sample
+    // (latest_insufficient — since bias@1.6.0 it states a value that was
+    // never compared with τ, possibly far above it) the row is 'n-a' (badge
+    // N/A, neutral colour), not a green PASS. When the window holds any
+    // insufficient-sample row, its first time is the first CHECK, which may
+    // not have been a pass.
     function mapPassSummary(payload) {
         const rows = payload && Array.isArray(payload.pass_summary)
             ? payload.pass_summary : [];
         return rows.map((p) => {
             const first = fmtAlertTime(p.first_time);
+            const firstLabel = Number(p.insufficient) > 0 ? ' First check ' : ' First pass ';
             return {
                 id: 'pass-' + p.assessment_type,
-                severity: 'pass',
+                severity: p.latest_insufficient === true ? 'n-a' : 'pass',
                 summary: true,
                 time: fmtAlertTime(p.last_time),
                 layer: p.layer || stageLabel(p.assessment_type),
-                detail: (p.detail || '') + (first ? ' First pass ' + first + '.' : ''),
+                detail: (p.detail || '') + (first ? firstLabel + first + '.' : ''),
                 citation: p.citation || null,
                 methodology: methodologyTag(p),
             };
         });
+    }
+
+    // alertBadge: the feed row's badge text ('n-a' reads N/A, as the
+    // fairness-layer rows do; layerRowView).
+    function alertBadge(severity) {
+        return severity === 'n-a' ? 'N/A' : String(severity).toUpperCase();
     }
 
     // historyNotice: truncation notice when the flagged-row safety cap bit;
@@ -1135,6 +1148,7 @@
         fmtAlertTime,
         mapBiasHistory,
         mapPassSummary,
+        alertBadge,
         historyNotice,
         healthBanner,
         watchdogModel,
@@ -2110,7 +2124,7 @@
             const row = el('div', 'alert-row sev-' + a.severity
                 + (a.summary ? ' alert-summary' : ''));
             row.appendChild(el('span', 'alert-sev mono',
-                String(a.severity).toUpperCase()));
+                alertBadge(a.severity)));
             const main = el('div', 'alert-main');
             const layerLine = el('div', 'alert-layer', a.layer + ' ');
             layerLine.appendChild(el('span', 'alert-time mono', a.time));

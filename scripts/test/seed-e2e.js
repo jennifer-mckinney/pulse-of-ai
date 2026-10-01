@@ -30,6 +30,9 @@
 'use strict';
 
 require('dotenv').config();
+// Diagnosis 2026-10-01: synthetic posts under REAL sources — e2e or
+// disposable databases only, never the dev database (scripts/lib/fixture-db-guard.js).
+try { require('../lib/fixture-db-guard').assertFixtureTarget(process.env); } catch (err) { console.error(require('../../src/collectors/redact').scrub(`seed-e2e: ${err.message}`)); process.exit(1); }
 const crypto = require('crypto');
 const { dbGet, dbAll, dbRun, closePool } = require('../../src/db/connection');
 

@@ -58,6 +58,12 @@ function fakeEmbedding(fill = 0.1) {
     return Array(EMBEDDING_DIMENSIONS).fill(fill);
 }
 function mockEmbeddingService(onCall = async () => {}) {
+    // GET /health reports the registered methodology (grumpy final #3: the
+    // stamp is verified before a vector is stored).
+    const reg = require('../../src/config/methodology-registry').METHODOLOGY_VERSIONS
+        .filter(m => m.component === 'embedding').pop();
+    jest.spyOn(axios, 'get').mockResolvedValue({ status: 200, data: {
+        model: reg.model_name, revision: reg.config.revision, library: reg.config.library } });
     return jest.spyOn(axios, 'post').mockImplementation(async (url, body) => {
         await onCall(body);
         return { data: { data: [{ index: 0, embedding: fakeEmbedding() }] } };
@@ -214,7 +220,7 @@ describe('embed job for a post whose text retention removed', () => {
 describe('other storage errors are not mistaken for a removal', () => {
     it('a vector the column rejects (wrong dimensions) fails the job', async () => {
         const postId = await insertPostWithFullPipeline(liveSrc, job, mv, { externalId: 'live-dims' });
-        jest.spyOn(axios, 'post').mockResolvedValue({ data: { data: [{ index: 0, embedding: [0.1, 0.2, 0.3] }] } });
+        mockEmbeddingService().mockResolvedValue({ data: { data: [{ index: 0, embedding: [0.1, 0.2, 0.3] }] } });
         await expect(embedPost(postId)).rejects.toThrow(/dimensions/i);
         expect(await embeddingCount(postId)).toBe(0);
     });

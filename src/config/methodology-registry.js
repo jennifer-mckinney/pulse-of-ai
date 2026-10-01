@@ -806,8 +806,12 @@ const METHODOLOGY_VERSIONS = [
 // ingest@1.8.0 and audit_narration@1.4.0 — content-hash wording correction
 // (Jennifer McKinney 2026-09-30: "Register new versions (Recommended)";
 // migration 066). Every released ingest row (1.0.0 to 1.7.0) called the
-// SHA-256 content hash a "join key" (justification, and config.dedup_strategy
-// from 1.1.0 on), and the receipt's ingestion step said the same. No query
+// SHA-256 content hash a "join key" in its justification (1.0.0 to 1.5.0)
+// and/or config.dedup_strategy (1.1.0 to 1.7.0): 1.0.0 only in the
+// justification ("immutable, non-reversible join key"), 1.6.0 and 1.7.0 only
+// in config.dedup_strategy. (Migration 066's header says every justification
+// does; it is released and stays as it is.) The receipt's ingestion step
+// said the same. No query
 // joins, reads or deduplicates on raw_posts.content_hash: src/pipeline/
 // ingest.js writes it once; the sentiment, relevance and discourse steps
 // record the same digest of the text they scored as decision_audit_log.

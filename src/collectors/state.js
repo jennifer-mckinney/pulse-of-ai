@@ -220,7 +220,13 @@ async function endCooldown(sourceId, probedDeniedAt) {
         `UPDATE source_collection_state
          SET access_denied_at = NULL, access_denied_status = NULL, access_denied_kind = NULL,
              refused_until = NULL, access_denied_headers = NULL,
-             probation_until = NOW() + make_interval(secs => $2::float8), updated_at = NOW()
+             probation_until = NOW() + make_interval(secs => $2::float8), updated_at = NOW(),
+             -- Grumpy final #4: a row refused before migration 062 has no
+             -- last_refused_at (062 adds it without a backfill, rewriting no
+             -- row). Carry the refusal time over (the right-hand side reads
+             -- the PRE-update access_denied_at), so an approved
+             -- SOURCE_<SLUG>_RESET can clear this probation like any other.
+             last_refused_at = COALESCE(last_refused_at, access_denied_at)
          -- JS Dates hold milliseconds, timestamptz microseconds: match the
          -- probed refusal within 1 ms (a newer refusal is a later run,
          -- whole seconds apart).

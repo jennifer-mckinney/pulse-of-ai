@@ -768,6 +768,34 @@ describe('migration 066 ↔ methodology registry (ingest@1.8.0 + audit_narration
         expect(reg.justification).toMatch(/^ingest@1\.8\.0 corrects wording only/);
     });
 
+    // Grumpy final #9: the registry comment above ingest@1.8.0 said every
+    // released row has "join key" in its justification. Only 1.0.0 to 1.5.0
+    // do; 1.1.0 to 1.7.0 say it in config.dedup_strategy. The facts are
+    // pinned here, and the comment must state them (migration 066's header
+    // is released and stays as it is).
+    test('where each released ingest row says "join key", and the registry comment says the same', () => {
+        const where = v => {
+            const r = registry('ingest', v);
+            return [/join key/.test(r.justification) && 'justification',
+                /join key/.test(r.config.dedup_strategy || '') && 'dedup_strategy'].filter(Boolean);
+        };
+        expect(Object.fromEntries(OLD_INGEST.map(v => [v, where(v)]))).toEqual({
+            '1.0.0': ['justification'],
+            '1.1.0': ['justification', 'dedup_strategy'],
+            '1.2.0': ['justification', 'dedup_strategy'],
+            '1.3.0': ['justification', 'dedup_strategy'],
+            '1.4.0': ['justification', 'dedup_strategy'],
+            '1.5.0': ['justification', 'dedup_strategy'],
+            '1.6.0': ['dedup_strategy'],
+            '1.7.0': ['dedup_strategy'],
+        });
+        const src = fs.readFileSync(path.join(__dirname, '../../../src/config/methodology-registry.js'), 'utf8');
+        const comment = src.slice(src.indexOf('// ingest@1.8.0 and audit_narration@1.4.0'))
+            .split('\n').filter(l => l.startsWith('//')).join(' ').replace(/\s*\/\/\s*/g, ' ');
+        expect(comment).toMatch(/justification \(1\.0\.0 to 1\.5\.0\) and\/or config\.dedup_strategy \(1\.1\.0 to 1\.7\.0\)/);
+        expect(comment).not.toMatch(/a "join key" \(justification, and config\.dedup_strategy\s+from 1\.1\.0 on\)/);
+    });
+
     test('ingest@1.8.0 is current and is 1.7.0 with only the wording keys changed', () => {
         expect(CURRENT_VERSIONS.ingest).toBe('1.8.0');
         expect(latest('ingest').version).toBe('1.8.0');

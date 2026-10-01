@@ -36,6 +36,19 @@ function mockServiceResponse(embedding = fakeEmbedding()) {
     });
 }
 
+// The service's GET /health as python/embeddings_service.py serves it when
+// it runs the registered embedding methodology (model, revision, library).
+const { METHODOLOGY_VERSIONS } = require('../../src/config/methodology-registry');
+const REGISTERED = METHODOLOGY_VERSIONS.filter(m => m.component === 'embedding').pop();
+const HEALTHY = Object.freeze({
+    status: 'healthy', model: REGISTERED.model_name, revision: REGISTERED.config.revision,
+    library: REGISTERED.config.library, model_loaded: true, embedding_dims: 384,
+});
+/** Mock GET /health (grumpy final #3: checked before a vector is stamped). */
+function mockHealth(body = HEALTHY, status = 200) {
+    return jest.spyOn(axios, 'get').mockResolvedValue({ status, data: body });
+}
+
 async function insertSource() {
     const row = await dbRun(
         `INSERT INTO data_sources (name, display_name, source_type, category)
@@ -95,6 +108,9 @@ describe('generateEmbedding()', () => {
 // ─── saveEmbedding() ──────────────────────────────────────────────────────────
 
 describe('saveEmbedding()', () => {
+    beforeEach(() => mockHealth());
+    afterEach(() => jest.restoreAllMocks());
+
     it('writes a row to post_embeddings', async () => {
         const srcId  = await insertSource();
         const postId = await insertRawPost(srcId, 'save-emb-1');
@@ -109,17 +125,21 @@ describe('saveEmbedding()', () => {
         expect(row.raw_post_id).toBe(postId);
     });
 
-    it('stores the model_name on the row', async () => {
+    // Copilot review on PR #43: a vector stored under another model name
+    // must not carry the registered methodology, even with a verified
+    // service — the stamp is gated on the stored model_name too.
+    it('stores the model_name on the row; another model is stamped NULL', async () => {
         const srcId  = await insertSource();
         const postId = await insertRawPost(srcId, 'save-emb-2');
 
         await saveEmbedding(postId, fakeEmbedding(), 'test-model-v1');
 
         const row = await dbGet(
-            'SELECT model_name FROM post_embeddings WHERE raw_post_id = $1',
+            'SELECT model_name, methodology_version FROM post_embeddings WHERE raw_post_id = $1',
             [postId],
         );
         expect(row.model_name).toBe('test-model-v1');
+        expect(row.methodology_version).toBeNull();
     });
 
     it('is idempotent: re-saving the same postId does not create a duplicate row', async () => {
@@ -183,6 +203,7 @@ describe('saveEmbedding()', () => {
 // ─── embedPost() ──────────────────────────────────────────────────────────────
 
 describe('embedPost()', () => {
+    beforeEach(() => mockHealth());
     afterEach(() => jest.restoreAllMocks());
 
     it('generates and stores an embedding for the post', async () => {
@@ -229,5 +250,100 @@ describe('embedPost()', () => {
         await expect(
             embedPost('00000000-0000-0000-0000-000000000000'),
         ).rejects.toThrow(/not found/i);
+    });
+});
+
+// ─── Grumpy final #3: the running service must be the registered one ─────────
+// The stamp used to depend only on the worker's EMBED_MODEL /
+// EMBED_MODEL_REVISION. The library (sentence-transformers==6.1.0 in
+// embedding@1.1.0) was never compared with the service actually running, so
+// a host .venv still on 2.7.0 got its vectors labelled 1.1.0. Now every
+// vector is stamped only after GET /health reports the registered model,
+// revision AND library; otherwise it is stored with methodology_version NULL
+// (the convention of migration 012 for a vector that may not match) and the
+// mismatch is logged once per process. An unreachable /health fails the job
+// (BullMQ retries it) rather than storing an unverified stamp.
+
+describe('the embedding methodology stamp is verified against GET /health (grumpy final #3)', () => {
+    let errors;
+    beforeEach(() => { errors = jest.spyOn(console, 'error').mockImplementation(() => {}); });
+    afterEach(() => jest.restoreAllMocks());
+
+    async function embedOne(externalId) {
+        const postId = await insertRawPost(await insertSource(), externalId);
+        mockServiceResponse();
+        const result = await embedPost(postId);
+        const row = await dbGet('SELECT methodology_version FROM post_embeddings WHERE raw_post_id = $1', [postId]);
+        return { postId, result, stamp: row ? row.methodology_version : undefined };
+    }
+
+    it('the registered model, revision and library: stamped with the current version, /health asked', async () => {
+        const health = mockHealth();
+        const { result, stamp } = await embedOne('gf3-ok');
+        expect(stamp).toBe(CURRENT_VERSIONS.embedding);
+        expect(result.methodologyVersion).toBe(CURRENT_VERSIONS.embedding);
+        expect(health).toHaveBeenCalledWith(expect.stringMatching(/\/health$/), expect.any(Object));
+        expect(errors).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        ['an older library (a .venv built before the bump)', { library: 'sentence-transformers==2.7.0' }, /library "sentence-transformers==2\.7\.0" \(registered "sentence-transformers==6\.1\.0"\)/],
+        ['no library field (another OpenAI-compatible server)', { library: undefined }, /library null \(registered "sentence-transformers==6\.1\.0"\)/],
+        ['another model', { model: 'other/model' }, /model "other\/model"/],
+        ['another revision', { revision: 'main' }, /revision "main"/],
+    ])('%s: stored with methodology_version NULL and logged', async (_label, change, logged) => {
+        mockHealth({ ...HEALTHY, ...change });
+        const { result, stamp } = await embedOne(`gf3-${Object.keys(change)[0]}-${Math.random()}`);
+        expect(stamp).toBeNull();
+        expect(result.methodologyVersion).toBeNull();
+        expect(errors).toHaveBeenCalledTimes(1);
+        expect(errors.mock.calls[0][0]).toMatch(/embedding@1\.1\.0/);
+        expect(errors.mock.calls[0][0]).toMatch(logged);
+        expect(errors.mock.calls[0][0]).toMatch(/methodology_version NULL/);
+    });
+
+    it('the same mismatch is logged once per process, every vector still NULL', async () => {
+        mockHealth({ ...HEALTHY, library: 'sentence-transformers==6.0.9' });
+        const a = await embedOne('gf3-once-a');
+        const b = await embedOne('gf3-once-b');
+        expect([a.stamp, b.stamp]).toEqual([null, null]);
+        expect(errors).toHaveBeenCalledTimes(1);
+    });
+
+    it('a 404 /health (no health endpoint) cannot verify: NULL', async () => {
+        mockHealth({ detail: 'Not Found' }, 404);
+        const { stamp } = await embedOne('gf3-404');
+        expect(stamp).toBeNull();
+        expect(errors.mock.calls[0][0]).toMatch(/GET \/health answered HTTP 404/);
+    });
+
+    it('an unreachable /health fails the job (retried) and stores no vector', async () => {
+        jest.spyOn(axios, 'get').mockRejectedValue(new Error('connect ECONNREFUSED'));
+        const postId = await insertRawPost(await insertSource(), 'gf3-down');
+        mockServiceResponse();
+        await expect(embedPost(postId)).rejects.toThrow(/\/health unavailable \(connect ECONNREFUSED\).*cannot be verified/);
+        expect(await dbGet('SELECT 1 FROM post_embeddings WHERE raw_post_id = $1', [postId])).toBeUndefined();
+    });
+
+    it('a model/revision override in the worker env claims nothing and needs no /health', async () => {
+        const saved = process.env.EMBED_MODEL_REVISION;
+        process.env.EMBED_MODEL_REVISION = 'main';
+        try {
+            let mod;
+            jest.isolateModules(() => { mod = require('../../src/pipeline/embeddings'); });
+            const health = mockHealth();
+            expect(await mod.verifiedMethodologyVersion()).toBeNull();
+            expect(health).not.toHaveBeenCalled();
+        } finally {
+            if (saved === undefined) delete process.env.EMBED_MODEL_REVISION; else process.env.EMBED_MODEL_REVISION = saved;
+        }
+    });
+
+    it('saveEmbedding goes through the same check', async () => {
+        mockHealth({ ...HEALTHY, library: 'sentence-transformers==2.7.0' });
+        const postId = await insertRawPost(await insertSource(), 'gf3-save');
+        await saveEmbedding(postId, fakeEmbedding());
+        const row = await dbGet('SELECT methodology_version FROM post_embeddings WHERE raw_post_id = $1', [postId]);
+        expect(row.methodology_version).toBeNull();
     });
 });
