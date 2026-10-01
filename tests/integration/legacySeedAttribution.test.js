@@ -111,6 +111,14 @@ describe('scripts/correct-legacy-seed-attribution.js', () => {
         ]);
     });
 
+    // Copilot re-review #44: once moved, these posts are purged as demo data;
+    // the purge's recorded legal basis must name this correction as a source
+    // of demo-feed posts, not only scripts/populate.js.
+    test('the demo purge\'s legal basis names this correction\'s action', () => {
+        const { DEMO_PURGE_LEGAL_BASIS } = require('../../scripts/compact');
+        expect(DEMO_PURGE_LEGAL_BASIS).toContain(ACTION);
+    });
+
     test('dry run (the default) changes nothing', async () => {
         const before = await auditCount();
         const r = await correctLegacySeedAttribution({ env: {} });

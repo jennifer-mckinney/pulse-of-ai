@@ -7,7 +7,7 @@
 
 const {
     HttpClient, HostLimiter, userAgent, defaultTransport, retryAfterMs,
-    MAX_IN_RUN_WAIT_MS, MAX_HOLD_MS, DEFAULT_RATE_LIMIT_HOLD_MS,
+    MAX_IN_RUN_WAIT_MS, MAX_HOLD_MS, DEFAULT_RATE_LIMIT_HOLD_MS, holdKey,
 } = require('../../../src/collectors/http');
 const { parseRobots, isAllowed, RobotsPolicy } = require('../../../src/collectors/robots');
 const { AccessDeniedError, RobotsDisallowedError, HttpError } = require('../../../src/collectors/errors');
@@ -168,32 +168,36 @@ describe('Retry-After holds (diagnosis 2026-10-01, TLDR deadline)', () => {
         expect(next.http.requests).toBe(0);
     });
 
-    test('the hold is persisted in the route HTTP cache, so another process (or a restart) honours it too', async () => {
+    // The persisted hold is per HOST (holdKey), like the in-process one: a
+    // restart must not ask another URL of the same host during the hold.
+    test('the hold is persisted per host in the HTTP cache, so another process (or a restart) honours it for every URL', async () => {
         const cache = {};
         let t = T0;
         const first = holdClient([[URL_, { status: 429, headers: { 'retry-after': '300' } }]], { now: () => t });
         await first.http.request(URL_, { cache }).catch(() => {});
-        expect(cache[URL_]).toEqual({ retry_after_until: '2026-10-01T02:05:00.000Z', retry_after_status: 429 });
+        expect(holdKey('feed.example')).toBe('retry-after:feed.example');
+        expect(cache).toEqual({ ['retry-after:feed.example']: { until: '2026-10-01T02:05:00.000Z', status: 429 } });
         t = T0 + 150000;
-        const other = holdClient([[URL_, { body: '<rss/>' }]], { now: () => t });   // empty in-process holds
+        const other = holdClient([[/./, { body: '<rss/>' }]], { now: () => t });   // empty in-process holds
         await expect(other.http.request(URL_, { cache })).rejects.toThrow(/not requested/);
+        await expect(other.http.request('https://feed.example/other.xml', { cache })).rejects.toThrow(/not requested/);
         expect(other.transport.calls).toHaveLength(0);
     });
 
     test('after the hold the request is sent again, and a success clears the hold but keeps the validators', async () => {
         const holds = new Map();
-        const cache = { [URL_]: { etag: '"v1"', last_modified: null, retry_after_until: '2026-10-01T02:05:00.000Z', retry_after_status: 429 } };
+        const cache = { [URL_]: { etag: '"v1"', last_modified: null }, ['retry-after:feed.example']: { until: '2026-10-01T02:05:00.000Z', status: 429 } };
         holds.set('feed.example', { until: T0 + 300000, status: 429 });
         const later = holdClient([[URL_, { body: '<rss/>', headers: { etag: '"v2"' } }]], { now: () => T0 + 300001, holds });
         const res = await later.http.request(URL_, { cache });
         expect(res.body).toBe('<rss/>');
         expect(later.transport.calls).toHaveLength(1);
-        expect(cache[URL_]).toEqual({ etag: '"v2"', last_modified: null });
+        expect(cache).toEqual({ [URL_]: { etag: '"v2"', last_modified: null } });
         expect(holds.has('feed.example')).toBe(false);
     });
 
-    test('a success without validators drops the cache entry that only held the Retry-After time', async () => {
-        const cache = { [URL_]: { retry_after_until: '2026-10-01T01:00:00.000Z', retry_after_status: 429 } };
+    test('a success drops the expired persisted hold of its host', async () => {
+        const cache = { ['retry-after:feed.example']: { until: '2026-10-01T01:00:00.000Z', status: 429 } };
         const { http } = holdClient([[URL_, { body: '<rss/>' }]]);
         await http.request(URL_, { cache });
         expect(cache).toEqual({});
@@ -252,7 +256,7 @@ describe('Retry-After holds (diagnosis 2026-10-01, TLDR deadline)', () => {
     // Copilot review #44: a hold set on a redirect target is also persisted
     // under the URL the route asks for, so a fresh process sends NOTHING
     // (not robots.txt, not the first hop) during the hold.
-    test('a hold behind a redirect is persisted under the requested URL too, so a fresh client sends nothing', async () => {
+    test('a hold behind a redirect is persisted for the requested URL\'s host too, so a fresh client sends nothing', async () => {
         const FINAL = 'https://cdn.feed.example/rss';
         const cache = {};
         const first = holdClient([
@@ -260,25 +264,72 @@ describe('Retry-After holds (diagnosis 2026-10-01, TLDR deadline)', () => {
             [FINAL, { status: 429, headers: { 'retry-after': '300' } }],
         ]);
         await first.http.request(URL_, { cache, robots: true }).catch(() => {});
-        const held = { retry_after_until: '2026-10-01T02:05:00.000Z', retry_after_status: 429 };
-        expect(cache[URL_]).toEqual(held);
-        expect(cache[FINAL]).toEqual(held);
+        const held = { until: '2026-10-01T02:05:00.000Z', status: 429 };
+        expect(cache).toEqual({ ['retry-after:feed.example']: held, ['retry-after:cdn.feed.example']: held });
 
         const fresh = holdClient([[/./, { body: 'never' }]], { now: () => T0 + 150000 });
         await expect(fresh.http.request(URL_, { cache, robots: true })).rejects.toThrow(/not requested/);
         expect(fresh.transport.calls).toEqual([]);
     });
 
-    test('a success through the redirect clears the hold under both URLs (validators stay on the final one)', async () => {
+    test('a success through the redirect clears the expired hold of both hosts (validators stay on the final URL)', async () => {
         const FINAL = 'https://cdn.feed.example/rss';
-        const expired = { retry_after_until: '2026-10-01T01:00:00.000Z', retry_after_status: 429 };
-        const cache = { [URL_]: { ...expired }, [FINAL]: { ...expired } };
+        const expired = { until: '2026-10-01T01:00:00.000Z', status: 429 };
+        const cache = { ['retry-after:feed.example']: { ...expired }, ['retry-after:cdn.feed.example']: { ...expired } };
         const { http } = holdClient([
             [URL_, { status: 301, headers: { location: FINAL } }],
             [FINAL, { body: '<rss/>', headers: { etag: '"v3"' } }],
         ]);
         await http.request(URL_, { cache });
         expect(cache).toEqual({ [FINAL]: { etag: '"v3"', last_modified: null } });
+    });
+
+    // Copilot re-review #44: a route that does not pass a validator cache
+    // (most API collectors) must still persist its hold. The runner hands
+    // the client the source's persisted HTTP cache as its hold store.
+    test('without a route cache the hold is persisted in the client\'s hold store, honoured by a fresh client', async () => {
+        const store = {};
+        const first = holdClient([[URL_, { status: 429, headers: { 'retry-after': '300' } }]]);
+        first.http.holdStore = store;
+        await first.http.request(URL_).catch(() => {});
+        expect(store).toEqual({ ['retry-after:feed.example']: { until: '2026-10-01T02:05:00.000Z', status: 429 } });
+
+        const fresh = holdClient([[/./, { body: 'never' }]], { now: () => T0 + 150000 });
+        fresh.http.holdStore = store;
+        await expect(fresh.http.request(URL_)).rejects.toThrow(/not requested/);
+        expect(fresh.transport.calls).toEqual([]);
+        // No validators are ever sent or written for an uncached route.
+        const later = holdClient([[URL_, { body: 'ok', headers: { etag: '"x"' } }]], { now: () => T0 + 300001 });
+        later.http.holdStore = store;
+        await later.http.request(URL_);
+        expect(later.transport.calls[0].headers['If-None-Match']).toBeUndefined();
+        expect(store).toEqual({});
+    });
+
+    // Copilot re-review #44: the runner rolls a route's cursor and validators
+    // back after a store failure; holds learned meanwhile must survive it.
+    test('withHolds(restored, current) keeps the holds learned since the snapshot', () => {
+        const { withHolds } = require('../../../src/collectors/http');
+        const hold = { until: '2026-10-01T03:00:00.000Z', status: 429 };
+        const expired = { until: '2026-10-01T01:00:00.000Z', status: 429 };
+        const restored = {
+            'https://a.example/1': { etag: '"old"', last_modified: null },
+            'retry-after:b.example': { ...hold },
+            'retry-after:c.example': { ...expired },                          // cleared during the route
+        };
+        const current = {
+            'https://a.example/1': { etag: '"new"', last_modified: null },   // validator: rolled back
+            'https://a.example/3': { etag: '"e"', last_modified: null },     // new validator: dropped
+            'retry-after:a.example': { ...hold },                             // hold learned: kept
+            'retry-after:b.example': { ...hold },                             // hold still active: kept
+        };
+        // Holds come from `current` only: the expired c.example hold that
+        // clearHold dropped is not brought back by the rollback.
+        expect(withHolds(restored, current)).toEqual({
+            'https://a.example/1': { etag: '"old"', last_modified: null },
+            'retry-after:a.example': { ...hold },
+            'retry-after:b.example': { ...hold },
+        });
     });
 
     test('a short Retry-After is still waited out inside the run and retried', async () => {

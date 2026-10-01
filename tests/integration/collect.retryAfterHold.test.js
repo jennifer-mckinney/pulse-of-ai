@@ -55,9 +55,9 @@ describe('HTTP 429 with a long Retry-After (TLDR)', () => {
         expect(throttled.calls.filter(c => c.url === FEED)).toHaveLength(1);   // not retried inside the run
 
         const st = await stateOf();
-        const until = Date.parse(st.http_cache[FEED].retry_after_until);
+        const until = Date.parse(st.http_cache['retry-after:tldr.tech'].until);
         expect(until).toBeGreaterThanOrEqual(t0 + 3600 * 1000);
-        expect(st.http_cache[FEED].retry_after_status).toBe(429);
+        expect(st.http_cache['retry-after:tldr.tech'].status).toBe(429);
         expect(st).toMatchObject({ last_error_kind: 'http_4xx', last_http_status: 429 });
 
         // Next tick, a fresh client (empty in-process holds): the persisted
@@ -81,13 +81,39 @@ describe('HTTP 429 with a long Retry-After (TLDR)', () => {
         await collect(throttled);
         // The source's time has passed.
         await dbRun(`UPDATE source_collection_state
-            SET http_cache = jsonb_set(http_cache, ARRAY[$1], jsonb_build_object('retry_after_until', '2000-01-01T00:00:00.000Z', 'retry_after_status', 429))
-            WHERE source_id = (SELECT id FROM data_sources WHERE name = 'tldr')`, [FEED]);
+            SET http_cache = jsonb_set(http_cache, ARRAY['retry-after:tldr.tech'], jsonb_build_object('until', '2000-01-01T00:00:00.000Z', 'status', 429))
+            WHERE source_id = (SELECT id FROM data_sources WHERE name = 'tldr')`);
         await nextPoll();
         const open = fixtureTransport([[FEED, { body: RSS }]]);
         const again = await collect(open);
         expect(open.calls.filter(c => c.url === FEED)).toHaveLength(1);
         expect(again).toMatchObject({ outcome: 'ok', error: null });
-        expect((await stateOf()).http_cache[FEED]).toBeUndefined();
+        expect((await stateOf()).http_cache['retry-after:tldr.tech']).toBeUndefined();
     });
 });
+
+// Copilot re-review #44: holds of routes WITHOUT a validator cache (most API
+// collectors — arXiv here) are persisted too, through the source's HTTP cache.
+describe('a route that passes no validator cache (arXiv)', () => {
+    it('persists the 429 hold in the source state; the next run (a fresh client) sends nothing', async () => {
+        const throttled = fixtureTransport([[/export\.arxiv\.org\/api/, { status: 429, headers: { 'retry-after': '3600' } }]]);
+        const first = (await runCollection({
+            slugs: ['arxiv'], triggeredBy: 'test', env: TEST_ENV, transport: throttled, now: () => Date.parse(RECORDED_AT),
+            queues: { enqueueEmbeds: async () => {}, enqueueIngestRetry: async () => {} }, collectorCtx: { sleep: () => Promise.resolve() },
+        })).sources[0];
+        expect(first).toMatchObject({ outcome: 'error', errorKind: 'http_4xx', httpStatus: 429 });
+        const st = await dbGet(`SELECT s.http_cache FROM source_collection_state s JOIN data_sources ds ON ds.id = s.source_id WHERE ds.name = 'arxiv'`);
+        expect(st.http_cache['retry-after:export.arxiv.org']).toMatchObject({ status: 429 });
+
+        await dbRun(`UPDATE source_collection_state SET last_attempt_at = NOW() - interval '1 day'
+            WHERE source_id = (SELECT id FROM data_sources WHERE name = 'arxiv')`);
+        const open = fixtureTransport([[/./, { body: 'never' }]]);
+        const second = (await runCollection({
+            slugs: ['arxiv'], triggeredBy: 'test', env: TEST_ENV, transport: open, now: () => Date.parse(RECORDED_AT),
+            queues: { enqueueEmbeds: async () => {}, enqueueIngestRetry: async () => {} }, collectorCtx: { sleep: () => Promise.resolve() },
+        })).sources[0];
+        expect(open.calls).toEqual([]);
+        expect(second.error).toMatch(/not requested: export\.arxiv\.org asked us to wait/);
+    });
+});
+

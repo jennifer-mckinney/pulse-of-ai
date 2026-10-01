@@ -13,13 +13,14 @@
 //   - Retry-After holds (diagnosis 2026-10-01, TLDR deadline): a 429 / 503
 //     whose Retry-After is longer than MAX_IN_RUN_WAIT_MS — or a 429 still
 //     answered after the retries — ends the request at once and HOLDS the
-//     URL until the source's time (capped at MAX_HOLD_MS; a 429 without
+//     HOST until the source's time (capped at MAX_HOLD_MS; a 429 without
 //     Retry-After holds DEFAULT_RATE_LIMIT_HOLD_MS). Until then no request
-//     is sent to it. The hold lives in a per-host map (process-wide for the
-//     network transport) AND, when the route passes its HTTP cache, in that
-//     cache (persisted per source by the runner, under the requested URL
-//     as well as a redirect target), so another worker replica or a
-//     restarted worker honours it too. Never slept through and retried
+//     is sent to that host. The hold lives in a per-host map (process-wide
+//     for the network transport) AND in the source's persisted HTTP cache
+//     under holdKey(host) — the route's validator cache, or the hold store
+//     the runner sets for routes without one — for the requested URL's host
+//     and any redirect target's, so another worker replica or a restarted
+//     worker honours it too. Never slept through and retried
 //     early: the old 60 s cap did exactly that and overran the run deadline;
 //   - 401 / 403 / 451 and bot challenges → AccessDeniedError, never retried;
 //     it carries an ALLOW-LIST of the refusal's response headers (server,
@@ -77,6 +78,12 @@ const DEFAULT_RATE_LIMIT_HOLD_MS = 5 * 60 * 1000;
 // RFC 6585 §4).
 const HOLD_STATUSES = Object.freeze([429, 503]);
 const MAX_REDIRECTS = 4;
+
+// The key of a host's persisted Retry-After hold in a source's HTTP cache
+// (source_collection_state.http_cache), next to the per-URL validators:
+// { until: ISO time, status: 429 | 503 }. Never a URL, so never a validator.
+const HOLD_KEY_PREFIX = 'retry-after:';
+const holdKey = host => `${HOLD_KEY_PREFIX}${host}`;
 
 // Diagnosis 2026-10-01: the process-wide Retry-After holds of the network
 // transport, host → { until (epoch ms), status } (shared by every client,
@@ -202,6 +209,26 @@ function retryAfterMs(headers, attempt, now = Date.now()) {
     return 1000 * 2 ** attempt;
 }
 
+/**
+ * `restored` (a route's HTTP cache rolled back to its snapshot) with every
+ * Retry-After hold `current` has learned since — the G10-5 store-failure
+ * rollback must forget new validators but never a hold (Copilot re-review
+ * #44). Holds are never rolled back in either direction: every hold comes
+ * from `current` (a hold missing there was an expired one clearHold
+ * dropped, so the snapshot's copy is not brought back). Pure: returns a
+ * new object.
+ */
+function withHolds(restored, current) {
+    const out = {};
+    for (const [k, e] of Object.entries(restored || {})) {
+        if (!k.startsWith(HOLD_KEY_PREFIX)) out[k] = { ...e };
+    }
+    for (const [k, e] of Object.entries(current || {})) {
+        if (k.startsWith(HOLD_KEY_PREFIX) && e) out[k] = { ...e };
+    }
+    return out;
+}
+
 class HttpClient {
     /**
      * @param {object} opts
@@ -211,7 +238,7 @@ class HttpClient {
      * @param {Function} [opts.sleep]
      * @param {number}   [opts.timeoutMs]
      * @param {Function} [opts.now]      wall clock for Retry-After holds (epoch ms)
-     * @param {Map}      [opts.rateLimitHolds]  host → hold; default: the
+     * @param {Map}      [opts.rateLimitHolds]  host → { until, status }; default: the
      *                   process-wide map for the network transport, a fresh
      *                   one for an injected (fixture) transport
      */
@@ -237,12 +264,18 @@ class HttpClient {
         // Diagnosis 2026-10-01: Retry-After holds, host → { until, status }.
         this.now = now;
         this.holds = rateLimitHolds || (transport === defaultTransport ? RATE_LIMIT_HOLDS : new Map());
+        // Copilot re-review #44: where a hold is PERSISTED when the route
+        // passes no validator cache (most API collectors). The runner sets it
+        // to the source's persisted HTTP cache before the source's routes run.
+        this.holdStore = null;
     }
 
     /**
-     * The active Retry-After hold on `url` (its host, in this process; or
-     * the route's persisted HTTP cache entry), else null. An expired hold
-     * is forgotten.
+     * The active Retry-After hold on `url`'s host — in this process, or
+     * persisted in the source's HTTP cache under holdKey(host) — else null.
+     * Per HOST, both ways: a 429 is the server telling this client to slow
+     * down, so no URL of that host is asked during the hold. An expired
+     * in-process hold is forgotten.
      * @returns {{ until: number, status: number }|null}
      */
     activeHold(url, cache) {
@@ -254,40 +287,40 @@ class HttpClient {
             if (mem.until > t) hold = mem;
             else this.holds.delete(host);
         }
-        const entry = cache && cache[url];
-        const persisted = entry && entry.retry_after_until ? Date.parse(entry.retry_after_until) : NaN;
+        const entry = cache && cache[holdKey(host)];
+        const persisted = entry && entry.until ? Date.parse(entry.until) : NaN;
         if (Number.isFinite(persisted) && persisted > t && (!hold || persisted > hold.until)) {
-            hold = { until: persisted, status: HOLD_STATUSES.includes(entry.retry_after_status) ? entry.retry_after_status : 429 };
+            hold = { until: persisted, status: HOLD_STATUSES.includes(entry.status) ? entry.status : 429 };
         }
         return hold;
     }
 
-    /** Record a hold of `ms` on `url` (host map + the route's cache). @returns {number} until (epoch ms) */
+    /** Record a hold of `ms` on `url`'s host (in-process + persisted). @returns {number} until (epoch ms) */
     setHold(url, cache, ms, status) {
         const until = this.now() + Math.min(ms, MAX_HOLD_MS);
         const host = new URL(url).host;
         const prev = this.holds.get(host);
         if (!prev || prev.until < until) this.holds.set(host, { until, status });
         if (cache) {
-            cache[url] = { ...(cache[url] || {}), retry_after_until: new Date(until).toISOString(), retry_after_status: status };
+            const key = holdKey(host);
+            const had = cache[key] && Date.parse(cache[key].until);
+            if (!(Number.isFinite(had) && had >= until)) cache[key] = { until: new Date(until).toISOString(), status };
         }
         return until;
     }
 
     /**
-     * A success from `url` drops its persisted (expired) hold; the
-     * validators stay. The host map is left alone: an expired entry is
-     * already dropped by activeHold, and a hold another source on the same
-     * host set while this request was in flight must survive.
+     * A success from `url` drops its host's persisted hold, which can only
+     * be an expired one (an active hold stops the request before it is
+     * sent). The in-process map is left alone: activeHold already drops
+     * expired entries, and a hold another source on the same host set while
+     * this request was in flight must survive.
      */
     clearHold(url, cache) {
-        const entry = cache && cache[url];
-        if (!entry || !('retry_after_until' in entry || 'retry_after_status' in entry)) return;
-        const rest = { ...entry };
-        delete rest.retry_after_until;
-        delete rest.retry_after_status;
-        if (Object.keys(rest).length) cache[url] = rest;
-        else delete cache[url];
+        const key = holdKey(new URL(url).host);
+        if (!cache || !cache[key]) return;
+        const until = Date.parse(cache[key].until);
+        if (!(Number.isFinite(until) && until > this.now())) delete cache[key];
     }
 
     /**
@@ -386,7 +419,10 @@ class HttpClient {
             origin = u.origin;
             // Diagnosis 2026-10-01: the source asked us to wait (Retry-After)
             // — honoured: nothing is sent until then (not robots.txt either).
-            const hold = this.activeHold(current, o.cache);
+            // The route's cache, else the source-level hold store (Copilot
+            // re-review #44): validators still come from o.cache only.
+            const holdCache = o.cache || this.holdStore;
+            const hold = this.activeHold(current, holdCache);
             if (hold) {
                 throw new HttpError(`not requested: ${u.host} asked us to wait (HTTP ${hold.status}, Retry-After) until `
                     + `${new Date(hold.until).toISOString()} — honoured`, { status: hold.status, url: redactUrl(current) });
@@ -418,8 +454,8 @@ class HttpClient {
                 continue;
             }
             if (res.status === 304) {
-                this.clearHold(current, o.cache);
-                if (current !== url) this.clearHold(url, o.cache);
+                this.clearHold(current, holdCache);
+                if (current !== url) this.clearHold(url, holdCache);
                 return { ...res, notModified: true, url: current };
             }
             if (REFUSAL_STATUSES.includes(res.status) || (res.status >= 400 && CHALLENGE_RE.test(res.body || ''))) {
@@ -432,16 +468,16 @@ class HttpClient {
             if (holdMs !== null) {
                 // Persisted under the URL the route asks for as well (Copilot
                 // review #44): a fresh process starts there, before any hop.
-                const until = this.setHold(current, o.cache, holdMs, res.status);
-                if (current !== url) this.setHold(url, o.cache, holdMs, res.status);
+                const until = this.setHold(current, holdCache, holdMs, res.status);
+                if (current !== url) this.setHold(url, holdCache, holdMs, res.status);
                 throw new HttpError(`HTTP ${res.status} from ${redactUrl(current)} — the source asked us to wait (Retry-After); `
                     + `honoured: no request before ${new Date(until).toISOString()}`, { status: res.status, url: redactUrl(current) });
             }
             if (res.status < 200 || res.status >= 300) {
                 throw new HttpError(`HTTP ${res.status} from ${redactUrl(current)}`, { status: res.status, url: redactUrl(current) });
             }
-            this.clearHold(current, o.cache);
-            if (current !== url) this.clearHold(url, o.cache);
+            this.clearHold(current, holdCache);
+            if (current !== url) this.clearHold(url, holdCache);
             if (o.cache && method === 'GET' && (res.headers.etag || res.headers['last-modified'])) {
                 o.cache[current] = { etag: res.headers.etag || null, last_modified: res.headers['last-modified'] || null };
             }
@@ -516,5 +552,5 @@ class HttpClient {
 module.exports = {
     HttpClient, HostLimiter, userAgent, defaultTransport, retryAfterMs, CHALLENGE_RE, redactUrl, SENSITIVE_HEADERS,
     REFUSAL_HEADER_ALLOWLIST, refusalHeaders, isDeterministic, NO_RETRY_CODES,
-    parseRetryAfter, MAX_IN_RUN_WAIT_MS, MAX_HOLD_MS, DEFAULT_RATE_LIMIT_HOLD_MS, HOLD_STATUSES, RATE_LIMIT_HOLDS,
+    parseRetryAfter, withHolds, holdKey, HOLD_KEY_PREFIX, MAX_IN_RUN_WAIT_MS, MAX_HOLD_MS, DEFAULT_RATE_LIMIT_HOLD_MS, HOLD_STATUSES, RATE_LIMIT_HOLDS,
 };
