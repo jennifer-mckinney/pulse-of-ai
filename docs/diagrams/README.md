@@ -1,6 +1,6 @@
 # Pulse of AI diagrams
 
-These diagrams explain how Pulse of AI works, for reviewers and contributors. Each one describes the code on `master` @ `7291490` (PRs #9 standup, #10 source collectors, #22 collection hardening and #24–#34 merged), plus what this PR ships: the legal-notice UI (`public/js/config/legal.config.js`, the header about panel). Nothing drawn is in flight.
+These diagrams explain how Pulse of AI works, for reviewers and contributors. Each one describes the code on `master` @ `0356a00` (PRs #9 standup, #10 source collectors, #22 collection hardening, #24–#35, #37, #38 and #39 merged; #36 is an issue, not a PR), plus what this PR ships: the legal-notice UI (`public/js/config/legal.config.js`, the header about panel). Nothing drawn is in flight.
 
 ## How the files fit together
 
