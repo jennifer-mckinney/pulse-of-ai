@@ -141,7 +141,8 @@ body {
 /* "about" chip + panel: the Appropriate Legal Notices (AGPL-3.0-or-later and
    the section 7(b) attribution), filled by main.js from
    config/legal.config.js. Unobtrusive: one chip, the panel opens on demand
-   and sits under the header chips, above the rail and the drawers' z-order. */
+   and sits under the header chips, above the rail (z-index 25) and below the
+   tooltip (40) and the drawers (50). */
 .hdr-about { cursor: pointer; font-family: inherit; color: var(--ink); transition: border-color 0.15s; }
 .hdr-about:hover, .hdr-about[aria-expanded="true"] { border-color: rgba(59,220,178,0.45); }
 .about-panel {

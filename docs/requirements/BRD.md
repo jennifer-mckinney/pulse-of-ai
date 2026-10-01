@@ -6,8 +6,8 @@
 | **Product** | The Pulse of AI — global real-time AI discourse dashboard |
 | **Version** | 1.1 |
 | **Date** | 2026-09-29 |
-| **Status** | Approved baseline, aligned with Technical Specification v1.2.0 |
-| **Related documents** | `docs/TECHNICAL_SPEC.md` (v1.2.0), `docs/requirements/PRD.md` (v1.1), `docs/adr/0001-source-registry-and-collection.md`; superseded: `docs/plans/2026-07-05-globe-storytelling-design.md` |
+| **Status** | Approved baseline, aligned with Technical Specification v1.2.1 |
+| **Related documents** | `docs/TECHNICAL_SPEC.md` (v1.2.1), `docs/requirements/PRD.md` (v1.1), `docs/adr/0001-source-registry-and-collection.md`; superseded: `docs/plans/2026-07-05-globe-storytelling-design.md` |
 
 **v1.1 changes (2026-09-29), aligned to code per independent audit, 2026-09-29:** §2 and §6.1 (52-source registry, 8 categories, the shipped Canvas-2D globe story); §3 (the bias checks that run today); §5 O7 and §7 (pseudonym format, correlation status, source economics); §10 (spec version). Business objectives are unchanged.
 
@@ -77,9 +77,9 @@ Objectives are taken directly from the specification's objectives table (spec §
 **Phase 1 — Foundation (delivered):**
 - Ingestion, processing, and storage backbone: immutable raw post store, processing jobs, versioned methodology registry, immutable decision audit log (spec §6, §13 Phases A–C)
 - Sentiment v1 (lexicon-based, establishing the audit pattern), keyword relevance scoring, aggregate bias monitoring with alerting (spec §9)
-- Public read API: health, aggregated posts by location, latest sentiment, audit trail, bias results, methodology, sources, on-demand refresh, structured query (spec §7)
+- Public read API: health, aggregated posts by location, latest sentiment, audit trail, bias results, methodology, sources, themes, on-demand refresh, structured query (spec §7)
 - Embedding pipeline and vector storage for semantic capabilities (spec §12, §13 Phase D)
-- Privacy-first collection: PII stripped at ingest (spec §8); the retention log records a `collected` row per stored post and every text removal, compaction and demo purge, each with its legal basis (spec §8, §19); erasure-request handling is PLANNED — not implemented as of spec v1.2.0
+- Privacy-first collection: PII stripped at ingest (spec §8); the retention log records a `collected` row per post stored through the ingest path (the fictional demo batch writes none) and every text removal, compaction and demo purge, each with its legal basis (spec §8, §19); erasure-request handling is PLANNED — not implemented as of spec v1.2.0
 
 **Phase E — Storytelling frontend (delivered):**
 - The FuN.zip prototype frontend: a Canvas-2D globe with an 11-beat scroll-driven narrative of dynamically derived insights, ending in free exploration with sentiment and source-category filters; demo data always labelled (spec §11; PRD §4.3)
@@ -136,4 +136,4 @@ Beyond the objective criteria in Section 5, the programme is judged on:
 
 ## 10. Approval and Change Control
 
-The Technical Specification (v1.2.0) is the source of truth for requirements; this BRD summarizes its business content and must be revised when the specification's objectives (§2), scope resolutions (§16), or compliance posture (§8, §19, §20) change. Methodology and threshold changes do not require BRD revision — they are governed by the versioned methodology registry by design.
+The Technical Specification (v1.2.1) is the source of truth for requirements; this BRD summarizes its business content and must be revised when the specification's objectives (§2), scope resolutions (§16), or compliance posture (§8, §19, §20) change. Methodology and threshold changes do not require BRD revision — they are governed by the versioned methodology registry by design.

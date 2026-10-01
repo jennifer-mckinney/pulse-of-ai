@@ -6,8 +6,8 @@
 | **Product** | The Pulse of AI — global real-time AI discourse dashboard |
 | **Version** | 1.1 |
 | **Date** | 2026-09-29 |
-| **Status** | Handoff excerpt of `docs/requirements/PRD.md`, aligned with Technical Specification v1.2.0 |
-| **Related documents** | `docs/requirements/PRD.md` (v1.1, the full PRD), `docs/requirements/BRD.md`, `docs/TECHNICAL_SPEC.md` (v1.2.0); superseded: `docs/plans/2026-07-05-globe-storytelling-design.md` |
+| **Status** | Handoff excerpt of `docs/requirements/PRD.md`, aligned with Technical Specification v1.2.1 |
+| **Related documents** | `docs/requirements/PRD.md` (v1.1, the full PRD), `docs/requirements/BRD.md`, `docs/TECHNICAL_SPEC.md` (v1.2.1); superseded: `docs/plans/2026-07-05-globe-storytelling-design.md` |
 
 **v1.1 changes (2026-09-29), aligned to code per independent audit, 2026-09-29:** §1 (52-source registry, 8 categories, Canvas-2D globe); §4.3 FR-17 to FR-25 rewritten to the shipped FuN.zip prototype design (11 beats, Canvas-2D globe, demo labelling, legal notices), identical in substance to PRD.md v1.1 §4.3. Persona numbering in this excerpt differs from PRD.md (here P1 = General Public, P2 = Journalist).
 
