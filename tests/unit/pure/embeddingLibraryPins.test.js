@@ -112,8 +112,21 @@ function parseVersion(v) {
         preN:  m[3] === undefined ? 0 : Number(m[3]),
         post:  m[4] === undefined ? -1 : Number(m[4]),
         dev:   m[5] === undefined ? Infinity : Number(m[5]),
-        local: m[6] === undefined ? null : m[6].toLowerCase(),
+        // PEP 440 local-label normalisation: '-', '_' and '.' are the same
+        // separator, letters compare case-insensitively and numeric segments
+        // as integers ('cpu_01' and 'CPU.1' are equal).
+        local: m[6] === undefined ? null : m[6].split(/[-_.]/)
+            .map(seg => (/^\d+$/.test(seg) ? String(Number(seg)) : seg.toLowerCase())).join('.'),
     };
+}
+
+const isPreRelease = v => v.pre !== 0 || v.dev !== Infinity;
+const isPostRelease = v => v.post !== -1;
+/** Same release segments, zero-padded ('2.0' and '2.0.0' are one release). */
+function sameRelease(a, b) {
+    const n = Math.max(a.release.length, b.release.length);
+    for (let i = 0; i < n; i++) if ((a.release[i] || 0) !== (b.release[i] || 0)) return false;
+    return true;
 }
 
 /** Compare two versions, local labels ignored: <0, 0 or >0. */
@@ -132,18 +145,22 @@ function compareVersions(a, b) {
 }
 
 /**
- * Whether one specifier admits a concrete version. As in PEP 440, the
- * candidate's local label (+cpu) is ignored unless the specifier names one.
+ * Whether one specifier admits a concrete version, by the PEP 440 rules pip
+ * applies: the candidate's local label (+cpu) is ignored unless the
+ * specifier names one, `<V` excludes pre-releases of V's release unless V is
+ * itself a pre-release, and `>V` excludes post-releases and local versions of
+ * V's release unless V is itself a post-release.
  * @param {{op: string, version: string}} spec
  * @param {string} candidate
  * @returns {boolean}
  */
 function admits({ op, version }, candidate) {
-    if (op === '===') return candidate === version;
+    if (op === '===') return candidate.toLowerCase() === version.toLowerCase();
     const spec = parseVersion(version);
+    const cand = parseVersion(candidate);
     const c = compareVersions(candidate, version);
     if ((op === '==' || op === '!=') && spec.local !== null) {
-        const same = c === 0 && parseVersion(candidate).local === spec.local;
+        const same = c === 0 && cand.local === spec.local;
         return op === '==' ? same : !same;
     }
     switch (op) {
@@ -151,8 +168,14 @@ function admits({ op, version }, candidate) {
         case '!=': return c !== 0;
         case '>=': return c >= 0;
         case '<=': return c <= 0;
-        case '>':  return c > 0;
-        case '<':  return c < 0;
+        case '>':
+            // A local version of V compares equal to V (c === 0), so it is
+            // already refused here; post-releases of V's release need the rule.
+            if (c <= 0) return false;
+            return !(!isPostRelease(spec) && isPostRelease(cand) && sameRelease(cand, spec));
+        case '<':
+            if (c >= 0) return false;
+            return !(!isPreRelease(spec) && isPreRelease(cand) && sameRelease(cand, spec));
         case '~=': {
             // ~=X.Y.Z means >=X.Y.Z together with ==X.Y.*
             if (spec.release.length < 2) throw new Error(`~=${version} needs at least two release segments`);
@@ -329,7 +352,27 @@ describe('lockDrift / admits / requirementSpecs (the comparison the drift check 
         ['>=', '2.0', '2.0rc1', false],
         ['>=', '2.0rc1', '2.0', true],
         ['<',  '2.0a1', '2.0.dev3', true],
+        // Exclusive bounds (PEP 440): `<V` refuses pre-releases of V unless V
+        // is one; `>V` refuses post-releases and local versions of V unless
+        // V is a post-release.
+        ['<',  '2.0', '2.0rc1', false],
+        ['<',  '2.0', '2.0.dev1', false],
+        ['<',  '2.0', '1.9', true],
+        ['<',  '2.0rc2', '2.0rc1', true],
+        ['<',  '2.0', '2.0.0a1', false],
+        ['>',  '1.0', '1.0.post1', false],
+        ['>',  '1.0', '1.0.0.post2', false],
+        ['>',  '1.0', '1.0+cpu', false],
+        ['>',  '1.0', '1.0.1', true],
+        ['>',  '1.0.post1', '1.0.post2', true],
+        ['>=', '1.0', '1.0.post1', true],
+        // Local labels normalise separators, case and numeric segments.
+        ['==', '1.0+cpu_1', '1.0+cpu-1', true],
+        ['==', '1.0+CPU.01', '1.0+cpu_1', true],
+        ['==', '1.0+cpu.1', '1.0+cpu.2', false],
+        ['!=', '1.0+cpu-1', '1.0+cpu.1', false],
         ['===', '1.0', '1.0', true],
+        ['===', 'Foo-1.0', 'foo-1.0', true],
         ['===', '1.0', '1.0.0', false],
     ])('%s%s admits %s: %s', (op, version, candidate, expected) => {
         expect(admits({ op, version }, candidate)).toBe(expected);
