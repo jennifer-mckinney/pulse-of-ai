@@ -6,8 +6,11 @@
 //   checkPlatformSentimentParity — flags if two source categories diverge in avg sentiment
 //   checkNegativeDominance       — flags if negative posts exceed threshold share
 //
-// All thresholds are read from methodology_versions.config (DB-driven).
-// This makes them auditable, versioned, and changeable without a code deploy (AI Act §13).
+// All thresholds are read from methodology_versions.config (DB-driven), which
+// makes them auditable and versioned (AI Act §13). A released row is never
+// edited: a threshold change is a NEW bias version in
+// src/config/methodology-registry.js plus a matching migration, i.e. a code
+// deploy.
 //
 // Every check writes a row to bias_assessments (always — for audit completeness),
 // recording the biasMvId it ran with in methodology_version_id (migration 010)

@@ -12,6 +12,7 @@ const {
     deriveScore,
     deriveStatus,
     renderIngestStep,
+    INGEST_HASH_NOTE,
 } = require('../../../src/config/audit-narration');
 
 const POST_ID = '9b2f1f1e-2b1a-4c3d-8e4f-000000000001';
@@ -207,8 +208,34 @@ describe('audit-narration renderIngestStep', () => {
         expect(live.audiences.config.content_origin).toBeUndefined();
     });
 
+    // 1.4.0 (migration 066): the content hash is an integrity check recorded
+    // as input_hash, not a join key — in the live and the demo branch alike,
+    // whatever ingest version the post was stored under.
+    it('states what the content hash is, never that it is a join key (1.4.0)', () => {
+        const prov = { source: 'hn', permalink: null, fingerprint: 'a'.repeat(64) };
+        const views = [
+            renderIngestStep(INGEST_MV),
+            renderIngestStep(INGEST_MV, { demo: true }),
+            renderIngestStep({ ...INGEST_MV, version: '1.7.0', config: { ...INGEST_MV.config, privacy_claim: 'c' } },
+                { provenance: prov, postId: POST_ID }),
+        ];
+        for (const step of views) {
+            expect(step.audiences.researcher.startsWith(INGEST_HASH_NOTE)).toBe(true);
+            expect(step.audiences.researcher).not.toMatch(/join key across/);
+            expect(step.audiences.researcher).not.toMatch(/immutable join key/);
+        }
+        expect(INGEST_HASH_NOTE).toMatch(/SHA-256/);
+        expect(INGEST_HASH_NOTE).toMatch(/input_hash/);
+        expect(INGEST_HASH_NOTE).toMatch(/npm run replay/);
+        expect(INGEST_HASH_NOTE).toMatch(/HMAC-SHA256 with AUDIT_HASH_KEY/);
+        expect(INGEST_HASH_NOTE).toMatch(/It is an integrity check, not a join key\.$/);
+        // Live provenance wording follows the note unchanged (1.3.0).
+        expect(views[2].audiences.researcher).toContain(`${INGEST_HASH_NOTE} Provenance: HMAC-SHA256(key, source_slug:upstream id:source URL) = ${'a'.repeat(64)}`);
+    });
+
     it('narration version constants are exported for the API to report', () => {
         expect(NARRATION_COMPONENT).toBe('audit_narration');
         expect(NARRATION_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
+        expect(NARRATION_VERSION).toBe('1.4.0');
     });
 });

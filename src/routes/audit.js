@@ -15,7 +15,9 @@
 //     methodology config
 //
 // input_hash exposure: decision_audit_log.input_hash stores an UNSALTED
-// SHA-256 of post content — internal immutable join key, never modified.
+// SHA-256 of post content — the internal, immutable input fingerprint (the
+// replay, src/audit/replay.js, re-hashes the stored content against it); it is
+// never joined on and never modified.
 // The API exposes HMAC-SHA256(AUDIT_HASH_KEY, storedHash) instead; when the
 // key is unset the field is OMITTED entirely (never raw).
 //
@@ -140,7 +142,8 @@ router.get('/audit/:post_id', async (req, res) => {
         // unsalted SHA-256 of the content, so returning it raw would let
         // anyone confirm a guessed post text offline. External log consumers
         // verify content in their own systems; the DB value stays untouched
-        // as the internal immutable join key. Key read per-request so tests
+        // as the internal immutable input fingerprint (replay verification,
+        // src/audit/replay.js). Key read per-request so tests
         // (and rotations) see the current environment.
         const auditKey = process.env.AUDIT_HASH_KEY;
         const exposed = decisions.map((d) => {

@@ -42,7 +42,7 @@ describe('migration 030_methodology_errata.sql (relevance@1.0.0 erratum)', () =>
         expect(await dbAll('SELECT id FROM methodology_errata')).toEqual([]);
     });
 
-    it('GET /api/methodology serves the erratum with relevance@1.0.0, and the bias ones with their versions only', async () => {
+    it('GET /api/methodology serves the erratum with relevance@1.0.0, and the bias and ingest ones with their versions only', async () => {
         await seedMethodology();
         await seedErrata();
         const res = await request(app).get('/api/methodology');
@@ -60,6 +60,16 @@ describe('migration 030_methodology_errata.sql (relevance@1.0.0 erratum)', () =>
             expect(row.errata[0]).toMatchObject({ corrected_by: 'bias@1.6.0' });
             expect(row.errata[0].erratum).toMatch(/recorded metric_value 0/);
         }
+        // Migration 066 (content-hash wording): every released ingest row,
+        // 1.0.0 to 1.7.0, carries an erratum corrected by ingest@1.8.0.
+        const ingestCorrected = ['1.0.0', '1.1.0', '1.2.0', '1.3.0', '1.4.0', '1.5.0', '1.6.0', '1.7.0'].map(v => ['ingest', v]);
+        for (const [component, version] of ingestCorrected) {
+            const row = res.body.find(r => r.component === component && r.version === version);
+            expect(row.errata).toHaveLength(1);
+            expect(row.errata[0]).toMatchObject({ corrected_by: 'ingest@1.8.0' });
+            expect(row.errata[0].erratum).toMatch(/describes the SHA-256 content hash as a join key/);
+        }
+        corrected.push(...ingestCorrected);
         for (const r of res.body.filter(x => !corrected.some(([c, v]) => x.component === c && x.version === v))) {
             expect(r.errata).toEqual([]);
         }

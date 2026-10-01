@@ -73,4 +73,11 @@ EXPOSE 8000
 HEALTHCHECK --interval=10s --timeout=5s --start-period=600s --retries=3 \
     CMD ["python", "-c", "import json,sys,urllib.request; b=json.load(urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4)); sys.exit(0 if b.get('model_loaded') else 1)"]
 
+# Listen on every CONTAINER interface, set explicitly here (not inherited from
+# python/start.sh, whose host default is 127.0.0.1 and which is not in the
+# image): the worker reaches the service as embeddings:8000 over the compose
+# network, which a loopback bind inside the container would refuse. This is
+# not host exposure — docker-compose.yml publishes no port for this service
+# (F9-8, asserted by scripts/test/check-compose.sh and
+# scripts/test/embeddings-bind.test.sh).
 CMD ["uvicorn", "embeddings_service:app", "--host", "0.0.0.0", "--port", "8000"]
