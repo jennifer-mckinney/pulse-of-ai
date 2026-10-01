@@ -20,10 +20,11 @@ async function collect() {
     });
     return { summary, transport };
 }
-// PR #22 decision G5 / security L6: the actor is the named approval. It is
-// dated today: re-enabling needs an approval dated on or after the takedown
-// (security review F6, scripts/source-admin.js).
-const APPROVER = `Tess Tester ${new Date().toISOString().slice(0, 10)}`;
+// PR #22 decision G5 / security L6: the actor is the named approval.
+// Dated tomorrow (UTC): re-enabling needs an approval dated on or after the
+// takedown and at most a day ahead (security review F6), and a run that
+// crosses UTC midnight still passes.
+const APPROVER = `Tess Tester ${new Date(Date.now() + 86400000).toISOString().slice(0, 10)}`;
 const admin = async (argv, env = { GATE_APPROVED_BY: APPROVER }, extra = {}) => {
     const lines = [];
     const code = await adminMain(argv, { db, out: l => lines.push(l), err: l => lines.push(l), env, ...extra });

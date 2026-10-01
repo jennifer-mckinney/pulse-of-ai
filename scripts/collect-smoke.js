@@ -92,7 +92,11 @@ async function smokeSource(src, env, http, now = () => Date.now(), gov = null) {
     // keyless routes production would run.
     let collectors;
     try {
-        collectors = buildCollectors({ ...src, routes }, { env, http, cursor: {}, httpCache: {}, now, routeKills });
+        // `routes` already excludes every switched-off route (smokeRoutes
+        // applied routeKills); a kill of a route outside this subset would
+        // read as a stale route id here, so only this subset's kills pass.
+        const subsetKills = routeKills.filter(k => routes.some(r => r.id === k.route_id));
+        collectors = buildCollectors({ ...src, routes }, { env, http, cursor: {}, httpCache: {}, now, routeKills: subsetKills });
     } catch (err) {
         return { ...row, error: err.message, routes: [{ id: '*', error: `${err.name}: ${err.message}`, ms: 0 }] };
     }

@@ -56,9 +56,10 @@ const FLAGS = {
     reset: new Set(['--note']),
 };
 
-// Control characters (newlines, ANSI escapes) in a reason or note would be
-// replayed raw into logs and the gate event; they are refused.
-const CONTROL = /[\u0000-\u001f\u007f-\u009f]/;
+// Control and format characters (newlines, ANSI escapes, bidi overrides) in
+// a reason or note would be replayed raw into logs and the gate event, or
+// spoof the reason where it is shown; they are refused.
+const CONTROL = /[\p{Cc}\p{Cf}]/u;
 
 function flag(args, name) {
     const i = args.indexOf(name);
@@ -98,7 +99,7 @@ function parseArgs(argv) {
         seen.add(args[i]);
     }
     for (const [name, v] of [['--note', note], ['--reason', reason]]) {
-        if (v !== undefined && CONTROL.test(v)) return { error: `${name} must not contain control characters (newlines, escapes)\n${USAGE}` };
+        if (v !== undefined && CONTROL.test(v)) return { error: `${name} must not contain control characters (newlines, escapes, bidi overrides)\n${USAGE}` };
     }
     let staleRoute = false;
     if (route !== undefined && !getRoute(src, route)) {
@@ -125,10 +126,18 @@ const utcDate = t => new Date(t).toISOString().slice(0, 10);
 /**
  * Security review F6: a takedown is reversed only by a named approval dated
  * on or after it — a standing GATE_APPROVED_BY from before the takedown
- * cannot undo it.
+ * cannot undo it — and not dated in the future (re-review: a standing
+ * far-future date would otherwise undo every takedown). One day of slack
+ * on the future side allows for an operator ahead of UTC.
  */
-function assertApprovalCovers(approval, disabledAt, what, command) {
-    if (!disabledAt || approval.date >= utcDate(disabledAt)) return;
+function assertApprovalCovers(approval, disabledAt, what, command, now = Date.now()) {
+    if (!disabledAt) return;
+    const latest = utcDate(now + 86400000);
+    if (approval.date > latest) {
+        throw new Refused(`${command} needs a named approval dated today: ${GATE_APPROVAL_ENV} is dated ${approval.date}, `
+            + `in the future (today is ${utcDate(now)} UTC). Nothing was changed.`);
+    }
+    if (approval.date >= utcDate(disabledAt)) return;
     throw new Refused(`${command} needs a named approval dated on or after the takedown it reverses: ${what} was disabled on `
         + `${utcDate(disabledAt)} (UTC) and ${GATE_APPROVAL_ENV} is dated ${approval.date}. Set ${GATE_APPROVAL_ENV}="Name YYYY-MM-DD" `
         + 'with the date of the approval to re-enable it. Nothing was changed.');
@@ -155,7 +164,7 @@ async function main(argv, io = {}) {
     const db = io.db || require('../src/db/connection');
     const state = io.state || require('../src/collectors/state');
     // Security review F9: what a takedown publishes.
-    const published = 'Published: the reason and the approver\'s name are shown on GET /api/sources '
+    const published = 'Published: the reason and the approver\'s name will be shown on GET /api/sources '
         + '(status_reason and routes[].reason).';
     try {
         const row = await db.dbGet('SELECT id FROM data_sources WHERE name = $1', [parsed.slug]);
@@ -164,6 +173,8 @@ async function main(argv, io = {}) {
         const event = (client, ev, reason, routes = null) => recordGateEvent({
             sourceId: row.id, slug: parsed.slug, event: ev, actor: who, approvedBy: who, reason, routes, client,
         });
+        // Re-review F9: said BEFORE the change, so the operator can still stop.
+        if (parsed.command === 'disable') out(published);
         if (parsed.route && parsed.command === 'disable') {
             // Migration 073: the route switch and its 'route_disabled' event
             // (naming the route) in ONE transaction (L6 / L16).
@@ -173,7 +184,6 @@ async function main(argv, io = {}) {
             });
             out(`${parsed.slug}/${parsed.route}: disabled (database route kill switch) — applies before the next run in every `
                 + 'process; the source\'s other routes keep collecting');
-            out(published);
         } else if (parsed.route && parsed.command === 'enable') {
             let changed = false;
             await db.dbTransaction(async (client) => {
@@ -203,7 +213,6 @@ async function main(argv, io = {}) {
                 await event(client, 'disabled', parsed.reason);
             });
             out(`${parsed.slug}: disabled (database kill switch) — applies before its next run in every process`);
-            out(published);
         } else if (parsed.command === 'enable') {
             await db.dbTransaction(async (client) => {
                 const cur = (await client.query(

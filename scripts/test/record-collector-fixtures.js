@@ -27,7 +27,7 @@ require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const { HttpClient } = require('../../src/collectors/http');
-const { getSource, killReason, routeKillReasons, staleRouteKills } = require('../../src/config/source-registry');
+const { getSource, getRoute, killReason, routeKillReasons, staleRouteKills } = require('../../src/config/source-registry');
 
 const DIR = path.join(__dirname, '../../tests/fixtures/collectors/recorded');
 const IDENTITY_KEYS = new Set(['author', 'authors', 'owner', 'user', 'username', 'login', 'avatar_url',
@@ -106,8 +106,9 @@ const TARGETS = [
 
 /**
  * Why a target must not be fetched, or null: its source or route is switched
- * off by a kill switch (env or database). Only the kill switches — not the
- * credential and permission gates, which recording sidesteps by design.
+ * off by a kill switch (env or database), or the source is in its refusal
+ * cooldown. Only these — not the credential and permission gates, which
+ * recording sidesteps by design.
  * @param {string} key   "slug/route"
  * @param {object} env
  * @param {object|null} gov  scripts/collect.js readGovernance(slug)
@@ -115,11 +116,17 @@ const TARGETS = [
 function killedTarget(key, env, gov) {
     const [slug, routeId] = key.split('/');
     const src = getSource(slug);
-    if (!src) return `${key} is not a registry route`;
+    if (!src || !getRoute(src, routeId)) return `${key} is not a registry route`;
     const killed = killReason(src, env);
     if (killed) return killed;
-    if (!gov) return `${slug} has no data_sources row, so its kill switches cannot be checked — run npm run seed`;
-    if (gov.disabled_at) return `${slug} is disabled by the database kill switch`;
+    // The database kill switch and the refusal cooldown, exactly as the
+    // supervised run and collect:smoke apply them (no data_sources row:
+    // cannot be checked, so not fetched).
+    try {
+        require('../collect').assertDbGatesOpen(slug, gov, env);
+    } catch (err) {
+        return err.message;
+    }
     const kills = gov.route_kills || [];
     if (staleRouteKills(src, kills).length) return `${slug} is held disabled by a database route kill switch`;
     return routeKillReasons(src, env, kills).get(routeId) || null;

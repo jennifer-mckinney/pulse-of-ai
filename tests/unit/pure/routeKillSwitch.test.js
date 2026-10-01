@@ -202,6 +202,15 @@ describe('sourceStatus with a route kill switch', () => {
 });
 
 describe('buildCollectors never builds a switched-off route', () => {
+    // Re-review N1/N3: fail closed on its own, without a sourceStatus gate.
+    it('a route-kill hold leaves no open route and builds nothing', () => {
+        for (const [env, routeKills] of [[TEST_ENV, [dbKill('old-forum')]], [withRoutes('huggingface/forum-latest'), []],
+            [withRoutes('hugging_face/forum'), []]]) {
+            expect(openRoutes(HF, env, { routeKills })).toEqual([]);
+            expect(buildCollectors(HF, { env, http: {}, routeKills })).toEqual([]);
+        }
+    });
+
     it('env and database kills are both honoured', () => {
         const ids = (env, routeKills) => buildCollectors(HF, { env, http: {}, routeKills }).map(c => c.route.id);
         expect(ids(TEST_ENV)).toEqual(['daily-papers', 'blog-rss', 'forum-latest']);
@@ -254,6 +263,14 @@ describe('source-admin --route argument rules (migration 073)', () => {
         expect(admin.parseArgs(['reset', 'hugging_face', '--reason', 'x']).error).toMatch(/^source:reset does not take --reason/);
         expect(admin.parseArgs(['disable', 'hugging_face', '--reason', 'line one\nline two']).error).toMatch(/--reason must not contain control characters/);
         expect(admin.parseArgs(['enable', 'hugging_face', '--note', 'x\u001b[31m']).error).toMatch(/--note must not contain control characters/);
+        expect(admin.parseArgs(['disable', 'hugging_face', '--reason', 'terms \u202Eecived']).error).toMatch(/--reason must not contain control characters/);
+    });
+
+    it('a named approval with control or format characters is not a named approval (re-review F10)', () => {
+        for (const v of ['Jen\u001b[31mnifer McKinney 2026-10-01', 'Jennifer \u202EyenniKcM 2026-10-01', 'Jennifer\u200B McKinney 2026-10-01']) {
+            expect(registry.namedApproval({ GATE_APPROVED_BY: v }).ok).toBe(false);
+        }
+        expect(registry.namedApproval({ GATE_APPROVED_BY: 'Jennifer McKinney 2026-10-01' }).ok).toBe(true);
     });
 
     it('refuses --route without a value, on reset, twice, or a stray argument', () => {
@@ -381,6 +398,11 @@ describe('the fixture recorder never fetches a switched-off source or route', ()
         expect(recorder.killedTarget('hugging_face/daily-papers', TEST_ENV, { ...gov, disabled_at: '2026-09-30T12:00:00Z' })).toMatch(/database kill switch/);
         expect(recorder.killedTarget('hugging_face/daily-papers', TEST_ENV, { ...gov, route_kills: [dbKill('old-forum')] })).toMatch(/held disabled/);
         expect(recorder.killedTarget('hugging_face/daily-papers', TEST_ENV, null)).toMatch(/no data_sources row/);
+        // Re-review: a mislabelled target is never fetched; nor a source in its refusal cooldown.
+        expect(recorder.killedTarget('hugging_face/forum', TEST_ENV, gov)).toBe('hugging_face/forum is not a registry route');
+        const cooling = { ...gov, access_denied_at: new Date().toISOString(), access_denied_status: 403, access_denied_kind: 'access_denied',
+            refused_until: new Date(Date.now() + 3600000).toISOString(), refusal_count: 1 };
+        expect(recorder.killedTarget('hugging_face/daily-papers', TEST_ENV, cooling)).toMatch(/refusal cooldown/);
     });
 
     it('main skips a switched-off route, keeps its earlier manifest entry, and records nothing when the database is unreadable', async () => {

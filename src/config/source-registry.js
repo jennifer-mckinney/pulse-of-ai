@@ -1065,7 +1065,7 @@ const ENV_DOCS = {
     COLLECTOR_CONTACT_URL: { group: 'collector', signup: 'https://foundation.wikimedia.org/wiki/Policy:Wikimedia_Foundation_User-Agent_Policy', description: 'Contact URL placed in the collector User-Agent (required: collection is disabled without it)' },
     COLLECTORS_ENABLED: { group: 'kill-switch', signup: null, description: 'Global kill switch: false stops every collector' },
     COLLECTORS_DISABLED: { group: 'kill-switch', signup: null, description: 'Comma-separated source slugs to turn off (per-source kill switch)' },
-    COLLECTORS_DISABLED_ROUTES: { group: 'kill-switch', signup: null, description: 'Comma-separated slug/route ids to turn off (per-route kill switch), e.g. hugging_face/forum-latest; the source\'s other routes keep collecting. Fails closed: an entry whose route is not a route of the source it names holds that whole source disabled, and an entry naming no registry source holds EVERY source disabled, until it is fixed' },
+    COLLECTORS_DISABLED_ROUTES: { group: 'kill-switch', signup: null, description: 'Comma-separated slug/route ids to turn off (per-route kill switch), e.g. hugging_face/forum-latest; the source\'s other routes keep collecting. Fails closed: an entry whose route is not a route of the source it names holds that whole source disabled, and an entry naming no registry source holds EVERY source disabled (Reddit\'s deletion re-checks pause too; its local 48 h text removal does not), until it is fixed' },
     COLLECT_WINDOW_MS: { group: 'collector', signup: null, description: 'Collection cycle length in ms (default 150000)' },
     GATE_APPROVED_BY: { group: 'collector', signup: null, description: 'Named approval ("<name> <YYYY-MM-DD>") required to open ANY gated source — one that needs a key, an approval, a licence or a permission (PR #22 decision G5). Without a valid value those sources stay closed ("awaiting named approval"); keyless sources are unaffected. It is recorded as the approver of every gate opening and of every database kill-switch change (source_gate_events). Empty keeps gated sources closed' },
     PERMISSION_GATED_FEEDS_ACCEPTED_BY: { group: 'collector', signup: null, description: 'Operator acknowledgement ("<name> <YYYY-MM-DD>") that opens the 8 permission-gated news feeds of ADR 0001 ruling 4 (BBC, NYT, Guardian, Al Jazeera, WSJ, NBC, Washington Post, Ars Technica): their terms require permission for automated analysis, and setting this records that you accept that legal risk. Empty keeps them closed' },
@@ -1305,6 +1305,9 @@ function namedApproval(env = process.env) {
     const bad = { ok: false, reason: `${GATE_APPROVAL_ENV} is not "Name YYYY-MM-DD"` };
     if (!m) return bad;
     const name = m[1].trim();
+    // Re-review F10: control and format characters (escapes, bidi
+    // overrides) would spoof the recorded actor wherever it is shown.
+    if (/[\p{Cc}\p{Cf}]/u.test(v)) return bad;
     if (name.length < 2 || !/\p{L}/u.test(name) || /^(name|your name|approver|operator|todo|tbd|changeme|x+)$/i.test(name) || /[<>{}$]/.test(name)) return bad;
     const [y, mo, d] = [Number(m[2]), Number(m[3]), Number(m[4])];
     const dt = new Date(Date.UTC(y, mo - 1, d));
@@ -1337,9 +1340,16 @@ function candidateRoutes(src, env) {
  * killed route never reopens the route it replaced.
  * @param {object} src
  * @param {object} [env]
+ * Fails closed on its own (re-review N1/N3): a route-kill hold — an env
+ * entry naming no registry source or an unknown route of this one, or a
+ * database row naming a route the registry no longer has — leaves no open
+ * route, so buildCollectors builds nothing even for a caller that skipped
+ * sourceStatus.
  * @param {{ routeKills?: object[] }} [o]  source_route_state rows (src/collectors/state.js routeKillSwitches)
  */
 function openRoutes(src, env = process.env, { routeKills = [] } = {}) {
+    const parsed = parseDisabledRoutes(env);
+    if (parsed.invalid.length || parsed.held.has(src.slug) || staleRouteKills(src, routeKills).length) return [];
     const killed = routeKillReasons(src, env, routeKills);
     return candidateRoutes(src, env).filter(r => !killed.has(r.id));
 }

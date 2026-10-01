@@ -15,9 +15,10 @@ const { HttpClient } = require('../../src/collectors/http');
 const { fixtureTransport, TEST_ENV } = require('../helpers/fixtureTransport');
 const { SOURCES } = require('../../src/config/source-registry');
 
-// Dated today: re-enabling needs an approval dated on or after the takedown
-// (security review F6, scripts/source-admin.js).
-const JM = `Jennifer McKinney ${new Date().toISOString().slice(0, 10)}`;
+// Dated tomorrow (UTC): re-enabling needs an approval dated on or after the
+// takedown and at most a day ahead (security review F6), and a run that
+// crosses UTC midnight still passes.
+const JM = `Jennifer McKinney ${new Date(Date.now() + 86400000).toISOString().slice(0, 10)}`;
 const events = (slug) => db.dbAll('SELECT event, gate_status, actor, reason FROM source_gate_events WHERE slug = $1 ORDER BY occurred_at, id', [slug]);
 
 describe('source_gate_events', () => {

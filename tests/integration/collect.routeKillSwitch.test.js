@@ -24,10 +24,12 @@ const { seedSources, seedMethodology } = require('../../scripts/seed');
 const { main: adminMain } = require('../../scripts/source-admin');
 const { fixtureTransport, RECORDED_AT, TEST_ENV } = require('../helpers/fixtureTransport');
 
-// Dated today: re-enabling needs an approval dated on or after the takedown
-// (security review F6). TODAY is the UTC date, as the CLI compares it.
+// Dated tomorrow (UTC): re-enabling needs an approval dated on or after the
+// takedown and at most a day ahead (security review F6), and a run that
+// crosses UTC midnight still passes.
+// TODAY is the UTC date of the takedowns, as the CLI compares it.
 const TODAY = new Date().toISOString().slice(0, 10);
-const APPROVER = `Tess Tester ${TODAY}`;
+const APPROVER = `Tess Tester ${new Date(Date.now() + 86400000).toISOString().slice(0, 10)}`;
 const DB_REASON = why => `kill switch (database): route disabled since ${TODAY} by ${APPROVER} — ${why}`;
 const FORUM = /discuss\.huggingface\.co/;
 const HF_FIXTURES = [
@@ -76,9 +78,10 @@ describe('per-route database kill switch (migration 073)', () => {
         await resetPollClaim();   // the next run is not held back by the poll interval
 
         const r = await admin(['disable', 'hugging_face', '--route', 'forum-latest', '--reason', 'forum terms ban automated access']);
-        expect(r).toEqual({ code: 0, text: expect.stringMatching(/^hugging_face\/forum-latest: disabled \(database route kill switch\)/) });
-        // Security review F9: the operator is told what the takedown publishes.
-        expect(r.text).toMatch(/Published: the reason and the approver's name are shown on GET \/api\/sources/);
+        // Security review F9: the operator is told what the takedown
+        // publishes BEFORE it is made, then that it was made.
+        expect(r).toEqual({ code: 0, text: expect.stringMatching(
+            /^Published: the reason and the approver's name will be shown on GET \/api\/sources .*\nhugging_face\/forum-latest: disabled \(database route kill switch\)/) });
         expect(await routeRows()).toEqual([
             { slug: 'hugging_face', route_id: 'forum-latest', disabled: true, reason: 'forum terms ban automated access', by: APPROVER },
         ]);
@@ -186,11 +189,14 @@ describe('per-route switch: review hardening', () => {
         await admin(['disable', 'hugging_face', '--route', 'forum-latest', '--reason', 'forum terms']);
         await admin(['disable', 'gitlab', '--reason', 'publisher asked']);
         const stale = { GATE_APPROVED_BY: 'Tess Tester 2000-01-01' };
+        const future = { GATE_APPROVED_BY: 'Tess Tester 2099-12-31' };   // a standing far-future date
         for (const argv of [['enable', 'hugging_face', '--route', 'forum-latest'], ['enable', 'gitlab']]) {
             const r = await admin(argv, stale);
             expect(r.code).toBe(2);
             expect(r.text).toContain(`was disabled on ${TODAY} (UTC) and GATE_APPROVED_BY is dated 2000-01-01`);
             expect(r.text).toMatch(/Nothing was changed\.$/);
+            expect(await admin(argv, future)).toEqual({ code: 2,
+                text: expect.stringMatching(/needs a named approval dated today: GATE_APPROVED_BY is dated 2099-12-31, in the future.*Nothing was changed\.$/) });
         }
         expect((await routeRows())[0].disabled).toBe(true);
         expect((await db.dbGet(`SELECT collection_disabled_at IS NOT NULL AS off FROM data_sources WHERE name = 'gitlab'`)).off).toBe(true);
@@ -357,11 +363,20 @@ describe('the governance log and the health evaluator count the route switch', (
         expect(await opened('gitlab')).toEqual([['topic-projects', 'forum-latest'], ['topic-projects'], ['topic-projects', 'forum-latest']]);
     });
 
+    // Re-review N6: a gate_opened written before migration 056 (routes NULL)
+    // is not a route change, so the first run after deploy writes nothing new.
+    it('a gate_opened with no recorded routes (pre-056) is not re-recorded', async () => {
+        await seedSources({ actor: 'test-seed' });
+        await recordGateTransitions({ env: TEST_ENV });
+        await db.dbRun(`INSERT INTO source_gate_events (source_id, slug, event, gate_status, actor)
+                        VALUES ($1, 'npr', 'gate_opened', 'collecting', 'worker scheduler (runtime env)')`, [await sourceId('npr')]);
+        expect(await recordGateTransitions({ env: TEST_ENV })).toEqual([]);
+    });
+
     it('the scheduler records a gate closing when every route is switched off, and its reopening', async () => {
         await seedSources({ actor: 'test-seed' });
         await recordGateTransitions({ env: TEST_ENV });
-        // One route off: the source still collects — no gate change (the
-        // route_disabled event records it).
+        // hacker_news has one route: switching it off closes the gate.
         await admin(['disable', 'hacker_news', '--route', 'algolia-search', '--reason', 'off']);
         const closed = await recordGateTransitions({ env: TEST_ENV });
         expect(closed).toEqual([{ slug: 'hacker_news', event: 'gate_closed', gate_status: 'disabled', approved_by: null }]);
