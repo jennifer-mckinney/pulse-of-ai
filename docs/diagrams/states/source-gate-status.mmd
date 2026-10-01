@@ -28,7 +28,15 @@ stateDiagram-v2
 
   collecting --> disabled : env kill switch (COLLECTORS_ENABLED=false, COLLECTORS_DISABLED, SOURCE_SLUG_ENABLED=false) needs a container recreate
   collecting --> disabled : database kill switch (source-admin disable, needs GATE_APPROVED_BY), applies before the next run
-  disabled --> collecting : source-admin enable (needs GATE_APPROVED_BY), or the env switch removed
+  state kill_cleared <<choice>>
+  disabled --> kill_cleared : kill switch cleared (source-admin enable, needs GATE_APPROVED_BY, or the env switch removed), and the registry gate decides the status again
+  kill_cleared --> collecting : contact URL set and a route open
+  kill_cleared --> awaiting_key : contact URL set, no route open, closedStatus awaiting_key
+  kill_cleared --> awaiting_approval : contact URL set, no route open, closedStatus awaiting_approval
+  kill_cleared --> awaiting_licence : contact URL set, no route open, closedStatus awaiting_licence
+  kill_cleared --> blocked : auth kind blocked, no permission route open or awaiting approval
+  kill_cleared --> blocked_by_source : a route open, but its refusal cooldown or probe is still pending
+  kill_cleared --> disabled : COLLECTOR_CONTACT_URL empty, or another kill switch still set
   collecting --> blocked_by_source : 401, 403, 451, bot challenge or robots disallow, cooldown 1 h doubling to 24 h
   blocked_by_source --> collecting : cooldown over and the one probe run succeeds
   blocked_by_source --> blocked_by_source : probe refused again, cooldown doubles
