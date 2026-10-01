@@ -454,6 +454,43 @@ describe('refusal transitions (grumpy review #5)', () => {
         await collect([HN]);
         expect(await stateOf('hacker_news')).toMatchObject({ refusal_count: 0, probation_until: null, last_refused_at: null });
     });
+
+    // Grumpy final #4: migration 062 added last_refused_at without a
+    // backfill, so a source REFUSED before 062 (access_denied_at set,
+    // last_refused_at NULL) went on probation with no last refusal time, and
+    // an approved env reset then silently did nothing. endCooldown now
+    // carries access_denied_at over when last_refused_at is NULL.
+    it('(iv) a pre-062 REFUSED row: its probe keeps the refusal time, so an approved env reset clears the probation', async () => {
+        await collect([DENIED]);
+        // As written before 062: refused, no last_refused_at.
+        await setState('hacker_news', 'last_refused_at = NULL');
+        const refusedAt = (await stateOf('hacker_news')).access_denied_at;
+        await nextPoll('hacker_news');
+        await endCooldown('hacker_news');
+        await collect([HN]);                             // probe ok → probation
+        const st = await stateOf('hacker_news');
+        expect(st).toMatchObject({ access_denied_at: null, refusal_count: 1 });
+        expect(st.probation_until).not.toBeNull();
+        expect(new Date(st.last_refused_at).getTime()).toBe(new Date(refusedAt).getTime());
+
+        await nextPoll('hacker_news');
+        const resetAt = await resetDateAtRefusal('hacker_news', 'last_refused_at');
+        await collect([HN], { ...TEST_ENV, SOURCE_HACKER_NEWS_RESET: resetAt });
+        expect(await stateOf('hacker_news')).toMatchObject({ refusal_count: 0, probation_until: null, last_refused_at: null });
+        expect(await dbAll(`SELECT event FROM source_gate_events WHERE slug = 'hacker_news' AND event = 'refusal_reset'`))
+            .toEqual([{ event: 'refusal_reset' }]);
+    });
+
+    it('(iv) endCooldown never overwrites a last_refused_at that is already set', async () => {
+        await collect([DENIED]);
+        const before = await stateOf('hacker_news');
+        expect(before.last_refused_at).not.toBeNull();
+        await setState('hacker_news', "last_refused_at = access_denied_at - interval '1 hour'");
+        const kept = (await stateOf('hacker_news')).last_refused_at;
+        const id = await idOf('hacker_news');
+        expect(await state.endCooldown(id, before.access_denied_at)).not.toBeNull();
+        expect(new Date((await stateOf('hacker_news')).last_refused_at).getTime()).toBe(new Date(kept).getTime());
+    });
 });
 
 // Security review: the listed tests.
