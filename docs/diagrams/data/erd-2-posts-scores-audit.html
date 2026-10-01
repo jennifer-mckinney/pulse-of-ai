@@ -38,7 +38,7 @@ erDiagram
     text external_id "UNIQUE with source_id; route:id, route:fp:HMAC, or route:SHA-256 when no PROVENANCE_KEY"
     text content "redacted text; NOT NULL; retention blanks it to a removal notice, never NULL"
     jsonb raw_payload "allowlisted fields, PII fields removed"
-    text content_hash "SHA-256 of normalised content"
+    text content_hash "SHA-256 of stored text; integrity hash, not a join key"
     text location "city level or empty"
     text language
     timestamptz collected_at

@@ -29,7 +29,7 @@
 <pre class="mermaid">
 %% Title: Trust boundaries and security controls
 %% Summary: The three trust boundaries (browser to web, worker to the internet, containers to the host) and the control that guards each crossing: CSP, CORS scope, the refresh CSRF guard, the SSRF guard, named gate approval, secret scrubbing and PII redaction.
-%% Sources: src/server.js (jsonErrorHandler, listenHost), src/middleware/{same-origin,log-error}.js, src/db/connection.js (pool error logging), src/routes/{refresh,audit,sources}.js, src/collectors/{http,netguard,transport,robots,redact,errors,identity,normalize,provenance,governance}.js, src/config/source-registry.js (GATE_APPROVED_BY), src/config/methodology-registry.js (ingest@1.7.0), src/pipeline/ingest.js, src/db/migrations/035, 036 (append-only triggers), 056, docker-compose.yml, public/js/*.js (DOM discipline). Updated 2026-09-29. Spec: TECHNICAL_SPEC.md section 8 (security and privacy).
+%% Sources: src/server.js (jsonErrorHandler, listenHost), src/middleware/{same-origin,log-error}.js, src/db/connection.js (pool error logging), src/routes/{refresh,audit,sources}.js, src/collectors/{http,netguard,transport,robots,redact,errors,identity,normalize,provenance,governance}.js, src/config/source-registry.js (GATE_APPROVED_BY), src/config/methodology-registry.js (ingest@1.8.0), src/pipeline/ingest.js, src/db/migrations/035, 036 (append-only triggers), 056, docker-compose.yml, public/js/*.js (DOM discipline). Updated 2026-09-30. Spec: TECHNICAL_SPEC.md section 8 (security and privacy).
 flowchart LR
 
   subgraph INTERNET["Untrusted · readers' browsers and any caller"]
@@ -57,7 +57,7 @@ flowchart LR
     S4["politeness: contact User-Agent, robots.txt,&lt;br/&gt;per-host spacing; 401/403/451/challenge never retried,&lt;br/&gt;source enters the refused state"]:::done
     S5["secret scrubbing: every stored or logged error passes&lt;br/&gt;redactUrl + scrub (env secrets raw and URL-encoded)"]:::done
     S7["named approval: a gated route (key, approval, licence&lt;br/&gt;or permission) opens only with a valid GATE_APPROVED_BY&lt;br/&gt;(Name YYYY-MM-DD); gate changes recorded with approved_by&lt;br/&gt;in append-only source_gate_events"]:::done
-    S6["PII: allowlisted payload, PII_FIELDS removed,&lt;br/&gt;in-text redaction (ingest@1.7.0), city-level location,&lt;br/&gt;identity-bearing ids stored as keyed fingerprints"]:::done
+    S6["PII: allowlisted payload, PII_FIELDS removed,&lt;br/&gt;in-text redaction (ingest@1.8.0), city-level location,&lt;br/&gt;identity-bearing ids stored as keyed fingerprints"]:::done
   end
 
   subgraph HOSTB["Boundary 3 · containers to the host and network"]
