@@ -55,3 +55,37 @@ test('legal notice: about chip opens the AGPL notices with the source link', asy
 
     expectNoConsoleErrors(errors);
 });
+
+// A pointer click on the chip closes the panel too. In Safari a click does
+// not move focus to the button, so a link inside the panel that had keyboard
+// focus would stay focused inside the hidden subtree. The click is
+// dispatched without moving focus (as Safari does), and focus must still
+// land on the chip (Copilot r4158521470).
+test('legal notice: closing by a click that does not move focus returns it to the chip', async ({ page }) => {
+    const errors = consoleErrors(page);
+    await gotoAndWaitForData(page);
+
+    const chip = page.locator('#about-chip');
+    const panel = page.locator('#about-panel');
+    await chip.click();
+    await expect(panel).toBeVisible();
+
+    const attribution = panel.getByRole('link', { name: 'Built on Pulse of AI by Jennifer McKinney' });
+    await attribution.focus();
+    await expect(attribution).toBeFocused();
+
+    await chip.dispatchEvent('click');
+    await expect(panel).toBeHidden();
+    await expect(chip).toHaveAttribute('aria-expanded', 'false');
+    await expect(chip).toBeFocused();
+
+    // Focus the user moved elsewhere on the page is left where it is.
+    await chip.dispatchEvent('click');
+    await expect(panel).toBeVisible();
+    await page.locator('#health-chip').focus();
+    await chip.dispatchEvent('click');
+    await expect(panel).toBeHidden();
+    await expect(page.locator('#health-chip')).toBeFocused();
+
+    expectNoConsoleErrors(errors);
+});

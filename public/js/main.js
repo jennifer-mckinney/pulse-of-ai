@@ -180,18 +180,28 @@
             panel.hidden = !open;
             chip.setAttribute('aria-expanded', open ? 'true' : 'false');
         };
-        chip.addEventListener('click', () => setOpen(panel.hidden));
-        document.addEventListener('keydown', (e) => {
-            if (e.key !== 'Escape' || panel.hidden) return;
-            // Hiding the panel would strand keyboard focus inside a hidden
-            // subtree when it sits on one of the panel's links, so focus
-            // returns to the controlling chip. Focus that is elsewhere on the
-            // page (another control the user moved to) is left where it is.
+        // close: hiding the panel would strand keyboard focus inside a hidden
+        // subtree when it sits on one of the panel's links, so focus returns
+        // to the controlling chip. Whether it is inside is read BEFORE the
+        // panel hides. Focus that is elsewhere on the page (another control
+        // the user moved to) is left where it is. Shared by Escape and the
+        // chip click: in Safari a click does not focus the button, so a
+        // focused notice link would otherwise stay focused when the chip
+        // closes the panel (Copilot r4158521470).
+        const close = () => {
             const active = document.activeElement;
             const returnFocus = !active || active === document.body
                 || active === chip || panel.contains(active);
             setOpen(false);
             if (returnFocus) chip.focus();
+        };
+        chip.addEventListener('click', () => {
+            if (panel.hidden) setOpen(true);
+            else close();
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Escape' || panel.hidden) return;
+            close();
         });
     }
 
