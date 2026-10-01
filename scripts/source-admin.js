@@ -131,13 +131,14 @@ const utcDate = t => new Date(t).toISOString().slice(0, 10);
  * on the future side allows for an operator ahead of UTC.
  */
 function assertApprovalCovers(approval, disabledAt, what, command, now = Date.now()) {
-    if (!disabledAt) return;
+    // The future-date limit applies to every enable (Copilot): a far-future
+    // approval is refused even when nothing is switched off.
     const latest = utcDate(now + 86400000);
     if (approval.date > latest) {
         throw new Refused(`${command} needs a named approval dated today: ${GATE_APPROVAL_ENV} is dated ${approval.date}, `
             + `in the future (today is ${utcDate(now)} UTC). Nothing was changed.`);
     }
-    if (approval.date >= utcDate(disabledAt)) return;
+    if (!disabledAt || approval.date >= utcDate(disabledAt)) return;
     throw new Refused(`${command} needs a named approval dated on or after the takedown it reverses: ${what} was disabled on `
         + `${utcDate(disabledAt)} (UTC) and ${GATE_APPROVAL_ENV} is dated ${approval.date}. Set ${GATE_APPROVAL_ENV}="Name YYYY-MM-DD" `
         + 'with the date of the approval to re-enable it. Nothing was changed.');
@@ -187,6 +188,14 @@ async function main(argv, io = {}) {
         } else if (parsed.route && parsed.command === 'enable') {
             let changed = false;
             await db.dbTransaction(async (client) => {
+                // Copilot: FOR UPDATE locks nothing when the route has no
+                // row, so a concurrent disable could commit between this
+                // read and the clear below and be undone unchecked. A
+                // cleared row is made to exist first, then locked: disable
+                // and enable of one route serialize on it.
+                await client.query(
+                    `INSERT INTO source_route_state (source_id, route_id) VALUES ($1, $2) ON CONFLICT (source_id, route_id) DO NOTHING`,
+                    [row.id, parsed.route]);
                 const cur = (await client.query(
                     `SELECT collection_disabled_at FROM source_route_state WHERE source_id = $1 AND route_id = $2 FOR UPDATE`,
                     [row.id, parsed.route])).rows[0];

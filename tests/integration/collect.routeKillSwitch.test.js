@@ -363,14 +363,28 @@ describe('the governance log and the health evaluator count the route switch', (
         expect(await opened('gitlab')).toEqual([['topic-projects', 'forum-latest'], ['topic-projects'], ['topic-projects', 'forum-latest']]);
     });
 
-    // Re-review N6: a gate_opened written before migration 056 (routes NULL)
-    // is not a route change, so the first run after deploy writes nothing new.
-    it('a gate_opened with no recorded routes (pre-056) is not re-recorded', async () => {
+    // A gate_opened written before migration 056 has no routes (NULL): the
+    // next run records ONE baseline with the routes, then compares normally,
+    // so a later route change is still recorded.
+    it('a gate_opened with no recorded routes (pre-056) gets one baseline, then route changes are recorded', async () => {
         await seedSources({ actor: 'test-seed' });
         await recordGateTransitions({ env: TEST_ENV });
         await db.dbRun(`INSERT INTO source_gate_events (source_id, slug, event, gate_status, actor)
-                        VALUES ($1, 'npr', 'gate_opened', 'collecting', 'worker scheduler (runtime env)')`, [await sourceId('npr')]);
+                        VALUES ($1, 'hugging_face', 'gate_opened', 'collecting', 'worker scheduler (runtime env)')`, [await sourceId('hugging_face')]);
+        expect((await recordGateTransitions({ env: TEST_ENV })).map(e => e.slug)).toEqual(['hugging_face']);   // the baseline
         expect(await recordGateTransitions({ env: TEST_ENV })).toEqual([]);
+        await admin(['disable', 'hugging_face', '--route', 'forum-latest', '--reason', 'forum terms']);
+        expect((await recordGateTransitions({ env: TEST_ENV })).map(e => e.slug)).toEqual(['hugging_face']);
+    });
+
+    // Copilot: an enable of a route with no row still serializes with a
+    // concurrent disable (a cleared row is created, then locked).
+    it('enabling a route that has no row leaves a cleared row behind and records no change', async () => {
+        expect((await admin(['enable', 'hugging_face', '--route', 'daily-papers'])).code).toBe(0);
+        expect(await routeRows()).toEqual([{ slug: 'hugging_face', route_id: 'daily-papers', disabled: false, reason: null, by: null }]);
+        // A far-future approval is refused even when nothing is switched off.
+        expect((await admin(['enable', 'hugging_face', '--route', 'daily-papers'], { GATE_APPROVED_BY: 'Tess Tester 2099-12-31' })).code).toBe(2);
+        expect((await admin(['enable', 'npr'], { GATE_APPROVED_BY: 'Tess Tester 2099-12-31' })).code).toBe(2);
     });
 
     it('the scheduler records a gate closing when every route is switched off, and its reopening', async () => {

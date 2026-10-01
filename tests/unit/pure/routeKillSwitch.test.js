@@ -267,10 +267,14 @@ describe('source-admin --route argument rules (migration 073)', () => {
     });
 
     it('a named approval with control or format characters is not a named approval (re-review F10)', () => {
-        for (const v of ['Jen\u001b[31mnifer McKinney 2026-10-01', 'Jennifer \u202EyenniKcM 2026-10-01', 'Jennifer\u200B McKinney 2026-10-01']) {
+        for (const v of ['Jen\u001b[31mnifer McKinney 2026-10-01', 'Jennifer \u202EyenniKcM 2026-10-01', 'Jennifer\u200B McKinney 2026-10-01',
+            'Jennifer\nMcKinney 2026-10-01', 'Jennifer\tMcKinney 2026-10-01', 'Jennifer McKinney\r\n2026-10-01']) {
             expect(registry.namedApproval({ GATE_APPROVED_BY: v }).ok).toBe(false);
         }
         expect(registry.namedApproval({ GATE_APPROVED_BY: 'Jennifer McKinney 2026-10-01' }).ok).toBe(true);
+        // Surrounding whitespace and repeated spaces are still only spacing.
+        expect(registry.namedApproval({ GATE_APPROVED_BY: '  Jennifer   McKinney 2026-10-01\n' }))
+            .toMatchObject({ ok: true, value: 'Jennifer McKinney 2026-10-01' });
     });
 
     it('refuses --route without a value, on reset, twice, or a stray argument', () => {

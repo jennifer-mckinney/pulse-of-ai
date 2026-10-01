@@ -94,8 +94,10 @@ async function recordGateTransitions({ env = process.env, actor = SCHEDULER_ACTO
         // routes change (a route kill switch set or cleared by env or
         // database — security review F5: an env route change leaves a record).
         // A gate event written before migration 056 has no routes (NULL):
-        // unknown, not a change — no re-record on the first run after deploy.
-        const sameRoutes = r.last_routes == null || sameSet(r.last_routes, st.openRoutes);
+        // the first run after deploy records ONE baseline gate_opened with
+        // its routes, which every later route change is compared with
+        // (Copilot: treating NULL as "same" would hide every later change).
+        const sameRoutes = r.last_routes != null && sameSet(r.last_routes, st.openRoutes);
         if (r.last_status === st.status && (!open || ((r.last_approved_by || null) === approvedBy && sameRoutes))) continue;
         const event = open ? 'gate_opened' : 'gate_closed';
         await recordGateEvent({

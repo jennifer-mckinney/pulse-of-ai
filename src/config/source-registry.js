@@ -1300,14 +1300,16 @@ function isGatedRoute(route) {
 function namedApproval(env = process.env) {
     const raw = env ? env[GATE_APPROVAL_ENV] : undefined;
     if (!nonEmpty(raw)) return { ok: false, reason: `${GATE_APPROVAL_ENV} is not set` };
-    const v = raw.trim().replace(/\s+/g, ' ');
-    const m = v.match(/^(.+) (\d{4})-(\d{2})-(\d{2})$/);
     const bad = { ok: false, reason: `${GATE_APPROVAL_ENV} is not "Name YYYY-MM-DD"` };
+    // Re-review F10 / Copilot: control and format characters (newlines,
+    // tabs, escapes, bidi overrides) inside the value would spoof the
+    // recorded actor wherever it is shown — checked BEFORE spaces are
+    // normalised, which would otherwise erase a newline or tab.
+    if (/[\p{Cc}\p{Cf}]/u.test(raw.trim())) return bad;
+    const v = raw.trim().replace(/ +/g, ' ');
+    const m = v.match(/^(.+) (\d{4})-(\d{2})-(\d{2})$/);
     if (!m) return bad;
     const name = m[1].trim();
-    // Re-review F10: control and format characters (escapes, bidi
-    // overrides) would spoof the recorded actor wherever it is shown.
-    if (/[\p{Cc}\p{Cf}]/u.test(v)) return bad;
     if (name.length < 2 || !/\p{L}/u.test(name) || /^(name|your name|approver|operator|todo|tbd|changeme|x+)$/i.test(name) || /[<>{}$]/.test(name)) return bad;
     const [y, mo, d] = [Number(m[2]), Number(m[3]), Number(m[4])];
     const dt = new Date(Date.UTC(y, mo - 1, d));
