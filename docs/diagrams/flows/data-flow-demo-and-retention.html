@@ -12,7 +12,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Pulse of AI · Data flow · demo population and retention</title>
-<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.12.1/dist/mermaid.min.js" integrity="sha384-LlKSgo4Eo5GuF/ZrstLti44dE+GC5XAJ7TSu0Nw9Q3vIZF2QMnkRcK7BUoLabYLF" crossorigin="anonymous"></script>
 <style>
   body { margin: 0; padding: 32px 40px; background: #ffffff; color: #1b1f23;
          font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
@@ -24,11 +24,11 @@
 </head>
 <body>
 <h1>Data flow · demo population and retention</h1>
-<p class="summary">The demo fallback path (fictional posts through the real scorers, labelled DEMO end to end) and the retention flows run by the worker&#x27;s maintenance jobs: text removal by blanking (platform-terms windows, the Reddit deletion re-check, the detail window), the demo purge, monthly compaction and the source_runs rollup.</p>
+<p class="summary">The demo population path (fictional demo-feed posts stored and scored through the real pipeline, labelled DEMO end to end; the page&#x27;s bundled fallback, never stored or scored, is separate) and the retention flows run by the worker&#x27;s maintenance jobs: text removal by blanking (platform-terms windows, the Reddit deletion re-check, the detail window), the demo purge, monthly compaction and the source_runs rollup.</p>
 <p class="source">Canonical source: <code>data-flow-demo-and-retention.mmd</code> · index: <code>docs/diagrams/README.md</code></p>
 <pre class="mermaid">
 %% Title: Data flow · demo population and retention
-%% Summary: The demo fallback path (fictional posts through the real scorers, labelled DEMO end to end) and the retention flows run by the worker's maintenance jobs: text removal by blanking (platform-terms windows, the Reddit deletion re-check, the detail window), the demo purge, monthly compaction and the source_runs rollup.
+%% Summary: The demo population path (fictional demo-feed posts stored and scored through the real pipeline, labelled DEMO end to end; the page's bundled fallback, never stored or scored, is separate) and the retention flows run by the worker's maintenance jobs: text removal by blanking (platform-terms windows, the Reddit deletion re-check, the detail window), the demo purge, monthly compaction and the source_runs rollup.
 %% Sources: scripts/populate.js, scripts/standup.sh, docker-compose.yml (populate, collector settings), src/config/data-mode.js, src/config/source-registry.js (retentionHours, sourceStatus), src/workers/maintenance.worker.js, src/workers/start.js, src/collectors/retention.js, src/collectors/run-retention.js, src/collectors/reddit/{maintenance,recheck}.js, scripts/compact.js; migrations 005, 025, 031, 034, 039. Spec: TECHNICAL_SPEC.md section 19 (layered retention); ADR 0001 ruling 9; PR #22 decisions G3, G4, G5.
 flowchart LR
 

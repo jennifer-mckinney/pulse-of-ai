@@ -12,7 +12,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Pulse of AI · State · retention lifecycle of a stored post</title>
-<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.12.1/dist/mermaid.min.js" integrity="sha384-LlKSgo4Eo5GuF/ZrstLti44dE+GC5XAJ7TSu0Nw9Q3vIZF2QMnkRcK7BUoLabYLF" crossorigin="anonymous"></script>
 <style>
   body { margin: 0; padding: 32px 40px; background: #ffffff; color: #1b1f23;
          font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
@@ -33,7 +33,7 @@
 stateDiagram-v2
   direction LR
 
-  [*] --&gt; detail : stored (raw_posts, scores, audit rows) with an embed job for a live post with relevance ≥ 1/21 and for a demo post, when the run has embeddings enabled and the service ready (a later populate --once backfills the hour)
+  [*] --&gt; detail : stored (raw_posts, scores, audit rows), embed job for a live post with relevance ≥ 1/21 (none from a populate run without a ready service) and for a demo post when its populate run has embeddings on and the service ready (a later populate --once backfills the hour's demo posts)
 
   state "Tier 1 · full detail&lt;br/&gt;shown on the page for its trailing hour,&lt;br/&gt;receipt available" as detail
   state "text blanked, platform terms&lt;br/&gt;content = the source's removal notice,&lt;br/&gt;text_removed_at set, embedding deleted&lt;br/&gt;in the same transaction (G3);&lt;br/&gt;scores, audit rows, hash, fingerprint kept" as blanked

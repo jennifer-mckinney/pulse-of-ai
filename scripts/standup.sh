@@ -212,7 +212,7 @@ else
     warn "the embeddings service is NOT ready (state ${e_state:-unknown}, health ${e_health:-unknown}, restarts ${restarts:-0}) after $(elapsed "$t_emb")s."
     warn "Most likely the sentence-transformers model could not be downloaded (offline, proxy, or Hugging Face unreachable)."
     warn "Continuing WITHOUT embeddings: posts are scored and audited, but vector search stays empty."
-    warn "Fix the network, then re-run '$(stack_cmd standup)' (the model is cached in the hf_cache volume once downloaded; the re-run embeds the posts this run could not)."
+    warn "Fix the network, then re-run '$(stack_cmd standup)' (the model is cached in the hf_cache volume once downloaded; the re-run backfills embeddings for the trailing hour's demo posts; live posts collected now stay without one)."
     compose_full logs --no-color --tail 25 embeddings >&2 || true
 fi
 

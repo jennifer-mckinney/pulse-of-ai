@@ -12,7 +12,7 @@ sequenceDiagram
   Reader->>UI: click "why?" on a post (city detail or featured post)
   UI->>Main: freezeInsightTimer() (first receipt)
   UI->>UI: open the audit drawer, loading state
-  alt bundled fallback data (the page could not load /api), or the post id is not a UUID
+  alt bundled fallback data (the API failed or holds no posts), or the post id is not a UUID
     UI->>UI: build the receipt locally (fictional, nothing stored), never call the API
   else a stored post, live or a demo-feed post from the database (isDemo false)
     UI->>API: GET /api/audit/{post_id}

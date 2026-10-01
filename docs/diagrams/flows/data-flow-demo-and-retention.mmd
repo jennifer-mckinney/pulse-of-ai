@@ -1,5 +1,5 @@
 %% Title: Data flow · demo population and retention
-%% Summary: The demo fallback path (fictional posts through the real scorers, labelled DEMO end to end) and the retention flows run by the worker's maintenance jobs: text removal by blanking (platform-terms windows, the Reddit deletion re-check, the detail window), the demo purge, monthly compaction and the source_runs rollup.
+%% Summary: The demo population path (fictional demo-feed posts stored and scored through the real pipeline, labelled DEMO end to end; the page's bundled fallback, never stored or scored, is separate) and the retention flows run by the worker's maintenance jobs: text removal by blanking (platform-terms windows, the Reddit deletion re-check, the detail window), the demo purge, monthly compaction and the source_runs rollup.
 %% Sources: scripts/populate.js, scripts/standup.sh, docker-compose.yml (populate, collector settings), src/config/data-mode.js, src/config/source-registry.js (retentionHours, sourceStatus), src/workers/maintenance.worker.js, src/workers/start.js, src/collectors/retention.js, src/collectors/run-retention.js, src/collectors/reddit/{maintenance,recheck}.js, scripts/compact.js; migrations 005, 025, 031, 034, 039. Spec: TECHNICAL_SPEC.md section 19 (layered retention); ADR 0001 ruling 9; PR #22 decisions G3, G4, G5.
 flowchart LR
 

@@ -77,7 +77,7 @@ When it finishes, open **http://localhost:3000**: the globe, the eleven chapters
 
 Re-running is safe: images come from the build cache, running containers are kept, and a second demo batch is skipped while the trailing hour is full. Flags: `npm run standup -- --help`. `--yes` never prompts, `--no-build` skips the image build, `--demo` adds a fresh demo batch. Timeouts: `STANDUP_TIMEOUT` (core services, default 300 s) and `STANDUP_EMBEDDINGS_TIMEOUT` (first model download, default 900 s).
 
-The first start downloads the ~90 MB `all-MiniLM-L6-v2` model into the `hf_cache` volume. If that fails (offline, proxy), standup says so and carries on: posts are still scored and audited, but they get no embeddings. Fix the network and run standup again.
+The first start downloads the ~90 MB `all-MiniLM-L6-v2` model into the `hf_cache` volume. If that fails (offline, proxy), standup says so and carries on: posts are still scored and audited, but they get no embeddings. Fix the network and run standup again: the re-run backfills embeddings for the trailing hour's demo posts; live posts collected while the service was down stay without one.
 
 ### What runs where
 
@@ -87,7 +87,7 @@ The first start downloads the ~90 MB `all-MiniLM-L6-v2` model into the `hf_cache
 | `worker` | none | Collection scheduler and `collect.{rss,api,bulk}` consumers, refresh collections, scoring (the `ingest` queue), cycle close and bias checks, embed jobs, the `maintenance` schedules (retention, compaction, run rollups, the rolling bias window, terms snapshots) and Reddit maintenance (`src/workers/start.js`). The only role holding collector credentials: it loads the env file (`PULSE_ENV_FILE`, default `.env`) whole through Compose `env_file`, while web gets only a "set" marker per credential. Healthy while its heartbeat is fresh; `docker stop` gives it 180 s to finish in-flight jobs |
 | `embeddings` | none (compose network only, `embeddings:8000`) | `POST /embeddings` and `GET /health`, unauthenticated, so never published |
 | `watchdog` | none | External alerting (see [Alerting](#alerting)). Polls `/api/health` every 2 minutes from its own container, so it still alerts when the worker is dead; writes critical alerts to the database and e-mails them. Holds only the database password and the SMTP settings; the only role that gets `SMTP_PASSWORD` |
-| `populate` | none | Demo fallback (profile `demo`): a fictional batch every 150 s, only while the trailing hour has no live posts |
+| `populate` | none | Demo feed (profile `demo`): stores and scores a fictional batch every 150 s, only while the trailing hour has no live posts (not the page's bundled fallback) |
 | `migrate` | none | One-shot: migrations and seed |
 | `postgres` | `POSTGRES_PORT` (`5434` in `.env.example`; `5432` if unset) | PostgreSQL 16 + pgvector (`postgres_data` volume) |
 | `postgres_test` | `5433` (`POSTGRES_TEST_PORT`) | Test database, not used by the running app |

@@ -12,7 +12,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Pulse of AI · Sequence · the &quot;why?&quot; audit receipt</title>
-<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.12.1/dist/mermaid.min.js" integrity="sha384-LlKSgo4Eo5GuF/ZrstLti44dE+GC5XAJ7TSu0Nw9Q3vIZF2QMnkRcK7BUoLabYLF" crossorigin="anonymous"></script>
 <style>
   body { margin: 0; padding: 32px 40px; background: #ffffff; color: #1b1f23;
          font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
@@ -41,7 +41,7 @@ sequenceDiagram
   Reader-&gt;&gt;UI: click "why?" on a post (city detail or featured post)
   UI-&gt;&gt;Main: freezeInsightTimer() (first receipt)
   UI-&gt;&gt;UI: open the audit drawer, loading state
-  alt bundled fallback data (the page could not load /api), or the post id is not a UUID
+  alt bundled fallback data (the API failed or holds no posts), or the post id is not a UUID
     UI-&gt;&gt;UI: build the receipt locally (fictional, nothing stored), never call the API
   else a stored post, live or a demo-feed post from the database (isDemo false)
     UI-&gt;&gt;API: GET /api/audit/{post_id}
