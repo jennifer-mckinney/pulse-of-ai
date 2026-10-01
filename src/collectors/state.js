@@ -325,9 +325,11 @@ async function loadHolds() {
  * access_denied_*) and opens no alert: a rate limit is a backoff.
  * @param {string} sourceId
  * @param {{ hosts: string[], changes?: Map, view?: object, routes?: object,
- *           limited?: boolean, headers?: object|null }} o
+ *           limited?: boolean, headers?: object|null, src?: object }} o
+ *   src: the registry source — rate_limited_until then counts only its
+ *   collection hosts (never its terms page's)
  */
-async function saveHolds(sourceId, { hosts, changes = new Map(), view = {}, routes = {}, limited = false, headers = null }) {
+async function saveHolds(sourceId, { hosts, changes = new Map(), view = {}, routes = {}, limited = false, headers = null, src = null }) {
     const rl = require('./rate-limit');
     const { dbTransaction } = require('../db/connection');
     const now = Date.now();
@@ -360,7 +362,9 @@ async function saveHolds(sourceId, { hosts, changes = new Map(), view = {}, rout
                 stored[host] = rl.combineHold(stored[host], viewClean[host]);
             }
         }
-        const active = Object.values(rl.activeHolds(stored, now)).map(h => h.until).sort();
+        // rate_limited_until: the source's COLLECTION holds only — a held
+        // terms page (src given) is not the source being rate-limited.
+        const active = Object.values(rl.activeHolds(src ? rl.collectionHolds(src, stored) : stored, now)).map(h => h.until).sort();
         const saved = headers && Object.keys(headers).length ? JSON.stringify(headers) : null;
         await client.query(
             `UPDATE source_collection_state
@@ -420,7 +424,7 @@ async function saveHoldChanges(changes, view, { env = process.env } = {}) {
         const mine = [...changes.keys()].filter(h => hosts.has(h));
         const id = ids.get(src.slug);
         if (!mine.length || !id) continue;
-        await saveHolds(id, { hosts: mine, changes, view, routes: rl.holdGate(src, env, view, Date.now()).routes });
+        await saveHolds(id, { hosts: mine, changes, view, routes: rl.holdGate(src, env, view, Date.now()).routes, src });
     }
 }
 

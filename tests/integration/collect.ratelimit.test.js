@@ -261,6 +261,8 @@ describe('a GitHub rate limit is a host backoff, not a refusal', () => {
         // and a throttled terms page is not shown as the source rate-limited.
         expect(st.rate_limited_hosts).not.toHaveProperty(['api.github.com']);
         expect(await rowOf('github')).toMatchObject({ status: 'collecting', rate_limited_until: null, rate_limited_hosts: [] });
+        // Grumpy NIT: the stored column agrees (a terms page is not the source).
+        expect(st.rate_limited_until).toBeNull();
         const t2 = fixtureTransport([[/./, { body: 'terms' }]]);
         await snapshotTerms({ http: new HttpClient({ env: TEST_ENV, transport: t2, sleep: () => Promise.resolve() }), slugs: ['github'] });
         expect(t2.calls).toHaveLength(0);

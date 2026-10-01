@@ -240,7 +240,7 @@ async function runCollection(o = {}) {
                 row.status = RATE_LIMITED;
                 row.reason = held.reason;
                 row.rateLimitedUntil = held.until;
-                await state.saveHolds(sourceId, { hosts: myHosts, view: runHolds, routes: held.routes });
+                await state.saveHolds(sourceId, { hosts: myHosts, view: runHolds, routes: held.routes, src });
                 log(`[collect] ${slug}: skipped — ${held.reason}`);
                 continue;
             }
@@ -375,7 +375,7 @@ async function runCollection(o = {}) {
             // overwrite of another run's newer hold.
             await state.saveHolds(sourceId, {
                 hosts: myHosts, changes: http.drainHoldChanges(), view: runHolds, routes: after.routes,
-                limited: !!limitedErr, headers: rateLimitHeaders,
+                limited: !!limitedErr, headers: rateLimitHeaders, src,
             });
             if (heldRoutes.length) log(`[collect] ${slug}: not requested (rate-limit backoff, honoured): ${[...new Set(heldRoutes)].join(', ')}`);
             if (okRoutes === 0 && routeErrors.length === 0 && heldRoutes.length > 0) {
