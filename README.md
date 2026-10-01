@@ -307,10 +307,10 @@ Optional embeddings service on the host (Python 3.11 or newer; CI tests 3.11 and
 python3 -m venv python/.venv
 python/.venv/bin/pip install "torch==2.12.1" --index-url https://download.pytorch.org/whl/cpu   # CPU-only torch first; PyPI's default build pulls ~2 GB of CUDA libraries
 python/.venv/bin/pip install -r python/requirements.txt
-bash python/start.sh        # uvicorn on 0.0.0.0:8000, ALL interfaces (EMBEDDINGS_SERVICE_URL); the API is unauthenticated
+bash python/start.sh        # uvicorn on 127.0.0.1:8000 (EMBEDDINGS_SERVICE_URL); EMBEDDINGS_HOST=0.0.0.0 serves other machines (the API is unauthenticated)
 ```
 
-If `python3 --version` is older than 3.11, name a newer interpreter instead (for example `python3.11 -m venv python/.venv`). The torch pin has no `+cpu` suffix on purpose, so the same line works on macOS and Linux: the CPU index serves `torch 2.12.1` on macOS and `2.12.1+cpu` on Linux, and `==2.12.1` matches both. Keep its version equal to the `torch` pin in `python/requirements-service.in`. `python/start.sh` listens on every interface, so while it runs anyone who can reach this machine on port 8000 can use the unauthenticated embeddings API; run it only on a trusted network or behind a host firewall.
+If `python3 --version` is older than 3.11, name a newer interpreter instead (for example `python3.11 -m venv python/.venv`). The torch pin has no `+cpu` suffix on purpose, so the same line works on macOS and Linux: the CPU index serves `torch 2.12.1` on macOS and `2.12.1+cpu` on Linux, and `==2.12.1` matches both. Keep its version equal to the `torch` pin in `python/requirements-service.in`. `python/start.sh` listens on 127.0.0.1 only. `EMBEDDINGS_HOST` opts in to another address (for example `0.0.0.0`), and it prints a warning when it does: the API is unauthenticated, so anyone who can reach that address can use it. An empty `EMBEDDINGS_HOST` counts as unset.
 
 `npm run dev` listens on 127.0.0.1 unless `HOST` or `PULSE_BIND_ADDR` names another address. Bound beyond loopback, or reached through a reverse proxy, `POST /api/refresh` is refused until you set `REFRESH_TOKEN`; once it is set, every refresh must send it in `X-Refresh-Token` (see [Security and privacy](#security-and-privacy)).
 
