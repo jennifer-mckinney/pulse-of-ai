@@ -120,4 +120,11 @@ async function main() {
     fs.writeFileSync(path.join(DIR, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
 }
 
-main();
+// Grumpy re-review: a failure is reported (never an unhandled rejection) and
+// the database pool opened for the holds is closed, so the script exits.
+main()
+    .catch((err) => {
+        process.stderr.write(`record-collector-fixtures: FAILED — ${require('../../src/collectors/redact').scrub(String(err && err.message))}\n`);
+        process.exitCode = 1;
+    })
+    .finally(() => require('../../src/db/connection').closePool().catch(() => {}));

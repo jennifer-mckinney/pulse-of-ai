@@ -381,6 +381,15 @@ describe('rate limits (grumpy #1, diagnosis 2026-10-01): Reddit asked us to wait
         expect(bud.used).toBe(used);
     });
 
+    test('Copilot: a held TOKEN host holds the API too, even with a cached token (prerequisite hosts)', async () => {
+        const warm = apiOver([TOKEN, [INFO, { body: '{"kind":"Listing","data":{"children":[]}}' }]]);
+        await warm.api.info(names(1));                           // the token is now cached
+        const holds = { 'www.reddit.com': { until: new Date(Date.now() + 60000).toISOString(), http_status: 429, signal: 'http_429', count: 1, weak: 0 } };
+        const { api, transport } = apiOver([TOKEN, [INFO, { body: '{}' }]], holds);
+        await expect(api.info(names(1))).rejects.toMatchObject({ held: true, host: 'www.reddit.com' });
+        expect(transport.calls).toHaveLength(0);
+    });
+
     test('a held API host: no token is fetched and no request sent', async () => {
         const holds = { 'oauth.reddit.com': { until: new Date(Date.now() + 60000).toISOString(), http_status: 429, signal: 'http_429', count: 1, weak: 0 } };
         const { api, transport } = apiOver([TOKEN, [INFO, { body: '{}' }]], holds);

@@ -43,7 +43,7 @@ const FAILING_AFTER = 3;
 // many times in a row (rate-limit.js WARN_AFTER; the streak resets on its
 // first success). A run whose OTHER routes succeed is 'ok', so
 // consecutive_failures never sees persistent throttling of one host.
-const { WARN_AFTER: RATE_LIMITED_WARN_AFTER, sanitizeHolds, CONFIGURED_HOST } = require('./rate-limit');
+const { WARN_AFTER: RATE_LIMITED_WARN_AFTER, sanitizeHolds, collectionHolds, CONFIGURED_HOST } = require('./rate-limit');
 const TYPES = Object.freeze(['source_stale', 'source_failing', 'source_refused', 'source_rate_limited']);
 
 /**
@@ -53,7 +53,8 @@ const TYPES = Object.freeze(['source_stale', 'source_failing', 'source_refused',
 function throttledHosts(row, src, now) {
     const { routeAllowedHosts } = require('../config/source-registry');
     const registry = new Set(src.routes.flatMap(r => routeAllowedHosts(r, {})));
-    const hit = Object.entries(sanitizeHolds(row.rate_limited_hosts, now)).filter(([, h]) => h.count >= RATE_LIMITED_WARN_AFTER);
+    // A throttled terms page is not the source being rate-limited.
+    const hit = Object.entries(sanitizeHolds(collectionHolds(src, row.rate_limited_hosts), now)).filter(([, h]) => h.count >= RATE_LIMITED_WARN_AFTER);
     return {
         hosts: [...new Set(hit.map(([host]) => (registry.has(host) ? host : CONFIGURED_HOST)))].sort(),
         max_count: hit.reduce((m, [, h]) => Math.max(m, h.count), 0),

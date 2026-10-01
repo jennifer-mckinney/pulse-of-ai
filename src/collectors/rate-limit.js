@@ -125,8 +125,13 @@ function parseRetryAfter(headers, now = Date.now()) {
         return ms > 0 ? ms : null;
     }
     if (IMF_FIXDATE.test(v)) {
-        const ms = Date.parse(v) - now;
-        return Number.isFinite(ms) && ms > 0 ? ms : null;
+        // Copilot review: the shape is not enough — Date.parse rolls 31 Feb
+        // into March and ignores a wrong weekday. Only a date that formats
+        // back to exactly the same string is a real one.
+        const t = Date.parse(v);
+        if (!Number.isFinite(t) || new Date(t).toUTCString() !== v) return null;
+        const ms = t - now;
+        return ms > 0 ? ms : null;
     }
     // Not strict delay-seconds, but a number beyond the cap (1e306): the
     // cap, never an early retry (F4).
@@ -288,18 +293,30 @@ function nextHold(prev, { retryAt = null, status = null, signal = null, weak = f
 
 /**
  * Merge `source` holds into `target` per host: the NEWEST record (`at`)
- * wins whole — its until and its streaks (Copilot review: a fieldwise
- * maximum resurrected a weak streak that a later strong limit had reset).
+ * gives the streaks and signal (Copilot review: a fieldwise maximum
+ * resurrected a weak streak that a later strong limit had reset), but the
+ * hold lasts until the LATEST until among the copies (security N6: a newer,
+ * shorter record never frees a host before another copy's stated time).
  */
 function mergeHolds(target, source, now = Date.now()) {
-    for (const [host, h] of Object.entries(sanitizeHolds(source, now))) {
-        const t = target[host];
-        const ta = t ? Date.parse(t.at) : NaN;
-        if (!t || !Number.isFinite(ta) || Date.parse(h.at) > ta || (Date.parse(h.at) === ta && Date.parse(h.until) > Date.parse(t.until))) {
-            target[host] = h;
-        }
-    }
+    for (const [host, h] of Object.entries(sanitizeHolds(source, now))) target[host] = combineHold(target[host], h);
     return target;
+}
+
+/**
+ * Two records of one host's hold → one (the ONE rule for merging loads and
+ * saves): the newest record (`at`) gives the streaks and signal; the hold
+ * lasts until the latest until of the two (security N6).
+ * @param {object|null} a  may lack `at` (then b is the newer)
+ * @param {object} b       a sanitised record
+ */
+function combineHold(a, b) {
+    if (!a) return b;
+    const ta = Date.parse(a.at);
+    const newest = !Number.isFinite(ta) || Date.parse(b.at) > ta ? b : a;
+    const ua = Date.parse(a.until);
+    const until = Math.max(Date.parse(b.until), Number.isFinite(ua) ? ua : -Infinity);
+    return { ...newest, until: new Date(until).toISOString() };
 }
 
 /** The active hold of a host (hostname), or null. @returns {{ until: number, http_status, signal }|null} */
@@ -392,6 +409,22 @@ function holdGate(src, env, holds, now = Date.now()) {
 }
 
 /**
+ * A source's stored holds WITHOUT its terms-page host (unless a route also
+ * uses it): a throttled terms page (the governance snapshot) is held so it
+ * is not asked early, but it is not the source being rate-limited — it never
+ * shows on /api/sources, in rate_limited_until or in the warning (grumpy
+ * re-review).
+ */
+function collectionHolds(src, holds) {
+    const { routeAllowedHosts } = require('../config/source-registry');
+    const terms = hostOf(src && src.termsUrl);
+    if (!holds || typeof holds !== 'object' || !terms) return holds;
+    const routeHosts = new Set(src.routes.flatMap(r => routeAllowedHosts(r, {})));
+    if (routeHosts.has(terms)) return holds;
+    return Object.fromEntries(Object.entries(holds).filter(([h]) => String(h).toLowerCase() !== terms));
+}
+
+/**
  * The hosts of a source's active holds as /api/sources may publish them
  * (security F3): a host the REGISTRY names (env-free) is served; any other
  * (from a contract feed URL in the env) is CONFIGURED_HOST.
@@ -400,7 +433,7 @@ function holdGate(src, env, holds, now = Date.now()) {
 function publicHosts(src, holds, now = Date.now()) {
     const { routeAllowedHosts } = require('../config/source-registry');
     const registry = new Set(src.routes.flatMap(r => routeAllowedHosts(r, {})));
-    return Object.entries(activeHolds(holds, now))
+    return Object.entries(activeHolds(collectionHolds(src, holds), now))
         .map(([host, h]) => ({ host: registry.has(host) ? host : CONFIGURED_HOST, until: h.until, http_status: h.http_status, signal: h.signal, count: h.count }))
         .sort((a, b) => a.host.localeCompare(b.host) || a.until.localeCompare(b.until));
 }
@@ -409,6 +442,6 @@ module.exports = {
     MIN_BACKOFF_MS, MAX_BACKOFF_MS, MAX_IN_RUN_WAIT_MS, ESCALATE_AFTER, WARN_AFTER, STALE_MS, RATE_LIMITED, SIGNALS,
     WEAK_SIGNALS, BODY_HOSTS, CONFIGURED_HOST, BODY_RE,
     parseRetryAfter, parseReset, bodyNamesRateLimit, rateLimitSignal, backoffUntil,
-    sanitizeHolds, activeHolds, nextHold, mergeHolds, heldUntil, hostOf,
+    sanitizeHolds, activeHolds, nextHold, mergeHolds, combineHold, collectionHolds, heldUntil, hostOf,
     routeRequestHosts, sourceHosts, routeHeldUntil, routeHeld, holdGate, holdReason, publicHosts,
 };

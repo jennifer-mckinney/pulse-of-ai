@@ -140,6 +140,9 @@ class RobotsPolicy {
             // off after a rate limit (diagnosis 2026-10-01, security F5): the
             // route is held, and nothing is cached as "unreachable".
             if (err && err.held === true) throw err;
+            // Nor is a rate limit robots.txt itself answered with (a new hold
+            // of the host), or the 5th body-only one escalated to a refusal.
+            if (err && (err.name === 'RateLimitedError' || err.name === 'AccessDeniedError')) throw err;
             entry = { denyAll: true, unreachable: true, reason: `robots.txt unreachable: ${err.message}` };
         }
         entry.at = this.now();

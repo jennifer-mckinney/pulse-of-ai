@@ -309,6 +309,13 @@ class HttpClient {
         for (let hop = 0; hop < 5; hop++) {
             checkUrl(current);
             const res = await this.raw(current, { headers: {}, maxBytes: ROBOTS_MAX_BYTES }, 0);
+            // Copilot review: robots.txt answering with a RATE LIMIT holds the
+            // host like any other response (never cached as "unreachable" or
+            // read as "allow all"); RobotsPolicy rethrows it uncached.
+            if (res.status === 429 || res.status === 403) {
+                const limited = this.rateLimitError(current, res);
+                if (limited) throw limited;
+            }
             if (!REDIRECTS.includes(res.status) || !res.headers.location) return res;
             current = new URL(res.headers.location, current).toString();
         }

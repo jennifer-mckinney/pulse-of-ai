@@ -105,8 +105,11 @@ class RedditApi {
     async token() {
         const key = cacheKey(this.clientId);
         const hit = TOKENS.get(key);
-        if (hit && hit.expiresAt - REFRESH_EARLY_MS > this.now()) return hit.token;
+        // Copilot review: the token host is a PREREQUISITE of the route
+        // (rate-limit.js mode 'any') — held, it holds the API too, even with
+        // a cached token.
         this.assertNotHeld(TOKEN_HOST, TOKEN_URL);
+        if (hit && hit.expiresAt - REFRESH_EARLY_MS > this.now()) return hit.token;
         await this.grant();
         const basic = Buffer.from(`${this.clientId}:${this.secret}`).toString('base64');
         const res = await this.http.json(TOKEN_URL, this.requestOptions({

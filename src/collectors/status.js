@@ -28,7 +28,7 @@ const { dbAll } = require('../db/connection');
 const { SOURCES, getSource, sourceStatus, killSwitchEnv, GATE_STATUSES } = require('../config/source-registry');
 const { DEMO_SOURCE_TYPE } = require('../config/data-mode');
 const { refusalGate, resetEnv, probationOver, BLOCKED_BY_SOURCE } = require('./refusal');
-const { activeHolds, publicHosts, holdReason, RATE_LIMITED } = require('./rate-limit');
+const { activeHolds, collectionHolds, publicHosts, holdReason, RATE_LIMITED } = require('./rate-limit');
 const { selectionStatus } = require('./reddit/selection');
 
 // Runtime statuses: the registry gate statuses plus 'blocked_by_source' (a
@@ -67,7 +67,7 @@ function rateLimitView(src, row, openRouteIds, now) {
         if (Number.isFinite(t) && t > now) routeMap[r.id] = new Date(t).toISOString();
     }
     const hosts = publicHosts(src, row.rate_limited_hosts, now);
-    const times = [...Object.values(routeMap), ...Object.values(activeHolds(row.rate_limited_hosts, now)).map(h => h.until)].sort();
+    const times = [...Object.values(routeMap), ...Object.values(activeHolds(collectionHolds(src, row.rate_limited_hosts), now)).map(h => h.until)].sort();
     const all = openRouteIds.length > 0 && openRouteIds.every(id => routeMap[id]);
     return { routeMap, hosts, until: times.length ? times[times.length - 1] : null, all };
 }

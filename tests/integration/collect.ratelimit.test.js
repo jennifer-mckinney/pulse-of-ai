@@ -231,6 +231,23 @@ describe('a GitHub rate limit is a host backoff, not a refusal', () => {
         expect((await stateOf('github')).rate_limited_hosts).toHaveProperty(['hn.algolia.com']);
     });
 
+    it('grumpy re-review: saving uses the same combine rule as loading — a newer strong record\'s streak wins, the later until is kept', async () => {
+        const st = require('../../src/collectors/state');
+        await collect([SEARCH_OK, BLOG_OK]);
+        const ghId = (await dbGet(`SELECT id FROM data_sources WHERE name = 'github'`)).id;
+        // Stored: an OLDER weak streak (4) whose hold ends LATER (+1 h).
+        await dbRun(`UPDATE source_collection_state SET rate_limited_hosts = jsonb_build_object('api.github.com', jsonb_build_object(
+                        'until', to_char((NOW() + interval '1 hour') AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+                        'http_status', 403, 'signal', 'body_rate_limit', 'count', 4, 'weak', 4,
+                        'at', to_char((NOW() - interval '5 minutes') AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')))
+                     WHERE source_id = $1`, [ghId]);
+        const newer = { until: new Date(Date.now() + 60000).toISOString(), http_status: 429, signal: 'http_429', count: 5, weak: 0, at: new Date().toISOString() };
+        await st.saveHolds(ghId, { hosts: ['api.github.com'], changes: new Map([['api.github.com', newer]]) });
+        const saved = (await stateOf('github')).rate_limited_hosts['api.github.com'];
+        expect(saved).toMatchObject({ signal: 'http_429', count: 5, weak: 0 });
+        expect(Date.parse(saved.until) - Date.now()).toBeGreaterThan(55 * 60000);
+    });
+
     it('grumpy N2: a rate limit met by the terms fetch is SAVED (on the source whose terms page it is) and honoured next time', async () => {
         const { snapshotTerms } = require('../../src/collectors/governance');
         const { HttpClient } = require('../../src/collectors/http');
@@ -240,8 +257,10 @@ describe('a GitHub rate limit is a host backoff, not a refusal', () => {
         expect(row.status).toBe('unreachable');
         const st = await stateOf('github');
         expect(st.rate_limited_hosts['docs.github.com']).toMatchObject({ http_status: 429, signal: 'http_429', count: 1 });
-        // The collector's own hosts are untouched (github keeps collecting).
+        // The collector's own hosts are untouched (github keeps collecting),
+        // and a throttled terms page is not shown as the source rate-limited.
         expect(st.rate_limited_hosts).not.toHaveProperty(['api.github.com']);
+        expect(await rowOf('github')).toMatchObject({ status: 'collecting', rate_limited_until: null, rate_limited_hosts: [] });
         const t2 = fixtureTransport([[/./, { body: 'terms' }]]);
         await snapshotTerms({ http: new HttpClient({ env: TEST_ENV, transport: t2, sleep: () => Promise.resolve() }), slugs: ['github'] });
         expect(t2.calls).toHaveLength(0);

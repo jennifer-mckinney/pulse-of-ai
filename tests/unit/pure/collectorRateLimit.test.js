@@ -143,6 +143,18 @@ describe('parse helpers (security F2 / F4, grumpy #4)', () => {
         expect(rl.parseRetryAfter({}, NOW)).toBeNull();
     });
 
+    test('Copilot: an IMF-fixdate must be a REAL date that round-trips (no 31 Feb, no wrong weekday)', () => {
+        const future = new Date(NOW + 90000).toUTCString();   // Thu, 01 Oct 2026 02:49:24 GMT
+        expect(rl.parseRetryAfter({ 'retry-after': future }, NOW)).toBe(90000);
+        for (const v of ['Sun, 31 Feb 2027 00:00:00 GMT', future.replace(/^Thu/, 'Fri'), 'Thu, 01 Oct 2026 25:61:00 GMT']) {
+            expect([v, rl.parseRetryAfter({ 'retry-after': v }, NOW)]).toEqual([v, null]);
+        }
+        // So a malformed date never upgrades GitHub's wording to strong evidence.
+        const body = json('You have exceeded a secondary rate limit.');
+        expect(rl.rateLimitSignal({ status: 403, headers: { 'retry-after': 'Sun, 31 Feb 2027 00:00:00 GMT' }, body }, NOW, 'api.github.com'))
+            .toMatchObject({ signal: 'body_rate_limit', weak: true });
+    });
+
     test('security F4: an overflowing or non-finite Retry-After is Infinity (→ the 24 h cap), never "no time"', () => {
         expect(rl.parseRetryAfter({ 'retry-after': '1e306' }, NOW)).toBe(Infinity);
         expect(rl.parseRetryAfter({ 'retry-after': '9'.repeat(400) }, NOW)).toBe(Infinity);
@@ -254,19 +266,30 @@ describe('stored holds', () => {
         expect(rl.sanitizeHolds('[]', NOW)).toEqual({});
     });
 
-    test('Copilot: mergeHolds takes the NEWEST record of a host whole — a later strong limit\'s reset weak streak is never resurrected', () => {
+    test('Copilot: mergeHolds takes the NEWEST record\'s streaks — a later strong limit\'s reset weak streak is never resurrected', () => {
         const old = { until: iso(NOW + 600000), http_status: 403, signal: 'body_rate_limit', count: 4, weak: 4, at: iso(NOW - 120000) };
         const newer = { until: iso(NOW + 60000), http_status: 429, signal: 'http_429', count: 5, weak: 0, at: iso(NOW - 1000) };
+        // Streaks from the newest record; the hold from the latest until (N6).
+        const merged = { ...newer, until: old.until };
         const a = { 'api.github.com': { ...old } };
         rl.mergeHolds(a, { 'api.github.com': newer, 'github.blog': { ...newer, until: iso(NOW + 30000) } }, NOW);
-        expect(a['api.github.com']).toEqual(newer);
+        expect(a['api.github.com']).toEqual(merged);
         expect(Object.keys(a).sort()).toEqual(['api.github.com', 'github.blog']);
-        // And in the other order: the older record never overwrites the newer one.
+        // And in the other order: the older record never overwrites the newer streaks.
         const b = { 'api.github.com': { ...newer } };
         rl.mergeHolds(b, { 'api.github.com': old }, NOW);
-        expect(b['api.github.com']).toEqual(newer);
+        expect(b['api.github.com']).toEqual(merged);
         // The next body-only limit is the FIRST weak one, never the 5th.
         expect(rl.nextHold(b['api.github.com'], { status: 403, signal: 'body_rate_limit', weak: true }, NOW).escalate).toBe(false);
+    });
+
+    test('security N6: a merge never SHORTENS a hold in force — the newest record\'s streaks, the latest until among the copies', () => {
+        const a = { 'api.github.com': { until: iso(NOW + HOUR), http_status: 403, signal: 'ratelimit_remaining_zero', count: 4, weak: 4, at: iso(NOW - 1000) } };
+        rl.mergeHolds(a, { 'api.github.com': { until: iso(NOW + 60000), http_status: 429, signal: 'http_429', count: 5, weak: 0, at: iso(NOW) } }, NOW);
+        expect(a['api.github.com']).toEqual({ until: iso(NOW + HOUR), http_status: 429, signal: 'http_429', count: 5, weak: 0, at: iso(NOW) });
+        const b = { 'api.github.com': { until: iso(NOW + 60000), http_status: 429, signal: 'http_429', count: 5, weak: 0, at: iso(NOW) } };
+        rl.mergeHolds(b, { 'api.github.com': { until: iso(NOW + HOUR), http_status: 403, signal: 'ratelimit_remaining_zero', count: 4, weak: 4, at: iso(NOW - 1000) } }, NOW);
+        expect(b['api.github.com']).toMatchObject({ until: iso(NOW + HOUR), count: 5, weak: 0, signal: 'http_429' });
     });
 
     test('grumpy N4 / Copilot: a 5xx\'s Retry-After hold leaves the streaks alone — three never reach the rate-limit warning', () => {
@@ -431,6 +454,15 @@ describe('classification and status: a rate limit is never a refusal', () => {
         const row = registryFields({ name: 'hacker_news', source_type: 'api', access_denied_at: at(-10), refused_until: at(3600),
             access_denied_status: 403, refusal_count: 1, rate_limited_hosts: hnHold, rate_limited_routes: { 'algolia-search': at(300) } }, TEST_ENV, NOW);
         expect(row.status).toBe('blocked_by_source');
+    });
+
+    test('grumpy re-review: a throttled TERMS page is held but is not the source being rate-limited (status, until, warning)', () => {
+        const { conditionsFor } = require('../../../src/collectors/source-health');
+        const terms = { 'docs.github.com': { until: at(900), http_status: 429, signal: 'http_429', count: 5, weak: 0, at: at(-1) } };
+        const row = registryFields({ name: 'github', source_type: 'api', last_success_at: at(-60), rate_limited_hosts: terms, rate_limited_routes: {} }, TEST_ENV, NOW);
+        expect(row).toMatchObject({ status: 'collecting', rate_limited_until: null, rate_limited_hosts: [], rate_limited_routes: [] });
+        expect(conditionsFor({ rate_limited_hosts: terms }, getSource('github'), NOW).source_rate_limited).toBeUndefined();
+        expect(rl.collectionHolds(getSource('github'), terms)).toEqual({});
     });
 
     test('security F3: a contract-feed host never reaches /api/sources (hosts or reason)', () => {

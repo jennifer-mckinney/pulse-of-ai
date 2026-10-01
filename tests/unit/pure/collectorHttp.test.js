@@ -555,6 +555,25 @@ describe('rate limits are not refusals (diagnosis 2026-10-01)', () => {
         expect(transport.calls.filter(c => c.url.includes('/page'))).toHaveLength(0);
     });
 
+    test('Copilot: a rate limit on robots.txt itself (429 + Retry-After) holds the host — nothing cached, the page never fetched', async () => {
+        const robotsCache = new Map();
+        const { http, transport } = at([
+            ['https://a.example/robots.txt', { status: 429, headers: { 'retry-after': '600' }, body: '' }],
+            [/a\.example\/page/, { body: 'ok' }],
+        ], { robotsCache });
+        const err = await http.request('https://a.example/page', { robots: true }).catch(e => e);
+        expect(err).toBeInstanceOf(RateLimitedError);
+        expect(err).toMatchObject({ host: 'a.example', status: 429 });
+        expect(http.holds['a.example']).toMatchObject({ until: iso(NOW + 600000), signal: 'http_429' });
+        expect(robotsCache.size).toBe(0);
+        expect(transport.calls.filter(c => c.url.includes('/page'))).toHaveLength(0);
+        // A robots.txt 403 with remaining 0 is a rate limit too (not "allow all").
+        const b = at([['https://b.example/robots.txt', { status: 403, headers: { 'x-ratelimit-remaining': '0' }, body: '' }],
+            [/b\.example\/page/, { body: 'ok' }]], { robotsCache: new Map() });
+        await expect(b.http.request('https://b.example/page', { robots: true })).rejects.toBeInstanceOf(RateLimitedError);
+        expect(b.transport.calls.filter(c => c.url.includes('/page'))).toHaveLength(0);
+    });
+
     test('security F5: the governance terms fetch never requests a held host', async () => {
         const { snapshotTerms } = require('../../../src/collectors/governance');
         const { http, transport } = at([[/./, { body: 'terms' }]]);

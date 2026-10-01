@@ -331,16 +331,15 @@ async function saveHolds(sourceId, { hosts, changes = new Map(), view = {}, rout
     const rl = require('./rate-limit');
     const { dbTransaction } = require('../db/connection');
     const now = Date.now();
-    await dbTransaction(async (client) => {
+    const cleared = await dbTransaction(async (client) => {
         // A source skipped before its first claim has no state row yet.
         await client.query('INSERT INTO source_collection_state (source_id) VALUES ($1) ON CONFLICT (source_id) DO NOTHING', [sourceId]);
         const cur = await client.query(
             'SELECT rate_limited_hosts FROM source_collection_state WHERE source_id = $1 FOR UPDATE', [sourceId]);
-        if (!cur.rows.length) return;
+        if (!cur.rows.length) return [];
         const stored = rl.sanitizeHolds(cur.rows[0].rate_limited_hosts, now);
         const viewClean = rl.sanitizeHolds(view, now);
-        const later = (a, b) => (a && (!b || Date.parse(a.until) > Date.parse(b.until)) ? a : b);
-        const cleared = [];
+        const done = [];
         for (const host of hosts) {
             if (changes.has(host)) {
                 const next = changes.get(host);
@@ -349,33 +348,16 @@ async function saveHolds(sourceId, { hosts, changes = new Map(), view = {}, rout
                     // hold another process stored meanwhile (still in force).
                     if (!stored[host] || Date.parse(stored[host].until) <= now) {
                         delete stored[host];
-                        cleared.push(host);
+                        done.push(host);
                     }
                 } else {
-                    stored[host] = later(stored[host], rl.sanitizeHolds({ [host]: next }, now)[host]) || stored[host];
+                    // Grumpy re-review: ONE combine rule with mergeHolds —
+                    // the newest record's streaks, the latest until.
+                    const mine = rl.sanitizeHolds({ [host]: next }, now)[host];
+                    if (mine) stored[host] = rl.combineHold(stored[host], mine);
                 }
             } else if (viewClean[host]) {
-                stored[host] = later(viewClean[host], stored[host]);
-            }
-        }
-        // Copilot review: a host's streak is ONE streak — a success clears its
-        // expired copies on every other source's row too, or the next run's
-        // merge would bring the old streak back (an active hold is kept).
-        for (const host of cleared) {
-            const others = await client.query(
-                `SELECT source_id, rate_limited_hosts -> $2::text AS hold FROM source_collection_state
-                 WHERE source_id <> $1 AND rate_limited_hosts ? $2::text`,
-                [sourceId, host],
-            );
-            for (const o of others.rows) {
-                const until = Date.parse(o.hold && o.hold.until);
-                if (Number.isFinite(until) && until > now) continue;
-                // Optimistic: only if that copy is still the one read here.
-                await client.query(
-                    `UPDATE source_collection_state SET rate_limited_hosts = rate_limited_hosts - $2::text, updated_at = NOW()
-                     WHERE source_id = $1 AND rate_limited_hosts -> $2::text = $3::jsonb`,
-                    [o.source_id, host, JSON.stringify(o.hold)],
-                );
+                stored[host] = rl.combineHold(stored[host], viewClean[host]);
             }
         }
         const active = Object.values(rl.activeHolds(stored, now)).map(h => h.until).sort();
@@ -392,7 +374,30 @@ async function saveHolds(sourceId, { hosts, changes = new Map(), view = {}, rout
             [sourceId, JSON.stringify(stored), active.length ? active[active.length - 1] : null, JSON.stringify(routes || {}),
                 limited, saved],
         );
+        return done;
     });
+    // Copilot review: a host's streak is ONE streak — a success clears its
+    // EXPIRED copies on every other source's row too, or the next run's
+    // merge would bring the old streak back (an active copy is kept). After
+    // the commit, one row per statement, so it never holds two row locks
+    // (grumpy re-review: no lock-order deadlock between concurrent saves).
+    for (const host of cleared) {
+        const others = await dbAll(
+            `SELECT source_id, rate_limited_hosts -> $2::text AS hold FROM source_collection_state
+             WHERE source_id <> $1 AND rate_limited_hosts ? $2::text`,
+            [sourceId, host],
+        );
+        for (const o of others) {
+            const until = Date.parse(o.hold && o.hold.until);
+            if (Number.isFinite(until) && until > Date.now()) continue;
+            // Optimistic: only if that copy is still the one read here.
+            await dbRun(
+                `UPDATE source_collection_state SET rate_limited_hosts = rate_limited_hosts - $2::text, updated_at = NOW()
+                 WHERE source_id = $1 AND rate_limited_hosts -> $2::text = $3::jsonb`,
+                [o.source_id, host, JSON.stringify(o.hold)],
+            );
+        }
+    }
 }
 
 /**
