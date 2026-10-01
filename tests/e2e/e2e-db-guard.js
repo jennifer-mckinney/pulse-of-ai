@@ -45,14 +45,24 @@ const PROTECTED_DATABASES = Object.freeze([
 const DEFAULT_TEST_DB_PORT = 5433;
 
 /**
- * Parse a TCP port; null when absent or not a valid port number.
+ * Strictly parse a TCP port: an integer, or a string of decimal digits only.
+ * Anything else ('5434oops', ' 5434', '0x1532', '5434.0') is invalid —
+ * parseInt-style leniency elsewhere could read such a value as a different
+ * port than the one checked here, so the guard never guesses (PR #42
+ * Copilot review).
  * @param {unknown} value
- * @returns {number|null}
+ * @returns {number|null} the port, or null when invalid
  */
 function parsePort(value) {
-    if (value === undefined || value === null || value === '') return null;
-    const n = Number(value);
+    let n = null;
+    if (typeof value === 'number') n = value;
+    else if (typeof value === 'string' && /^[0-9]+$/.test(value)) n = Number(value);
     return Number.isInteger(n) && n > 0 && n <= 65535 ? n : null;
+}
+
+/** True when an env setting is absent (unset or empty: callers fall back to a default). */
+function isUnset(value) {
+    return value === undefined || value === null || value === '';
 }
 
 /**
@@ -85,8 +95,17 @@ function assertDisposableE2eDatabase({ database, port, env = process.env } = {})
             + `invalid Postgres port ${JSON.stringify(port)}`);
     }
     const testPorts = new Set([DEFAULT_TEST_DB_PORT]);
-    const configuredTestPort = parsePort(env.POSTGRES_TEST_PORT);
-    if (configuredTestPort !== null) testPorts.add(configuredTestPort);
+    if (!isUnset(env.POSTGRES_TEST_PORT)) {
+        // Fail closed: a malformed POSTGRES_TEST_PORT (e.g. '45433oops',
+        // which src/db/connection.js's parseInt still reads as 45433) means
+        // the test Postgres cannot be told apart from the target.
+        const configuredTestPort = parsePort(env.POSTGRES_TEST_PORT);
+        if (configuredTestPort === null) {
+            throw new Error(`[e2e db guard] refusing to recreate database "${database}": `
+                + `invalid POSTGRES_TEST_PORT ${JSON.stringify(env.POSTGRES_TEST_PORT)}`);
+        }
+        testPorts.add(configuredTestPort);
+    }
     if (testPorts.has(p)) {
         throw new Error(`[e2e db guard] refusing to recreate database "${database}" on port ${p}: `
             + 'that is the Jest test Postgres (POSTGRES_TEST_PORT), not the e2e host');
@@ -131,6 +150,7 @@ module.exports = {
     PROTECTED_DATABASES,
     DEFAULT_TEST_DB_PORT,
     assertDisposableE2eDatabase,
+    parsePort,
     quoteIdentifier,
     recreateE2eDatabase,
 };

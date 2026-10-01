@@ -13,6 +13,7 @@ const {
     E2E_DB_PATTERN,
     PROTECTED_DATABASES,
     assertDisposableE2eDatabase,
+    parsePort,
     quoteIdentifier,
     recreateE2eDatabase,
 } = require('../../e2e/e2e-db-guard');
@@ -92,9 +93,32 @@ describe('assertDisposableE2eDatabase — accepts only e2e databases off the tes
             .toThrow(/port 45433/);
     });
 
-    test.each([[undefined], [''], ['abc'], [0], [70000], [5434.5]])('refuses an invalid port %p', (port) => {
+    test.each([
+        [undefined], [''], ['abc'], [0], [70000], [5434.5],
+        // parseInt-lenient spellings: each reads as a different port elsewhere.
+        ['5434oops'], [' 5434'], ['5434 '], ['0x1532'], ['5434.0'], ['+5434'], ['1e4'],
+    ])('refuses an invalid port %p', (port) => {
         expect(() => assertDisposableE2eDatabase({ database: 'pulse_of_ai_e2e', port, env: DEV_ENV }))
             .toThrow(/invalid Postgres port/);
+    });
+
+    test.each([['45433oops'], ['abc'], ['0x1'], ['70000'], [' 45433']])(
+        'fails closed on a malformed POSTGRES_TEST_PORT %p (PR #42 Copilot review)', (testPort) => {
+            const env = { ...DEV_ENV, POSTGRES_TEST_PORT: testPort };
+            // 45433 is what src/db/connection.js's parseInt would read for '45433oops'.
+            expect(() => assertDisposableE2eDatabase({ database: 'pulse_of_ai_e2e', port: 45433, env }))
+                .toThrow(/invalid POSTGRES_TEST_PORT/);
+            expect(() => assertDisposableE2eDatabase({ database: 'pulse_of_ai_e2e', port: 5434, env }))
+                .toThrow(/invalid POSTGRES_TEST_PORT/);
+        });
+
+    test('an unset or empty POSTGRES_TEST_PORT falls back to refusing only 5433', () => {
+        for (const POSTGRES_TEST_PORT of [undefined, '']) {
+            const env = { ...DEV_ENV, POSTGRES_TEST_PORT };
+            expect(assertDisposableE2eDatabase({ database: 'pulse_of_ai_e2e', port: 5434, env })).toBe('pulse_of_ai_e2e');
+            expect(() => assertDisposableE2eDatabase({ database: 'pulse_of_ai_e2e', port: 5433, env }))
+                .toThrow(/port 5433/);
+        }
     });
 
     test('refuses a name Postgres would truncate (> 63 characters)', () => {
@@ -109,6 +133,18 @@ describe('assertDisposableE2eDatabase — accepts only e2e databases off the tes
     test('called with no argument it refuses instead of crashing', () => {
         expect(() => assertDisposableE2eDatabase()).toThrow(/\[e2e db guard\] refusing/);
     });
+});
+
+describe('parsePort — strict', () => {
+    test('accepts integers and pure decimal-digit strings', () => {
+        expect(parsePort(5434)).toBe(5434);
+        expect(parsePort('5434')).toBe(5434);
+        expect(parsePort('65535')).toBe(65535);
+    });
+    test.each([[null], [undefined], [''], ['5434oops'], [' 5434'], ['0x1532'], ['1e4'], ['0'], [65536], [NaN], [{}]])(
+        'returns null for %p', (v) => {
+            expect(parsePort(v)).toBeNull();
+        });
 });
 
 describe('quoteIdentifier', () => {
@@ -218,11 +254,31 @@ describe('tests/e2e/global-setup.js wiring', () => {
         ['E2E_DB=pulse_of_ai (the dev database)', { E2E_DB: 'pulse_of_ai' }],
         ['E2E_DB=pulse_of_ai_test (the Jest database)', { E2E_DB: 'pulse_of_ai_test' }],
         ['POSTGRES_PORT=5433 (the Jest test Postgres)', { POSTGRES_PORT: '5433' }],
+        // PR #42 Copilot review: malformed ports are refused, never normalized
+        // (parseInt would have read 'abc' as the 5432 default, '5434oops' as 5434).
+        ['POSTGRES_PORT=abc (malformed)', { POSTGRES_PORT: 'abc' }],
+        ['POSTGRES_PORT=5434oops (malformed)', { POSTGRES_PORT: '5434oops' }],
+        ['POSTGRES_TEST_PORT=45433oops (malformed)', { POSTGRES_TEST_PORT: '45433oops' }],
     ])('%s: refuses before opening any connection or running any step', async (_label, overrides) => {
         Object.assign(process.env, overrides);
         const { setup, Client, execFileSync } = loadGlobalSetup();
         await expect(setup()).rejects.toThrow(/\[e2e db guard\] refusing/);
         expect(Client).not.toHaveBeenCalled();
         expect(execFileSync).not.toHaveBeenCalled();
+    });
+
+    test.each([[undefined], ['']])('POSTGRES_PORT=%p falls back to 5432, as src/db/connection.js does', async (value) => {
+        if (value === undefined) delete process.env.POSTGRES_PORT; else process.env.POSTGRES_PORT = value;
+        const { setup, Client, client } = loadGlobalSetup();
+        const write = jest.spyOn(process.stdout, 'write').mockImplementation(() => true);
+        const log = jest.spyOn(console, 'log').mockImplementation(() => {});
+        try {
+            await setup();
+        } finally {
+            write.mockRestore();
+            log.mockRestore();
+        }
+        expect(Client).toHaveBeenCalledWith(expect.objectContaining({ database: 'postgres', port: 5432 }));
+        expect(client.queries[0]).toBe('DROP DATABASE IF EXISTS "pulse_of_ai_e2e" WITH (FORCE)');
     });
 });

@@ -32,21 +32,29 @@ const { execFileSync } = require('child_process');
 const path = require('path');
 const { Client } = require('pg');
 const { E2E_DB } = require('./e2e-env');
-const { assertDisposableE2eDatabase, recreateE2eDatabase } = require('./e2e-db-guard');
+const { assertDisposableE2eDatabase, parsePort, recreateE2eDatabase } = require('./e2e-db-guard');
 
 const ROOT = path.join(__dirname, '..', '..');
 const UNREACHABLE = /ECONNREFUSED|ETIMEDOUT|ENOTFOUND|Connection terminated|timeout expired/i;
 
-/** The dev Postgres port the e2e database lives on (same default as src/db/connection.js). */
-function postgresPort() {
-    return parseInt(process.env.POSTGRES_PORT, 10) || 5432;
+/**
+ * The dev Postgres port setting the e2e database lives on, RAW: the default
+ * (5432, as in src/db/connection.js) applies only when POSTGRES_PORT is
+ * unset or empty. A malformed value ('abc', '5434oops') is passed through
+ * untouched so the guard refuses it, instead of being normalized to a
+ * valid-looking port on an unintended server (PR #42 Copilot review).
+ * @returns {string|number}
+ */
+function postgresPortSetting() {
+    const v = process.env.POSTGRES_PORT;
+    return v === undefined || v === '' ? 5432 : v;
 }
 
-async function recreateDatabase() {
+async function recreateDatabase(port) {
     // Connect to the maintenance DB: a database cannot drop itself.
     const client = new Client({
         host:     process.env.POSTGRES_HOST || 'localhost',
-        port:     postgresPort(),
+        port,
         database: 'postgres',
         user:     process.env.POSTGRES_USER || 'pulse_user',
         password: process.env.POSTGRES_PASSWORD,
@@ -54,7 +62,7 @@ async function recreateDatabase() {
     });
     await client.connect();
     try {
-        await recreateE2eDatabase(client, { database: E2E_DB, port: postgresPort(), env: process.env });
+        await recreateE2eDatabase(client, { database: E2E_DB, port, env: process.env });
         console.log(`[e2e global-setup] recreated database ${E2E_DB} from scratch`);
     } finally {
         await client.end();
@@ -73,9 +81,11 @@ function run(cmd, args) {
 module.exports = async () => {
     // Refuse a non-e2e target BEFORE connecting, so the "Postgres
     // unreachable" leniency below can never mask a refusal.
-    assertDisposableE2eDatabase({ database: E2E_DB, port: postgresPort(), env: process.env });
+    const portSetting = postgresPortSetting();
+    assertDisposableE2eDatabase({ database: E2E_DB, port: portSetting, env: process.env });
     try {
-        await recreateDatabase();
+        // The guard accepted the setting, so it parses strictly to a port.
+        await recreateDatabase(parsePort(portSetting));
     } catch (err) {
         if (UNREACHABLE.test(err.message)) {
             console.warn('[e2e global-setup] Postgres unreachable — e2e database NOT provisioned. '
