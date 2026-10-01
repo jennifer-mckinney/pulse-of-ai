@@ -6,6 +6,24 @@
 # tests/unit/pure/embeddingLibraryPins.test.js fails on drift. A bump is a
 # methodology change: register a new embedding version with it.
 sentence-transformers==6.1.0
+# The libraries the vectors also depend on, pinned to the embedding row's
+# config.library_dependencies (and so to requirements-service.in and the
+# lock), so dev and CI run the set embedding@1.1.0 registers instead of
+# whatever resolves today. Same drift test, same rule: a bump is a new
+# embedding version.
+transformers==5.18.0
+huggingface_hub==1.33.0
+tokenizers==0.23.2
+# torch, the fourth registered dependency (2.12.1+cpu). The +cpu build exists
+# only on the PyTorch CPU index (the same index as the image lock), for Linux
+# and Windows; the default PyPI wheel for Linux pulls ~2 GB of CUDA libraries.
+# macOS has no +cpu wheel anywhere: its plain 2.12.1 build is CPU/MPS and is
+# the same release, not the registered build (embedding@1.1.0's equivalence
+# evidence covers the Linux image builds). CI's Python 3.11 job installs the
+# +cpu build before this file (.github/workflows/ci.yml TORCH_VERSION).
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.12.1+cpu ; sys_platform != "darwin"
+torch==2.12.1 ; sys_platform == "darwin"
 # Infinity (PyPI package: infinity-emb) is the planned Phase-2 embedding server
 # per docs/TECHNICAL_SPEC.md §5 — add the dependency when actually adopted.
 
@@ -14,7 +32,11 @@ psycopg2-binary>=2.9.13
 # No Python pgvector client: no Python file imports it. Vectors are stored
 # through PostgreSQL's pgvector extension from the Node side.
 
-# HTTP server for python/embeddings_service.py (the production embedder)
+# HTTP server for python/embeddings_service.py (the production embedder).
+# Floors only (Dependabot bumps them), but never above the versions the image
+# lock (requirements-service.txt) pins: embeddingLibraryPins.test.js fails
+# when a floor here excludes the locked version, so a bump lands together
+# with a manual lock refresh (requirements-service.in has the command).
 fastapi>=0.141.1
 uvicorn>=0.54.0
 
