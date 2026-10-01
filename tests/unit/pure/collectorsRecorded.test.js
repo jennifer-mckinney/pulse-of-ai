@@ -11,17 +11,26 @@ const { HttpClient } = require('../../../src/collectors/http');
 const { ADAPTERS, buildCollectors } = require('../../../src/collectors');
 const { getSource } = require('../../../src/config/source-registry');
 const { PII_FIELDS } = require('../../../src/pipeline/ingest');
-const { fixtureTransport, RECORDED_AT, TEST_ENV } = require('../../helpers/fixtureTransport');
+const { fixtureTransport, RECORDED_AT, recordedAtOf, TEST_ENV } = require('../../helpers/fixtureTransport');
 
 const NOW = Date.parse(RECORDED_AT);
 const noSleep = () => Promise.resolve();
+
+/** "now" for a route's recorded fixtures: the latest clock among them (a fixture kept from an earlier recording run keeps its own clock), else the overall clock. */
+function clockFor(routes) {
+    const clocks = routes.map(([, response]) => response)
+        .filter(r => typeof r === 'string' && r.startsWith('recorded/'))
+        .map(r => Date.parse(recordedAtOf(r)));
+    return clocks.length ? Math.max(...clocks) : NOW;
+}
 
 function run(slug, routeId, routes, { cursor = {}, env = TEST_ENV } = {}) {
     const source = getSource(slug);
     const route = source.routes.find(r => r.id === routeId);
     const transport = fixtureTransport(routes);
     const http = new HttpClient({ transport, env, sleep: noSleep });
-    const c = new ADAPTERS[route.adapter]({ source, route, env, http, cursor, httpCache: {}, now: () => NOW });
+    const now = clockFor(routes);
+    const c = new ADAPTERS[route.adapter]({ source, route, env, http, cursor, httpCache: {}, now: () => now });
     return c.collect().then(r => ({ ...r, transport, collector: c, cursor }));
 }
 
@@ -34,6 +43,18 @@ function expectNoIdentity(payloads) {
         if (p.url) expect(p.url).not.toMatch(/\/user\//);
     }
 }
+
+describe('recorded fixture clocks', () => {
+    test('a fixture without its own entry reads the manifest\'s overall clock, with or without the recorded/ prefix', () => {
+        expect(recordedAtOf('recorded/hf-forum-latest.json')).toBe(recordedAtOf('hf-forum-latest.json'));
+        expect(Date.parse(recordedAtOf('recorded/hf-forum-latest.json'))).toBe(NOW);
+    });
+
+    test('clockFor takes the latest clock among a route\'s recorded fixtures, else the overall clock', () => {
+        expect(clockFor([['https://x.test/a', 'recorded/hf-forum-latest.json']])).toBe(NOW);
+        expect(clockFor([['https://x.test/a', { body: 'inline' }]])).toBe(NOW);
+    });
+});
 
 describe('RSS / Atom (publisher feeds, robots-gated)', () => {
     test('BBC Technology: robots checked, AI filter applied, publisher city London', async () => {

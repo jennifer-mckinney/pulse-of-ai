@@ -1200,8 +1200,8 @@ function getRoute(src, routeId) {
     return src.routes.find(r => r.id === routeId) || null;
 }
 
-// Invisible characters a copy-paste can carry into an env value.
-const INVISIBLE = /[­᠎​-‏⁠-⁤﻿]/g;
+// Invisible characters a copy-paste can carry into an env value: every Unicode format character (zero-width, bidi marks and overrides, isolates, word joiner, BOM, soft hyphen) plus the Mongolian vowel separator.
+const INVISIBLE = /[\p{Cf}\u00AD\u180E]/gu;
 
 /**
  * COLLECTORS_DISABLED_ROUTES parsed and validated against the registry

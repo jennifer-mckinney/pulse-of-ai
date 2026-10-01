@@ -142,30 +142,66 @@ async function main({ env = process.env, governance, http = new HttpClient(), di
         log(`the database kill switches could not be read (${err.message}) — nothing was recorded`);
         return 2;
     }
+    // The manifest on disk: its file map, its overall clock and each fixture's
+    // own clock. A fixture that is not re-recorded keeps the clock it was
+    // recorded at: the collector tests use that clock as "now", and a retained
+    // fixture read at a later "now" would age out of the recency windows.
     let previous = {};
+    let previousAt = null;
+    let previousByFile = {};
     try {
-        previous = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8')).files || {};
+        const prior = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'));
+        previous = prior.files || {};
+        previousAt = prior.recordedAt || null;
+        previousByFile = prior.recordedAtByFile || {};
     } catch {
         previous = {};
     }
-    const manifest = { recordedAt: new Date().toISOString(), note: 'Live responses trimmed and identity-redacted by scripts/test/record-collector-fixtures.js', files: {} };
+    const startedAt = new Date().toISOString();
+    const files = {};
+    const byFile = {};
+    let recorded = 0;
+    // A fixture not re-recorded (skipped or failed) stays, with its own clock.
+    const retain = (url) => {
+        if (!previous[url]) return;
+        files[url] = previous[url];
+        const at = previousByFile[previous[url]] || previousAt;
+        if (at) byFile[previous[url]] = at;
+    };
     for (const [key, file, url, transform] of TARGETS) {
         const killed = killedTarget(key, env, govs.get(key.split('/')[0]));
         if (killed) {
             // Not fetched; the fixture recorded earlier stays in use.
-            if (previous[url]) manifest.files[url] = previous[url];
+            retain(url);
             log(`SKIPPED ${file} (${key}): ${killed}`);
             continue;
         }
         try {
             const res = await http.request(url, { minIntervalMs: 1000 });
             write(path.join(dir, file), transform(res.body));
-            manifest.files[url] = file;
+            files[url] = file;
+            byFile[file] = startedAt;
+            recorded += 1;
             log(`recorded ${file}`);
         } catch (err) {
+            retain(url);
             log(`FAILED ${file}: ${err.message}`);
         }
     }
+    // Nothing recorded: every fixture and its clock stay exactly as they are,
+    // so the manifest is left untouched rather than re-stamped.
+    if (recorded === 0) {
+        log('nothing was recorded; the manifest is unchanged');
+        return 0;
+    }
+    // The overall clock moves only when EVERY target was recorded in this run;
+    // a mixed run keeps the older overall clock and tells the truth per file.
+    const manifest = {
+        recordedAt: recorded === TARGETS.length || !previousAt ? startedAt : previousAt,
+        recordedAtByFile: byFile,
+        note: 'Live responses trimmed and identity-redacted by scripts/test/record-collector-fixtures.js',
+        files,
+    };
     write(path.join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
     return 0;
 }

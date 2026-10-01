@@ -70,6 +70,17 @@ describe('parseDisabledRoutes (COLLECTORS_DISABLED_ROUTES), validated against th
         expect([p.held.size, p.invalid]).toEqual([0, []]);
     });
 
+    // Copilot review of PR #46: bidi controls and every other Unicode format
+    // character are invisible too; one left in the route id would hold all of
+    // Hugging Face disabled instead of switching off only the forum.
+    it('strips every Unicode format character, bidi overrides and isolates included', () => {
+        for (const ch of ['‮', '‪', '‬', '⁦', '⁧', '⁨', '⁩', '‎', '‏', '؜', '⁠', '­', '᠎', '﻿']) {
+            const p = parseDisabledRoutes({ [ROUTE_KILL_ENV]: `hugging_face/${ch}forum-latest${ch}` });
+            expect([...(p.routes.get('hugging_face') || [])]).toEqual(['forum-latest']);
+            expect([p.held.size, p.invalid]).toEqual([0, []]);
+        }
+    });
+
     it('sorts the rest into held (a registry source, unknown route) and invalid (no registry source)', () => {
         const p = parseDisabledRoutes({ [ROUTE_KILL_ENV]: 'hugging_face/forum,gitlab,nope/forum-latest,/forum-latest,huggingface/forum-latest' });
         expect(p.held.get('hugging_face')).toEqual(['hugging_face/forum']);
@@ -431,5 +442,69 @@ describe('the fixture recorder never fetches a switched-off source or route', ()
         const failing = async () => { throw new Error('connect ECONNREFUSED'); };
         expect(await recorder.main({ env: TEST_ENV, governance: failing, http, write: () => { throw new Error('wrote'); }, log: () => {} })).toBe(2);
         expect(calls).toEqual([]);
+    });
+
+    // Copilot review of PR #46: the manifest clock is the collector tests'
+    // "now", so it must never move for fixtures that were not re-recorded.
+    describe('manifest clocks', () => {
+        const fs = require('fs');
+        const os = require('os');
+        const path = require('path');
+        const OLD = '2026-09-29T02:59:38.173Z';
+        // Every target answers with the fixture already recorded for its URL, so
+        // each transform sees a response of the shape it expects.
+        const REC = path.join(__dirname, '../../fixtures/collectors/recorded');
+        const REC_FILES = JSON.parse(fs.readFileSync(path.join(REC, 'manifest.json'), 'utf8')).files;
+        const okHttp = { request: async (url) => ({ body: fs.readFileSync(path.join(REC, REC_FILES[url]), 'utf8') }) };
+        let dir;
+        let written;
+        const write = (f, body) => { written[path.basename(f)] = body; };
+        beforeEach(() => {
+            dir = fs.mkdtempSync(path.join(os.tmpdir(), 'recorder-clock-'));
+            fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({
+                recordedAt: OLD, files: { 'https://discuss.huggingface.co/latest.json': 'hf-forum-latest.json' },
+            }));
+            written = {};
+        });
+        afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+        it('leaves the manifest untouched when nothing is recorded', async () => {
+            const allOff = async () => ({ disabled_at: '2026-09-30T12:00:00Z', route_kills: [] });
+            const lines = [];
+            expect(await recorder.main({ env: TEST_ENV, governance: allOff, http: okHttp, dir, write, log: l => lines.push(l) })).toBe(0);
+            expect(written).toEqual({});
+            expect(JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8')).recordedAt).toBe(OLD);
+            expect(lines).toEqual(expect.arrayContaining([expect.stringMatching(/manifest is unchanged/)]));
+        });
+
+        it('a mixed run keeps the overall clock and each retained fixture\'s own clock', async () => {
+            const governance = async slug => (slug === 'hugging_face'
+                ? { disabled_at: null, route_kills: [dbKill('forum-latest')] } : { disabled_at: null, route_kills: [] });
+            expect(await recorder.main({ env: TEST_ENV, governance, http: okHttp, dir, write, log: () => {} })).toBe(0);
+            const m = JSON.parse(written['manifest.json']);
+            expect(m.recordedAt).toBe(OLD);
+            expect(m.recordedAtByFile['hf-forum-latest.json']).toBe(OLD);          // kept: the clock it was recorded at
+            expect(m.recordedAtByFile['hn-algolia.json']).not.toBe(OLD);            // recorded now
+            expect(Date.parse(m.recordedAtByFile['hn-algolia.json'])).toBeGreaterThan(Date.parse(OLD));
+            expect(m.files['https://discuss.huggingface.co/latest.json']).toBe('hf-forum-latest.json');
+        });
+
+        it('a complete run moves the overall clock to the new recording', async () => {
+            const open = async () => ({ disabled_at: null, route_kills: [] });
+            expect(await recorder.main({ env: TEST_ENV, governance: open, http: okHttp, dir, write, log: () => {} })).toBe(0);
+            const m = JSON.parse(written['manifest.json']);
+            expect(Date.parse(m.recordedAt)).toBeGreaterThan(Date.parse(OLD));
+            expect(new Set(Object.values(m.recordedAtByFile))).toEqual(new Set([m.recordedAt]));
+        });
+
+        it('a fetch that fails keeps the earlier fixture and its clock', async () => {
+            const failing = { request: async (url) => { if (/discuss\.huggingface\.co\/latest/.test(url)) throw new Error('boom'); return okHttp.request(url); } };
+            const open = async () => ({ disabled_at: null, route_kills: [] });
+            await recorder.main({ env: TEST_ENV, governance: open, http: failing, dir, write, log: () => {} });
+            const m = JSON.parse(written['manifest.json']);
+            expect(m.files['https://discuss.huggingface.co/latest.json']).toBe('hf-forum-latest.json');
+            expect(m.recordedAtByFile['hf-forum-latest.json']).toBe(OLD);
+            expect(m.recordedAt).toBe(OLD);
+        });
     });
 });
