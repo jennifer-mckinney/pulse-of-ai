@@ -275,6 +275,26 @@ describe('the shared request budget (DbBudget)', () => {
         // One budget for every process: a second instance sees the block.
         expect(await new DbBudget().take()).toBe(false);
     });
+
+    // PR #44 verify gate: the reserve held only inside a live window; once
+    // the window had expired the first take() was granted whatever the
+    // reserve, so background jobs could spend the collector's share.
+    it('applies the reserve to an expired (rolled) window as well, like MemoryBudget', async () => {
+        await db.dbRun(`INSERT INTO reddit_api_budget (id) VALUES (1) ON CONFLICT (id) DO NOTHING`);
+        await db.dbRun(`UPDATE reddit_api_budget SET used = 3, window_start = NOW() - interval '1 hour',
+            blocked_until = NULL WHERE id = 1`);
+        const b = new DbBudget({ cap: 3, windowMs: 1000 });
+        expect(await b.take({ reserve: 3 })).toBe(false);          // reserve >= cap: never granted
+        const still = await db.dbGet('SELECT used FROM reddit_api_budget WHERE id = 1');
+        expect(still.used).toBe(3);                                  // nothing rolled or counted
+        expect(await b.take({ reserve: 2 })).toBe(true);           // 0 + 2 < 3: rolled, first grant
+        expect((await db.dbGet('SELECT used FROM reddit_api_budget WHERE id = 1')).used).toBe(1);
+        expect(await b.take({ reserve: 2 })).toBe(false);          // 1 + 2 = cap: the reserve holds
+
+        const { MemoryBudget } = require('../../src/collectors/reddit/budget');
+        const m = new MemoryBudget({ cap: 3, windowMs: 1000 });
+        expect(await m.take({ reserve: 3 })).toBe(false);          // the in-process budget agrees
+    });
 });
 
 describe('maintenance: retention always, API jobs only behind the open gate', () => {

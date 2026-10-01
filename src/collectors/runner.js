@@ -53,7 +53,7 @@
 const { dbGet, dbAll, dbRun, dbTransaction } = require('../db/connection');
 const { SOURCES, getSource, sourceStatus, pollIntervalSec, collectWindowMs } = require('../config/source-registry');
 const { buildCollectors } = require('./index');
-const { HttpClient } = require('./http');
+const { HttpClient, withHolds } = require('./http');
 const state = require('./state');
 const { storeRawPost, scorePost } = require('../pipeline/ingest');
 const { resolveCurrentMethodology } = require('../pipeline/methodology');
@@ -237,6 +237,9 @@ async function runCollection(o = {}) {
             const before = http.requests;
             const cursor = claimed.cursor || {};
             const httpCache = claimed.http_cache || {};
+            // Copilot re-review #44: Retry-After holds of routes that pass no
+            // validator cache are persisted in this source's HTTP cache too.
+            http.holdStore = httpCache;
             // { text, err } per failure; the first one classifies the run.
             const routeErrors = [];
             const fail = (text, err) => {
@@ -357,8 +360,11 @@ async function runCollection(o = {}) {
                     const prev = JSON.parse(snapshot);
                     for (const k of Object.keys(cursor)) delete cursor[k];
                     Object.assign(cursor, prev.cursor);
+                    // Validators roll back; a Retry-After hold learned in this
+                    // route is kept (Copilot re-review #44).
+                    const restored = withHolds(prev.httpCache, httpCache);
                     for (const k of Object.keys(httpCache)) delete httpCache[k];
-                    Object.assign(httpCache, prev.httpCache);
+                    Object.assign(httpCache, restored);
                 }
             }
             const classified = routeErrors.map(e => classifyError(e.err));
