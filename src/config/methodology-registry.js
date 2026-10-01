@@ -871,7 +871,7 @@ const CONTENT_HASH_DESCRIPTION = 'SHA-256 of the stored post text (after normali
         justification: 'The audit endpoint serves four audience representations (public, journalist, regulator, researcher) '
             + 'of every decision step. The wording is part of the auditable surface, so the template set is registered here '
             + 'and version-bumped on any change. 1.4.0 corrects wording only, in the researcher view of the ingestion step '
-            + '(real sources and demo feeds alike): it no longer says that the content hash is "the immutable join key '
+            + '(for real-source and demo-feed posts alike): it no longer says that the content hash is "the immutable join key '
             + 'across the decision audit log". It now says what the hash is: the stored text is SHA-256 hashed at ingest; '
             + 'each scoring step records the same digest of the text it scored as input_hash, which npm run replay '
             + 're-checks against the stored text and the audit API serves only keyed (HMAC-SHA256 with AUDIT_HASH_KEY); it '
