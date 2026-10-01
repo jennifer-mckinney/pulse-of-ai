@@ -36,7 +36,13 @@ def mmd_sha256(mmd_path):
 
 
 def read_chunks(data):
-    """Split PNG bytes into [(type, payload)]; raise ValueError if malformed."""
+    """Split PNG bytes into [(type, payload)]; raise ValueError if malformed.
+
+    The --hash-only gate reads nothing but IHDR and the hash chunk, so this
+    is also the structural check on a committed PNG: every chunk's CRC must
+    match, IEND must be present, and nothing may follow it. A truncated or
+    corrupted file therefore fails instead of passing on an intact hash.
+    """
     if data[:8] != PNG_SIG:
         raise ValueError("not a PNG")
     chunks, i = [], 8
@@ -48,11 +54,19 @@ def read_chunks(data):
         payload = data[i + 8:i + 8 + length]
         if len(payload) != length or i + 12 + length > len(data):
             raise ValueError("truncated chunk")
+        # Verify the stored CRC (over type + payload) for every chunk.
+        (crc,) = struct.unpack(">I", data[i + 8 + length:i + 12 + length])
+        if crc != zlib.crc32(ctype + payload) & 0xFFFFFFFF:
+            raise ValueError(f"CRC mismatch in {ctype.decode('latin-1')} chunk")
         chunks.append((ctype, payload))
         i += 12 + length
         if ctype == b"IEND":
-            break
-    return chunks
+            # IEND must be the terminal chunk: reject any trailing bytes.
+            if i != len(data):
+                raise ValueError(f"{len(data) - i} trailing bytes after IEND")
+            return chunks
+    # The loop ran out of data without seeing IEND: the file is truncated.
+    raise ValueError("missing IEND (truncated PNG)")
 
 
 def write_chunks(chunks):

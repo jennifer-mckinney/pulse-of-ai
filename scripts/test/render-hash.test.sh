@@ -165,6 +165,50 @@ else
     fail "a non-PNG fails with a clear message" "rc=$rc: $out"
 fi
 
+# 6b. Structurally damaged PNGs fail even though the hash chunk is intact
+# (Copilot r4151336164): the --hash-only gate reads only IHDR and the hash
+# chunk, so read_chunks itself must require a terminal IEND and verify every
+# chunk CRC. Each case must fail in the helper AND in render.sh --check.
+# damage_png MODE PNG: rewrite PNG in place.
+#   no-iend    drop the IEND chunk (file truncated on a chunk boundary)
+#   bad-crc    flip one byte of the first IDAT payload, CRC left as is
+#   trailing   append bytes after IEND
+damage_png() {
+    python3 - "$1" "$2" <<'PY'
+import struct, sys
+mode, p = sys.argv[1], sys.argv[2]
+data = bytearray(open(p, "rb").read())
+assert data[-8:-4] == b"IEND", "fixture PNG must end with IEND"
+if mode == "no-iend":
+    data = data[:-12]
+elif mode == "bad-crc":
+    i = 8
+    while data[i + 4:i + 8] != b"IDAT":
+        (length,) = struct.unpack(">I", bytes(data[i:i + 4]))
+        i += 12 + length
+    data[i + 8] ^= 0xFF
+elif mode == "trailing":
+    data += b"junk"
+open(p, "wb").write(bytes(data))
+PY
+}
+expect_damaged() {
+    local name="$1" mode="$2" want="$3" mmd out rc out2 rc2
+    mmd="$(copy_diagram "dmg-$mode")"
+    damage_png "$mode" "${mmd%.mmd}.png"
+    out="$(python3 "$HASH" check "${mmd%.mmd}.png" "$mmd" 2>&1)"; rc=$?
+    out2="$(bash "$RENDER" --check --hash-only "$mmd" 2>&1)"; rc2=$?
+    if (( rc == 1 )) && [[ "$out" == *"png-stale-mmd-hash(unreadable"*"$want"* ]] && [[ "$out" != *Traceback* ]] \
+       && (( rc2 != 0 )) && [[ "$out2" == *png-stale-mmd-hash* ]]; then
+        pass "$name"
+    else
+        fail "$name" "helper rc=$rc: $out | render.sh rc=$rc2: $out2"
+    fi
+}
+expect_damaged "a PNG truncated before IEND fails" no-iend "missing IEND"
+expect_damaged "a PNG with a corrupted chunk CRC fails" bad-crc "CRC mismatch"
+expect_damaged "a PNG with bytes after IEND fails" trailing "after IEND"
+
 # 7. --hash-only is refused without --check.
 bash "$RENDER" --hash-only >/dev/null 2>&1; rc=$?
 if (( rc == 2 )); then pass "--hash-only without --check is refused"; else fail "--hash-only without --check is refused" "rc=$rc"; fi
