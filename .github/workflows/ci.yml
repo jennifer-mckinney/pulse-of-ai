@@ -228,14 +228,16 @@ jobs:
         run: |
           for f in scripts/standup.sh scripts/teardown.sh scripts/lib/stack.sh \
                    scripts/test/stack-lib.test.sh scripts/test/check-compose.sh \
-                   scripts/test/ci-install-compose.sh; do
+                   scripts/test/ci-install-compose.sh scripts/test/embeddings-bind.test.sh \
+                   python/start.sh; do
             bash -n "$f"
           done
           docker run --rm -v "$PWD:/mnt" -w /mnt \
             koalaman/shellcheck:v0.10.0@sha256:2097951f02e735b613f4a34de20c40f937a6c8f18ecb170612c88c34517221fb \
             -x scripts/standup.sh scripts/teardown.sh scripts/lib/stack.sh \
                scripts/test/stack-lib.test.sh scripts/test/check-compose.sh \
-               scripts/test/ci-install-compose.sh
+               scripts/test/ci-install-compose.sh scripts/test/embeddings-bind.test.sh \
+               python/start.sh
 
       # The scripts must work on macOS's /bin/bash 3.2 (G9-3): run the
       # library's behaviour tests under bash 3.2 and under the runner's bash.
@@ -245,6 +247,12 @@ jobs:
           docker run --rm -v "$PWD:/w" -w /w \
             bash:3.2@sha256:0fd7cb8499c63a3c9345e7088a9cd83bb69f6e895e83833859aff838a0312091 \
             bash scripts/test/stack-lib.test.sh
+
+      # The embeddings API is unauthenticated: python/start.sh must bind
+      # 127.0.0.1 unless EMBEDDINGS_HOST opts in, while the image keeps its
+      # explicit 0.0.0.0 CMD for the compose network (run under /bin/sh = dash).
+      - name: Embeddings bind address (start.sh loopback default, image CMD)
+        run: bash scripts/test/embeddings-bind.test.sh
 
       - name: Build app image (web / worker / migrate / populate), linux/amd64
         run: docker buildx build --platform linux/amd64 --load --tag pulse-of-ai/app:ci .
