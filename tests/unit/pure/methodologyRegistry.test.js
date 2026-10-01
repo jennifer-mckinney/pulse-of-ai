@@ -233,7 +233,7 @@ describe('migration 014 ↔ methodology registry (alignment)', () => {
 
     test('the code implements the CURRENT versions', () => {
         expect(CURRENT_VERSIONS).toEqual(expect.objectContaining({
-            sentiment: '1.0.0', relevance: '1.2.0', discourse: '1.1.0-DQI', ingest: '1.7.0',
+            sentiment: '1.0.0', relevance: '1.2.0', discourse: '1.1.0-DQI', ingest: '1.8.0',
         }));
     });
 
@@ -331,11 +331,11 @@ describe('migration 017 ↔ methodology registry (ingest@1.3.0, decision D2)', (
         expect(reg.justification).toContain('"both yet we need an identifier to be able to prove the audit traceability back to the source."');
     });
 
-    test('audit_narration@1.3.0 is the renderer\'s version and registers the provenance wording', () => {
+    test('audit_narration@1.3.0 registers the provenance wording (superseded by 1.4.0, never edited)', () => {
         const { NARRATION_VERSION, VERIFY_PROVENANCE_COMMAND, PROVENANCE_VERIFIABLE } = require('../../../src/config/audit-narration');
         const reg = registry('audit_narration', '1.3.0');
         expect(latest('audit_narration').version).toBe(NARRATION_VERSION);
-        expect(NARRATION_VERSION).toBe('1.3.0');
+        expect(NARRATION_VERSION).toBe('1.4.0');
         expect(reg.config.verify_provenance_command).toBe(VERIFY_PROVENANCE_COMMAND);
         expect(reg.justification).toContain(PROVENANCE_VERIFIABLE);
     });
@@ -430,7 +430,7 @@ describe('migration 026 ↔ methodology registry (ingest@1.5.0, Reddit u/ names)
     test('ingest@1.5.0 redacts Reddit user names (superseded by 1.6.0, never edited); 1.4.0 is unchanged', () => {
         const reg = registry('ingest', '1.5.0');
         const prev = registry('ingest', '1.4.0');
-        expect(latest('ingest').version).toBe('1.7.0');
+        expect(latest('ingest').version).toBe('1.8.0');
         expect(reg.config.text_redaction.reddit_user_handles).toMatch(/u\/\[user\]/);
         expect(prev.config.text_redaction.reddit_user_handles).toBeUndefined();
         expect(reg.config.pii_fields_removed).toEqual(prev.config.pii_fields_removed);
@@ -707,5 +707,86 @@ describe('migration 065 ↔ methodology registry (embedding@1.1.0, sentence-tran
         ]));
         expect(reg.justification).toMatch(/bit-identical/);
         expect(reg.justification).toMatch(/embedding@1\.0\.0 row is kept unedited/);
+    });
+});
+
+// Content-hash wording (Jennifer McKinney 2026-09-30, "Register new versions
+// (Recommended)"): ingest@1.8.0 and audit_narration@1.4.0 (migration 066)
+// stop calling the content hash a join key; every released ingest row gets
+// an erratum and stays unedited. Wording only.
+describe('migration 066 ↔ methodology registry (ingest@1.8.0 + audit_narration@1.4.0, content-hash wording)', () => {
+    const { generate } = require('../../../scripts/generate-methodology-migration');
+    const { CURRENT_VERSIONS, METHODOLOGY_ERRATA } = require('../../../src/config/methodology-registry');
+    const narration = require('../../../src/config/audit-narration');
+    const SQL_066 = fs.readFileSync(
+        path.join(__dirname, '../../../src/db/migrations/066_content_hash_wording.sql'), 'utf8');
+    const rows = [...SQL_066.matchAll(ROW_011_RE)].map(m => ({
+        component: m[1], version: m[2], model_name: m[3],
+        config: JSON.parse(m[4]), justification: m[5],
+    }));
+    const OLD_INGEST = ['1.0.0', '1.1.0', '1.2.0', '1.3.0', '1.4.0', '1.5.0', '1.6.0', '1.7.0'];
+
+    test('066 ends with exactly the generated ingest@1.8.0 and audit_narration@1.4.0 rows, is additive and edits nothing', () => {
+        expect(SQL_066.endsWith(generate(['ingest@1.8.0', 'audit_narration@1.4.0']))).toBe(true);
+        expect(rows.map(r => `${r.component}@${r.version}`)).toEqual(['ingest@1.8.0', 'audit_narration@1.4.0']);
+        expect((SQL_066.match(/INSERT INTO methodology_versions/g) || []).length).toBe(2);
+        const body = SQL_066.split('\n').filter(l => !l.startsWith('--')).join('\n');
+        expect(body).not.toMatch(/DO UPDATE|UPDATE [a-z_]+ SET|DELETE FROM|DROP |TRUNCATE|ALTER TABLE|CREATE /);
+    });
+
+    test.each(['ingest@1.8.0', 'audit_narration@1.4.0'])('%s agrees field for field', (key) => {
+        const [component, version] = key.split('@');
+        const reg = registry(component, version);
+        expect(rows.find(r => r.component === component && r.version === version)).toEqual({
+            component: reg.component, version: reg.version, model_name: reg.model_name,
+            config: reg.config, justification: reg.justification,
+        });
+    });
+
+    test('066 carries one erratum per released ingest row, field for field', () => {
+        const errata = METHODOLOGY_ERRATA.filter(e => e.corrected_by === 'ingest@1.8.0');
+        expect(errata.map(e => `${e.component}@${e.version}`)).toEqual(OLD_INGEST.map(v => `ingest@${v}`));
+        expect((SQL_066.match(/INSERT INTO methodology_errata/g) || []).length).toBe(OLD_INGEST.length);
+        for (const e of errata) {
+            expect(SQL_066).toContain(`'${e.erratum_key}', '${e.corrected_by}', $err$${e.erratum}$err$`);
+            expect(SQL_066).toContain(`mv.component = '${e.component}' AND mv.version = '${e.version}'`);
+            expect(e.erratum).toMatch(/nothing ran differently/);
+            expect(e.erratum).toContain(`The ingest@${e.version} row is kept unedited`);
+        }
+        expect(new Set(METHODOLOGY_ERRATA.map(e => e.erratum_key)).size).toBe(METHODOLOGY_ERRATA.length);
+    });
+
+    test('every released ingest row says "join key" (what the errata correct); 1.8.0 does not', () => {
+        for (const v of OLD_INGEST) {
+            const r = registry('ingest', v);
+            expect(`${r.justification} ${JSON.stringify(r.config)}`).toMatch(/join key/);
+        }
+        const reg = registry('ingest', '1.8.0');
+        expect(reg.config.dedup_strategy).not.toMatch(/join key/);
+        expect(reg.config.content_hash).toMatch(/not a join key/);
+        expect(reg.config.content_hash).toMatch(/input_hash/);
+        expect(reg.justification).toMatch(/^ingest@1\.8\.0 corrects wording only/);
+    });
+
+    test('ingest@1.8.0 is current and is 1.7.0 with only the wording keys changed', () => {
+        expect(CURRENT_VERSIONS.ingest).toBe('1.8.0');
+        expect(latest('ingest').version).toBe('1.8.0');
+        const reg = registry('ingest', '1.8.0');
+        const prev = registry('ingest', '1.7.0');
+        expect(reg.model_name).toBe(prev.model_name);
+        for (const k of Object.keys(prev.config)) if (k !== 'dedup_strategy') expect([k, reg.config[k]]).toEqual([k, prev.config[k]]);
+        expect(Object.keys(reg.config).filter(k => !(k in prev.config)).sort()).toEqual(['changelog', 'content_hash']);
+    });
+
+    test('audit_narration@1.4.0 is the renderer\'s version and registers its hash wording verbatim', () => {
+        expect(CURRENT_VERSIONS.audit_narration).toBe('1.4.0');
+        expect(narration.NARRATION_VERSION).toBe('1.4.0');
+        const reg = registry('audit_narration', '1.4.0');
+        const prev = registry('audit_narration', '1.3.0');
+        expect(reg.model_name).toBe(prev.model_name);
+        for (const k of Object.keys(prev.config)) expect([k, reg.config[k]]).toEqual([k, prev.config[k]]);
+        expect(reg.config.ingest_hash_note).toBe(narration.INGEST_HASH_NOTE);
+        expect(narration.INGEST_HASH_NOTE).toMatch(/not a join key/);
+        expect(narration.INGEST_HASH_NOTE).not.toMatch(/immutable join key/);
     });
 });

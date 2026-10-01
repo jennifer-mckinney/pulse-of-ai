@@ -13,6 +13,8 @@
 //   - src/db/migrations/012_embedding_methodology.sql inserts embedding@1.0.0
 //     (the pinned embedding model revision, P9-5); 065 inserts
 //     embedding@1.1.0 (sentence-transformers 6.1.0, same model and revision);
+//   - src/db/migrations/066_content_hash_wording.sql inserts ingest@1.8.0 and
+//     audit_narration@1.4.0 (content-hash wording) and the ingest errata;
 //   - tests/integration/helpers.js registers the real bias/ingest rows.
 // A component may list several versions (history is kept); the renderer's
 // current version is the LAST entry for its component.
@@ -801,6 +803,83 @@ const METHODOLOGY_VERSIONS = [
     });
 })();
 
+// ingest@1.8.0 and audit_narration@1.4.0 — content-hash wording correction
+// (Jennifer McKinney 2026-09-30: "Register new versions (Recommended)";
+// migration 066). Every released ingest row (1.0.0 to 1.7.0) called the
+// SHA-256 content hash a "join key" (justification, and config.dedup_strategy
+// from 1.1.0 on), and the receipt's ingestion step said the same. No query
+// joins, reads or deduplicates on raw_posts.content_hash: src/pipeline/
+// ingest.js writes it once; the sentiment, relevance and discourse steps
+// record the same digest of the text they scored as decision_audit_log.
+// input_hash; src/audit/replay.js re-checks that against the stored text and
+// src/routes/audit.js serves it only keyed (HMAC-SHA256, AUDIT_HASH_KEY).
+// Wording only: no code path changes. Both rows are pushed LAST for their
+// component, so they are CURRENT_VERSIONS (new posts record ingest@1.8.0 via
+// src/pipeline/methodology.js; the receipt reports audit_narration@1.4.0).
+// Released rows keep their text; an erratum on each ingest row points here.
+const CONTENT_HASH_DESCRIPTION = 'SHA-256 of the stored post text (after normalisation and redaction), written once at ingest '
+    + 'to raw_posts.content_hash and kept when the text is removed (ruling 9); the sentiment, relevance and discourse steps '
+    + 'record the same digest of the text they scored as decision_audit_log.input_hash, which npm run replay re-checks '
+    + 'against the stored text and GET /api/audit serves only keyed (HMAC-SHA256 with AUDIT_HASH_KEY); an integrity '
+    + 'check, not a join key: no query joins, reads or deduplicates on it';
+(() => {
+    const prev = METHODOLOGY_VERSIONS.find(m => m.component === 'ingest' && m.version === '1.7.0');
+    METHODOLOGY_VERSIONS.push({
+        component: 'ingest',
+        version: '1.8.0',
+        model_name: prev.model_name,
+        config: {
+            ...prev.config,
+            // Was 'unique (source, external id); sha256-content-hash join key'
+            dedup_strategy: 'unique (source, external id): a post whose source and upstream id are already stored is not '
+                + 'stored again; the content hash plays no part in deduplication',
+            content_hash: CONTENT_HASH_DESCRIPTION,
+            changelog: [
+                'ingest@1.8.0 (2026-09-30): wording-only correction; the content hash is described as what it is (an '
+                    + 'integrity check recorded as input_hash), not as a join key; no behaviour change',
+            ],
+        },
+        justification: 'ingest@1.8.0 corrects wording only: the code, the stored data and every rule are exactly as in '
+            + 'ingest@1.7.0. Every earlier ingest version described the SHA-256 content hash as a join key ("the immutable '
+            + 'join key", and in its config "sha256-content-hash join key"). It is not one: no query joins, reads or '
+            + 'deduplicates on it. What it is: the SHA-256 of the stored post text, after normalisation and redaction, '
+            + 'written once at ingest (raw_posts.content_hash) and kept when the text is removed. The sentiment, relevance '
+            + 'and discourse steps each record the same digest of the text they scored as input_hash in the decision audit '
+            + 'log, so `npm run replay` can show that the stored text is the text that was scored; the audit API serves '
+            + 'input_hash only keyed (HMAC-SHA256 with AUDIT_HASH_KEY), never raw. Duplicates are dropped by unique '
+            + '(source, external id) alone. Posts stored under earlier ingest versions keep their version; an erratum on '
+            + 'each of those versions records this correction, and their rows are kept unedited. Everything else is as in '
+            + 'ingest@1.7.0.',
+    });
+})();
+(() => {
+    const prev = METHODOLOGY_VERSIONS.find(m => m.component === 'audit_narration' && m.version === '1.3.0');
+    const { INGEST_HASH_NOTE } = require('./audit-narration');
+    METHODOLOGY_VERSIONS.push({
+        component: 'audit_narration',
+        version: '1.4.0',
+        model_name: prev.model_name,
+        config: {
+            ...prev.config,
+            // Must equal src/config/audit-narration.js INGEST_HASH_NOTE
+            ingest_hash_note: INGEST_HASH_NOTE,
+            changelog: [
+                'audit_narration@1.4.0 (2026-09-30): wording-only correction of the ingestion step\'s researcher view; the '
+                    + 'content hash is described as an integrity check recorded as input_hash, not as a join key',
+            ],
+        },
+        justification: 'The audit endpoint serves four audience representations (public, journalist, regulator, researcher) '
+            + 'of every decision step. The wording is part of the auditable surface, so the template set is registered here '
+            + 'and version-bumped on any change. 1.4.0 corrects wording only, in the researcher view of the ingestion step '
+            + '(real sources and demo feeds alike): it no longer says that the content hash is "the immutable join key '
+            + 'across the decision audit log". It now says what the hash is: the stored text is SHA-256 hashed at ingest; '
+            + 'each scoring step records the same digest of the text it scored as input_hash, which npm run replay '
+            + 're-checks against the stored text and the audit API serves only keyed (HMAC-SHA256 with AUDIT_HASH_KEY); it '
+            + 'is an integrity check, not a join key. No stored data, score or rule changes. Every other sentence of every '
+            + 'step is unchanged from 1.3.0.',
+    });
+})();
+
 // ─── Errata (P10-16) ─────────────────────────────────────────────────────────
 // A released methodology row is never edited, even when it turns out not to
 // describe the code that ran. An erratum is a NEW row in
@@ -833,6 +912,22 @@ const METHODOLOGY_ERRATA = [
             + 'row\'s evidence. Location concentration and negative dominance did state their values. bias@1.6.0 records the '
             + `gap. The bias@${version} row is kept unedited as it was registered. Found by the documentation audit (drift D-2); `
             + 'recorded 2026-09-30.',
+    })),
+    // Content-hash wording (2026-09-30), corrected by ingest@1.8.0 (migration 066).
+    ...['1.0.0', '1.1.0', '1.2.0', '1.3.0', '1.4.0', '1.5.0', '1.6.0', '1.7.0'].map(version => ({
+        component: 'ingest',
+        version,
+        erratum_key: `ingest-${version}-content-hash-wording`,
+        corrected_by: 'ingest@1.8.0',
+        erratum: `ingest@${version} describes the SHA-256 content hash as a join key${version === '1.0.0'
+            ? ' and registers "sha256-content-hash" as its deduplication strategy'
+            : ' ("sha256-content-hash join key")'}. That wording is wrong; nothing ran differently. No query joins, reads `
+            + 'or deduplicates on the content hash (raw_posts.content_hash): duplicates were dropped by unique (source, '
+            + 'external id) alone. The hash is the SHA-256 of the stored post text after normalisation and redaction; the '
+            + 'sentiment, relevance and discourse steps record the same digest of the text they scored as input_hash in '
+            + 'the decision audit log, which `npm run replay` re-checks against the stored text. ingest@1.8.0 registers the '
+            + `corrected wording. The ingest@${version} row is kept unedited as it was registered, and posts stored under `
+            + 'it keep their version. Found by the documentation audit; recorded 2026-09-30.',
     })),
 ];
 

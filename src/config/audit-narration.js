@@ -14,7 +14,7 @@
 // builders over stored facts. Because the wording itself is part of the
 // auditable surface, this module is registered in methodology_versions
 // (component 'audit_narration') via src/config/methodology-registry.js
-// (seed.js + migrations 009 / 011) — changes to the wording
+// (seed.js + migrations 009 / 011 / 017 / 066) — changes to the wording
 // MUST bump NARRATION_VERSION and add a new methodology row, never edit the
 // registered version in place.
 
@@ -36,7 +36,11 @@ const NARRATION_COMPONENT = 'audit_narration';
 // instead of "anything that could identify who wrote it was removed", and
 // states the post's provenance: the permalink or the provenance
 // fingerprint, with the command that verifies an original against it.
-const NARRATION_VERSION   = '1.3.0';
+// 1.4.0 (wording only, migration 066): the ingestion step's researcher view
+// no longer calls the content hash "the immutable join key across the
+// decision audit log" (no query joins on it); it states what the hash is
+// (INGEST_HASH_NOTE). Every other sentence is unchanged from 1.3.0.
+const NARRATION_VERSION   = '1.4.0';
 const NARRATION_MODEL     = 'pulse-narration-templates-v1';
 
 // Reproduce-command template surfaced in every researcher view. It runs
@@ -49,6 +53,16 @@ const REPRODUCE_COMMAND = 'npm run replay -- --post {post_id}';
 // when the upstream id was fingerprinted, the original id).
 const VERIFY_PROVENANCE_COMMAND = 'npm run verify-provenance -- --post {post_id} --url <original URL> [--id <original id>]';
 const PROVENANCE_VERIFIABLE = 'verifiable: provide the original URL or id to reproduce the fingerprint';
+
+// 1.4.0: the ingestion step's researcher sentence about the content hash.
+// Registered verbatim as audit_narration@1.4.0 config.ingest_hash_note.
+// raw_posts.content_hash and decision_audit_log.input_hash are the same
+// SHA-256 of the stored text (src/pipeline/ingest.js, sentiment.js,
+// relevance.js, discourse.js); src/audit/replay.js re-checks input_hash and
+// src/routes/audit.js serves it HMAC-keyed only.
+const INGEST_HASH_NOTE = 'The stored text is SHA-256 hashed at ingest; each scoring step records the same digest of the '
+    + 'text it scored as input_hash, which npm run replay re-checks against the stored text and this receipt serves '
+    + 'only keyed (HMAC-SHA256 with AUDIT_HASH_KEY). It is an integrity check, not a join key.';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -300,8 +314,10 @@ function renderIngestStep(ingestMv, opts) {
     // opts.demo: the post's source is a demo feed (source_type 'demo').
     const demo = Boolean(opts && opts.demo);
 
-    const researcher = 'Raw content is SHA-256 hashed at ingest; the hash is the immutable join key '
-        + 'across the decision audit log (exposed keyed via AUDIT_HASH_KEY).';
+    // 1.4.0: was "Raw content is SHA-256 hashed at ingest; the hash is the
+    // immutable join key across the decision audit log (exposed keyed via
+    // AUDIT_HASH_KEY)." — no query joins on it.
+    const researcher = INGEST_HASH_NOTE;
     const config = {
         model:                `${ingestMv.model_name}@${ingestMv.version}`,
         methodology_version:  ingestMv.version,
@@ -341,6 +357,7 @@ module.exports = {
     REPRODUCE_COMMAND,
     VERIFY_PROVENANCE_COMMAND,
     PROVENANCE_VERIFIABLE,
+    INGEST_HASH_NOTE,
     renderAudiences,
     deriveScore,
     deriveStatus,
