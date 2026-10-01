@@ -59,29 +59,70 @@ const ORIGIN = Object.freeze({
     devSeed: 'scripts/test/seed-e2e.js run against this database',
 });
 
+// The (external id, location) pairs the two seed scripts actually generated
+// — the EXACT historical sets, not a prefix (Copilot review #44):
+//   scripts/seed-demo.js (git show c9844b2^:scripts/seed-demo.js):
+//     `demo-${city.replace(/\s/g, '-').toLowerCase()}-${i}`, i = 0..7, over
+//     its 30 cities, location = the city;
+//   scripts/test/seed-e2e.js (the 2026-09-28 fixture): `dev-seed-${ci}-${pi}`,
+//     pi < 3 + (ci % 4), over its 15 cities, location = CITIES[ci].
+// A read-only rehearsal on the live database matched all 240 + 66 rows.
+const SEED_DEMO_CITIES = Object.freeze([
+    'San Francisco', 'New York', 'London', 'Tokyo', 'Berlin', 'Paris', 'Seoul', 'Beijing', 'Shanghai', 'Bangalore',
+    'Mumbai', 'Sydney', 'Toronto', 'Vancouver', 'Amsterdam', 'Stockholm', 'Singapore', 'Tel Aviv', 'Dublin', 'Austin',
+    'Seattle', 'Boston', 'Chicago', 'Los Angeles', 'São Paulo', 'Buenos Aires', 'Lagos', 'Cairo', 'Moscow', 'Jakarta',
+]);
+const SEED_DEMO_POSTS_PER_CITY = 8;
+const SEED_E2E_CITIES = Object.freeze([
+    'San Francisco', 'New York', 'London', 'Berlin', 'Tokyo', 'Beijing', 'Singapore', 'Seoul', 'Bangalore', 'Toronto',
+    'Paris', 'Brussels', 'Dubai', 'Melbourne', 'Lagos',
+]);
+
+/** Every generated (external id, location, origin) of both seed scripts. */
+function legacyFixtureIds() {
+    const out = [];
+    for (const city of SEED_DEMO_CITIES) {
+        for (let i = 0; i < SEED_DEMO_POSTS_PER_CITY; i++) {
+            out.push({ id: `demo-${city.replace(/\s/g, '-').toLowerCase()}-${i}`, location: city, origin: ORIGIN.seedDemo });
+        }
+    }
+    SEED_E2E_CITIES.forEach((city, ci) => {
+        for (let pi = 0; pi < 3 + (ci % 4); pi++) out.push({ id: `dev-seed-${ci}-${pi}`, location: city, origin: ORIGIN.devSeed });
+    });
+    return out;
+}
+
 // The legacy signature. Every condition must hold:
 // - a non-demo source that is retired (the legacy sources migration 013
 //   retired);
 // - none of the fields the real ingest path writes;
-// - an id of either seed script: seed-demo.js `demo-<city>-<n>`, or
-//   seed-e2e.js `dev-seed-<city index>-<post index>`.
+// - an (external id, location) pair one of the seed scripts generated.
+// The source name is not pinned: seed-demo.js took whichever active source
+// came first, so only the id/location pair identifies its rows.
 const CANDIDATES_FILTER = `
-    SELECT rp.id, rp.external_id, rp.pseudo_user_id,
+    SELECT rp.id, rp.external_id, rp.pseudo_user_id, gen.origin,
            ds.id AS from_id, ds.name AS from_name, ds.category
     FROM raw_posts rp
     JOIN data_sources ds ON ds.id = rp.source_id
+    JOIN unnest($2::text[], $3::text[], $4::text[]) AS gen(external_id, location, origin)
+      ON gen.external_id = rp.external_id AND gen.location = rp.location
     WHERE ds.source_type <> $1
       AND ds.retired_at IS NOT NULL
       AND rp.ingest_mv_id IS NULL
       AND rp.admission_mv_id IS NULL
       AND rp.provenance_fingerprint IS NULL
-      AND rp.raw_payload IS NULL
-      AND (rp.external_id LIKE 'demo-%' OR rp.external_id ~ '^dev-seed-[0-9]+-[0-9]+$')`;
+      AND rp.raw_payload IS NULL`;
 const CANDIDATES_SQL = `${CANDIDATES_FILTER}
     ORDER BY ds.name, rp.external_id`;
 // The same rows, locked for the transaction (the lock needs no order).
 const LOCK_CANDIDATES_SQL = `${CANDIDATES_FILTER}
     FOR UPDATE OF rp`;
+
+/** The candidate query's parameters. */
+function candidateParams() {
+    const gen = legacyFixtureIds();
+    return [DEMO_SOURCE_TYPE, gen.map(g => g.id), gen.map(g => g.location), gen.map(g => g.origin)];
+}
 
 /**
  * What the correction would do, and what blocks it.
@@ -89,7 +130,7 @@ const LOCK_CANDIDATES_SQL = `${CANDIDATES_FILTER}
  * @returns {Promise<{ candidates: object[], blockers: string[] }>}
  */
 async function planCorrection(query = (sql, params) => dbAll(sql, params)) {
-    const rows = await query(CANDIDATES_SQL, [DEMO_SOURCE_TYPE]);
+    const rows = await query(CANDIDATES_SQL, candidateParams());
     const demo = await query(
         `SELECT id, name, category FROM data_sources WHERE source_type = $1 AND name = 'demo_' || category`,
         [DEMO_SOURCE_TYPE]);
@@ -106,7 +147,7 @@ async function planCorrection(query = (sql, params) => dbAll(sql, params)) {
         candidates.push({
             id: r.id, external_id: r.external_id, from_id: r.from_id, from_name: r.from_name,
             category: r.category, to_id: to.id, to_name: to.name,
-            origin: r.external_id.startsWith('demo-') ? ORIGIN.seedDemo : ORIGIN.devSeed,
+            origin: r.origin,
         });
     }
     for (const c of [...missing].sort()) blockers.push(`no demo feed source for category "${c}" (demo_${c}; run the demo feed once)`);
@@ -138,7 +179,7 @@ async function correctLegacySeedAttribution({ apply = false, env = process.env, 
     return dbTransaction(async (client) => {
         const query = async (sql, params) => (await client.query(sql, params)).rows;
         // Lock the candidates so the plan and the update see the same rows.
-        await query(LOCK_CANDIDATES_SQL, [DEMO_SOURCE_TYPE]);
+        await query(LOCK_CANDIDATES_SQL, candidateParams());
         const plan = await planCorrection(query);
         if (plan.blockers.length) throw new Error(`correction blocked — nothing changed:\n  ${plan.blockers.join('\n  ')}`);
         for (const c of plan.candidates) {
@@ -153,7 +194,7 @@ async function correctLegacySeedAttribution({ apply = false, env = process.env, 
                     to_source: c.to_name, to_source_id: c.to_id,
                     origin: c.origin,
                     evidence: 'retired non-demo source; no ingest/admission version, provenance fingerprint or payload '
-                        + '(never through storeRawPost); seed-script external id',
+                        + '(never through storeRawPost); an (external id, location) pair the seed script generated',
                     diagnosis: '2026-10-01 sparse-UI diagnosis: fictional posts counted as live data',
                 }), `${SCRIPT} (approved by ${approval.value})`]);
         }
@@ -192,4 +233,4 @@ if (require.main === module) {
         });
 }
 
-module.exports = { planCorrection, correctLegacySeedAttribution, describe, ACTION, ORIGIN, CANDIDATES_SQL };
+module.exports = { planCorrection, correctLegacySeedAttribution, describe, legacyFixtureIds, ACTION, ORIGIN, CANDIDATES_SQL };

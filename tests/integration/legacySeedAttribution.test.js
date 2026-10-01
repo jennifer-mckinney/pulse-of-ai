@@ -5,9 +5,11 @@
 // automatically: it needs Jennifer's OK. These tests pin what it would do:
 //   - dry run (default) changes nothing;
 //   - --apply needs a named approval (GATE_APPROVED_BY "Name YYYY-MM-DD");
-//   - only the exact legacy signature moves: a retired non-demo source, a
-//     `demo-*` / `dev-seed-<c>-<p>` id, and every field the real ingest path
-//     writes (ingest / admission version, provenance, payload) still NULL;
+//   - only the exact legacy signature moves: a retired non-demo source, an
+//     (external id, location) pair the seed scripts actually generated
+//     (seed-demo.js: demo-<city slug>-<0..7> over its 30 cities; seed-e2e.js:
+//     dev-seed-<c>-<p> over its 15 cities — Copilot review #44), and every
+//     field the real ingest path writes still NULL;
 //   - each moved post goes to the demo feed of its own category and gets one
 //     data_retention_log row ('source_reattributed') naming the old source;
 //   - no audit row is touched or deleted; a re-run finds nothing;
@@ -19,7 +21,7 @@
 const { dbGet, dbAll, dbRun } = require('../../src/db/connection');
 const { seedSources, seedMethodology } = require('../../scripts/seed');
 const {
-    planCorrection, correctLegacySeedAttribution, ACTION,
+    planCorrection, correctLegacySeedAttribution, legacyFixtureIds, ACTION,
 } = require('../../scripts/correct-legacy-seed-attribution');
 
 const APPROVED = { GATE_APPROVED_BY: 'Jennifer McKinney 2026-10-01' };
@@ -35,11 +37,12 @@ async function source(name, { type = 'reddit', category = 'social', retired = tr
 
 async function post(sourceId, externalId, extra = {}) {
     const content = `post ${externalId}`;
+    const location = extra.location || 'Amsterdam';
     const row = await dbGet(
         `INSERT INTO raw_posts (source_id, external_id, content, content_hash, location, collected_at,
                                 ingest_mv_id, raw_payload, provenance_fingerprint)
-         VALUES ($1, $2, $3, $4, 'Amsterdam', '2026-09-28T14:00:00Z', $5, $6, $7) RETURNING id`,
-        [sourceId, externalId, content, sha(content), extra.ingestMvId || null,
+         VALUES ($1, $2, $3, $4, $5, '2026-09-28T14:00:00Z', $6, $7, $8) RETURNING id`,
+        [sourceId, externalId, content, sha(content), location, extra.ingestMvId || null,
             extra.payload ? JSON.stringify(extra.payload) : null, extra.fingerprint || null]);
     const mv = await dbGet(`SELECT id, model_name FROM methodology_versions WHERE component = 'sentiment' ORDER BY effective_from DESC LIMIT 1`);
     await dbRun(
@@ -67,24 +70,43 @@ beforeEach(async () => {
     const ingestMv = (await dbGet(`SELECT id FROM methodology_versions WHERE component = 'ingest' ORDER BY effective_from DESC LIMIT 1`)).id;
     ids = {
         seedDemo: await post(legacyReddit, 'demo-amsterdam-0'),
-        seedDemoUnicode: await post(legacyReddit, 'demo-são paulo-3'),
-        devSeed: await post(legacyNews, 'dev-seed-10-2'),
+        seedDemoUnicode: await post(legacyReddit, 'demo-são-paulo-3', { location: 'São Paulo' }),
+        devSeed: await post(legacyNews, 'dev-seed-10-2', { location: 'Paris' }),
         // NOT candidates:
         realLegacy: await post(legacyReddit, 't3_abc123'),                                 // a real post id
         ingested: await post(legacyReddit, 'demo-ingested-1', { ingestMvId: ingestMv }),    // went through storeRawPost
         withPayload: await post(legacyReddit, 'demo-payload-1', { payload: { title: 'x' } }),
         activeSource: await post(activeReal, 'dev-seed-0-0'),                               // e2e-style fixture on an ACTIVE source
         badDevSeed: await post(legacyNews, 'dev-seed-x'),                                   // not the fixture id shape
+        // Copilot review #44: the seed-demo branch is the EXACT generated set.
+        demoOutOfRange: await post(legacyReddit, 'demo-amsterdam-8'),                      // seed-demo wrote 0..7
+        demoUnknownCity: await post(legacyReddit, 'demo-atlantis-0', { location: 'Atlantis' }),
+        demoWrongCity: await post(legacyReddit, 'demo-london-1', { location: 'Paris' }),   // id and location disagree
+        demoOtherShape: await post(legacyReddit, 'demo-amsterdam-0-extra'),
+        devSeedOutOfRange: await post(legacyNews, 'dev-seed-0-3', { location: 'San Francisco' }),   // city 0 has 3 posts
+        devSeedWrongCity: await post(legacyNews, 'dev-seed-2-0', { location: 'Berlin' }),          // city 2 is London
     };
 });
 
 describe('scripts/correct-legacy-seed-attribution.js', () => {
+    test('the generated legacy set is exactly 240 seed-demo + 66 dev-seed (id, location) pairs, all distinct', () => {
+        const gen = legacyFixtureIds();
+        expect(gen.filter(g => g.id.startsWith('demo-'))).toHaveLength(240);
+        expect(gen.filter(g => g.id.startsWith('dev-seed-'))).toHaveLength(66);
+        expect(new Set(gen.map(g => g.id)).size).toBe(306);
+        expect(gen).toContainEqual(expect.objectContaining({ id: 'demo-são-paulo-7', location: 'São Paulo' }));
+        // City 14 (Lagos) has 3 + (14 % 4) = 5 posts: 0..4. City 0 has 3: 0..2.
+        expect(gen).toContainEqual(expect.objectContaining({ id: 'dev-seed-14-4', location: 'Lagos' }));
+        expect(gen.map(g => g.id)).not.toContain('dev-seed-14-5');
+        expect(gen.map(g => g.id)).not.toContain('dev-seed-0-3');
+    });
+
     test('the plan selects exactly the legacy signature and maps each post to its category\'s demo feed', async () => {
         const plan = await planCorrection();
         expect(plan.blockers).toEqual([]);
         expect(plan.candidates.map(c => [c.external_id, c.from_name, c.to_name, c.origin]).sort()).toEqual([
             ['demo-amsterdam-0', 'reddit_artificial', 'demo_social', 'scripts/seed-demo.js (removed in c9844b2)'],
-            ['demo-são paulo-3', 'reddit_artificial', 'demo_social', 'scripts/seed-demo.js (removed in c9844b2)'],
+            ['demo-são-paulo-3', 'reddit_artificial', 'demo_social', 'scripts/seed-demo.js (removed in c9844b2)'],
             ['dev-seed-10-2', 'techcrunch_ai', 'demo_news', 'scripts/test/seed-e2e.js run against this database'],
         ]);
     });
@@ -113,8 +135,11 @@ describe('scripts/correct-legacy-seed-attribution.js', () => {
         expect(await sourceNameOf(ids.seedDemo)).toBe('demo_social');
         expect(await sourceNameOf(ids.seedDemoUnicode)).toBe('demo_social');
         expect(await sourceNameOf(ids.devSeed)).toBe('demo_news');
-        for (const k of ['realLegacy', 'ingested', 'withPayload', 'badDevSeed']) {
-            expect([k, await sourceNameOf(ids[k])]).toEqual([k, k === 'badDevSeed' ? 'techcrunch_ai' : 'reddit_artificial']);
+        for (const k of ['realLegacy', 'ingested', 'withPayload', 'demoOutOfRange', 'demoUnknownCity', 'demoWrongCity', 'demoOtherShape']) {
+            expect([k, await sourceNameOf(ids[k])]).toEqual([k, 'reddit_artificial']);
+        }
+        for (const k of ['badDevSeed', 'devSeedOutOfRange', 'devSeedWrongCity']) {
+            expect([k, await sourceNameOf(ids[k])]).toEqual([k, 'techcrunch_ai']);
         }
         expect(await sourceNameOf(ids.activeSource)).toBe('guardian');
         expect(await auditCount()).toBe(before);
@@ -139,7 +164,7 @@ describe('scripts/correct-legacy-seed-attribution.js', () => {
 
     test('a category without a demo feed aborts the whole correction', async () => {
         const legacyPolicy = await source('nist_ai', { type: 'rss', category: 'policy' });
-        await post(legacyPolicy, 'dev-seed-3-1');
+        await post(legacyPolicy, 'dev-seed-3-1', { location: 'Berlin' });
         const plan = await planCorrection();
         expect(plan.blockers).toEqual([expect.stringMatching(/no demo feed source for category "policy"/)]);
         await expect(correctLegacySeedAttribution({ apply: true, env: APPROVED })).rejects.toThrow(/policy/);
