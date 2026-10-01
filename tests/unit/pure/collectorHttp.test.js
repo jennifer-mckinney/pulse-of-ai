@@ -237,6 +237,50 @@ describe('Retry-After holds (diagnosis 2026-10-01, TLDR deadline)', () => {
         expect(other.size).toBe(0);
     });
 
+    // Copilot review #44: only the statuses that can hold (429, 503) skip the
+    // in-run retry; any other 5xx keeps the capped retry behaviour.
+    test.each([500, 502, 504])('a %i with a long Retry-After keeps the capped in-run retries and never holds', async (status) => {
+        const holds = new Map();
+        const { http, transport, sleeps } = holdClient([[URL_, { status, headers: { 'retry-after': '600' } }]], { holds });
+        const err = await http.request(URL_).catch(e => e);
+        expect(classifyError(err)).toEqual({ error_kind: 'http_5xx', http_status: status });
+        expect(transport.calls).toHaveLength(3);
+        expect(sleeps).toEqual([MAX_IN_RUN_WAIT_MS, MAX_IN_RUN_WAIT_MS]);
+        expect(holds.size).toBe(0);
+    });
+
+    // Copilot review #44: a hold set on a redirect target is also persisted
+    // under the URL the route asks for, so a fresh process sends NOTHING
+    // (not robots.txt, not the first hop) during the hold.
+    test('a hold behind a redirect is persisted under the requested URL too, so a fresh client sends nothing', async () => {
+        const FINAL = 'https://cdn.feed.example/rss';
+        const cache = {};
+        const first = holdClient([
+            [URL_, { status: 301, headers: { location: FINAL } }],
+            [FINAL, { status: 429, headers: { 'retry-after': '300' } }],
+        ]);
+        await first.http.request(URL_, { cache, robots: true }).catch(() => {});
+        const held = { retry_after_until: '2026-10-01T02:05:00.000Z', retry_after_status: 429 };
+        expect(cache[URL_]).toEqual(held);
+        expect(cache[FINAL]).toEqual(held);
+
+        const fresh = holdClient([[/./, { body: 'never' }]], { now: () => T0 + 150000 });
+        await expect(fresh.http.request(URL_, { cache, robots: true })).rejects.toThrow(/not requested/);
+        expect(fresh.transport.calls).toEqual([]);
+    });
+
+    test('a success through the redirect clears the hold under both URLs (validators stay on the final one)', async () => {
+        const FINAL = 'https://cdn.feed.example/rss';
+        const expired = { retry_after_until: '2026-10-01T01:00:00.000Z', retry_after_status: 429 };
+        const cache = { [URL_]: { ...expired }, [FINAL]: { ...expired } };
+        const { http } = holdClient([
+            [URL_, { status: 301, headers: { location: FINAL } }],
+            [FINAL, { body: '<rss/>', headers: { etag: '"v3"' } }],
+        ]);
+        await http.request(URL_, { cache });
+        expect(cache).toEqual({ [FINAL]: { etag: '"v3"', last_modified: null } });
+    });
+
     test('a short Retry-After is still waited out inside the run and retried', async () => {
         let n = 0;
         const holds = new Map();

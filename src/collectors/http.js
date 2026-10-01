@@ -17,8 +17,9 @@
 //     Retry-After holds DEFAULT_RATE_LIMIT_HOLD_MS). Until then no request
 //     is sent to it. The hold lives in a per-host map (process-wide for the
 //     network transport) AND, when the route passes its HTTP cache, in that
-//     cache (persisted per source by the runner), so another worker replica
-//     or a restarted worker honours it too. Never slept through and retried
+//     cache (persisted per source by the runner, under the requested URL
+//     as well as a redirect target), so another worker replica or a
+//     restarted worker honours it too. Never slept through and retried
 //     early: the old 60 s cap did exactly that and overran the run deadline;
 //   - 401 / 403 / 451 and bot challenges → AccessDeniedError, never retried;
 //     it carries an ALLOW-LIST of the refusal's response headers (server,
@@ -418,6 +419,7 @@ class HttpClient {
             }
             if (res.status === 304) {
                 this.clearHold(current, o.cache);
+                if (current !== url) this.clearHold(url, o.cache);
                 return { ...res, notModified: true, url: current };
             }
             if (REFUSAL_STATUSES.includes(res.status) || (res.status >= 400 && CHALLENGE_RE.test(res.body || ''))) {
@@ -428,7 +430,10 @@ class HttpClient {
             // holds the URL for the source's full Retry-After.
             const holdMs = this.holdMsFor(res);
             if (holdMs !== null) {
+                // Persisted under the URL the route asks for as well (Copilot
+                // review #44): a fresh process starts there, before any hop.
                 const until = this.setHold(current, o.cache, holdMs, res.status);
+                if (current !== url) this.setHold(url, o.cache, holdMs, res.status);
                 throw new HttpError(`HTTP ${res.status} from ${redactUrl(current)} — the source asked us to wait (Retry-After); `
                     + `honoured: no request before ${new Date(until).toISOString()}`, { status: res.status, url: redactUrl(current) });
             }
@@ -436,6 +441,7 @@ class HttpClient {
                 throw new HttpError(`HTTP ${res.status} from ${redactUrl(current)}`, { status: res.status, url: redactUrl(current) });
             }
             this.clearHold(current, o.cache);
+            if (current !== url) this.clearHold(url, o.cache);
             if (o.cache && method === 'GET' && (res.headers.etag || res.headers['last-modified'])) {
                 o.cache[current] = { etag: res.headers.etag || null, last_modified: res.headers['last-modified'] || null };
             }
@@ -475,7 +481,9 @@ class HttpClient {
             // Diagnosis 2026-10-01: a Retry-After longer than the in-run wait
             // is never slept through and retried early — request() turns it
             // into a hold for the source's full time.
-            const ra = parseRetryAfter(res.headers, this.now());
+            // Only a status that can hold (429 / 503) skips the in-run retry
+            // (Copilot review #44); any other 5xx keeps the capped retries.
+            const ra = HOLD_STATUSES.includes(res.status) ? parseRetryAfter(res.headers, this.now()) : null;
             const waitLonger = ra !== null && ra > MAX_IN_RUN_WAIT_MS;
             if ((res.status === 429 || res.status >= 500) && attempt < MAX_RETRIES && !waitLonger
                 && !CHALLENGE_RE.test(res.body || '')) {
