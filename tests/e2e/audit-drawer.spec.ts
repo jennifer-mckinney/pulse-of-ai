@@ -21,7 +21,8 @@ test('audit drawer: audiences, bias layers, timer freeze, close restores view', 
     const card = page.locator('#card-col .chapter-card').nth(4);
     await expect(card.locator('.mini-post')).toBeVisible({ timeout: 15000 });
     const scrollBefore = await page.evaluate(() => window.scrollY);
-    await card.locator('.btn-trace').click();
+    const opener = card.locator('.btn-trace');
+    await opener.click();
 
     const drawer = page.locator('#audit-drawer');
     await expect(drawer).toHaveClass(/open/);
@@ -114,6 +115,9 @@ test('audit drawer: audiences, bias layers, timer freeze, close restores view', 
     await expect(drawer).toHaveAttribute('aria-hidden', 'true');
     await expect(card).toBeVisible();
     expect(await page.evaluate(() => window.scrollY)).toBe(scrollBefore);
+    // Keyboard focus returns to the button that opened the receipt instead
+    // of staying on the × inside the now-hidden drawer.
+    await expect(opener).toBeFocused();
 
     expectNoConsoleErrors(errors);
 });

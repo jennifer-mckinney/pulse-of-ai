@@ -182,7 +182,16 @@
         };
         chip.addEventListener('click', () => setOpen(panel.hidden));
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && !panel.hidden) setOpen(false);
+            if (e.key !== 'Escape' || panel.hidden) return;
+            // Hiding the panel would strand keyboard focus inside a hidden
+            // subtree when it sits on one of the panel's links, so focus
+            // returns to the controlling chip. Focus that is elsewhere on the
+            // page (another control the user moved to) is left where it is.
+            const active = document.activeElement;
+            const returnFocus = !active || active === document.body
+                || active === chip || panel.contains(active);
+            setOpen(false);
+            if (returnFocus) chip.focus();
         });
     }
 

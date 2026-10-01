@@ -95,6 +95,9 @@ test('health drawer: yellow banner, alert history, methodology table, sources st
     await drawer.locator('.drawer-x').click();
     await expect(drawer).not.toHaveClass(/open/);
     await expect(page.locator('#health-chip')).toHaveAttribute('aria-expanded', 'false');
+    // Keyboard focus returns to the chip that opened the drawer instead of
+    // staying on the × inside the now-hidden drawer.
+    await expect(page.locator('#health-chip')).toBeFocused();
 
     expectNoConsoleErrors(errors);
 });

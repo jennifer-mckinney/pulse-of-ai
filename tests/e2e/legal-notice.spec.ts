@@ -43,9 +43,15 @@ test('legal notice: about chip opens the AGPL notices with the source link', asy
     await expect(panel.locator('[data-notice="warranty"]')).toContainText('No warranty');
     await evidence(page, '14-legal-notice');
 
+    // Escape from a link INSIDE the panel closes it and returns keyboard
+    // focus to the controlling chip, never leaving it in a hidden subtree
+    // (Copilot r4151202232).
+    await attribution.focus();
+    await expect(attribution).toBeFocused();
     await page.keyboard.press('Escape');
     await expect(panel).toBeHidden();
     await expect(chip).toHaveAttribute('aria-expanded', 'false');
+    await expect(chip).toBeFocused();
 
     expectNoConsoleErrors(errors);
 });

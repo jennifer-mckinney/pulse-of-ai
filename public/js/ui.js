@@ -1744,10 +1744,40 @@
 
     // ── Audit drawer ────────────────────────────────────────────────────────
 
-    function setDrawerOpen(drawer, open) {
+    // The control that had keyboard focus when each drawer opened, so
+    // closing can hand focus back to it instead of leaving it on the × in a
+    // now-hidden (aria-hidden) drawer.
+    const drawerOpeners = new WeakMap();
+
+    // setDrawerOpen(drawer, open, fallback): show/hide a drawer. Opening
+    // remembers the focused opener; closing returns focus to it (or to
+    // `fallback` when the opener is gone or was never focused, e.g. Safari
+    // does not focus buttons on click) whenever focus sits inside the
+    // drawer or was lost to <body>. Focus the user moved elsewhere stays.
+    function setDrawerOpen(drawer, open, fallback) {
         if (!drawer) return;
+        const wasOpen = drawer.classList.contains('open');
+        const active = typeof document !== 'undefined' ? document.activeElement : null;
+        if (open && !wasOpen && active && active !== document.body
+            && !drawer.contains(active)) {
+            drawerOpeners.set(drawer, active);
+        }
         drawer.classList.toggle('open', open);
         drawer.setAttribute('aria-hidden', open ? 'false' : 'true');
+        if (open || !wasOpen) return;
+
+        const opener = drawerOpeners.get(drawer);
+        drawerOpeners.delete(drawer);
+        const focusLost = !active || active === document.body || drawer.contains(active);
+        if (!focusLost) return;
+        const target = opener && opener.isConnected ? opener
+            : (fallback && fallback.isConnected ? fallback : null);
+        if (target && typeof target.focus === 'function') {
+            target.focus();
+        } else if (active && drawer.contains(active) && typeof active.blur === 'function') {
+            // No control to return to: at least never keep focus hidden.
+            active.blur();
+        }
     }
 
     // openAudit(post): the receipt. `post` is a raw /api/query result row
@@ -1976,7 +2006,9 @@
     }
 
     function closeHealth() {
-        setDrawerOpen(els.healthDrawer, false);
+        // The header chip is the drawer's controlling element: the focus
+        // fallback when the opener is unknown.
+        setDrawerOpen(els.healthDrawer, false, els.healthChip);
         if (els.healthChip) els.healthChip.setAttribute('aria-expanded', 'false');
     }
 
