@@ -40,7 +40,7 @@ flowchart LR
     M9{"--once, no --force: hour already holds&lt;br/&gt;--size demo posts, no live posts and&lt;br/&gt;collection unavailable? (checked first)"}:::done
     M4["populate --loop (profile demo)&lt;br/&gt;every DEMO_FEED_INTERVAL_MS (150 s):&lt;br/&gt;DEMO_FEED_BATCH posts (default 16,&lt;br/&gt;two per category) only while the hour has no live posts"]:::done
     M5["fictional posts: text starts with [Demo],&lt;br/&gt;raw_payload demo: true, fictional: true,&lt;br/&gt;under data_sources demo_#lt;category#gt;&lt;br/&gt;(source_type demo, active false)"]:::done
-    M6["normalisePost → raw_posts (collected_at = now)&lt;br/&gt;→ saveSentiment / saveRelevance / saveDQI&lt;br/&gt;with audit rows → runBiasChecks&lt;br/&gt;→ embed jobs; processing_jobs triggered_by demo"]:::done
+    M6["normalisePost → raw_posts (collected_at = now)&lt;br/&gt;→ saveSentiment / saveRelevance / saveDQI&lt;br/&gt;with audit rows → runBiasChecks&lt;br/&gt;→ embed jobs only when embeddings are enabled and&lt;br/&gt;the service is ready (standup otherwise passes --no-embed;&lt;br/&gt;a later --once backfills the hour); processing_jobs triggered_by demo"]:::done
     M7["labelled on the way out: data_mode on /api/health,&lt;br/&gt;demo_posts + data_mode per city row,&lt;br/&gt;data_origin on receipts → DEMO kicker,&lt;br/&gt;Demo data markers, demo receipt wording"]:::done
     M8["no demo post written;&lt;br/&gt;the page reads LIVE"]:::done
     M10["collection and batch skipped; only missing&lt;br/&gt;demo embeddings are backfilled"]:::done

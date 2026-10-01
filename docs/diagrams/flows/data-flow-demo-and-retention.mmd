@@ -11,7 +11,7 @@ flowchart LR
     M9{"--once, no --force: hour already holds<br/>--size demo posts, no live posts and<br/>collection unavailable? (checked first)"}:::done
     M4["populate --loop (profile demo)<br/>every DEMO_FEED_INTERVAL_MS (150 s):<br/>DEMO_FEED_BATCH posts (default 16,<br/>two per category) only while the hour has no live posts"]:::done
     M5["fictional posts: text starts with [Demo],<br/>raw_payload demo: true, fictional: true,<br/>under data_sources demo_#lt;category#gt;<br/>(source_type demo, active false)"]:::done
-    M6["normalisePost → raw_posts (collected_at = now)<br/>→ saveSentiment / saveRelevance / saveDQI<br/>with audit rows → runBiasChecks<br/>→ embed jobs; processing_jobs triggered_by demo"]:::done
+    M6["normalisePost → raw_posts (collected_at = now)<br/>→ saveSentiment / saveRelevance / saveDQI<br/>with audit rows → runBiasChecks<br/>→ embed jobs only when embeddings are enabled and<br/>the service is ready (standup otherwise passes --no-embed;<br/>a later --once backfills the hour); processing_jobs triggered_by demo"]:::done
     M7["labelled on the way out: data_mode on /api/health,<br/>demo_posts + data_mode per city row,<br/>data_origin on receipts → DEMO kicker,<br/>Demo data markers, demo receipt wording"]:::done
     M8["no demo post written;<br/>the page reads LIVE"]:::done
     M10["collection and batch skipped; only missing<br/>demo embeddings are backfilled"]:::done

@@ -29,7 +29,7 @@
 <pre class="mermaid">
 %% Title: Sequence · the "why?" audit receipt
 %% Summary: What happens when a reader opens a post's receipt: the drawer request, the queries behind GET /api/audit/:post_id, the provenance and lineage it adds, and the four audience views the drawer switches between.
-%% Sources: public/js/ui.js (openAudit, mapAuditResponse, AUDIENCES), src/routes/audit.js, src/config/{audit-narration,bias-lineage,bias-vocabulary,source-registry,data-mode}.js, src/collectors/retention.js (retentionStatus), src/db/migrations/042_admission_filter.sql. Updated 2026-09-30. Spec: TECHNICAL_SPEC.md sections 7 (GET /api/audit/:post_id), 8 (provenance), 10 (explainability chain, audiences).
+%% Sources: public/js/ui.js (openAudit, mapAuditResponse, AUDIENCES), src/routes/audit.js, src/config/{audit-narration,bias-lineage,bias-vocabulary,source-registry,data-mode}.js, src/collectors/retention.js (retentionStatus), src/db/migrations/042_admission_filter.sql. Updated 2026-10-01. Spec: TECHNICAL_SPEC.md sections 7 (GET /api/audit/:post_id), 8 (provenance), 10 (explainability chain, audiences).
 sequenceDiagram
   autonumber
   actor Reader
@@ -41,9 +41,9 @@ sequenceDiagram
   Reader-&gt;&gt;UI: click "why?" on a post (city detail or featured post)
   UI-&gt;&gt;Main: freezeInsightTimer() (first receipt)
   UI-&gt;&gt;UI: open the audit drawer, loading state
-  alt demo data on the page, or the post id is not a UUID
-    UI-&gt;&gt;UI: build the receipt locally (demo), never call the API
-  else live post
+  alt bundled fallback data (the page could not load /api), or the post id is not a UUID
+    UI-&gt;&gt;UI: build the receipt locally (fictional, nothing stored), never call the API
+  else a stored post, live or a demo-feed post from the database (isDemo false)
     UI-&gt;&gt;API: GET /api/audit/{post_id}
     API-&gt;&gt;API: validate UUID, else 400
     API-&gt;&gt;DB: raw_posts JOIN data_sources (content, location, external_id,&lt;br/&gt;provenance_fingerprint, ingest_mv_id, admission_mv_id,&lt;br/&gt;text_removed_at / _reason, permalink)
@@ -65,9 +65,9 @@ sequenceDiagram
   UI--&gt;&gt;Reader: receipt: ingestion step, sentiment, relevance, discourse, bias layers
 
   Reader-&gt;&gt;UI: pick an audience
-  Note over UI: Public → public · Journalist → plain ·&lt;br/&gt;Regulator → config · Researcher → researcher&lt;br/&gt;(the researcher view names npm run replay -- --post id)
+  Note over UI: Public → public · Journalist → plain ·&lt;br/&gt;Regulator → config · Researcher → researcher&lt;br/&gt;(a stored post's researcher view names npm run replay -- --post id,&lt;br/&gt;the bundled fallback receipt says it has no hash and nothing to replay)
   UI--&gt;&gt;Reader: the same steps in that audience's words
-  opt API or network failure on a live post
+  opt API or network failure on a stored post
     UI--&gt;&gt;Reader: an error state, a live receipt is never fabricated
   end
 </pre>

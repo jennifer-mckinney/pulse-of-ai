@@ -4,7 +4,7 @@
 stateDiagram-v2
   direction LR
 
-  [*] --> detail : stored (raw_posts, scores, audit rows, embedding for a live post with relevance ≥ 1/21 and for every demo post)
+  [*] --> detail : stored (raw_posts, scores, audit rows) with an embed job for a live post with relevance ≥ 1/21 and for a demo post, when the run has embeddings enabled and the service ready (a later populate --once backfills the hour)
 
   state "Tier 1 · full detail<br/>shown on the page for its trailing hour,<br/>receipt available" as detail
   state "text blanked, platform terms<br/>content = the source's removal notice,<br/>text_removed_at set, embedding deleted<br/>in the same transaction (G3);<br/>scores, audit rows, hash, fingerprint kept" as blanked
