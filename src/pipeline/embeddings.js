@@ -11,12 +11,16 @@
 // Entry points:
 //   generateEmbedding(text)        — calls the service; returns float array
 //   saveEmbedding(postId, vec)     — upserts post_embeddings row; returns row UUID
-//   embedPost(postId)              — full pipeline: fetch content → generate → save
+//   embedPost(postId)              — full pipeline: fetch content → generate →
+//                                    verify the service (GET /health) → save
 //                                    (a no-op with a reason for a post purged or
 //                                    blanked by retention — never its notice)
 //
 // The service is reached at the EMBEDDINGS_SERVICE_URL env var.
-// In test environments, axios.post is mocked — no real HTTP call is made.
+//   GET /health  { model, revision, library, ... } — compared with the
+//                registered embedding methodology before a vector is stamped
+// In test environments, axios.post and axios.get are mocked — no real HTTP
+// call is made.
 
 'use strict';
 
@@ -49,6 +53,88 @@ function embeddingMethodologyVersion(env) {
         ? EMBEDDING_METHODOLOGY.version : null;
 }
 const METHODOLOGY_VERSION = embeddingMethodologyVersion(process.env);
+
+// ─── The running service must be the registered one (grumpy final #3) ────────
+//
+// The worker's env names the model and revision it ASKS for; it says nothing
+// about the library the service actually runs, and the library is part of
+// the methodology (embedding@1.1.0: sentence-transformers==6.1.0, migration
+// 065). A host .venv built before the bump, or one resolved with other
+// versions, would get its vectors labelled 1.1.0. So before a vector is
+// stamped, the service's GET /health (python/embeddings_service.py) must
+// report the registered model, revision AND library.
+//
+// Mismatch behaviour (decision): the vector is STORED, with
+// methodology_version NULL, and the mismatch is logged once per process.
+//   - NULL is the existing convention for a vector that may not match the
+//     registered methodology (migration 012: model/revision overrides store
+//     NULL) — the claim is withheld, the data is not thrown away. A later
+//     re-embedding under a verified service restamps the row (the upsert).
+//   - Failing the job instead would stop semantic search for every new post
+//     over a provenance gap whose vectors are probably identical (the 1.1.0
+//     equivalence evidence), and BullMQ would retry it for nothing.
+//   - A /health that cannot be READ (network error, timeout, HTTP 5xx) is
+//     not a mismatch: the job fails and is retried, so no vector is stored
+//     with a verdict that was never reached. A /health that answers without
+//     the registered fields (HTTP 404, another server) cannot verify: NULL.
+// The check runs for every vector, right after the service produced it (one
+// local GET per embed job), so a service replaced while the worker runs is
+// noticed at once — a cached verdict would keep stamping the old one.
+const HEALTH_TIMEOUT_MS = 5000;
+const loggedMismatches = new Set();
+
+/** What GET /health reports that differs from the registered methodology ([] = the registered one). */
+function healthMismatches(health) {
+    const h = health && typeof health === 'object' ? health : {};
+    const registered = {
+        model:    EMBEDDING_METHODOLOGY.model_name,
+        revision: EMBEDDING_METHODOLOGY.config.revision,
+        library:  EMBEDDING_METHODOLOGY.config.library,
+    };
+    return Object.keys(registered)
+        .filter(k => h[k] !== registered[k])
+        // The served value is capped: it goes into a log line.
+        .map(k => `${k} ${String(JSON.stringify(h[k] === undefined ? null : h[k])).slice(0, 200)} (registered ${JSON.stringify(registered[k])})`);
+}
+
+/**
+ * The embedding methodology version to stamp on a vector the service just
+ * produced: the registered version when the worker's model/revision are the
+ * registered ones (embeddingMethodologyVersion), the vector is stored under
+ * the registered model name, AND the service's GET /health reports the
+ * registered model, revision and library; null otherwise.
+ * Throws when /health cannot be read (the job is retried).
+ * @param {string} [modelName]  the model_name the vector is stored under
+ * @returns {Promise<string|null>}
+ */
+async function verifiedMethodologyVersion(modelName = MODEL_NAME) {
+    if (METHODOLOGY_VERSION === null) return null;     // an override claims nothing
+    // Copilot review on PR #43: a vector stored under another model name
+    // never carries the registered methodology, whatever the service runs.
+    if (modelName !== EMBEDDING_METHODOLOGY.model_name) return null;
+    let res;
+    try {
+        res = await axios.get(`${EMBEDDINGS_SERVICE_URL}/health`, {
+            timeout: HEALTH_TIMEOUT_MS,
+            validateStatus: status => status < 500,
+        });
+    } catch (err) {
+        throw new Error(`embeddings service /health unavailable (${err && err.message}): `
+            + `the vector's embedding methodology cannot be verified, so it is not stored`);
+    }
+    const ok = res.status >= 200 && res.status < 300;
+    const problems = ok ? healthMismatches(res.data) : [`GET /health answered HTTP ${res.status}`];
+    if (problems.length === 0) return METHODOLOGY_VERSION;
+    const key = problems.join('; ');
+    if (!loggedMismatches.has(key)) {
+        loggedMismatches.add(key);
+        require('../workers/logging').logError(
+            `[embed] the embeddings service at ${EMBEDDINGS_SERVICE_URL} does not match the registered `
+            + `embedding@${METHODOLOGY_VERSION}: ${key}. New vectors are stored with methodology_version NULL `
+            + 'until it does (logged once per mismatch per process).');
+    }
+    return null;
+}
 
 // all-MiniLM-L6-v2 produces 384-dimensional embeddings
 const EMBEDDING_DIMENSIONS = 384;
@@ -87,7 +173,9 @@ async function saveEmbedding(postId, embedding, modelName = MODEL_NAME) {
     const vectorStr = `[${embedding.join(',')}]`;
 
     // methodology_version (P9-5): which registered embedding methodology
-    // (model + pinned revision, migration 012) produced this vector.
+    // (model + pinned revision + library) produced this vector — only once
+    // the running service is verified to be it (grumpy final #3).
+    const methodologyVersion = await verifiedMethodologyVersion(modelName);
     const row = await dbRun(
         `INSERT INTO post_embeddings (raw_post_id, embedding, model_name, methodology_version)
          VALUES ($1, $2::vector, $3, $4)
@@ -96,7 +184,7 @@ async function saveEmbedding(postId, embedding, modelName = MODEL_NAME) {
                 model_name          = EXCLUDED.model_name,
                 methodology_version = EXCLUDED.methodology_version
          RETURNING id`,
-        [postId, vectorStr, modelName, METHODOLOGY_VERSION],
+        [postId, vectorStr, modelName, methodologyVersion],
     );
     return row.id;
 }
@@ -163,7 +251,7 @@ async function missingPost(postId) {
  * behind for removed text.
  * @returns {Promise<string|null>} post_embeddings.id, or null
  */
-async function saveEmbeddingIfTextStored(postId, embedding, modelName = MODEL_NAME) {
+async function saveEmbeddingIfTextStored(postId, embedding, methodologyVersion, modelName = MODEL_NAME) {
     const vectorStr = `[${embedding.join(',')}]`;
     try {
         const row = await dbRun(
@@ -177,7 +265,7 @@ async function saveEmbeddingIfTextStored(postId, embedding, modelName = MODEL_NA
                     model_name          = EXCLUDED.model_name,
                     methodology_version = EXCLUDED.methodology_version
              RETURNING id`,
-            [postId, vectorStr, modelName, METHODOLOGY_VERSION],
+            [postId, vectorStr, modelName, methodologyVersion],
         );
         return row ? row.id : null;
     } catch (err) {
@@ -192,7 +280,7 @@ async function saveEmbeddingIfTextStored(postId, embedding, modelName = MODEL_NA
  * A post purged or blanked by retention is skipped (see SKIP_REASONS).
  *
  * @param {string} postId  UUID of the raw_posts row to embed
- * @returns {Promise<{ postId: string, embeddingId: string, dimensions: number }
+ * @returns {Promise<{ postId: string, embeddingId: string, dimensions: number, methodologyVersion: string|null }
  *                  | { postId: string, skipped: true, reason: string, at: string|null }>}
  */
 async function embedPost(postId) {
@@ -204,7 +292,10 @@ async function embedPost(postId) {
     if (post.text_removed_at) return skipped(postId, SKIP_REASONS.TEXT_REMOVED, post.text_removed_at);
 
     const embedding   = await generateEmbedding(post.content);
-    const embeddingId = await saveEmbeddingIfTextStored(postId, embedding);
+    // Grumpy final #3: the stamp is verified against the service that just
+    // produced the vector (NULL on a mismatch; throws if /health is down).
+    const methodologyVersion = await verifiedMethodologyVersion(MODEL_NAME);
+    const embeddingId = await saveEmbeddingIfTextStored(postId, embedding, methodologyVersion);
     if (!embeddingId) {
         // Purged or blanked while the vector was being computed: re-read.
         const now = await dbGet('SELECT text_removed_at FROM raw_posts WHERE id = $1', [postId]);
@@ -213,7 +304,7 @@ async function embedPost(postId) {
         throw new Error(`embedding for post ${postId} was not stored`);
     }
 
-    return { postId, embeddingId, dimensions: embedding.length };
+    return { postId, embeddingId, dimensions: embedding.length, methodologyVersion };
 }
 
 module.exports = {
@@ -224,4 +315,5 @@ module.exports = {
     SKIP_REASONS,
     EMBEDDING_DIMENSIONS,
     embeddingMethodologyVersion,
+    verifiedMethodologyVersion,
 };

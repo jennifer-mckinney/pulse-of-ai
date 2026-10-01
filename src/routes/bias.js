@@ -51,8 +51,12 @@
 //                     model_name, version, lineage } ],
 //         pass_summary: [ { severity: 'pass', layer, assessment_type, count, insufficient,
 //                           first_time, last_time, metric_name, latest_value,
-//                           threshold, detail, citation,
+//                           threshold, latest_insufficient, detail, citation,
 //                           model_name, version, lineage } ] }
+//   latest_insufficient: the latest row is below its check's minimum sample
+//   — its value was never compared with τ (the detail says so, and the
+//   dashboard shows N/A instead of PASS for it).
+//   NOTE: severity 'pass' here is the stored vocabulary (not a violation).
 //   400 when hours is not an integer
 
 'use strict';
@@ -121,6 +125,12 @@ function foldPassSummaries(rows, versions) {
                 created_at:             r.last_time,
             }, versions);
             const value = Number(r.metric_value);
+            // Grumpy final #2: since bias@1.6.0 an insufficient-sample row
+            // states its computed value (parity: the largest gap over ALL
+            // categories), which can be far above τ. It was never compared
+            // with τ, so the latest value says so instead of "(τ = …)".
+            const latestInsufficient = r.group_value === INSUFFICIENT_SAMPLE;
+            const valueText = Number.isFinite(value) ? value.toFixed(3) : 'n/a';
             return {
                 severity:        'pass',
                 layer:           layerName(r.assessment_type, lin.config),
@@ -132,6 +142,7 @@ function foldPassSummaries(rows, versions) {
                 metric_name:     r.metric_name,
                 latest_value:    r.metric_value,
                 threshold:       r.threshold,
+                latest_insufficient: latestInsufficient,
                 // Deterministic, built only from stored fields.
                 // PR #22 principal #11: rows below the minimum sample are
                 // not passes; the detail says how many there were.
@@ -139,9 +150,10 @@ function foldPassSummaries(rows, versions) {
                     ? `${r.n - r.insufficient} passing check${r.n - r.insufficient === 1 ? '' : 's'} and `
                         + `${r.insufficient} with an insufficient sample in the window · `
                     : `${r.n} passing check${r.n === 1 ? '' : 's'} in the window · `)
-                    + `latest ${r.metric_name} `
-                    + `${Number.isFinite(value) ? value.toFixed(3) : 'n/a'} `
-                    + `(τ = ${r.threshold}).`,
+                    + `latest ${r.metric_name} ${valueText} `
+                    + (latestInsufficient
+                        ? `(insufficient sample, not compared with τ = ${r.threshold}).`
+                        : `(τ = ${r.threshold}).`),
                 citation:        citationFor(r.assessment_type, lin.config),
                 model_name:      lin.model_name,
                 version:         lin.version,
@@ -198,7 +210,7 @@ router.get('/bias/history', async (req, res) => {
         // functions run before DISTINCT ON picks the newest row).
         const passRows = await dbAll(
             `SELECT DISTINCT ON (assessment_type)
-                    assessment_type, metric_name, metric_value, threshold,
+                    assessment_type, group_value, metric_name, metric_value, threshold,
                     methodology_version_id,
                     created_at                                         AS last_time,
                     COUNT(*)        OVER (PARTITION BY assessment_type) AS n,

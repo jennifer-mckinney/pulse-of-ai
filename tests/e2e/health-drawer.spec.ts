@@ -205,3 +205,63 @@ test('health drawer: pass summaries, lineage tags and the truncation notice', as
 
     expectNoConsoleErrors(errors);
 });
+
+// Grumpy final #2: since bias@1.6.0 an insufficient-sample parity row states
+// its real gap (here 1.300 against τ 0.3). When it is the LATEST row of a
+// pass summary the feed shows N/A in the neutral colour, never a green PASS,
+// and the served detail says the value was not compared with τ.
+test('health drawer: a latest insufficient-sample summary reads N/A, not PASS', async ({ page }) => {
+    const errors = consoleErrors(page);
+    const now = Date.now();
+    const iso = (minAgo: number) => new Date(now - minAgo * 60000).toISOString();
+    await page.route('**/api/bias/history*', async (route) => {
+        await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+                window_hours: 12, window_start: iso(720), generated_at: iso(0),
+                total_count: 2, alert_count: 0, pass_count: 2, insufficient_count: 1,
+                truncated: false, alert_cap: 500, alerts: [],
+                pass_summary: [{
+                    severity: 'pass', layer: 'Demographic parity', assessment_type: 'platform_sentiment_parity',
+                    count: 1, insufficient: 1, first_time: iso(3), last_time: iso(3),
+                    metric_name: 'max_comparative_diff', latest_value: 1.3, threshold: 0.3,
+                    latest_insufficient: true,
+                    detail: '0 passing checks and 1 with an insufficient sample in the window · '
+                        + 'latest max_comparative_diff 1.300 (insufficient sample, not compared with τ = 0.3).',
+                    citation: 'Barocas & Selbst (2016)', model_name: 'pulse-bias-monitor-v1',
+                    version: '1.6.0', lineage: 'recorded',
+                }, {
+                    severity: 'pass', layer: 'Negative dominance', assessment_type: 'negative_dominance',
+                    count: 1, insufficient: 0, first_time: iso(4), last_time: iso(4),
+                    metric_name: 'negative_share', latest_value: 0.21, threshold: 0.6,
+                    latest_insufficient: false,
+                    detail: '1 passing check in the window · latest negative_share 0.210 (τ = 0.6).',
+                    citation: 'Suresh & Guttag (2021)', model_name: 'pulse-bias-monitor-v1',
+                    version: '1.6.0', lineage: 'recorded',
+                }],
+            }),
+        });
+    });
+    await gotoAndWaitForData(page);
+    await page.locator('#health-chip').click();
+    const drawer = page.locator('#health-drawer');
+    await expect(drawer).toHaveClass(/open/);
+
+    const rows = drawer.locator('.alert-feed .alert-row.alert-summary');
+    await expect(rows).toHaveCount(2);
+    const na = rows.nth(0);
+    await expect(na).toHaveClass(/sev-n-a/);
+    await expect(na).not.toHaveClass(/sev-pass/);
+    await expect(na.locator('.alert-sev')).toHaveText('N/A');
+    await expect(na.locator('.alert-detail')).toContainText('(insufficient sample, not compared with τ = 0.3).');
+    await expect(na.locator('.alert-detail')).toContainText(/First check \d\d:\d\d UTC\./);
+    const pass = rows.nth(1);
+    await expect(pass).toHaveClass(/sev-pass/);
+    await expect(pass.locator('.alert-sev')).toHaveText('PASS');
+    // Neutral, not the green of a pass.
+    const colour = (row: typeof na) => row.locator('.alert-sev').evaluate((n) => getComputedStyle(n).color);
+    expect(await colour(na)).not.toBe(await colour(pass));
+
+    expectNoConsoleErrors(errors);
+});
