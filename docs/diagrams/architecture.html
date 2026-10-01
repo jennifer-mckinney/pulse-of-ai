@@ -161,6 +161,7 @@ flowchart LR
   M1 -- "migrations + seed" --&gt; D0
   M2 -- "demo posts through the real scorers" --&gt; D2
   M2 -- "embed jobs" --&gt; Q3
+  M2 -- "GET /health (model loaded?)" --&gt; E1
   WD1 -- "GET /api/health" --&gt; W3
   WD1 -- "critical alert_events, alert_resolutions" --&gt; D3
   WD1 -- "SELECT 1, watchdog_state / _notifications" --&gt; D6

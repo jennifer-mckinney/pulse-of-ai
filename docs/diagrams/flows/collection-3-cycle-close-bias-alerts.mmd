@@ -5,7 +5,7 @@ flowchart LR
 
   subgraph CLOSE["Cycle close · worker timer every 30 s"]
     direction TB
-    C1["29 · claimDueCycles(): FOR UPDATE SKIP LOCKED,<br/>status → closing, for every cron job whose window<br/>+ 60 s grace has passed with inflight_runs ≤ 0<br/>(or past the hard cap max(15 min, 4 × window)),<br/>and every awaiting_retries job whose retries are done"]:::done
+    C1["29 · claimDueCycles(): FOR UPDATE SKIP LOCKED,<br/>status → closing, for every cron job whose window<br/>+ 60 s grace has passed with inflight_runs ≤ 0<br/>(or past the hard cap max(15 min, 4 × window)),<br/>every awaiting_retries job whose retries are done<br/>(or past the same cap), and a cycle left closing<br/>by a dead closer (2 × the cap)"]:::done
     C2["30 · posts = COUNT(DISTINCT raw_post_id)<br/>in decision_audit_log for the job"]:::done
     C3{"posts #gt; 0?"}:::done
     C4["31 · runBiasChecks(job, bias@1.6.0), once:<br/>location_concentration (content-located posts,<br/>publisher-located excluded, min 30) ·<br/>platform_sentiment_parity (categories with ≥ 10<br/>posts, at least 2) · negative_dominance (min 30)<br/>→ 3 bias_assessments rows with methodology_version_id;<br/>below a minimum: #quot;insufficient sample#quot;,<br/>no violation, no alert"]:::done

@@ -71,6 +71,7 @@ flowchart LR
   MIGRATE --> PG
   POP --> PG
   POP -- "6379 auth" --> RD
+  POP -- "GET embeddings:8000/health" --> EMB
   PG --- V1
   RD --- V2
   EMB --- V3

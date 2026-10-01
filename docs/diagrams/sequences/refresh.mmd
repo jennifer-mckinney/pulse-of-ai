@@ -51,7 +51,7 @@ sequenceDiagram
   I->>DB: scores + audit rows under the job, slot released,<br/>embed job when the relevance gate passes
   alt slots still held when the run ends
     W->>DB: job awaiting_retries
-    Note over DB: cycle closer (every 30 s) finalizes it once every slot is released:<br/>counts from decision_audit_log, bias checks once, completed
+    Note over DB: cycle closer (every 30 s) finalizes it once every slot is released<br/>(or its age passes the hard cap max(15 min, 4 × window)):<br/>counts from decision_audit_log, bias checks once, completed
   else no slot held
     W->>DB: completed: posts_processed counted from decision_audit_log,<br/>bias checks once when > 0 (cycle.jobPostsProcessed)
   end

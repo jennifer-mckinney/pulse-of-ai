@@ -129,6 +129,7 @@ classDiagram
     RedirectRefusedError
     ResponseTooLargeError
     BudgetExhaustedError
+    ResponseDecodeError
   }
   CollectorError <|-- ErrorTypes
 
@@ -189,6 +190,8 @@ classDiagram
     +getRefusal(sourceId)
     +recordRefusal(sourceId, refusal, slug)
     +clearRefusal(sourceId, resolution, o: client)
+    +endCooldown(sourceId, probedDeniedAt) probe ok: 24 h probation, count kept
+    +decayRefusal(sourceId) count to 0 after probation
   }
   class cycle {
     <<module cycle.js>>
@@ -205,6 +208,7 @@ classDiagram
     +envReset(slug, env, deniedAt) date AND named approval
     +refusalOf(classified)
     +cooldownMs(n)
+    +probationOver(row, now)
     +resetEnv(slug)
   }
   class status {
