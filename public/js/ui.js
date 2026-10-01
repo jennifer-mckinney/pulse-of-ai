@@ -1013,10 +1013,18 @@
                     config: {
                         pii_fields_removed: 2,
                         location_granularity: 'city',
-                        dedupe: 'simhash-64',
+                        // Real rule (001_core_schema.sql): duplicates are
+                        // dropped by source + upstream id; no simhash exists.
+                        dedup_strategy: 'unique source + upstream id: UNIQUE(source_id, external_id)',
                         legal_basis: 'legitimate_interest § 6(1)(f)',
                     },
-                    researcher: 'Raw content hashed at ingest; hash is the immutable join key across the audit log.',
+                    // audit_narration@1.4.0 INGEST_HASH_NOTE verbatim (src/config/
+                    // audit-narration.js): the hash is an integrity check, not a
+                    // join key. Demo suffix mirrors the sentiment step's.
+                    researcher: 'The stored text is SHA-256 hashed at ingest; each scoring step records the same digest of the '
+                        + 'text it scored as input_hash, which npm run replay re-checks against the stored text and this receipt serves '
+                        + 'only keyed (HMAC-SHA256 with AUDIT_HASH_KEY). It is an integrity check, not a join key.'
+                        + ' (fictional demo post — nothing stored to replay)',
                 },
                 layers: null,
             },
