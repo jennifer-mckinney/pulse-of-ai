@@ -1,14 +1,14 @@
 # The Pulse of AI — Technical Specification
 **Version:** 1.2.1
 **Date:** 2026-09-30
-**Status:** Implemented through PR #34 (`master` @ `7291490`). PR #10 Part 2 landed as PR #22; nothing described here is in flight.
+**Status:** Implemented through PR #39 (`master` @ `0356a00`). PR #10 Part 2 landed as PR #22; nothing described here is in flight.
 **Maps to:** `pulse-of-ai-mvp-v1-final-requirements.pdf`, `pulse-of-ai-evidence-based-thresholds.pdf`, `pulse-of-ai-model-health-dashboard.pdf`
 
 **Authority.** The code on `master` is the authority for what exists; this specification is the source of truth for names and intent. Legal and product decisions belong to `docs/adr/0001-source-registry-and-collection.md` (ADR 0001); this document references them and does not restate them differently.
 
 **Status markers used in this document:**
 - **PLANNED — not implemented as of v1.2.0**: designed intent that is kept on purpose. Nothing on `master` implements it (still true at v1.2.1; the marker keeps its v1.2.0 wording).
-- Anything without a marker describes `master` @ `7291490`. The v1.2.0 draft also used **IN FLIGHT (PR #10 Part 2)** and **KNOWN DEFECT (fix pending)**; PR #22 merged that work and fixed those defects, so neither marker is used any more.
+- Anything without a marker describes `master` @ `0356a00`. The v1.2.0 draft also used **IN FLIGHT (PR #10 Part 2)** and **KNOWN DEFECT (fix pending)**; PR #22 merged that work and fixed those defects, so neither marker is used any more.
 
 ### v1.2.0 changelog (2026-09-29): aligned to code per independent audit, 2026-09-29
 Every section below changed because the independent diagram-accuracy audit (round 1) confirmed drift between v1.1.0 and the code on `master`. Section-by-section:
@@ -53,7 +53,7 @@ PRs #24–#28 and #31–#34 merged after v1.2.0 (`master` @ `7291490`; #29 and #
 - **Header, §11, §13, §21**: the master SHA 7291490 (header, §11, §21); the status line names PR #34; §13 lists the PRs merged after #22.
 - **Audit round 3 corrections (no code change behind them):** §2 text retention also blanks on the Reddit deletion re-check; §5 compose profiles per service and the model's disk size; §6 the migration index, the schema sketch's foreign keys, the provenance id format, the migration gaps (063–064), DDL comments (`decision_audit_log`, `alert_events`, `data_retention_log`, `source_type`, `source_runs.job_id`) and the index note; §7 the health queue list, the proxy headers of the refresh token rule, the bias layer status `n-a`, the served error fields and `retired_note` of `/api/sources`; §8 the SSRF refusal list, the safe-id rule and the `verify-provenance` exit codes; §9 the window-run alert and lineage columns; §12 the embedding code comments; §13 the PRs after #22; §17 the cadence band (120–180 s) and the Stack Overflow / GitLab cadences; §19 the retention tiers, the Reddit re-check's refusal condition and the rollup coverage example; §20 the pseudonym history and the HMAC signal hash.
 - **Audit round 4 corrections (2026-09-30; no code change behind them):** this changelog's PR list (#29 and #30 were closed unmerged); §1 provenance fingerprints need a key and demo posts carry none; §3 the per-source `online` rule; §5 the watchdog shares the app image, and the MongoDB, `all-mpnet-base-v2`, IVFFlat and Infinity rows; §6 `processing_jobs` row creation, `content_hash` (stored and indexed, joined by nothing) and the `alert_resolution_approvals` foreign key; §8 `.env.example` holds defaults and placeholders, `content_hash`, and the error-response rule (environment variable names may be served where they tell the operator what to set; secrets never are; owner ruling, no code change); §9 source health runs on every cycle-timer tick; §12 and §15 every external benchmark figure is now cited to its primary source (sbert.net pretrained-models table, the Tembo pgvector benchmark, the e5-large model card, the `sentiment` README) or corrected, and the unsourced ones (CPU throughput, STS-B 84-85%, 3-4%, Infinity's 30-40% and 2-4x, e5-large 8GB+ RAM, RoBERTa 6GB RAM, "comparable to VADER") are withdrawn; §15 MongoDB has multi-document ACID transactions (since 4.0) and a vector search feature; §16 Discourse forums are collected (four routes); §17 refusal headers stay on the state row only while the refused state lasts; §20 the pseudonym upsert was removed in PR #22.
-- **Reconciliation with PRs #35–#39 (2026-09-30):** §3, §10 ingest@1.8.0 and audit_narration@1.4.0 (migration 066, wording only: the content hash is an integrity check, not a join key; errata on ingest 1.0.0–1.7.0); §6 50 migrations (001–066); §8, §12 python/start.sh binds 127.0.0.1 (`EMBEDDINGS_HOST`, PR #35); ADR 0001 `CORRELATION_MIN_CONFIDENCE` (PRs #37, #39).
+- **Reconciliation with PRs #35, #37, #38 and #39 (2026-09-30; #36 is an issue, not a PR):** header, §11, §13, §21 the master SHA 0356a00 and the status line names PR #39; §3, §10 ingest@1.8.0 and audit_narration@1.4.0 (migration 066, wording only: the content hash is an integrity check, not a join key; errata on ingest 1.0.0–1.7.0); §6 50 migrations (001–066); §8, §12 python/start.sh binds 127.0.0.1 (`EMBEDDINGS_HOST`, PR #35); ADR 0001 `CORRELATION_MIN_CONFIDENCE` (PRs #37, #39).
 
 **v1.1.0 Amendments (historical record; v1.2.0 supersedes the source count and categories, the pseudonym format and the retention schedule where the sections below say so):**
 - Scope: Global (not US-only)
@@ -1472,7 +1472,7 @@ Each beat sets a camera intent, a colour mode (`sentiment` | `category` | `warm`
 Demo numbers are never presented as live. `data.js` derives a data mode from the snapshot's `demo_posts` counts (`live` | `demo` | `mixed` | `none`), or `fallback` when the API is unreachable and the bundled deterministic demo set is rendered. Every mode that includes demo posts (`demo`, `mixed`, `fallback`) shows the "Demo data" markers, and the overview kicker states the mode. In demo mode, posts and receipts are synthesised locally and demo ids are never sent to `/api/audit`. Server-side demo posts come only from demo feeds (`data_sources.source_type = 'demo'`, text prefixed `[Demo]`) and are reported with `data_origin: "demo"`.
 
 ### Legal Notices
-The header "about" chip opens a panel with the Appropriate Legal Notices of §21; `index.html` repeats them in `<noscript>`. This UI is added by the `docs/diagrams-and-readme` branch together with the licence; it is not on `master` @ `7291490`.
+The header "about" chip opens a panel with the Appropriate Legal Notices of §21; `index.html` repeats them in `<noscript>`. This UI is added by the `docs/diagrams-and-readme` branch together with the licence; it is not on `master` @ `0356a00`.
 
 ### Page Load Priority (Performance Budget: <3s)
 
@@ -1563,7 +1563,7 @@ Nothing on `master` queries the vectors yet; they are stored for the uses below.
 
 ## 13. Implementation Phases (TDD)
 
-**Status (v1.2.1):** Phases A to E are done on `master`; the lists below are the original plan, kept for traceability, with the deviations marked. Later work landed as PR #8 (story frontend), PR #9 (one-command standup), PR #10 (source collectors, ADR 0001) and PR #22 (PR #10 Part 2: collection hardening, maintenance schedule, rolling bias window, watchdog, Valkey); then PR #24 (refresh-job finalization and bias attribution, `bias@1.6.0`, `scripts/seed-demo.js` removed), PRs #25, #26 and #32 (Dependabot, black target, CPU-only torch in CI), PR #33 (refusal probation and refusal headers, the Internet Archive 304 fix) and PR #34 (`embedding@1.1.0`, sentence-transformers 6.1.0); PRs #13–#21, #23, #27, #28 and #31 are dependency bumps.
+**Status (v1.2.1):** Phases A to E are done on `master`; the lists below are the original plan, kept for traceability, with the deviations marked. Later work landed as PR #8 (story frontend), PR #9 (one-command standup), PR #10 (source collectors, ADR 0001) and PR #22 (PR #10 Part 2: collection hardening, maintenance schedule, rolling bias window, watchdog, Valkey); then PR #24 (refresh-job finalization and bias attribution, `bias@1.6.0`, `scripts/seed-demo.js` removed), PRs #25, #26 and #32 (Dependabot, black target, CPU-only torch in CI), PR #33 (refusal probation and refusal headers, the Internet Archive 304 fix) PR #34 (`embedding@1.1.0`, sentence-transformers 6.1.0), PR #35 (`python/start.sh` binds 127.0.0.1, `EMBEDDINGS_HOST`), PRs #37 and #39 (compose web gets the retention grace and pool settings; `CORRELATION_MIN_CONFIDENCE` dropped and blanked on the worker) and PR #38 (`ingest@1.8.0` / `audit_narration@1.4.0`, content-hash wording, migration 066); PRs #13–#21, #23, #27, #28 and #31 are dependency bumps.
 
 ### TDD Rule: Every component follows Red → Green → Refactor
 Write the failing test first. Write only enough code to make it pass. Refactor. Never write production code without a failing test.
@@ -2311,7 +2311,7 @@ Before shipping this feature:
 
 ## 21. Licence and Legal Notices
 
-**Scope.** The licence and the legal-notices UI are added by the `docs/diagrams-and-readme` branch; `master` @ `7291490` still declares `"license": "MIT"` in `package.json` and has no `LICENSE` file or notice UI. The licensing decision and its wording belong to `LICENSE` and `ADDITIONAL-TERMS.md`; this section states how the code carries them and does not restate the terms differently.
+**Scope.** The licence and the legal-notices UI are added by the `docs/diagrams-and-readme` branch; `master` @ `0356a00` still declares `"license": "MIT"` in `package.json` and has no `LICENSE` file or notice UI. The licensing decision and its wording belong to `LICENSE` and `ADDITIONAL-TERMS.md`; this section states how the code carries them and does not restate the terms differently.
 
 ### Licence
 - `LICENSE` is the complete, unmodified GNU Affero General Public License v3.
