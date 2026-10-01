@@ -86,7 +86,9 @@ classDiagram
     +text(url, o) response
     +fetchRobots(url)
     +checkDeadline()
-    +activeHold / setHold / clearHold(url, cache)
+    +activeHold(url, cache)
+    +setHold(url, cache, ms, status)
+    +clearHold(url, cache)
     +holdMsFor(res) ms
   }
   class HostLimiter {
@@ -184,6 +186,7 @@ classDiagram
   }
   class state {
     <<module state.js>>
+    +sourceIdsBySlug(slugs)
     +claim(sourceId, minIntervalSec, windowMs)
     +saveOutcome(sourceId, o)
     +recordRun(o)
@@ -200,6 +203,9 @@ classDiagram
     <<module cycle.js>>
     +currentCycleJob(windowMs)
     +joinCycle(jobId, windowMs)
+    +addToCycle(jobId, counts)
+    +claimDueCycles(windowMs)
+    +jobPostsProcessed(jobId)
     +retryJobFor(jobId, windowMs)
     +leaveCycle(jobId, counts)
     +reserveRetry / releaseRetry(jobId)

@@ -12,7 +12,7 @@
 // the complete corresponding source of the version you run (your fork). The
 // ATTRIBUTION entry is the section 7(b) term and must stay as it is.
 //
-// Zero functions by contract; invariants locked by
+// Exports data only (no functions); invariants locked by
 // tests/unit/pure/legalNotice.test.js.
 //
 // Dual export guard: CommonJS (module.exports) for jest,

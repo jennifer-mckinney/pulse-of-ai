@@ -36,7 +36,7 @@ flowchart LR
     direction TB
     F1["13 · buildCollectors(): one instance per open route;&lt;br/&gt;the constructor throws GateClosedError&lt;br/&gt;if route.requires is missing"]:::done
     F2["14 · HttpClient checks every hop before sending it:&lt;br/&gt;https only, public host, route allowedHosts (SSRF guard),&lt;br/&gt;DNS answers checked and pinned;&lt;br/&gt;robots.txt for RSS / Atom feeds (not arXiv or&lt;br/&gt;licensed feeds), Pew's WordPress API and&lt;br/&gt;Discourse forums (conservative);&lt;br/&gt;redirects followed manually, max 4;&lt;br/&gt;a credentialed request never crosses origins"]:::done
-    F3["15 · User-Agent PulseOfAI/#lt;version#gt; (+contact URL);&lt;br/&gt;per-host spacing; 20 s timeout;&lt;br/&gt;at most 2 retries on 429 / 5xx (a Retry-After ≤ 10 s&lt;br/&gt;waited out) and network errors (not DNS failures);&lt;br/&gt;a longer Retry-After on 429 / 503, or a 429 after the&lt;br/&gt;retries (5 min), holds the host up to 24 h: nothing sent,&lt;br/&gt;robots.txt included; ETag / Last-Modified → 304 not modified"]:::done
+    F3["15 · User-Agent PulseOfAI/#lt;version#gt; (+contact URL);&lt;br/&gt;per-host spacing; 20 s timeout;&lt;br/&gt;at most 2 retries on 429 / 5xx (a Retry-After ≤ 10 s&lt;br/&gt;waited out) and network errors (not DNS failures or an&lt;br/&gt;undecodable body); a longer Retry-After on 429 / 503 (its&lt;br/&gt;full delay), or a 429 with no Retry-After still answered&lt;br/&gt;after the retries (5 min), holds the host up to 24 h: nothing sent,&lt;br/&gt;robots.txt included; ETag / Last-Modified → 304 not modified"]:::done
     F4["16 · caps: 5 MB decoded per response (route override),&lt;br/&gt;robots.txt 500 KiB, bulk file 50 MB;&lt;br/&gt;a DTD with entity declarations is refused"]:::done
     F5{"401 / 403 / 451, bot&lt;br/&gt;challenge or robots&lt;br/&gt;disallow?"}:::done
     F1 --&gt; F2 --&gt; F3 --&gt; F4 --&gt; F5
@@ -82,7 +82,8 @@ flowchart LR
   end
 
   F5 -- yes --&gt; V1
-  F5 -- no --&gt; N1
+  F5 -- "no, response ok" --&gt; N1
+  F3 -. "hold, final 5xx, timeout, too large: the fetch throws" .-&gt; V1
   N4 --&gt; T1
   T1 -. "insert error" .-&gt; T6 --&gt; V1
   T2 -- "no, duplicate" --&gt; V1

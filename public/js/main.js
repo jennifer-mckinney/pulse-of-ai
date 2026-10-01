@@ -154,7 +154,18 @@
     function renderLegalNotice() {
         const panel = document.getElementById('about-panel');
         const chip = document.getElementById('about-chip');
-        if (!panel || !chip || !legalConfig || !Array.isArray(legalConfig.NOTICE)) return;
+        if (!panel || !chip) return;
+        if (!legalConfig || !Array.isArray(legalConfig.NOTICE)) {
+            // The notices are the AGPL section 7(b) attribution surface: never
+            // leave a dead control and never fail silently when the config
+            // did not load (404, CSP, rename). The <noscript>-style notice in
+            // index.html stays the static fallback.
+            chip.hidden = true;
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn('legal notices unavailable: PulseLegalConfig missing or malformed');
+            }
+            return;
+        }
 
         const list = document.createElement('ul');
         list.className = 'about-list';
@@ -203,6 +214,14 @@
             if (e.key !== 'Escape' || panel.hidden) return;
             close();
         });
+        // A drawer opening (receipt: pulse:trace; health chip) sits above the
+        // panel (z-index 50 vs 30): fold the panel away so it is not left
+        // expanded and focusable behind the drawer. Focus is NOT moved: the
+        // drawer's own opener handling owns focus.
+        const foldAway = () => { if (!panel.hidden) setOpen(false); };
+        document.addEventListener('pulse:trace', foldAway);
+        const healthChip = document.getElementById('health-chip');
+        if (healthChip) healthChip.addEventListener('click', foldAway);
     }
 
     // Shared shell surface for later modules (freeze timer on first receipt,

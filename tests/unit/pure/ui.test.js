@@ -901,7 +901,7 @@ describe('demoAuditModel — prototype buildAudit receipt', () => {
         for (const s of P.demoAuditModel(post).steps) {
             const r = s.audiences.researcher;
             expect(r).not.toContain('npm run replay -- --post ' + post.id);
-            if (/replay/.test(r)) expect(r).toMatch(/nothing to replay/);
+            expect(r).not.toMatch(/npm run replay -- --post \d+/);
         }
     });
 

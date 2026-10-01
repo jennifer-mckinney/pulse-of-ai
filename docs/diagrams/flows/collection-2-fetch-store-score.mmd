@@ -7,7 +7,7 @@ flowchart LR
     direction TB
     F1["13 · buildCollectors(): one instance per open route;<br/>the constructor throws GateClosedError<br/>if route.requires is missing"]:::done
     F2["14 · HttpClient checks every hop before sending it:<br/>https only, public host, route allowedHosts (SSRF guard),<br/>DNS answers checked and pinned;<br/>robots.txt for RSS / Atom feeds (not arXiv or<br/>licensed feeds), Pew's WordPress API and<br/>Discourse forums (conservative);<br/>redirects followed manually, max 4;<br/>a credentialed request never crosses origins"]:::done
-    F3["15 · User-Agent PulseOfAI/#lt;version#gt; (+contact URL);<br/>per-host spacing; 20 s timeout;<br/>at most 2 retries on 429 / 5xx (a Retry-After ≤ 10 s<br/>waited out) and network errors (not DNS failures);<br/>a longer Retry-After on 429 / 503, or a 429 after the<br/>retries (5 min), holds the host up to 24 h: nothing sent,<br/>robots.txt included; ETag / Last-Modified → 304 not modified"]:::done
+    F3["15 · User-Agent PulseOfAI/#lt;version#gt; (+contact URL);<br/>per-host spacing; 20 s timeout;<br/>at most 2 retries on 429 / 5xx (a Retry-After ≤ 10 s<br/>waited out) and network errors (not DNS failures or an<br/>undecodable body); a longer Retry-After on 429 / 503 (its<br/>full delay), or a 429 with no Retry-After still answered<br/>after the retries (5 min), holds the host up to 24 h: nothing sent,<br/>robots.txt included; ETag / Last-Modified → 304 not modified"]:::done
     F4["16 · caps: 5 MB decoded per response (route override),<br/>robots.txt 500 KiB, bulk file 50 MB;<br/>a DTD with entity declarations is refused"]:::done
     F5{"401 / 403 / 451, bot<br/>challenge or robots<br/>disallow?"}:::done
     F1 --> F2 --> F3 --> F4 --> F5
@@ -53,7 +53,8 @@ flowchart LR
   end
 
   F5 -- yes --> V1
-  F5 -- no --> N1
+  F5 -- "no, response ok" --> N1
+  F3 -. "hold, final 5xx, timeout, too large: the fetch throws" .-> V1
   N4 --> T1
   T1 -. "insert error" .-> T6 --> V1
   T2 -- "no, duplicate" --> V1

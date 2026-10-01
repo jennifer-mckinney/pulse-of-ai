@@ -179,7 +179,10 @@ render_png() {
         read -r w h < <(png_size "$png")
         if (( w < MAX_PX && h < MAX_PX )); then
             # Record which .mmd this PNG was rendered from (--check compares it).
-            python3 "$HERE/png_mmd_hash.py" embed "$png" "$src"
+            # A failed embed must fail the render (this runs under `if`/`||`,
+            # where set -e is off): a PNG without its hash is stale by definition.
+            python3 "$HERE/png_mmd_hash.py" embed "$png" "$src" \
+                || { echo "  hash embed failed for $png" >&2; return 1; }
             [[ -n "$quiet" ]] || echo "  ${png#"$HERE"/}  ${w}x${h} (scale $scale)"
             return 0
         fi

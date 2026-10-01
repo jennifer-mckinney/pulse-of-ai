@@ -1846,6 +1846,10 @@
     }
 
     function closeAudit() {
+        // No fallback control: the opener ("why?") is remembered by
+        // setDrawerOpen. If the explore detail re-rendered while the drawer
+        // was open the opener is gone and focus falls to <body> (never left
+        // in the hidden drawer); the user resumes from the top of the page.
         setDrawerOpen(els.auditDrawer, false);
         // Closing restores the prior view by construction: the drawer is an
         // overlay and no explore/story state was touched to open it.

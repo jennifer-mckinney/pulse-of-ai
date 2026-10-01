@@ -109,6 +109,11 @@ describe('main.js — renders the notice through the DOM API only', () => {
         expect(main).toContain('renderLegalNotice();');
     });
 
+    test('a missing or malformed config hides the chip and warns, never a dead control', () => {
+        expect(main).toMatch(/chip\.hidden = true;/);
+        expect(main).toContain("console.warn('legal notices unavailable");
+    });
+
     test('never uses innerHTML / outerHTML / insertAdjacentHTML', () => {
         // Code use only: the file's comments name innerHTML to forbid it.
         expect(main).not.toMatch(/\.(innerHTML|outerHTML)\s*[+]?=|insertAdjacentHTML\s*\(/);

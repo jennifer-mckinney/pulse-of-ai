@@ -88,8 +88,9 @@ mmd="$(copy_diagram m2)"
 python3 - "$mmd" <<'PY'
 import sys; p = sys.argv[1]; s = open(p, encoding="utf-8").read()
 old = "shown on the page for its trailing hour"
-line = next(l for l in s.splitlines() if old in l)
-assert s.count(old) == 1 and not line.startswith("%%")   # a drawn state label, not a comment
+line = next((l for l in s.splitlines() if old in l), "")
+assert s.count(old) == 1 and not line.startswith("%%"), \
+    "fixture drifted: update mutation M2 in render-hash.test.sh (retention-lifecycle.mmd label reworded)"
 s2 = s.replace(old, "shown on the page for its trailing day", 1)
 assert s2 != s; open(p, "w", encoding="utf-8").write(s2)
 PY
@@ -109,7 +110,8 @@ mmd="$(copy_diagram s3)"
 python3 - "$mmd" <<'PY'
 import sys; p = sys.argv[1]; s = open(p, encoding="utf-8").read()
 old = "  class detail, blanked, removed, purged, compacted done\n"
-assert s.count(old) == 1
+assert s.count(old) == 1, \
+    "fixture drifted: update mutation S3 in render-hash.test.sh (retention-lifecycle.mmd class line changed)"
 s2 = s.replace(old, "  class blanked, removed, purged, compacted done\n"
                "  classDef planned fill:#f2f2f2,stroke:#8a8a8a,color:#4a4a4a,stroke-dasharray:2 3\n"
                "  class detail planned\n", 1)
@@ -189,6 +191,8 @@ elif mode == "bad-crc":
     data[i + 8] ^= 0xFF
 elif mode == "trailing":
     data += b"junk"
+elif mode == "oversize":
+    data += b"\0" * (33 * 1024 * 1024)
 open(p, "wb").write(bytes(data))
 PY
 }
@@ -208,6 +212,7 @@ expect_damaged() {
 expect_damaged "a PNG truncated before IEND fails" no-iend "missing IEND"
 expect_damaged "a PNG with a corrupted chunk CRC fails" bad-crc "CRC mismatch"
 expect_damaged "a PNG with bytes after IEND fails" trailing "after IEND"
+expect_damaged "a PNG over the size cap fails before it is parsed" oversize "larger than"
 
 # 6c. The HTML must load the pinned Mermaid release (render.sh
 # MERMAID_VERSION + MERMAID_SRI) and nothing else (Copilot review on PR #40:

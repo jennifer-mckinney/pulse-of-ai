@@ -26,6 +26,9 @@ import sys
 import zlib
 
 KEYWORD = b"mmd-sha256"
+# The committed diagram PNGs are well under 1 MB; a cap keeps a hostile or
+# corrupt multi-GB file from being read into memory whole.
+MAX_PNG_BYTES = 32 * 1024 * 1024
 PNG_SIG = b"\x89PNG\r\n\x1a\n"
 
 
@@ -33,6 +36,15 @@ def mmd_sha256(mmd_path):
     """SHA-256 (hex) of the .mmd file's bytes."""
     with open(mmd_path, "rb") as fh:
         return hashlib.sha256(fh.read()).hexdigest()
+
+
+def read_png_file(path):
+    """Read a PNG file's bytes, refusing one over MAX_PNG_BYTES."""
+    with open(path, "rb") as fh:
+        data = fh.read(MAX_PNG_BYTES + 1)
+    if len(data) > MAX_PNG_BYTES:
+        raise ValueError(f"PNG larger than {MAX_PNG_BYTES} bytes")
+    return data
 
 
 def read_chunks(data):
@@ -84,8 +96,7 @@ def _is_hash_chunk(chunk):
 
 def stored_hash(png_path):
     """The hash in the PNG's mmd-sha256 tEXt chunk, or None."""
-    with open(png_path, "rb") as fh:
-        chunks = read_chunks(fh.read())
+    chunks = read_chunks(read_png_file(png_path))
     for chunk in chunks:
         if _is_hash_chunk(chunk):
             return chunk[1][len(KEYWORD) + 1:].decode("latin-1")
@@ -94,8 +105,7 @@ def stored_hash(png_path):
 
 def embed(png_path, mmd_path):
     """Write (or replace) the mmd-sha256 chunk, right after IHDR."""
-    with open(png_path, "rb") as fh:
-        chunks = [c for c in read_chunks(fh.read()) if not _is_hash_chunk(c)]
+    chunks = [c for c in read_chunks(read_png_file(png_path)) if not _is_hash_chunk(c)]
     payload = KEYWORD + b"\x00" + mmd_sha256(mmd_path).encode("ascii")
     at = 1 if chunks and chunks[0][0] == b"IHDR" else 0
     chunks.insert(at, (b"tEXt", payload))

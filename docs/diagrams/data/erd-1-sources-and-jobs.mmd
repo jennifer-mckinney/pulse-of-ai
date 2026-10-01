@@ -75,7 +75,7 @@ erDiagram
     timestamptz started_at
     timestamptz completed_at
     int inflight_runs "021"
-    timestamptz last_progress_at "040: an api, standup, demo or manual job is failed after 30 min without progress"
+    timestamptz last_progress_at "040: api/standup/demo/manual job failed after 30 min idle (STALE_JOB_MINUTES; api: REFRESH_STALE_MINUTES)"
   }
 
   alert_events {
