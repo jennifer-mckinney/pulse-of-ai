@@ -5,10 +5,11 @@
 #   <name>.html  is regenerated: it embeds the .mmd definition VERBATIM
 #                (HTML-escaped inside <pre class="mermaid">; the browser
 #                decodes it back to the identical text) and renders it with
-#                Mermaid 11 and the forest theme;
+#                Mermaid MERMAID_VERSION (pinned, with SRI) and the forest theme;
 #   <name>.png   is regenerated from the .mmd with @mermaid-js/mermaid-cli
-#                (mmdc), the forest theme and mmdc-config.json (natural
-#                width, useMaxWidth false), at scale 2, lowered to 1.5 or 1
+#                (mmdc) running the same MERMAID_VERSION, the forest theme
+#                and mmdc-config.json (natural width, useMaxWidth false),
+#                at scale 2, lowered to 1.5 or 1
 #                if either dimension would reach 8000 px (the Claude API
 #                image limit); the script fails if it still does. The PNG
 #                carries the SHA-256 of the .mmd it was rendered from, in a
@@ -18,7 +19,9 @@
 #   bash docs/diagrams/render.sh a.mmd ...  only the given sources
 #   bash docs/diagrams/render.sh --check    verify CONTENT only, change nothing:
 #                                           every .html embeds its .mmd byte
-#                                           for byte; every .png exists, is
+#                                           for byte and loads only the
+#                                           pinned mermaid (version + SRI);
+#                                           every .png exists, is
 #                                           under 8000 px, carries the SHA-256
 #                                           of its CURRENT .mmd (a missing or
 #                                           different mmd-sha256 chunk fails
@@ -57,6 +60,16 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MMDC_VERSION="11.12.0"
+# The ONE Mermaid version both artifacts use (Copilot review on PR #40): mmdc
+# is run with this exact mermaid installed beside it (mermaid-cli's own
+# dependency is the range ^11.0.2, so npx would otherwise resolve whatever
+# 11.x is newest), and every .html loads the same release from jsDelivr,
+# pinned and checked with Subresource Integrity. MERMAID_SRI is the sha384
+# of mermaid@MERMAID_VERSION/dist/mermaid.min.js; recompute both together:
+#   curl -sL https://cdn.jsdelivr.net/npm/mermaid@<v>/dist/mermaid.min.js \
+#     | openssl dgst -sha384 -binary | openssl base64 -A
+MERMAID_VERSION="11.12.1"
+MERMAID_SRI="sha384-LlKSgo4Eo5GuF/ZrstLti44dE+GC5XAJ7TSu0Nw9Q3vIZF2QMnkRcK7BUoLabYLF"
 MAX_PX=8000
 PNG_TOLERANCE="${PNG_TOLERANCE:-0.0005}"
 CHECK=0
@@ -88,9 +101,9 @@ png_size() {
 
 # Write <name>.html for <name>.mmd.
 write_html() {
-    python3 - "$1" "${1%.mmd}.html" <<'PY'
+    python3 - "$1" "${1%.mmd}.html" "$MERMAID_VERSION" "$MERMAID_SRI" <<'PY'
 import html, sys
-src, out = sys.argv[1], sys.argv[2]
+src, out, version, sri = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 text = open(src, encoding="utf-8").read()
 lines = text.splitlines()
 title = lines[0].split("Title:", 1)[1].strip() if lines and "Title:" in lines[0] else src
@@ -110,7 +123,7 @@ page = f"""<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Pulse of AI · {html.escape(title)}</title>
-<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@{version}/dist/mermaid.min.js" integrity="{sri}" crossorigin="anonymous"></script>
 <style>
   body {{ margin: 0; padding: 32px 40px; background: #ffffff; color: #1b1f23;
          font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }}
@@ -134,15 +147,21 @@ open(out, "w", encoding="utf-8").write(page)
 PY
 }
 
-# Exit non-zero unless <name>.html embeds <name>.mmd exactly.
+# Exit non-zero unless <name>.html embeds <name>.mmd exactly and loads the
+# pinned Mermaid release (MERMAID_VERSION, with its SRI hash) as its only
+# external script.
 check_html() {
-    python3 - "$1" "${1%.mmd}.html" <<'PY'
+    python3 - "$1" "${1%.mmd}.html" "$MERMAID_VERSION" "$MERMAID_SRI" <<'PY'
 import html, re, sys
-src, out = sys.argv[1], sys.argv[2]
+src, out, version, sri = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 text = open(src, encoding="utf-8").read()
 page = open(out, encoding="utf-8").read()
 m = re.search(r'<pre class="mermaid">\n(.*?)</pre>', page, re.S)
-sys.exit(0 if m and html.unescape(m.group(1)) == text else 1)
+pinned = (f'<script src="https://cdn.jsdelivr.net/npm/mermaid@{version}/dist/mermaid.min.js" '
+          f'integrity="{sri}" crossorigin="anonymous"></script>')
+scripts = re.findall(r'<script src="', page)
+sys.exit(0 if m and html.unescape(m.group(1)) == text
+         and page.count(pinned) == 1 and len(scripts) == 1 else 1)
 PY
 }
 
@@ -152,7 +171,7 @@ render_png() {
     local src="$1" png="${2:-${1%.mmd}.png}" quiet="${3:-}" scale w h
     for scale in 2 1.5 1; do
         rm -f "$png"
-        if ! npx -y "@mermaid-js/mermaid-cli@${MMDC_VERSION}" -q -i "$src" -o "$png" -t forest -b white -s "$scale" -c "$HERE/mmdc-config.json" >/dev/null \
+        if ! npx -y -p "@mermaid-js/mermaid-cli@${MMDC_VERSION}" -p "mermaid@${MERMAID_VERSION}" mmdc -q -i "$src" -o "$png" -t forest -b white -s "$scale" -c "$HERE/mmdc-config.json" >/dev/null \
             || [[ ! -f "$png" ]]; then
             echo "  mmdc failed for $src" >&2
             return 1

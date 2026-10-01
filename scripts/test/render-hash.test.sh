@@ -209,6 +209,43 @@ expect_damaged "a PNG truncated before IEND fails" no-iend "missing IEND"
 expect_damaged "a PNG with a corrupted chunk CRC fails" bad-crc "CRC mismatch"
 expect_damaged "a PNG with bytes after IEND fails" trailing "after IEND"
 
+# 6c. The HTML must load the pinned Mermaid release (render.sh
+# MERMAID_VERSION + MERMAID_SRI) and nothing else (Copilot review on PR #40:
+# a floating mermaid@11 lets the HTML drift from the PNG renderer).
+# expect_html_fail NAME MODE: damage the copy's .html (MODE floating | sri |
+# extra), then --check --hash-only must fail with html-out-of-sync.
+expect_html_fail() {
+    local name="$1" mode="$2" mmd out rc
+    mmd="$(copy_diagram "html-$mode")"
+    python3 - "${mmd%.mmd}.html" "$mode" <<'PY'
+import re, sys
+path, mode = sys.argv[1], sys.argv[2]
+page = open(path, encoding="utf-8").read()
+if mode == "floating":
+    page = re.sub(r"mermaid@[0-9.]+/", "mermaid@11/", page)
+elif mode == "sri":
+    page = re.sub(r'integrity="sha384-[^"]+"', 'integrity="sha384-AAAA"', page)
+elif mode == "extra":
+    page = page.replace("</head>", '<script src="https://example.org/x.js"></script>\n</head>')
+open(path, "w", encoding="utf-8").write(page)
+PY
+    out="$(bash "$RENDER" --check --hash-only "$mmd" 2>&1)"; rc=$?
+    if (( rc != 0 )) && [[ "$out" == *html-out-of-sync* ]]; then
+        pass "$name"
+    else
+        fail "$name" "expected an html-out-of-sync FAIL, got rc=$rc: $out"
+    fi
+}
+expect_html_fail "an HTML loading the floating mermaid@11 fails" floating
+expect_html_fail "an HTML whose SRI hash does not match the pin fails" sri
+expect_html_fail "an HTML that loads a second external script fails" extra
+mmd="$(copy_diagram html-pinned)"
+if grep -q 'mermaid@[0-9]*\.[0-9]*\.[0-9]*/dist/mermaid.min.js" integrity="sha384-' "${mmd%.mmd}.html"; then
+    pass "the committed HTML loads an exact mermaid version with SRI"
+else
+    fail "the committed HTML loads an exact mermaid version with SRI" "$(grep -n 'script src' "${mmd%.mmd}.html")"
+fi
+
 # 7. --hash-only is refused without --check.
 bash "$RENDER" --hash-only >/dev/null 2>&1; rc=$?
 if (( rc == 2 )); then pass "--hash-only without --check is refused"; else fail "--hash-only without --check is refused" "rc=$rc"; fi

@@ -9,15 +9,15 @@ Every diagram has three files with the same name:
 | File | Role |
 |---|---|
 | `<name>.mmd` | **Canonical** Mermaid source. Edit this file only. |
-| `<name>.html` | Standalone page. It embeds the `.mmd` definition verbatim and renders it in the browser with Mermaid 11 and the forest theme. |
-| `<name>.png` | Rendered from the `.mmd` with `@mermaid-js/mermaid-cli` 11.12.0 (`mmdc -t forest`, natural width via `mmdc-config.json`). Both dimensions stay under 8000 px. |
+| `<name>.html` | Standalone page. It embeds the `.mmd` definition verbatim and renders it in the browser with Mermaid 11.12.1 (the same release the PNG renderer runs, `MERMAID_VERSION` in `render.sh`, loaded from jsDelivr with a Subresource Integrity hash) and the forest theme. |
+| `<name>.png` | Rendered from the `.mmd` with `@mermaid-js/mermaid-cli` 11.12.0 running mermaid 11.12.1 (both pinned in `render.sh`; `mmdc -t forest`, natural width via `mmdc-config.json`). Both dimensions stay under 8000 px. |
 
 After editing a `.mmd`, regenerate its HTML and PNG and verify that everything is in sync:
 
 ```bash
 bash docs/diagrams/render.sh docs/diagrams/flows/data-flow-live.mmd   # one diagram
 bash docs/diagrams/render.sh                                          # all of them
-bash docs/diagrams/render.sh --check   # HTML <pre> embeds the .mmd exactly; each PNG carries the SHA-256 of the .mmd it was rendered from and it must match; PNG is under 8000 px and matches a fresh re-render (same size, pixels within tolerance); needs Pillow; no timestamps
+bash docs/diagrams/render.sh --check   # HTML <pre> embeds the .mmd exactly and loads only the pinned mermaid (version + SRI); each PNG carries the SHA-256 of the .mmd it was rendered from and it must match; PNG is under 8000 px and matches a fresh re-render (same size, pixels within tolerance); needs Pillow; no timestamps
 bash docs/diagrams/render.sh --check --hash-only   # the same without the re-render (HTML sync, size and hash only)
 ```
 
