@@ -157,9 +157,11 @@ async function main({ env = process.env, governance, http = null, loadHolds = lo
     // Never ask a host the worker is backing off from (the stored rate-limit
     // holds, read only). Without a reachable database the holds cannot be
     // checked — said so, not hidden. An injected client (tests) is used as given.
-    const holds = await loadHolds();
-    if (!holds) log('rate-limit holds NOT checked (database unreachable)');
-    if (!http) http = new HttpClient({ holds: holds || {} });
+    if (!http) {
+        const holds = await loadHolds();
+        if (!holds) log('rate-limit holds NOT checked (database unreachable)');
+        http = new HttpClient({ env, holds: holds || {} });
+    }
     // The manifest on disk: its file map, its overall clock and each fixture's
     // own clock. A fixture that is not re-recorded keeps the clock it was
     // recorded at: the collector tests use that clock as "now", and a retained
