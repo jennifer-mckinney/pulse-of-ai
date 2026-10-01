@@ -61,6 +61,7 @@ const cycle = require('./cycle');
 const { scrub } = require('./redact');
 const { classifyError } = require('./errors');
 const { refusalGate, refusalOf, resetEnv, probationOver, BLOCKED_BY_SOURCE } = require('./refusal');
+const counters = require('./admission-counters');
 
 /** Default queue hooks: lazily bind BullMQ (opening Redis only when needed). */
 function defaultQueues() {
@@ -237,6 +238,9 @@ async function runCollection(o = {}) {
                 fail(err.message, err);
             }
             let storeFailed = false;
+            // Relevance-accuracy R1: the routes' dropped counters, summed
+            // onto this run's source_runs row (counts only).
+            const droppedByRoute = [];
             for (const c of collectors) {
                 // G10-5: the route's cursor and HTTP validators as they were
                 // before it ran. If any of its items fails to store, they are
@@ -259,6 +263,17 @@ async function runCollection(o = {}) {
                 for (const w of result.warnings || []) fail(`${c.route.id}: ${w.text}`, w.err);
                 row.fetched += result.fetched;
                 row.kept += result.payloads.length;
+                droppedByRoute.push(result.dropped);
+                // R1: this route's admission rule counts for today (UTC),
+                // under the admission_filter version that ran. Counts only. A
+                // failed write is a run warning (G10-6): it never costs a post.
+                try {
+                    await counters.recordRuleHits({
+                        sourceId, route: c.route.id, admissionMvId: mv.admissionMvId, tally: result.ruleHits,
+                    });
+                } catch (err) {
+                    fail(`${c.route.id}: admission counters not recorded: ${err.message}`, err);
+                }
                 for (const payload of result.payloads) {
                     let stored;
                     try {
@@ -368,6 +383,7 @@ async function runCollection(o = {}) {
                 postsNew: row.new, requests: http.requests - before, error: row.error,
                 errorKind: row.errorKind, httpStatus: row.httpStatus, startedAt,
                 responseHeaders: refused ? refusalHeaders : null,
+                dropped: counters.mergeDropped(droppedByRoute),
             });
             log(`[collect] ${slug}: ${row.outcome} fetched ${row.fetched}, kept ${row.kept}, new ${row.new}${row.error ? ` — ${row.error}` : ''}`);
             await touch();

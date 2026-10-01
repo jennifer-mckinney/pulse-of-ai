@@ -290,6 +290,7 @@ data_sources.id ─────────────────────�
 | `processing_jobs.last_progress_at` | 040 | Progress heartbeat of one-shot jobs (the stale-job sweeper uses it, not age) |
 | `raw_posts.admission_mv_id` | 042 | The admission-filter version a post was stored under |
 | `source_gate_events.approved_by`, `routes`, event `refusal_reset`; `correlation_gate_events` | 056 | Decision G5: the named approval (`GATE_APPROVED_BY`, "Name YYYY-MM-DD") behind each gate opening and operator change (a CHECK requires it as the actor of `enabled` / `disabled` / `refusal_reset`); every change of the correlation DPIA gate (principal #19) |
+| `source_runs.dropped_*`, `source_run_daily.dropped_*`, `admission_rule_hits` | 068 | Admission rejection counters (relevance-accuracy R1; Jennifer McKinney 2026-09-30, "Counters only"): per run, the collector's dropped counts (invalid, old, out of scope, in-batch duplicate); per UTC day, source, route, admission_filter version and rule, admitted and rejected counts. Counts only: CHECKs restrict `rule_id` and `route` to closed vocabularies, so no text or id is stored. `src/collectors/admission-counters.js` |
 | `bias_window_runs`, `bias_window_assessments` | 060 | The rolling 24 h bias checks (bias@1.5.0, G2): one run row per window, its assessments append-only |
 
 `alert_resolutions`, `alert_resolution_approvals`, `source_gate_events`, `correlation_gate_events`, `source_terms_snapshots` and `methodology_errata` are append-only: a trigger rejects UPDATE and DELETE (migrations 036 and 056); so is `bias_window_assessments` (migration 060). Migrations are numbered uniquely and applied in file-name order; gaps in the numbering are allowed.
@@ -487,7 +488,7 @@ CREATE INDEX idx_embeddings_hnsw ON post_embeddings
 All responses: `Content-Type: application/json`. All errors follow: `{ "error": "descriptive message" }`. Stack traces, SQL errors, and file paths are never returned to clients.
 
 ### `GET /api/health`
-Returns system status, last job info, and active unresolved alerts. The response is cached in process for 5 s, keyed on the path alone (it fans out to the queue store and the database; PR #22 security L2). It also carries `bias_sample` (the insufficient-sample share per bias check, §9) and `correlation` (§20).
+Returns system status, last job info, and active unresolved alerts. The response is cached in process for 5 s, keyed on the path alone (it fans out to the queue store and the database; PR #22 security L2). It also carries `bias_sample` (the insufficient-sample share per bias check, §9), `correlation` (§20) and `admission` (migration 068): over the last 7 UTC days and all sources together, items evaluated, admitted (and admitted on AI-specific feeds although no admission pattern matched) and rejected by reason (out of scope, too old, invalid, duplicate), plus admissions per admission-filter pattern. Counts are per evaluation: an item a feed serves again is counted again.
 
 **Response 200:**
 ```json
@@ -737,7 +738,7 @@ Returns all versioned methodology configurations, ordered by component and effec
 ---
 
 ### `GET /api/sources`
-Returns all registered data sources with their collection status and category.
+Returns all registered data sources with their collection status and category. Each registry source also carries `admission` (migration 068): its 7-day admission counts, `{ window_days, evaluated, admitted, admitted_without_pattern, rejected: { total, out_of_scope, old, invalid, duplicate } }`, or `null` when it has none in the window.
 
 **Response 200:**
 ```json
@@ -1550,6 +1551,8 @@ TIER 3: Permanent Archival (automatic — no expiry)
   Access: GET /api/methodology, GET /api/audit/:post_id (audit skeleton)
 ```
 
+**Admission counters (migration 068).** `admission_rule_hits` holds counts only (no text, no ids, no personal data). It is kept `ADMISSION_RULE_HITS_DAYS` days, default 400 (a year plus a month, so a month can be compared with the same month a year earlier), then removed by the `daily` maintenance task with a `data_retention_log` summary row (`expired_admission_rule_hits`). A bad value (not a whole number of days from 35 to 3650) fails that step and removes nothing. The per-source daily rejection totals are not lost with it: they are rolled up from `source_runs` into `source_run_daily` (Tier 3, kept permanently).
+
 ### Migration 005 — Retention & Compaction Tables
 
 ```sql
@@ -1610,7 +1613,7 @@ The worker registers three BullMQ job schedulers on the `maintenance` queue (sha
 | Scheduler | Cadence | Steps |
 |---|---|---|
 | `retention` | `MAINTENANCE_EVERY_MS`, default 5 min | text retention for every source (below); stale one-shot jobs (no progress for `STALE_JOB_MINUTES`) marked failed |
-| `daily` | `MAINTENANCE_DAILY_EVERY_MS`, default 24 h | compaction (below); `source_runs` older than `SOURCE_RUNS_RAW_DAYS` (30) rolled into `source_run_daily`; the rolling 24 h bias checks (bias@1.5.0, §9) |
+| `daily` | `MAINTENANCE_DAILY_EVERY_MS`, default 24 h | compaction (below); `source_runs` older than `SOURCE_RUNS_RAW_DAYS` (30) rolled into `source_run_daily`, dropped counts included; `admission_rule_hits` older than `ADMISSION_RULE_HITS_DAYS` (400) removed; the rolling 24 h bias checks (bias@1.5.0, §9) |
 | `terms` | `MAINTENANCE_TERMS_EVERY_MS`, default 7 days | a polite snapshot of every source's terms page; a changed normalised-text hash opens a `terms_changed` alert |
 
 A failing step does not stop the others, but it fails the job (BullMQ failed count) and is logged at error level. Every run writes its outcome to `maintenance_state`; `GET /api/health` reports `maintenance.tasks` (last run, last success, last error per task) and `maintenance.retention_overdue` (posts still holding text past their window). While any post of a source holds text more than `RETENTION_OVERDUE_GRACE_MINUTES` (60) past its window, the worker keeps one critical `retention_overdue` alert open for that source. The schedulers are re-registered on every reschedule, so a queue-store outage at boot is retried. A bad `RETENTION_DETAIL_DAYS` (not a whole number of days from 30 to 3650) fails the retention and compaction steps and changes nothing.

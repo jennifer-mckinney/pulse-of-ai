@@ -47,6 +47,16 @@
 //                    { latest_run, last_7d } } — per bias check
 //                    { assessments, insufficient, share }: how often it could
 //                    not reach its minimum sample (PR #22 principal #11, G2)
+//   admission      { window_days: 7, day_basis: 'UTC', counted_as,
+//                    sources_reporting, evaluated, admitted,
+//                    admitted_without_pattern, rejected: { total, out_of_scope,
+//                    old, invalid, duplicate }, patterns: [{ admission_filter,
+//                    rule_id, admitted, rejected }], retention_days } — why
+//                  fetched items were admitted or rejected, all sources
+//                  together (relevance-accuracy R1, migration 068). Counts
+//                  only: no source, route, id or text; per-source counts are
+//                  on GET /api/sources. retention_days is null when
+//                  ADMISSION_RULE_HITS_DAYS is invalid.
 //   redis          { reachable } — an authenticated PING answered (P9-7)
 //   worker         { alive, last_heartbeat, queues } — the worker's heartbeat
 //                  (src/workers/heartbeat.js); alive = a beat within its TTL;
@@ -78,6 +88,7 @@ const { sourceRows, summarize } = require('../collectors/status');
 const { overdueBySource } = require('../collectors/retention-overdue');
 const { scrub } = require('../collectors/redact');
 const { insufficientSampleReport } = require('../pipeline/bias-window');
+const { admissionTotals } = require('../collectors/admission-counters');
 
 const router = Router();
 
@@ -310,6 +321,9 @@ router.get('/health', responseCache(HEALTH_CACHE_TTL_MS, { key: () => 'GET /api/
         // PR #22 principal #11 / G2: the insufficient-sample share per bias
         // check, per cycle and in the rolling 24 h window.
         const biasSample = await insufficientSampleReport();
+        // Relevance-accuracy R1 (migration 068): admission counts over the
+        // last 7 UTC days, all sources together — aggregates only.
+        const admission = await admissionTotals();
 
         return res.json({
             status:        dbConnected ? 'healthy' : 'degraded',
@@ -334,6 +348,7 @@ router.get('/health', responseCache(HEALTH_CACHE_TTL_MS, { key: () => 'GET /api/
             jobs:           { failed_last_hour: failedCycles.n },
             watchdog,
             bias_sample: biasSample,
+            admission,
             // Spec §20 DPIA gate: correlation is off (explicitly) until a
             // completed DPIA is recorded and the operator enables it.
             // PR #22 security L1: from the worker (which alone holds the

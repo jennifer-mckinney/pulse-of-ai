@@ -92,19 +92,26 @@ async function countUnchangedRun(sourceId) {
 /**
  * `responseHeaders`: the allow-listed, scrubbed headers of a refusal
  * (migration 062); null on every other run.
+ * `dropped`: the collector's dropped counters summed over the run's routes,
+ * { invalid, old, outOfScope, duplicate } (migration 068, relevance-accuracy
+ * R1); counts only. Missing keys are 0: every run written from now on
+ * records them (NULL is kept for rows from before the migration).
  */
 async function recordRun({
     sourceId, jobId, gateStatus, outcome, itemsFetched = 0, postsNew = 0, requests = 0,
-    error = null, errorKind = null, httpStatus = null, startedAt, responseHeaders = null,
+    error = null, errorKind = null, httpStatus = null, startedAt, responseHeaders = null, dropped = {},
 }) {
     const headers = responseHeaders && Object.keys(responseHeaders).length ? JSON.stringify(responseHeaders) : null;
+    const d = (k) => (Number.isInteger(dropped && dropped[k]) && dropped[k] >= 0 ? dropped[k] : 0);
     await dbRun(
         `INSERT INTO source_runs
             (source_id, job_id, gate_status, outcome, items_fetched, posts_new, requests, error, error_kind, http_status,
-             started_at, finished_at, response_headers)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), $12::jsonb)`,
+             started_at, finished_at, response_headers,
+             dropped_invalid, dropped_old, dropped_out_of_scope, dropped_duplicate)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), $12::jsonb, $13, $14, $15, $16)`,
         [sourceId, jobId, gateStatus, outcome, itemsFetched, postsNew, requests, error,
-            error ? errorKind : null, error ? httpStatus : null, startedAt || new Date(), headers],
+            error ? errorKind : null, error ? httpStatus : null, startedAt || new Date(), headers,
+            d('invalid'), d('old'), d('outOfScope'), d('duplicate')],
     );
 }
 
