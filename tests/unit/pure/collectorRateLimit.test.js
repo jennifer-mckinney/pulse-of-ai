@@ -202,19 +202,35 @@ describe('backoffUntil: 60 s floor growing per repeat, 24 h cap', () => {
 
 describe('nextHold: the per-host streak (security F1)', () => {
     const weak = { status: 403, signal: 'body_rate_limit', weak: true, retryAt: null };
-    const strong = { status: 429, signal: 'http_429', weak: false, retryAt: null };
+    // A 429 that names a (short) time: the doubling floor decides.
+    const strong = { status: 429, signal: 'http_429', weak: false, retryAt: NOW + 1000 };
 
     test('consecutive rate limits grow the hold; strong ones never escalate', () => {
         let prev = null;
         const lengths = [];
         for (let i = 0; i < 8; i++) {
-            const n = rl.nextHold(prev, strong, NOW);
+            // Each limit comes once the previous hold has passed.
+            const t = prev ? Date.parse(prev.until) : NOW;
+            const n = rl.nextHold(prev, { ...strong, retryAt: t + 1000 }, t);
             expect(n.escalate).toBe(false);
-            lengths.push(Date.parse(n.entry.until) - NOW);
+            lengths.push(Date.parse(n.entry.until) - t);
             prev = n.entry;
         }
         expect(lengths.slice(0, 4)).toEqual([60000, 120000, 240000, 480000]);
         expect(prev).toMatchObject({ count: 8, weak: 0, http_status: 429, signal: 'http_429' });
+    });
+
+    // PR #44 (TLDR) merged: a 429 naming no time holds at least
+    // NO_TIME_429_HOLD_MS; a longer doubling floor or source time still wins.
+    test('a 429 that names NO time holds at least NO_TIME_429_HOLD_MS (5 min); the floor wins once longer', () => {
+        const none = { status: 429, signal: 'http_429', weak: false, retryAt: null };
+        expect(rl.NO_TIME_429_HOLD_MS).toBe(300000);
+        expect(Date.parse(rl.nextHold(null, none, NOW).entry.until) - NOW).toBe(300000);
+        const fourth = rl.nextHold({ until: iso(NOW - 1), count: 3, weak: 0, at: iso(NOW - 600000) }, none, NOW);
+        expect(Date.parse(fourth.entry.until) - NOW).toBe(480000);
+        expect(Date.parse(rl.nextHold(null, { ...none, retryAt: NOW + 3600000 }, NOW).entry.until) - NOW).toBe(3600000);
+        // Only a 429 without a time: a body-only 403 keeps the 60 s floor.
+        expect(Date.parse(rl.nextHold(null, weak, NOW).entry.until) - NOW).toBe(60000);
     });
 
     test(`${rl.ESCALATE_AFTER} consecutive WEAK (body-only) rate limits escalate to a refusal — fail closed`, () => {
@@ -526,5 +542,44 @@ describe('source health: persistent throttling is a WARNING (grumpy #5)', () => 
     test('a masked host is named "configured host" in the alert details too (security F3)', () => {
         const row = { rate_limited_hosts: { 'acme-123.feeds.example': { until: iso(NOW), http_status: 429, signal: 'http_429', count: 9, weak: 0 } } };
         expect(JSON.stringify(conditionsFor(row, getSource('cnn'), NOW))).not.toMatch(/acme-123/);
+    });
+});
+
+// PR #44 + #45 merge: ONE hold store. PR #44 kept its Retry-After holds as
+// `retry-after:<host>` keys in a source's HTTP cache; legacyHolds folds any
+// such key into this store's records and strips it from the cache (the
+// runner, at claim; migration 077 moved the stored ones).
+describe('legacyHolds: PR #44 HTTP-cache hold keys → the one hold store', () => {
+    test('active keys become sanitised holds (429 → http_429 count 1; 503 → retry_after_5xx count 0); the cache keeps validators only', () => {
+        const cache = {
+            'https://tldr.tech/api/rss/ai': { etag: '"v1"', last_modified: null },
+            'retry-after:tldr.tech': { until: iso(NOW + 600000), status: 429 },
+            'retry-after:srv.example:8443': { until: iso(NOW + 120000), status: 503 },
+            'retry-after:old.example': { until: iso(NOW - 1000), status: 429 },
+            'retry-after:bad.example': { until: 'not a date', status: 429 },
+            'retry-after:': { until: iso(NOW + 60000), status: 429 },
+        };
+        const { holds, cache: rest } = rl.legacyHolds(cache, NOW);
+        expect(rest).toEqual({ 'https://tldr.tech/api/rss/ai': { etag: '"v1"', last_modified: null } });
+        expect(holds).toEqual({
+            'tldr.tech': { until: iso(NOW + 600000), http_status: 429, signal: 'http_429', count: 1, weak: 0, at: iso(NOW) },
+            'srv.example': { until: iso(NOW + 120000), http_status: 503, signal: 'retry_after_5xx', count: 0, weak: 0, at: iso(NOW) },
+        });
+        expect(cache['retry-after:tldr.tech']).toBeDefined();   // pure: the input is not mutated
+    });
+
+    test('an until beyond 24 h is capped; two keys of one hostname (with and without a port) keep the later until', () => {
+        const { holds } = rl.legacyHolds({
+            'retry-after:a.example': { until: iso(NOW + 30 * HOUR), status: 429 },
+            'retry-after:b.example': { until: iso(NOW + 60000), status: 429 },
+            'retry-after:b.example:443': { until: iso(NOW + 600000), status: 429 },
+        }, NOW);
+        expect(holds['a.example'].until).toBe(iso(NOW + rl.MAX_BACKOFF_MS));
+        expect(holds['b.example'].until).toBe(iso(NOW + 600000));
+    });
+
+    test('nothing to fold: no holds, the same validators', () => {
+        expect(rl.legacyHolds(undefined, NOW)).toEqual({ holds: {}, cache: {} });
+        expect(rl.legacyHolds({ 'https://x.example/': { etag: 'e' } }, NOW)).toEqual({ holds: {}, cache: { 'https://x.example/': { etag: 'e' } } });
     });
 });

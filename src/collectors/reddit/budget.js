@@ -117,6 +117,10 @@ class DbBudget {
         await this.db.dbRun('INSERT INTO reddit_api_budget (id) VALUES (1) ON CONFLICT (id) DO NOTHING');
         // One statement: roll an expired window (the first grant of the new
         // window counts as 1) or grant within the cap; never while blocked.
+        // The reserve applies to a rolled window too (it counts from 0 there,
+        // as in MemoryBudget): a rolled window used to grant unconditionally,
+        // so a background caller's reserve was bypassed on the first request
+        // of every new window (found by the PR #44 verify gate).
         const row = await this.db.dbGet(
             `UPDATE reddit_api_budget
              SET used = CASE WHEN window_start <= NOW() - make_interval(secs => $2) THEN 1 ELSE used + 1 END,
@@ -124,7 +128,7 @@ class DbBudget {
                  updated_at = NOW()
              WHERE id = 1
                AND (blocked_until IS NULL OR blocked_until <= NOW())
-               AND (window_start <= NOW() - make_interval(secs => $2) OR used + $3 < $1)
+               AND (CASE WHEN window_start <= NOW() - make_interval(secs => $2) THEN 0 ELSE used END) + $3 < $1
              RETURNING used`,
             [this.cap, this.windowMs / 1000, Math.max(0, reserve)],
         );

@@ -47,9 +47,21 @@
 //            limited WARN_AFTER times in a row, src/collectors/source-health.js).
 //
 // In-run retries (http.js withRetries): a 429 is retried inside the run only
-// when the source's wait is at most MAX_IN_RUN_WAIT_MS, and never before it;
-// a longer (or unparseable-overflow) wait ends the request and becomes the
-// hold instead of a sleep.
+// when the source's wait is at most MAX_IN_RUN_WAIT_MS (10 s), and never
+// before it; a longer (or unparseable-overflow) wait ends the request and
+// becomes the hold instead of a sleep.
+//
+// TLDR (diagnosis 2026-10-01, PR #44, unified here in the PR #45 merge):
+// tldr.tech answered the poll with HTTP 429 and a Retry-After of a minute or
+// more; a 60 s in-run wait slept twice overran the scheduled run's deadline
+// (half the collection window), hiding the 429 as 'deadline'. That is now a
+// case of this classifier: 429 → 'http_429' → a host hold until the
+// source's time, persisted in source_collection_state.rate_limited_hosts
+// (never in the rolled-back HTTP cache), so a restarted worker or another
+// replica honours it. A 429 that names NO time holds at least
+// NO_TIME_429_HOLD_MS (PR #44's default: two cadence ticks). PR #44 kept its
+// holds as `retry-after:<host>` keys in http_cache; legacyHolds() folds any
+// such key into this store (migration 077 moved the stored ones).
 
 'use strict';
 
@@ -57,7 +69,16 @@ const { isChallenge } = require('./challenge');
 
 const MIN_BACKOFF_MS = 60 * 1000;
 const MAX_BACKOFF_MS = 24 * 60 * 60 * 1000;
-const MAX_IN_RUN_WAIT_MS = 60 * 1000;
+// PR #44 (TLDR): the longest wait slept INSIDE a run. Two waits plus three
+// requests stay well inside the scheduled run's deadline (half the
+// collection window); a longer wait is a hold, never a sleep.
+const MAX_IN_RUN_WAIT_MS = 10 * 1000;
+// PR #44: a 429 that names no time (no Retry-After, no x-ratelimit-reset)
+// holds the host at least this long — two cadence ticks (2 × 150 s).
+const NO_TIME_429_HOLD_MS = 5 * 60 * 1000;
+// PR #44's persisted hold keys in source_collection_state.http_cache
+// ({ until: ISO, status: 429 | 503 }), folded into this store (legacyHolds).
+const LEGACY_HOLD_PREFIX = 'retry-after:';
 // Security F1: consecutive weak (body-only) rate limits of one host before
 // the next one is treated as the refusal it may really be.
 const ESCALATE_AFTER = 5;
@@ -281,6 +302,11 @@ function nextHold(prev, { retryAt = null, status = null, signal = null, weak = f
     const count = notLimit ? prevCount : Math.min(STREAK_MAX, prevCount + 1);
     const weakCount = notLimit ? prevWeak : (weak ? Math.min(STREAK_MAX, prevWeak + 1) : 0);
     let until = backoffUntil(retryAt, now, notLimit ? 1 : count);
+    // PR #44: a 429 without any time of the source's holds at least
+    // NO_TIME_429_HOLD_MS (the doubling floor may already be longer).
+    if (signal === 'http_429' && (retryAt === null || retryAt === undefined)) {
+        until = Math.max(until, now + NO_TIME_429_HOLD_MS);
+    }
     // A later hold already in force is never shortened.
     const prevUntil = prev ? Date.parse(prev.until) : NaN;
     if (Number.isFinite(prevUntil) && prevUntil > until) until = prevUntil;
@@ -438,10 +464,40 @@ function publicHosts(src, holds, now = Date.now()) {
         .sort((a, b) => a.host.localeCompare(b.host) || a.until.localeCompare(b.until));
 }
 
+/**
+ * PR #44's holds, stored as `retry-after:<host>` keys ({ until, status }) in
+ * a source's HTTP cache, as holds of this store — and the cache without
+ * them. One hold store: the runner folds them in on claim (a worker of the
+ * previous release may still write one during a rolling deploy; migration
+ * 077 moved the stored ones). A key's host may carry a port (PR #44 keyed by
+ * URL host): the hold is the hostname's. 429 → 'http_429' (count 1), 503 →
+ * 'retry_after_5xx' (count 0 — not a rate limit, nextHold), recorded `at`
+ * now. Expired keys are dropped from the cache and not kept.
+ * @returns {{ holds: object, cache: object }} holds: sanitised; cache: a new object
+ */
+function legacyHolds(httpCache, now = Date.now()) {
+    const holds = {};
+    const cache = {};
+    for (const [k, e] of Object.entries(httpCache && typeof httpCache === 'object' ? httpCache : {})) {
+        if (!k.startsWith(LEGACY_HOLD_PREFIX)) { cache[k] = e; continue; }
+        const host = hostOf(`https://${k.slice(LEGACY_HOLD_PREFIX.length)}/`);
+        const until = Date.parse(e && e.until);
+        if (!host || !Number.isFinite(until) || until <= now) continue;
+        const status = e.status === 503 ? 503 : 429;
+        const rec = sanitizeHolds({ [host]: {
+            until: new Date(Math.min(until, now + MAX_BACKOFF_MS)).toISOString(), http_status: status,
+            signal: status === 503 ? 'retry_after_5xx' : 'http_429', count: status === 503 ? 0 : 1, weak: 0,
+            at: new Date(now).toISOString(),
+        } }, now)[host];
+        if (rec) holds[host] = combineHold(holds[host], rec);
+    }
+    return { holds, cache };
+}
+
 module.exports = {
-    MIN_BACKOFF_MS, MAX_BACKOFF_MS, MAX_IN_RUN_WAIT_MS, ESCALATE_AFTER, WARN_AFTER, STALE_MS, RATE_LIMITED, SIGNALS,
+    MIN_BACKOFF_MS, MAX_BACKOFF_MS, MAX_IN_RUN_WAIT_MS, NO_TIME_429_HOLD_MS, LEGACY_HOLD_PREFIX, ESCALATE_AFTER, WARN_AFTER, STALE_MS, RATE_LIMITED, SIGNALS,
     WEAK_SIGNALS, BODY_HOSTS, CONFIGURED_HOST, BODY_RE,
     parseRetryAfter, parseReset, bodyNamesRateLimit, rateLimitSignal, backoffUntil,
     sanitizeHolds, activeHolds, nextHold, mergeHolds, combineHold, collectionHolds, heldUntil, hostOf,
-    routeRequestHosts, sourceHosts, routeHeldUntil, routeHeld, holdGate, holdReason, publicHosts,
+    routeRequestHosts, sourceHosts, routeHeldUntil, routeHeld, holdGate, holdReason, publicHosts, legacyHolds,
 };

@@ -1,0 +1,74 @@
+-- Migration 077: ONE rate-limit hold store (PR #44 merged into PR #45)
+--
+-- PR #44 (TLDR, diagnosis 2026-10-01) kept its Retry-After holds as
+-- `retry-after:<host>` keys inside source_collection_state.http_cache
+-- ({ "until": <ISO>, "status": 429 | 503 }), next to the per-URL
+-- validators. PR #45 keeps every rate-limit hold in
+-- source_collection_state.rate_limited_hosts (migrations 075-076,
+-- src/collectors/rate-limit.js). The two mechanisms are unified into #45's
+-- store: the HTTP cache holds validators only again, and a hold can never be
+-- rolled back with it (G10-5).
+--
+-- This migration moves every still-active PR #44 key into
+-- rate_limited_hosts and removes every PR #44 key (active or expired) from
+-- http_cache:
+--   - the host is the key's host without a port, lower-cased (#45 holds are
+--     keyed by hostname — security F5);
+--   - 429 → { signal: "http_429", count: 1 }, 503 → { signal:
+--     "retry_after_5xx", count: 0 } (a 5xx's Retry-After is not a rate
+--     limit), weak 0, http_status the key's status, at NOW();
+--   - until is capped at NOW() + 24 h (rate-limit.js MAX_BACKOFF_MS);
+--   - a host that already has a #45 entry keeps it (its streaks), with the
+--     LATER until of the two (never shortened — security N6);
+--   - rate_limited_until becomes the later of its value and the moved holds'.
+-- An unparseable `until` is dropped (it never held: #44 read it with
+-- Date.parse). The runner also folds such a key in at claim
+-- (rate-limit.js legacyHolds), for a previous-release worker that writes one
+-- during a rolling deploy.
+--
+-- Additive data move, idempotent: a second run finds no `retry-after:` key.
+
+WITH legacy AS (
+    SELECT s.source_id,
+           lower(split_part(substring(e.key FROM length('retry-after:') + 1), ':', 1)) AS host,
+           CASE WHEN (e.value ->> 'until') ~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})$'
+                THEN LEAST((e.value ->> 'until')::timestamptz, NOW() + interval '24 hours') END AS until,
+           CASE WHEN (e.value ->> 'status') = '503' THEN 503 ELSE 429 END AS status
+    FROM source_collection_state s, jsonb_each(s.http_cache) e
+    WHERE e.key LIKE 'retry-after:%'
+),
+live AS (
+    SELECT DISTINCT ON (source_id, host) source_id, host, until, status
+    FROM legacy
+    WHERE until IS NOT NULL AND until > NOW() AND host ~ '^[a-z0-9.-]{1,253}$'
+    ORDER BY source_id, host, until DESC
+),
+entries AS (
+    SELECT l.source_id,
+           jsonb_object_agg(l.host, CASE
+               WHEN s.rate_limited_hosts ? l.host THEN
+                   (s.rate_limited_hosts -> l.host) || jsonb_build_object('until', to_char(
+                       GREATEST(l.until, CASE WHEN (s.rate_limited_hosts -> l.host ->> 'until') ~ '^\d{4}-\d{2}-\d{2}T'
+                                              THEN (s.rate_limited_hosts -> l.host ->> 'until')::timestamptz END)
+                       AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))
+               ELSE jsonb_build_object(
+                   'until', to_char(l.until AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+                   'http_status', l.status,
+                   'signal', CASE WHEN l.status = 503 THEN 'retry_after_5xx' ELSE 'http_429' END,
+                   'count', CASE WHEN l.status = 503 THEN 0 ELSE 1 END,
+                   'weak', 0,
+                   'at', to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))
+           END) AS holds,
+           MAX(l.until) AS last_until
+    FROM live l JOIN source_collection_state s ON s.source_id = l.source_id
+    GROUP BY l.source_id
+)
+UPDATE source_collection_state s
+SET rate_limited_hosts = s.rate_limited_hosts || COALESCE(e.holds, '{}'::jsonb),
+    rate_limited_until = CASE WHEN e.last_until IS NULL THEN s.rate_limited_until
+                              ELSE GREATEST(s.rate_limited_until, e.last_until) END,
+    http_cache = s.http_cache - ARRAY(SELECT k FROM jsonb_object_keys(s.http_cache) k WHERE k LIKE 'retry-after:%'),
+    updated_at = NOW()
+FROM (SELECT DISTINCT source_id FROM legacy) moved
+LEFT JOIN entries e ON e.source_id = moved.source_id
+WHERE s.source_id = moved.source_id;

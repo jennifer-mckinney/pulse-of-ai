@@ -10,8 +10,9 @@
 //     next cadence tick is the retry) or an undecodable body (deterministic)
 //     — diagnosis 2026-09-30. A source's Retry-After (or, on a 429 with the
 //     limit spent, x-ratelimit-reset) is honoured WHOLE: never retried
-//     before it; a wait longer than MAX_IN_RUN_WAIT_MS is not slept at all
-//     (diagnosis 2026-10-01: the old 60 s cap retried early);
+//     before it; a wait longer than MAX_IN_RUN_WAIT_MS (10 s) is not slept
+//     at all (diagnosis 2026-10-01: the old 60 s cap retried early, and two
+//     60 s waits overran TLDR's run deadline — PR #44);
 //   - rate limits (src/collectors/rate-limit.js, diagnosis 2026-10-01) →
 //     RateLimitedError, never retried past the above and NEVER a refusal:
 //     HTTP 429, or a 403 with positive evidence (x-ratelimit-remaining 0, or
@@ -24,7 +25,10 @@
 //     success from the host resets its streak; the ESCALATE_AFTER-th
 //     consecutive body-only rate limit is a refusal (fail closed — F1). A
 //     5xx whose Retry-After is too long to wait in-run holds the host too
-//     (signal retry_after_5xx, grumpy #7);
+//     (signal retry_after_5xx, grumpy #7). A hold learned BEHIND a redirect
+//     holds the requested URL's host as well (PR #44), so a fresh client
+//     sends nothing at all — not robots.txt, not the first hop. This is the
+//     ONE hold path: PR #44's TLDR Retry-After holds are a case of it;
 //   - 401 / 451, any other 403, and bot challenges (a challenge page or
 //     cf-mitigated: challenge — F6, src/collectors/challenge.js) → AccessDeniedError,
 //     never retried; it carries an ALLOW-LIST of the refusal's response
@@ -72,8 +76,9 @@ const { CHALLENGE_RE, challengeHeader, isChallenge } = require('./challenge');
 const DEFAULT_TIMEOUT_MS = 20000;
 const MAX_RETRIES = 2;
 // Diagnosis 2026-10-01: the longest wait slept INSIDE a run before a retry
-// (rate-limit.js MAX_IN_RUN_WAIT_MS, 60 s). A longer Retry-After is never
-// shortened: the request ends and a 429 becomes the host's backoff.
+// (rate-limit.js MAX_IN_RUN_WAIT_MS, 10 s — PR #44: two waits stay inside
+// the run's deadline). A longer Retry-After is never shortened: the request
+// ends and a 429 becomes the host's backoff.
 const { MAX_IN_RUN_WAIT_MS } = rateLimit;
 const MAX_REDIRECTS = 4;
 
@@ -249,11 +254,34 @@ class HttpClient {
         });
     }
 
-    /** A success from a host ends its streak (security F1: only a success resets it). */
+    /**
+     * A success from a host ends its streak (security F1: only a success
+     * resets it). Only an EXPIRED hold is cleared: an active one cannot have
+     * been in force when the request was sent (raw() refuses a held host),
+     * so it was set meanwhile by a concurrent request of this client — it
+     * stands (PR #44: a success never clears a hold set while in flight).
+     */
     clearHold(hostname) {
-        if (!this.holds[hostname]) return;
+        const h = this.holds[hostname];
+        if (!h) return;
+        const until = Date.parse(h.until);
+        if (Number.isFinite(until) && until > this.now()) return;
         delete this.holds[hostname];
         this.holdChanges.set(hostname, null);
+    }
+
+    /**
+     * PR #44 (Copilot review): a hold learned on a redirect TARGET also holds
+     * the host the route asked for, so a fresh client (a restart, another
+     * replica) sends nothing at all during it — not robots.txt, not the
+     * first hop. The same record (combineHold: never shortens a longer hold
+     * already there). No-op when the hosts are the same.
+     */
+    holdAlso(hostname, entry) {
+        if (!entry || !hostname || this.holds[hostname] === entry) return;
+        const next = rateLimit.combineHold(this.holds[hostname] || null, entry);
+        this.holds[hostname] = next;
+        this.holdChanges.set(hostname, next);
     }
 
     /** Record the next hold of a host (rate-limit.js nextHold). @returns {{ entry, escalate }} */
@@ -403,6 +431,9 @@ class HttpClient {
         const credentialed = body !== undefined && body !== null
             || Object.keys(baseHeaders).some(h => isSensitive(h, o.sensitiveHeaders));
         let origin = null;
+        // PR #44: the host the route asked for — held too when a redirect
+        // target holds (holdAlso), cleared too by a success through it.
+        const firstHost = new URL(url).hostname;
         for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
             const u = checkUrl(current, { allowedHosts: o.allowedHosts });
             if (origin && u.origin !== origin) {
@@ -448,13 +479,17 @@ class HttpClient {
             }
             if (res.status === 304) {
                 this.clearHold(u.hostname);
+                if (firstHost !== u.hostname) this.clearHold(firstHost);
                 return { ...res, notModified: true, url: current };
             }
             // Checked BEFORE the refusal statuses: a 403 with positive
             // rate-limit evidence is not a refusal (a bot wall still is; the
             // 5th body-only one is one again — rateLimitError).
             const limited = this.rateLimitError(current, res);
-            if (limited) throw limited;
+            if (limited) {
+                if (limited instanceof RateLimitedError && firstHost !== u.hostname) this.holdAlso(firstHost, this.holds[u.hostname]);
+                throw limited;
+            }
             if (REFUSAL_STATUSES.includes(res.status) || (res.status >= 400 && isChallenge(res))) {
                 throw new AccessDeniedError(`${new URL(current).host} refused access (HTTP ${res.status}) — not retried, not worked around`,
                     { status: res.status, url: redactUrl(current), headers: refusalHeaders(res.headers, this.env) });
@@ -469,12 +504,14 @@ class HttpClient {
                     const ra = rateLimit.parseRetryAfter(res.headers, now);
                     if (ra !== null && ra > MAX_IN_RUN_WAIT_MS) {
                         const { entry } = this.recordHold(u.hostname, { retryAt: now + ra, status: res.status, signal: 'retry_after_5xx', weak: false });
+                        if (firstHost !== u.hostname) this.holdAlso(firstHost, entry);
                         Object.assign(extra, { host: u.hostname, retryAt: Date.parse(entry.until) });
                     }
                 }
                 throw new HttpError(`HTTP ${res.status} from ${redactUrl(current)}`, { status: res.status, url: redactUrl(current), ...extra });
             }
             this.clearHold(u.hostname);
+            if (firstHost !== u.hostname) this.clearHold(firstHost);
             if (o.cache && method === 'GET' && (res.headers.etag || res.headers['last-modified'])) {
                 o.cache[current] = { etag: res.headers.etag || null, last_modified: res.headers['last-modified'] || null };
             }

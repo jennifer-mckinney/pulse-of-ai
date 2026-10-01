@@ -253,7 +253,16 @@ async function runCollection(o = {}) {
             const startedAt = new Date();
             const before = http.requests;
             const cursor = claimed.cursor || {};
-            const httpCache = claimed.http_cache || {};
+            // ONE hold store (PR #44 unified into #45): a PR #44
+            // `retry-after:<host>` key still in the HTTP cache (written by a
+            // previous-release worker during a rolling deploy; migration 077
+            // moved the stored ones) is folded into the run's holds as a
+            // change of this source — persisted by saveHolds below, outside
+            // the HTTP cache, so the G10-5 rollback can never drop it — and
+            // removed from the cache, which holds validators only.
+            const legacy = rateLimit.legacyHolds(claimed.http_cache || {}, Date.now());
+            const httpCache = legacy.cache;
+            for (const [host, hold] of Object.entries(legacy.holds)) http.holdAlso(host, hold);
             // { text, err } per failure; the first one classifies the run.
             const routeErrors = [];
             const fail = (text, err) => {
@@ -358,6 +367,10 @@ async function runCollection(o = {}) {
                     const prev = JSON.parse(snapshot);
                     for (const k of Object.keys(cursor)) delete cursor[k];
                     Object.assign(cursor, prev.cursor);
+                    // Validators roll back. A rate-limit hold learned in this
+                    // route is NOT in the HTTP cache (it lives in the run's
+                    // holds, saved to rate_limited_hosts), so it is never
+                    // rolled back (PR #44 Copilot re-review).
                     for (const k of Object.keys(httpCache)) delete httpCache[k];
                     Object.assign(httpCache, prev.httpCache);
                 }
