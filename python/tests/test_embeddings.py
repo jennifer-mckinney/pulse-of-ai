@@ -67,6 +67,10 @@ async def test_health_reports_pinned_model_revision(client):
 # holds this constant, the registry and every requirement file to the same
 # string, so a library bump (a new embedding version) has to update it here too.
 REGISTERED_LIBRARY = "sentence-transformers==6.1.0"
+# config.library_dependencies.torch of the same row, held to the registry by
+# the same JS test. macOS has no +cpu wheel, so there only the release is
+# compared (python/requirements.txt pins the plain build of it).
+REGISTERED_TORCH = "2.12.1+cpu"
 
 
 @pytest.mark.asyncio
@@ -79,6 +83,21 @@ async def test_health_reports_the_registered_library(client):
     body = (await client.get("/health")).json()
     assert body["library"] == REGISTERED_LIBRARY
     assert f"sentence-transformers=={version('sentence-transformers')}" == REGISTERED_LIBRARY
+
+
+def test_installed_torch_is_the_registered_build():
+    """The environment runs the torch build embedding@1.1.0 registers (the
+    +cpu build; on macOS, which has no +cpu wheel, the same release), so a
+    venv resolved to another torch fails here instead of storing vectors
+    that claim the registered library stack."""
+    import sys
+    from importlib.metadata import version
+
+    installed = version("torch")
+    if sys.platform == "darwin":
+        assert installed == REGISTERED_TORCH.split("+")[0]
+    else:
+        assert installed == REGISTERED_TORCH
 
 
 @pytest.mark.asyncio

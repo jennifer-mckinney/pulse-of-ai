@@ -12,9 +12,11 @@
 //   - python/requirements.txt           (dev/test toolchain, CI Python 3.11)
 //   - python/requirements-service.in    (top-level pins of the image)
 //   - python/requirements-service.txt   (the hash lock the image installs)
-// must all pin exactly the registered versions (torch excepted in
-// requirements.txt: PyPI has no +cpu build, so CI's Python 3.11 job installs
-// it first from .github/workflows/ci.yml TORCH_VERSION, checked here too).
+// must all pin exactly the registered versions. torch is pinned per platform
+// in requirements.txt (the +cpu build where it exists, from the PyTorch CPU
+// index; the plain build of the same release on macOS, which has no +cpu
+// wheel), and CI's Python 3.11 job also installs it first from
+// .github/workflows/ci.yml TORCH_VERSION, checked here too.
 //
 // Two general drift checks sit beside the methodology ones:
 //   - every exact pin of requirements-service.in is the version the lock
@@ -40,20 +42,32 @@ const norm = name => name.toLowerCase().replace(/[-_.]+/g, '-');
 const PIN_RE = /^([A-Za-z0-9][A-Za-z0-9._-]*)==([^\s\;]+)/;
 const LIBRARY_RE = /^([A-Za-z0-9][A-Za-z0-9._-]*)==(\S+)$/;
 
+/** The environment marker of a requirement line ('; sys_platform == "darwin"'), whitespace-normalised, or null. */
+function markerOf(line) {
+    const i = line.indexOf(';');
+    if (i < 0) return null;
+    const marker = line.slice(i + 1).replace(/\\$/, '').trim().replace(/\s+/g, ' ');
+    return marker || null;
+}
+
 /**
  * Every `name==version` pin of a requirements file, keyed by normalised
  * name. Comments, option lines (--hash, --extra-index-url) and `>=` ranges
  * are ignored; a name pinned twice is an error (it would make the lookup
- * ambiguous).
+ * ambiguous). A pin with an environment marker is keyed `name ; marker`, so
+ * per-platform pins of one package (torch in requirements.txt) stay apart
+ * and never answer the unconditional lookup.
  * @param {string} text
  * @returns {Map<string, string>}
  */
 function exactPins(text) {
     const pins = new Map();
     for (const raw of text.split('\n')) {
-        const m = raw.replace(/#.*$/, '').trim().match(PIN_RE);
+        const line = raw.replace(/#.*$/, '').trim();
+        const m = line.match(PIN_RE);
         if (!m) continue;
-        const key = norm(m[1]);
+        const marker = markerOf(line);
+        const key = marker ? `${norm(m[1])} ; ${marker}` : norm(m[1]);
         if (pins.has(key)) throw new Error(`${key} pinned twice`);
         pins.set(key, m[2]);
     }
@@ -71,11 +85,13 @@ const VERSION_RE = /^v?(\d+(?:\.\d+)*)(?:[-_.]?(a|b|rc)(\d+))?(?:[-_.]?post(\d+)
 const PRE_RANK = { a: -3, b: -2, rc: -1 };
 
 /**
- * Every requirement of a requirements file, keyed by normalised name, with
- * its specifier list (empty = any version). A name listed twice is an error,
- * as in exactPins.
+ * Every requirement of a requirements file, keyed by normalised name: one
+ * entry per line, each with its environment marker (null = every platform)
+ * and specifier list (empty = any version). A name may appear on several
+ * lines only when every one of them carries a different marker (per-platform
+ * pins); any other repeat is an error, as in exactPins.
  * @param {string} text
- * @returns {Map<string, Array<{op: string, version: string}>>}
+ * @returns {Map<string, Array<{marker: (string|null), specs: Array<{op: string, version: string}>}>>}
  */
 function requirementSpecs(text) {
     const reqs = new Map();
@@ -85,7 +101,11 @@ function requirementSpecs(text) {
         const m = line.match(REQ_RE);
         if (!m) continue;
         const key = norm(m[1]);
-        if (reqs.has(key)) throw new Error(`${key} listed twice`);
+        const marker = markerOf(line);
+        const entries = reqs.get(key) || [];
+        if (entries.length && (marker === null || entries.some(e => e.marker === null || e.marker === marker))) {
+            throw new Error(`${key} listed twice`);
+        }
         const specs = m[2].split(',').map(x => x.trim()).filter(Boolean).map(spec => {
             const sm = spec.match(SPEC_RE);
             if (!sm) throw new Error(`${key}: unsupported specifier "${spec}"`);
@@ -93,7 +113,8 @@ function requirementSpecs(text) {
             parseVersion(sm[2]);
             return { op: sm[1], version: sm[2] };
         });
-        reqs.set(key, specs);
+        entries.push({ marker, specs });
+        reqs.set(key, entries);
     }
     return reqs;
 }
@@ -187,19 +208,22 @@ function admits({ op, version }, candidate) {
 }
 
 /**
- * Every requirement whose package the lock installs at a version the
- * requirement does not admit.
- * @param {Map<string, Array<{op: string, version: string}>>} reqs
+ * Every requirement line whose package the lock installs at a version the
+ * line does not admit. Each per-platform line is checked on its own.
+ * @param {ReturnType<typeof requirementSpecs>} reqs
  * @param {Map<string, string>} lockPins
  * @returns {string[]} e.g. ['fastapi>=0.141.1 excludes the locked 0.139.0']
  */
 function lockDrift(reqs, lockPins) {
     const out = [];
-    for (const [name, specs] of reqs) {
+    for (const [name, entries] of reqs) {
         const locked = lockPins.get(name);
         if (locked === undefined) continue;
-        if (specs.some(s => !admits(s, locked))) {
-            out.push(`${name}${specs.map(s => s.op + s.version).join(',')} excludes the locked ${locked}`);
+        for (const { marker, specs } of entries) {
+            if (specs.some(s => !admits(s, locked))) {
+                const where = marker ? ` ; ${marker}` : '';
+                out.push(`${name}${specs.map(s => s.op + s.version).join(',')}${where} excludes the locked ${locked}`);
+            }
         }
     }
     return out;
@@ -241,19 +265,39 @@ describe('embedding methodology library ↔ requirement pins', () => {
             expect(PINS.serviceLock.get(norm(dep))).toBe(version);
         });
 
-    // torch is the exception: PyPI has no +cpu build to pin, so CI installs
-    // it before requirements.txt (TORCH_VERSION, checked below).
     test.each(Object.keys(current.config.library_dependencies).filter(dep => dep !== 'torch'))(
         'dependency %s: python/requirements.txt pins the registered version exactly', (dep) => {
             const version = current.config.library_dependencies[dep];
-            expect(DEV_REQS.get(norm(dep))).toEqual([{ op: '==', version }]);
+            expect(DEV_REQS.get(norm(dep))).toEqual([{ marker: null, specs: [{ op: '==', version }] }]);
         });
 
-    test('python/requirements.txt pins torch to the registered build or leaves it to CI', () => {
-        const spec = DEV_REQS.get('torch');
-        if (spec !== undefined) {
-            expect(spec).toEqual([{ op: '==', version: current.config.library_dependencies.torch }]);
-        }
+    // torch has two builds of one release: the registered +cpu build exists
+    // for Linux and Windows on the PyTorch CPU index only, and macOS has just
+    // the plain build (CPU/MPS, no +cpu wheel anywhere). requirements.txt pins
+    // each platform exactly instead of leaving torch to whatever pip resolves
+    // (Copilot, PR #41: an unpinned torch in the README install path would
+    // let host vectors claim embedding@1.1.0 on an unregistered build).
+    test('dependency torch: python/requirements.txt pins the registered build on every platform that has it', () => {
+        const registered = current.config.library_dependencies.torch;
+        expect(registered).toMatch(/^\d+(\.\d+)*\+cpu$/);
+        expect(DEV_REQS.get('torch')).toEqual([
+            { marker: 'sys_platform != "darwin"', specs: [{ op: '==', version: registered }] },
+            { marker: 'sys_platform == "darwin"', specs: [{ op: '==', version: registered.replace(/\+cpu$/, '') }] },
+        ]);
+    });
+
+    test('python/requirements.txt reads the PyTorch CPU index, the same one as the image lock', () => {
+        const INDEX = /^--extra-index-url\s+(\S+)\s*$/m;
+        const devIndex = read(FILES.requirements).match(INDEX);
+        expect(devIndex).not.toBeNull();
+        expect(devIndex[1]).toBe('https://download.pytorch.org/whl/cpu');
+        expect(read(FILES.serviceLock).match(INDEX)[1]).toBe(devIndex[1]);
+    });
+
+    test('the Python suite expects the registered torch build (REGISTERED_TORCH)', () => {
+        const m = read('python/tests/test_embeddings.py').match(/^REGISTERED_TORCH = "([^"]+)"$/m);
+        expect(m).not.toBeNull();
+        expect(m[1]).toBe(current.config.library_dependencies.torch);
     });
 
     test('the Python suite expects /health to report the registered library (REGISTERED_LIBRARY)', () => {
@@ -306,7 +350,7 @@ describe('service .in ↔ hash lock ↔ dev requirements', () => {
         const compared = [...DEV_REQS.keys()].filter(name => PINS.serviceLock.has(name));
         expect(compared).toEqual(expect.arrayContaining([
             'fastapi', 'uvicorn', 'httpx',
-            'sentence-transformers', 'transformers', 'huggingface-hub', 'tokenizers',
+            'sentence-transformers', 'transformers', 'huggingface-hub', 'tokenizers', 'torch',
         ]));
     });
 });
@@ -389,11 +433,27 @@ describe('lockDrift / admits / requirementSpecs (the comparison the drift check 
             'pytest',
         ].join('\n'));
         expect([...reqs]).toEqual([
-            ['uvicorn', [{ op: '>=', version: '0.54.0' }, { op: '<', version: '1' }]],
-            ['httpx', [{ op: '>=', version: '0.28.1' }]],
-            ['huggingface-hub', [{ op: '==', version: '1.33.0' }]],
-            ['pytest', []],
+            ['uvicorn', [{ marker: 'python_version >= "3.11"', specs: [{ op: '>=', version: '0.54.0' }, { op: '<', version: '1' }] }]],
+            ['httpx', [{ marker: null, specs: [{ op: '>=', version: '0.28.1' }] }]],
+            ['huggingface-hub', [{ marker: null, specs: [{ op: '==', version: '1.33.0' }] }]],
+            ['pytest', [{ marker: null, specs: [] }]],
         ]);
+    });
+
+    test('keeps per-platform lines of one package apart and checks each against the lock', () => {
+        const reqs = requirementSpecs([
+            'torch==2.12.1+cpu ; sys_platform != "darwin"',
+            'torch==2.12.1 ;  sys_platform  ==  "darwin"',
+        ].join('\n'));
+        expect(reqs.get('torch')).toEqual([
+            { marker: 'sys_platform != "darwin"', specs: [{ op: '==', version: '2.12.1+cpu' }] },
+            { marker: 'sys_platform == "darwin"', specs: [{ op: '==', version: '2.12.1' }] },
+        ]);
+        // The plain macOS pin admits the locked +cpu build (local labels are
+        // ignored by a public pin); a different release on either line is drift.
+        expect(lockDrift(reqs, exactPins('torch==2.12.1+cpu\n'))).toEqual([]);
+        expect(lockDrift(requirementSpecs('torch==2.13.0 ; sys_platform == "darwin"\n'), exactPins('torch==2.12.1+cpu\n')))
+            .toEqual(['torch==2.13.0 ; sys_platform == "darwin" excludes the locked 2.12.1+cpu']);
     });
 
     test('refuses what it cannot compare correctly instead of guessing', () => {
@@ -401,6 +461,10 @@ describe('lockDrift / admits / requirementSpecs (the comparison the drift check 
         expect(() => requirementSpecs('fastapi=0.1\n')).toThrow(/unsupported specifier/);
         expect(() => requirementSpecs('fastapi>=latest\n')).toThrow(/not a PEP 440 version/);
         expect(() => requirementSpecs('a>=1\nA>=2\n')).toThrow(/a listed twice/);
+        // A repeat is only allowed as per-platform lines with distinct markers.
+        expect(() => requirementSpecs('a==1 ; sys_platform == "linux"\na==2\n')).toThrow(/a listed twice/);
+        expect(() => requirementSpecs('a==1\na==2 ; sys_platform == "linux"\n')).toThrow(/a listed twice/);
+        expect(() => requirementSpecs('a==1 ; os_name == "nt"\na==2 ; os_name == "nt"\n')).toThrow(/a listed twice/);
         expect(() => admits({ op: '~=', version: '1' }, '1.5')).toThrow(/two release segments/);
     });
 });
@@ -423,6 +487,15 @@ describe('exactPins (the parser the drift check relies on)', () => {
 
     test('refuses a package pinned twice', () => {
         expect(() => exactPins('a==1\nA==2\n')).toThrow(/a pinned twice/);
+    });
+
+    test('keys a pin with a marker by name and marker, so it never answers the plain lookup', () => {
+        const pins = exactPins('torch==2.12.1+cpu ; sys_platform != "darwin"\ntorch==2.12.1 ; sys_platform == "darwin"\n');
+        expect(pins.get('torch')).toBeUndefined();
+        expect([...pins]).toEqual([
+            ['torch ; sys_platform != "darwin"', '2.12.1+cpu'],
+            ['torch ; sys_platform == "darwin"', '2.12.1'],
+        ]);
     });
 
     test('splitLibrary refuses a library string that is not an exact pin', () => {
