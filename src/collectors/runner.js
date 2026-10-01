@@ -172,6 +172,9 @@ async function runCollection(o = {}) {
             const st = sourceStatus(src, env);
             const row = { slug, category: src.category, status: st.status, outcome: 'skipped', fetched: 0, kept: 0, new: 0, error: null };
             summary.sources.push(row);
+            // Migration 073 (grumpy #7): routes switched off by env are named
+            // in the summary too; the database check below adds its own.
+            if (st.disabledRoutes.length) row.disabledRoutes = st.disabledRoutes;
             if (st.status !== 'collecting') { row.reason = st.reason; continue; }
             if (!(await touch())) {
                 row.reason = 'the job was closed as stale before this source started';
@@ -249,7 +252,35 @@ async function runCollection(o = {}) {
                 fail(err.message, err);
             }
             let storeFailed = false;
+            // Security review F7: a takedown issued while this source's
+            // earlier routes ran applies before its next route — both
+            // database switches are read again before every route after the
+            // first (the first was gated just above). A failed read skips the
+            // route: a takedown never fails open.
+            const stillOpen = async (routeId) => {
+                try {
+                    if (await state.dbKillSwitch(sourceId)) return 'kill switch (database): the source was disabled during this run';
+                    const now = await state.routeKillSwitches(sourceId);
+                    const rst = sourceStatus(src, env, { routeKills: now });
+                    if (rst.status !== 'collecting' || !rst.openRoutes.includes(routeId)) {
+                        return 'kill switch (database): the route was disabled during this run';
+                    }
+                    return null;
+                } catch (err) {
+                    return `the kill switches could not be read again (${err.message}); the route is not fetched`;
+                }
+            };
+            let gated = false;
             for (const c of collectors) {
+                if (gated) {
+                    const why = await stillOpen(c.route.id);
+                    if (why) {
+                        (row.skippedRoutes = row.skippedRoutes || []).push({ route: c.route.id, reason: why });
+                        log(`[collect] ${slug}/${c.route.id}: skipped — ${why}`);
+                        continue;
+                    }
+                }
+                gated = true;
                 // G10-5: the route's cursor and HTTP validators as they were
                 // before it ran. If any of its items fails to store, they are
                 // restored, so the next run fetches those items again (a

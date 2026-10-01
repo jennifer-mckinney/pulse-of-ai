@@ -15,6 +15,9 @@ const { HttpClient } = require('../../src/collectors/http');
 const { fixtureTransport, TEST_ENV } = require('../helpers/fixtureTransport');
 const { SOURCES } = require('../../src/config/source-registry');
 
+// Dated today: re-enabling needs an approval dated on or after the takedown
+// (security review F6, scripts/source-admin.js).
+const JM = `Jennifer McKinney ${new Date().toISOString().slice(0, 10)}`;
 const events = (slug) => db.dbAll('SELECT event, gate_status, actor, reason FROM source_gate_events WHERE slug = $1 ORDER BY occurred_at, id', [slug]);
 
 describe('source_gate_events', () => {
@@ -33,13 +36,13 @@ describe('source_gate_events', () => {
     it('source:disable / source:enable record who and why', async () => {
         await seedSources({ actor: 'test-seed' });
         // G5 / security L6: the actor is the named approval, not $USER.
-        const io = { out: () => {}, err: () => {}, env: { GATE_APPROVED_BY: 'Jennifer McKinney 2026-09-29' } };
+        const io = { out: () => {}, err: () => {}, env: { GATE_APPROVED_BY: JM } };
         expect(await admin.main(['disable', 'npr', '--reason', 'publisher asked'], io)).toBe(0);
         expect(await admin.main(['enable', 'npr', '--note', 'resolved'], io)).toBe(0);
         const e = (await events('npr')).slice(1);
         expect(e).toEqual([
-            { event: 'disabled', gate_status: null, actor: 'Jennifer McKinney 2026-09-29', reason: 'publisher asked' },
-            { event: 'enabled', gate_status: null, actor: 'Jennifer McKinney 2026-09-29', reason: 'resolved' },
+            { event: 'disabled', gate_status: null, actor: JM, reason: 'publisher asked' },
+            { event: 'enabled', gate_status: null, actor: JM, reason: 'resolved' },
         ]);
     });
 
@@ -84,11 +87,11 @@ describe('source_gate_events', () => {
     it('a source disabled by the database kill switch is recorded closed, whatever the env says', async () => {
         await seedSources({ actor: 'test-seed' });
         await recordGateTransitions({ env: TEST_ENV });
-        const io = { out: () => {}, err: () => {}, env: { GATE_APPROVED_BY: 'Jennifer McKinney 2026-09-29' } };
+        const io = { out: () => {}, err: () => {}, env: { GATE_APPROVED_BY: JM } };
         expect(await admin.main(['disable', 'npr', '--reason', 'takedown'], io)).toBe(0);
         expect(await recordGateTransitions({ env: TEST_ENV })).toEqual([{ slug: 'npr', event: 'gate_closed', gate_status: 'disabled', approved_by: null }]);
         const row = await db.dbGet(`SELECT reason, routes FROM source_gate_events WHERE slug = 'npr' AND event = 'gate_closed'`);
-        expect(row).toEqual({ reason: 'database kill switch (Jennifer McKinney 2026-09-29): takedown', routes: [] });
+        expect(row).toEqual({ reason: `database kill switch (${JM}): takedown`, routes: [] });
         expect(await recordGateTransitions({ env: TEST_ENV })).toEqual([]);
         expect(await admin.main(['enable', 'npr'], io)).toBe(0);
         expect(await recordGateTransitions({ env: TEST_ENV })).toEqual([{ slug: 'npr', event: 'gate_opened', gate_status: 'collecting', approved_by: null }]);

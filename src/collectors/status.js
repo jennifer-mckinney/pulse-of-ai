@@ -20,8 +20,9 @@
 // the database switch, npm run source:disable -- <slug> --route <id>). A
 // source with SOME routes off still collects (and counts as collecting /
 // online); its status_reason names the routes that are off. `open_routes`
-// lists only routes that run now: none for a disabled source, and never a
-// disabled route.
+// lists only routes that run now: none for a disabled source or one in its
+// refusal cooldown, and never a disabled route. A database route kill naming
+// a route the registry no longer has holds the whole source disabled.
 
 'use strict';
 
@@ -63,6 +64,7 @@ function registryFields(row, env, now, routeKills = []) {
     // or is reset.
     const gate = refusalGate(row, src.slug, env, now);
     const refused = st.status === 'collecting' && (gate.state === 'cooldown' || gate.state === 'probe');
+    const cooling = refused && gate.state === 'cooldown';
     // F10-10: the database kill switch disables a source whatever its gate.
     const dbKilled = !!row.collection_disabled_at;
     const status = dbKilled ? 'disabled' : (refused ? BLOCKED_BY_SOURCE : st.status);
@@ -82,14 +84,20 @@ function registryFields(row, env, now, routeKills = []) {
         collection_disabled_at: row.collection_disabled_at || null,
         missing_env: st.missing,
         // Only the routes that run now: a source switched off by the
-        // database kill switch has none (sourceStatus already empties them
-        // for every other non-collecting status), and a disabled route is
-        // never among them.
-        open_routes: dbKilled ? [] : st.openRoutes,
+        // database kill switch, or cooling down after a refusal, has none
+        // (sourceStatus already empties them for every other non-collecting
+        // status), and a disabled route is never among them. A source
+        // awaiting its post-cooldown probe keeps them: the probe runs them.
+        open_routes: dbKilled || cooling ? [] : st.openRoutes,
         disabled_routes: st.disabledRoutes,
-        routes: dbKilled
-            ? st.routes.map(r => (r.status === 'open' ? { ...r, status: 'closed', reason: 'the source is disabled' } : r))
-            : st.routes,
+        routes: st.routes.map((r) => {
+            if (r.status !== 'open') return r;
+            if (dbKilled) return { ...r, status: 'closed', reason: 'the source is disabled' };
+            // Grumpy #11: a refused source's routes say why they are not
+            // collecting normally (closed through the cooldown, open for the probe).
+            if (refused) return { ...r, status: cooling ? 'closed' : 'open', reason: gate.reason };
+            return r;
+        }),
         licence_refs_on_file: st.recorded,
         kill_switch_env: killSwitchEnv(src.slug),
         online: isOnline(status, row.last_success_at, now, row.last_error_at),

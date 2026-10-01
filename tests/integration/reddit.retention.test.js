@@ -317,7 +317,8 @@ describe('maintenance: retention always, API jobs only behind the open gate', ()
         const state = require('../../src/collectors/state');
         await state.setRouteKillSwitch(redditId, 'data-api', true, { reason: 'terms review', by: 'Tess Tester 2026-09-30' });
         expect((await maintenance.runRedditMaintenance({ env: OPEN_ENV, api })).api)
-            .toMatch(/^skipped: every route that would run is switched off by a route kill switch — data-api \(kill switch \(database\): route disabled by Tess Tester 2026-09-30 — terms review\)$/);
+            .toBe('skipped: every route that would run is switched off by a route kill switch — data-api (kill switch (database): route disabled '
+                + `since ${new Date().toISOString().slice(0, 10)} by Tess Tester 2026-09-30 — terms review)`);
         await state.setRouteKillSwitch(redditId, 'data-api', false);
         expect((await maintenance.runRedditMaintenance({ env: OPEN_ENV, api })).api).toBeUndefined();
         // The database kill switch closes the API jobs too.

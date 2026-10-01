@@ -7,7 +7,11 @@
 //                          calls it with the env it runs under). The
 //                          database kill switch counts (PR #22 grumpy L14),
 //                          and an opening of a gated route carries its
-//                          named approver, GATE_APPROVED_BY (decision G5)
+//                          named approver, GATE_APPROVED_BY (decision G5).
+//                          The route kill switches count too (migration
+//                          073): a change of an open gate's routes (a route
+//                          switched off or back on, by env or database) is
+//                          a new gate_opened naming the routes that run
 //   recordCorrelationGate  append a correlation_gate_events row whenever the
 //                          correlation DPIA gate changes (principal #19)
 //   snapshotTerms          fetch each source's terms page politely; keep its
@@ -42,6 +46,13 @@ async function recordGateEvent({
     else await dbRun(sql, params);
 }
 
+/** Whether two route-id lists hold the same ids (order-insensitive; null = []). */
+function sameSet(a, b) {
+    const x = [...new Set(a || [])].sort();
+    const y = [...new Set(b || [])].sort();
+    return x.length === y.length && x.every((v, i) => v === y[i]);
+}
+
 /**
  * @param {{ env?: object, actor?: string }} [o]  `actor` is used when no
  *   named approval stands behind the event (a closing, a keyless opening).
@@ -50,18 +61,19 @@ async function recordGateEvent({
 async function recordGateTransitions({ env = process.env, actor = SCHEDULER_ACTOR } = {}) {
     const rows = await dbAll(
         `SELECT ds.id, ds.name, ds.collection_disabled_at, ds.collection_disabled_reason, ds.collection_disabled_by,
-                last.gate_status AS last_status, last.approved_by AS last_approved_by
+                last.gate_status AS last_status, last.approved_by AS last_approved_by, last.routes AS last_routes
          FROM data_sources ds
          LEFT JOIN LATERAL (
-             SELECT e.gate_status, e.approved_by FROM source_gate_events e
+             SELECT e.gate_status, e.approved_by, e.routes FROM source_gate_events e
              WHERE e.source_id = ds.id AND e.event IN ('gate_opened', 'gate_closed')
              ORDER BY e.occurred_at DESC, e.id DESC LIMIT 1) last ON TRUE
          WHERE ds.name = ANY($1::text[])`,
         [SOURCES.map(s => s.slug)],
     );
     // Migration 073: the database route kill switches count too — a source
-    // whose every runnable route is switched off is closed, and an open
-    // gate's recorded routes never include a disabled route.
+    // whose every runnable route is switched off is closed, and a change of
+    // an open gate's routes is recorded (below), so the latest gate_opened
+    // never lists a route that is switched off.
     const routeKills = await require('./state').allRouteKillSwitches();
     const written = [];
     for (const r of rows) {
@@ -77,9 +89,12 @@ async function recordGateTransitions({ env = process.env, actor = SCHEDULER_ACTO
         }
         const open = st.status === 'collecting';
         const approvedBy = open ? st.approvedBy || null : null;
-        // Recorded on the first observation, on every change of status, and
-        // when an open gate's named approver changes (G5).
-        if (r.last_status === st.status && (!open || (r.last_approved_by || null) === approvedBy)) continue;
+        // Recorded on the first observation, on every change of status, when
+        // an open gate's named approver changes (G5), and when an open gate's
+        // routes change (a route kill switch set or cleared by env or
+        // database — security review F5: an env route change leaves a record).
+        const sameRoutes = sameSet(r.last_routes, st.openRoutes);
+        if (r.last_status === st.status && (!open || ((r.last_approved_by || null) === approvedBy && sameRoutes))) continue;
         const event = open ? 'gate_opened' : 'gate_closed';
         await recordGateEvent({
             sourceId: r.id, slug: r.name, event, gateStatus: st.status, actor: approvedBy || actor, reason: st.reason,

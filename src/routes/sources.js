@@ -18,8 +18,9 @@
 //                                             // blocked | disabled
 //           status_reason, missing_env,       // env var NAMES only, never values
 //           open_routes,                      // routes that run now ([] unless
-//                                             // collecting / blocked_by_source;
-//                                             // never a disabled route)
+//                                             // collecting, or blocked_by_source
+//                                             // awaiting its probe; never a
+//                                             // disabled route)
 //           disabled_routes,                  // route ids off by a route kill
 //                                             // switch (migration 073)
 //           routes: [ { id, status,           // open | disabled | closed

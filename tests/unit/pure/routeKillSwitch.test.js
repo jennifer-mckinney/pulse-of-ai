@@ -1,8 +1,10 @@
 // tests/unit/pure/routeKillSwitch.test.js
 // Migration 073: the per-ROUTE kill switch, pure parts — the registry's
 // route gate (env COLLECTORS_DISABLED_ROUTES and the database rows passed as
-// `routeKills`), buildCollectors, the CLI's argument rules and the
-// supervised dry run. No database: the DB module throws on any use.
+// `routeKills`), buildCollectors, the CLI's argument rules, the supervised
+// dry run, collect:smoke and the fixture recorder (both read the database
+// state through an injected `governance`). No database: the DB module throws
+// on any use.
 // The database switch itself is covered against Postgres in
 // tests/integration/collect.routeKillSwitch.test.js.
 
@@ -16,11 +18,14 @@ const registry = require('../../../src/config/source-registry');
 const { buildCollectors } = require('../../../src/collectors/index');
 const admin = require('../../../scripts/source-admin');
 const collect = require('../../../scripts/collect');
+const smoke = require('../../../scripts/collect-smoke');
+const recorder = require('../../../scripts/test/record-collector-fixtures');
+const { HttpClient } = require('../../../src/collectors/http');
 const { fixtureTransport, TEST_ENV } = require('../../helpers/fixtureTransport');
 
 const {
-    getSource, getRoute, parseDisabledRoutes, routeKillReasons, sourceStatus, openRoutes, pollIntervalSec,
-    killReason, ROUTE_KILL_ENV, registryEnvVars, envClass, ENV_DOCS,
+    SOURCES, getSource, getRoute, parseDisabledRoutes, routeKillReasons, staleRouteKills, sourceStatus, openRoutes, pollIntervalSec,
+    killReason, ROUTE_KILL_ENV, ROUTE_ID_PATTERN, registryEnvVars, envClass, ENV_DOCS,
 } = registry;
 
 const HF = getSource('hugging_face');
@@ -58,12 +63,30 @@ describe('parseDisabledRoutes (COLLECTORS_DISABLED_ROUTES), validated against th
         expect(p.invalid).toEqual([]);
     });
 
-    it('HOLDS a registry source whose entry names a route it does not have (fail closed), and ignores unknown sources', () => {
-        const p = parseDisabledRoutes({ [ROUTE_KILL_ENV]: 'hugging_face/forum,gitlab,nope/forum-latest,/forum-latest' });
+    it('resolves case, hyphen / underscore and invisible-character variants to the source and route they spell', () => {
+        const p = parseDisabledRoutes({ [ROUTE_KILL_ENV]: 'Hugging-Face/Forum_Latest,\u200bGITLAB/forum-latest\uFEFF' });
+        expect([...p.routes.get('hugging_face')]).toEqual(['forum-latest']);
+        expect([...p.routes.get('gitlab')]).toEqual(['forum-latest']);
+        expect([p.held.size, p.invalid]).toEqual([0, []]);
+    });
+
+    it('sorts the rest into held (a registry source, unknown route) and invalid (no registry source)', () => {
+        const p = parseDisabledRoutes({ [ROUTE_KILL_ENV]: 'hugging_face/forum,gitlab,nope/forum-latest,/forum-latest,huggingface/forum-latest' });
         expect(p.held.get('hugging_face')).toEqual(['hugging_face/forum']);
         expect(p.held.get('gitlab')).toEqual(['gitlab']);            // no route given at all
-        expect(p.invalid).toEqual(['nope/forum-latest', '/forum-latest']);
+        expect(p.invalid).toEqual(['nope/forum-latest', '/forum-latest', 'huggingface/forum-latest']);
         expect(p.routes.size).toBe(0);
+    });
+
+    // Security review F2: a slug typo in a takedown must not fail open.
+    it('an entry naming no registry source holds EVERY source disabled until it is fixed', () => {
+        const env = withRoutes('huggingface/forum-latest');
+        for (const src of [HF, GITLAB, HN]) {
+            const st = sourceStatus(src, env);
+            expect([st.status, st.openRoutes]).toEqual(['disabled', []]);
+            expect(st.reason).toBe('kill switch COLLECTORS_DISABLED_ROUTES has an entry naming no registry source ("huggingface/forum-latest"); '
+                + 'every source is held disabled until it is fixed (entries are "slug/route")');
+        }
     });
 });
 
@@ -87,17 +110,27 @@ describe('sourceStatus with a route kill switch', () => {
         expect(st.status).toBe('collecting');
         expect(st.openRoutes).toEqual(['topic-projects']);
         expect(st.routes.find(r => r.id === 'forum-latest')).toEqual({
-            id: 'forum-latest', status: 'disabled', reason: `kill switch (database): route disabled by ${APPROVER} — forum terms`,
+            id: 'forum-latest', status: 'disabled', reason: `kill switch (database): route disabled since 2026-09-30 by ${APPROVER} — forum terms`,
         });
     });
 
-    it('ignores database rows that are cleared or name no registry route of the source', () => {
-        const st = sourceStatus(HF, TEST_ENV, {
-            routeKills: [dbKill('forum-latest', { disabled_at: null }), dbKill('topic-projects'), dbKill('nope'), null],
-        });
+    it('ignores database rows that are cleared (or empty)', () => {
+        const st = sourceStatus(HF, TEST_ENV, { routeKills: [dbKill('forum-latest', { disabled_at: null }), dbKill('nope', { disabled_at: null }), null] });
         expect(st.openRoutes).toEqual(['daily-papers', 'blog-rss', 'forum-latest']);
         expect(st.disabledRoutes).toEqual([]);
         expect(st.reason).toBe('collecting via daily-papers, blog-rss, forum-latest');
+    });
+
+    // Security review F3 / grumpy #1: a recorded takedown never fails open
+    // when the registry renames or removes the route it names.
+    it('a database row naming a route the registry no longer has holds the whole source disabled', () => {
+        expect(staleRouteKills(HF, [dbKill('old-forum'), dbKill('topic-projects'), dbKill('forum-latest'), dbKill('old-forum')]))
+            .toEqual(['old-forum', 'topic-projects']);
+        const st = sourceStatus(HF, TEST_ENV, { routeKills: [dbKill('old-forum')] });
+        expect([st.status, st.openRoutes]).toEqual(['disabled', []]);
+        expect(st.reason).toBe('kill switch (database) names route old-forum, which is not a route of hugging_face '
+            + '(routes: daily-papers, blog-rss, forum-latest); the whole source is held disabled until it is cleared with '
+            + 'npm run source:enable -- hugging_face --route <id>');
     });
 
     it('a source with EVERY route switched off is disabled and has no open route', () => {
@@ -110,7 +143,7 @@ describe('sourceStatus with a route kill switch', () => {
     });
 
     it('a mistyped env entry holds the whole source disabled until it is fixed', () => {
-        expect(killReason(HF, withRoutes('hugging_face/forum'))).toMatch(/names hugging_face\/forum, which is not a route of hugging_face/);
+        expect(killReason(HF, withRoutes('hugging_face/forum'))).toMatch(/names "hugging_face\/forum", which is not a route of hugging_face/);
         const st = sourceStatus(HF, withRoutes('hugging_face/forum'));
         expect([st.status, st.openRoutes]).toEqual(['disabled', []]);
         // Other sources are untouched by it.
@@ -154,6 +187,13 @@ describe('sourceStatus with a route kill switch', () => {
         expect(pollIntervalSec(yt, env, { routeKills: [dbKill('data-api')] })).toBe(yt.pollIntervalSec);
     });
 
+    it('every registry route id fits the database CHECK (a takedown can always be recorded)', () => {
+        for (const s of SOURCES) for (const r of s.routes) expect([s.slug, r.id, ROUTE_ID_PATTERN.test(r.id)]).toEqual([s.slug, r.id, true]);
+        expect(ROUTE_ID_PATTERN.source).toBe('^[a-z0-9][a-z0-9-]{0,63}$');
+        const sql = require('fs').readFileSync(require.resolve('../../../src/db/migrations/073_source_route_kill_switch.sql'), 'utf8');
+        expect(sql).toContain(`CHECK (route_id ~ '${ROUTE_ID_PATTERN.source}')`);
+    });
+
     it('routeKillReasons: the database reason wins over an env entry for the same route; registry order', () => {
         const reasons = routeKillReasons(HF, withRoutes('hugging_face/forum-latest,hugging_face/daily-papers'), [dbKill('forum-latest')]);
         expect([...reasons.keys()]).toEqual(['daily-papers', 'forum-latest']);
@@ -185,9 +225,9 @@ describe('COLLECTORS_DISABLED_ROUTES is catalogued as a kill-switch setting', ()
 describe('source-admin --route argument rules (migration 073)', () => {
     it('accepts a registry route of the source on disable and enable', () => {
         expect(admin.parseArgs(['disable', 'hugging_face', '--route', 'forum-latest', '--reason', 'forum terms']))
-            .toEqual({ command: 'disable', slug: 'hugging_face', route: 'forum-latest', note: null, reason: 'forum terms' });
+            .toEqual({ command: 'disable', slug: 'hugging_face', route: 'forum-latest', staleRoute: false, note: null, reason: 'forum terms' });
         expect(admin.parseArgs(['enable', 'gitlab', '--route', 'forum-latest', '--note', 'cleared']))
-            .toEqual({ command: 'enable', slug: 'gitlab', route: 'forum-latest', note: 'cleared', reason: null });
+            .toEqual({ command: 'enable', slug: 'gitlab', route: 'forum-latest', staleRoute: false, note: 'cleared', reason: null });
         // Flag order does not matter.
         expect(admin.parseArgs(['disable', 'gitlab', '--reason', 'r', '--route', 'forum-latest']).route).toBe('forum-latest');
     });
@@ -199,10 +239,27 @@ describe('source-admin --route argument rules (migration 073)', () => {
         }
     });
 
+    it('source:enable may name a well-formed id the registry no longer has (to clear a stale switch); disable may not', () => {
+        expect(admin.parseArgs(['enable', 'hugging_face', '--route', 'old-forum'])).toMatchObject({ route: 'old-forum', staleRoute: true });
+        expect(admin.parseArgs(['disable', 'hugging_face', '--route', 'old-forum', '--reason', 'x']).error).toMatch(/unknown route 'old-forum'/);
+        for (const bad of ['../forum', 'Old-Forum', 'old_forum', '-x']) {
+            expect(admin.parseArgs(['enable', 'hugging_face', '--route', bad]).error).toMatch(/unknown route/);
+        }
+    });
+
+    it('refuses a flag the command does not take, and control characters in a reason or note', () => {
+        expect(admin.parseArgs(['enable', 'hugging_face', '--route', 'forum-latest', '--reason', 'why']).error)
+            .toMatch(/^source:enable does not take --reason/);
+        expect(admin.parseArgs(['disable', 'hugging_face', '--reason', 'x', '--note', 'n']).error).toMatch(/^source:disable does not take --note/);
+        expect(admin.parseArgs(['reset', 'hugging_face', '--reason', 'x']).error).toMatch(/^source:reset does not take --reason/);
+        expect(admin.parseArgs(['disable', 'hugging_face', '--reason', 'line one\nline two']).error).toMatch(/--reason must not contain control characters/);
+        expect(admin.parseArgs(['enable', 'hugging_face', '--note', 'x\u001b[31m']).error).toMatch(/--note must not contain control characters/);
+    });
+
     it('refuses --route without a value, on reset, twice, or a stray argument', () => {
         expect(admin.parseArgs(['disable', 'hugging_face', '--route']).error).toBe(admin.USAGE);
         expect(admin.parseArgs(['disable', 'hugging_face', '--route', '--reason', 'x']).error).toBe(admin.USAGE);
-        expect(admin.parseArgs(['reset', 'hugging_face', '--route', 'forum-latest']).error).toMatch(/source:reset applies to a whole source/);
+        expect(admin.parseArgs(['reset', 'hugging_face', '--route', 'forum-latest']).error).toMatch(/source:reset does not take --route/);
         expect(admin.parseArgs(['disable', 'hugging_face', '--route', 'forum-latest', '--route', 'blog-rss', '--reason', 'x']).error)
             .toMatch(/--route is given more than once/);
         expect(admin.parseArgs(['disable', 'hugging_face', 'forum-latest', '--reason', 'x']).error).toMatch(/unexpected argument 'forum-latest'/);
@@ -260,5 +317,93 @@ describe('supervised dry run honours the database route kill switch (no request 
             governance: gov(['daily-papers', 'blog-rss', 'forum-latest'].map(id => dbKill(id))),
         })).rejects.toThrow(/hugging_face is not collecting: every route that would run is switched off/);
         expect(transport.calls).toHaveLength(0);
+    });
+});
+
+// Security review F1: `npm run collect:smoke` honours both database switches.
+describe('collect:smoke honours the database kill switches (no request to a disabled route or source)', () => {
+    const HF_LIVE = [
+        ['https://huggingface.co/api/daily_papers?limit=30', 'recorded/hf-daily-papers.json'],
+        ['https://huggingface.co/blog/feed.xml', 'recorded/substack-importai.xml'],
+        [/discuss\.huggingface\.co/, { status: 500, body: 'must not be asked' }],
+    ];
+    const OPEN_GOV = { disabled_at: null, access_denied_at: null, refused_until: null, route_kills: [] };
+    const run = async (gov) => {
+        const transport = fixtureTransport(HF_LIVE);
+        const http = new HttpClient({ env: TEST_ENV, transport, sleep: () => Promise.resolve() });
+        const row = await smoke.smokeSource(HF, TEST_ENV, http, undefined, gov);
+        return { row, transport, forum: transport.calls.filter(c => /discuss\.huggingface\.co/.test(c.url)) };
+    };
+
+    it('skips a route switched off in the database', async () => {
+        const { row, forum } = await run({ ...OPEN_GOV, route_kills: [dbKill('forum-latest')] });
+        expect(forum).toHaveLength(0);
+        expect(row.routes.map(r => r.id)).toEqual(['daily-papers', 'blog-rss']);
+    });
+
+    it('skips a source switched off in the database, or with no data_sources row, before any request', async () => {
+        const off = await run({ ...OPEN_GOV, disabled_at: '2026-09-30T12:00:00Z', disabled_by: APPROVER, disabled_reason: 'stop' });
+        expect([off.row.status, off.transport.calls.length]).toEqual(['disabled', 0]);
+        expect(off.row.skipped).toMatch(/disabled by the database kill switch/);
+        const none = await run(null);
+        expect([none.row.skipped, none.transport.calls.length]).toEqual([expect.stringMatching(/has no data_sources row/), 0]);
+        const all = await run({ ...OPEN_GOV, route_kills: ['daily-papers', 'blog-rss', 'forum-latest'].map(id => dbKill(id)) });
+        expect([all.row.status, all.transport.calls.length]).toEqual(['disabled', 0]);
+    });
+
+    it('fetches nothing when the database state cannot be read (fail closed)', async () => {
+        const out = [];
+        const governance = async () => { throw new Error('connect ECONNREFUSED'); };
+        expect(await smoke.main(['--only', 'hugging_face'], TEST_ENV, l => out.push(l), { governance })).toBe(2);
+        expect(out.join('\n')).toMatch(/could not be read \(connect ECONNREFUSED\) — nothing was fetched/);
+    });
+});
+
+// Security review F4: the fixture recorder honours every kill switch too.
+describe('the fixture recorder never fetches a switched-off source or route', () => {
+    const OPEN_GOV = async () => ({ disabled_at: null, route_kills: [] });
+
+    it('every target names a registry route', () => {
+        for (const [key] of recorder.TARGETS) {
+            const [slug, routeId] = key.split('/');
+            expect([key, !!getRoute(getSource(slug), routeId)]).toEqual([key, true]);
+        }
+    });
+
+    it('killedTarget: env and database switches, source and route', () => {
+        const gov = { disabled_at: null, route_kills: [] };
+        expect(recorder.killedTarget('hugging_face/forum-latest', TEST_ENV, gov)).toBeNull();
+        expect(recorder.killedTarget('hugging_face/forum-latest', withRoutes('hugging_face/forum-latest'), gov)).toMatch(/COLLECTORS_DISABLED_ROUTES/);
+        expect(recorder.killedTarget('hugging_face/forum-latest', { ...TEST_ENV, SOURCE_HUGGING_FACE_ENABLED: 'false' }, gov)).toMatch(/=false/);
+        expect(recorder.killedTarget('hugging_face/forum-latest', TEST_ENV, { ...gov, route_kills: [dbKill('forum-latest')] }))
+            .toMatch(/^kill switch \(database\): route disabled/);
+        expect(recorder.killedTarget('hugging_face/daily-papers', TEST_ENV, { ...gov, route_kills: [dbKill('forum-latest')] })).toBeNull();
+        expect(recorder.killedTarget('hugging_face/daily-papers', TEST_ENV, { ...gov, disabled_at: '2026-09-30T12:00:00Z' })).toMatch(/database kill switch/);
+        expect(recorder.killedTarget('hugging_face/daily-papers', TEST_ENV, { ...gov, route_kills: [dbKill('old-forum')] })).toMatch(/held disabled/);
+        expect(recorder.killedTarget('hugging_face/daily-papers', TEST_ENV, null)).toMatch(/no data_sources row/);
+    });
+
+    it('main skips a switched-off route, keeps its earlier manifest entry, and records nothing when the database is unreadable', async () => {
+        const calls = [];
+        const http = { request: async (url) => { calls.push(url); return { body: url.includes('.json') || url.includes('api') ? '[]' : '<rss></rss>' }; } };
+        const written = {};
+        const lines = [];
+        const governance = async slug => (slug === 'hugging_face'
+            ? { disabled_at: null, route_kills: [dbKill('forum-latest')] } : OPEN_GOV());
+        const code = await recorder.main({
+            env: TEST_ENV, governance, http, dir: require('path').join(__dirname, '../../fixtures/collectors/recorded'),
+            write: (f, body) => { written[require('path').basename(f)] = body; }, log: l => lines.push(l),
+        });
+        expect(code).toBe(0);
+        expect(calls.some(u => /discuss\.huggingface\.co/.test(u))).toBe(false);
+        expect(lines).toEqual(expect.arrayContaining([expect.stringMatching(/^SKIPPED hf-forum-latest\.json \(hugging_face\/forum-latest\): kill switch \(database\)/)]));
+        const manifest = JSON.parse(written['manifest.json']);
+        expect(manifest.files['https://discuss.huggingface.co/latest.json']).toBe('hf-forum-latest.json');   // kept, not re-recorded
+        expect(written['hf-forum-latest.json']).toBeUndefined();
+
+        calls.length = 0;
+        const failing = async () => { throw new Error('connect ECONNREFUSED'); };
+        expect(await recorder.main({ env: TEST_ENV, governance: failing, http, write: () => { throw new Error('wrote'); }, log: () => {} })).toBe(2);
+        expect(calls).toEqual([]);
     });
 });

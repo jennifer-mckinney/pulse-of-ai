@@ -1065,7 +1065,7 @@ const ENV_DOCS = {
     COLLECTOR_CONTACT_URL: { group: 'collector', signup: 'https://foundation.wikimedia.org/wiki/Policy:Wikimedia_Foundation_User-Agent_Policy', description: 'Contact URL placed in the collector User-Agent (required: collection is disabled without it)' },
     COLLECTORS_ENABLED: { group: 'kill-switch', signup: null, description: 'Global kill switch: false stops every collector' },
     COLLECTORS_DISABLED: { group: 'kill-switch', signup: null, description: 'Comma-separated source slugs to turn off (per-source kill switch)' },
-    COLLECTORS_DISABLED_ROUTES: { group: 'kill-switch', signup: null, description: 'Comma-separated slug/route ids to turn off (per-route kill switch), e.g. hugging_face/forum-latest; the source\'s other routes keep collecting. An entry whose route is not a registry route of a registry source holds that whole source disabled until it is fixed' },
+    COLLECTORS_DISABLED_ROUTES: { group: 'kill-switch', signup: null, description: 'Comma-separated slug/route ids to turn off (per-route kill switch), e.g. hugging_face/forum-latest; the source\'s other routes keep collecting. Fails closed: an entry whose route is not a route of the source it names holds that whole source disabled, and an entry naming no registry source holds EVERY source disabled, until it is fixed' },
     COLLECT_WINDOW_MS: { group: 'collector', signup: null, description: 'Collection cycle length in ms (default 150000)' },
     GATE_APPROVED_BY: { group: 'collector', signup: null, description: 'Named approval ("<name> <YYYY-MM-DD>") required to open ANY gated source — one that needs a key, an approval, a licence or a permission (PR #22 decision G5). Without a valid value those sources stay closed ("awaiting named approval"); keyless sources are unaffected. It is recorded as the approver of every gate opening and of every database kill-switch change (source_gate_events). Empty keeps gated sources closed' },
     PERMISSION_GATED_FEEDS_ACCEPTED_BY: { group: 'collector', signup: null, description: 'Operator acknowledgement ("<name> <YYYY-MM-DD>") that opens the 8 permission-gated news feeds of ADR 0001 ruling 4 (BBC, NYT, Guardian, Al Jazeera, WSJ, NBC, Washington Post, Ars Technica): their terms require permission for automated analysis, and setting this records that you accept that legal risk. Empty keeps them closed' },
@@ -1169,14 +1169,27 @@ function killReason(src, env) {
     if (isFalse(env[killSwitchEnv(src.slug)])) return `kill switch ${killSwitchEnv(src.slug)}=false`;
     // Fail closed: a COLLECTORS_DISABLED_ROUTES entry that names this source
     // with a route it does not have (a typo in a takedown) holds the whole
-    // source off until the entry is fixed — never silently ignored.
-    const held = parseDisabledRoutes(env).held.get(src.slug);
+    // source off until the entry is fixed — never silently ignored. An entry
+    // naming NO registry source cannot say which source it meant, so it holds
+    // EVERY source off (security review F2: a slug typo must not fail open).
+    const parsed = parseDisabledRoutes(env);
+    if (parsed.invalid.length) {
+        return `kill switch ${ROUTE_KILL_ENV} has ${parsed.invalid.length > 1 ? 'entries' : 'an entry'} naming no registry source `
+            + `(${parsed.invalid.map(e => JSON.stringify(e)).join(', ')}); every source is held disabled until `
+            + `${parsed.invalid.length > 1 ? 'they are' : 'it is'} fixed (entries are "slug/route")`;
+    }
+    const held = parsed.held.get(src.slug);
     if (held) {
-        return `kill switch ${ROUTE_KILL_ENV} names ${held.join(', ')}, which is not a route of ${src.slug} `
+        return `kill switch ${ROUTE_KILL_ENV} names ${held.map(e => JSON.stringify(e)).join(', ')}, which is not a route of ${src.slug} `
             + `(routes: ${src.routes.map(r => r.id).join(', ')}); the whole source is held disabled until the entry is fixed`;
     }
     return null;
 }
+
+// Registry route ids: lower-case letters, digits and hyphens (migration
+// 073's source_route_state CHECK; tests/unit/pure/routeKillSwitch.test.js
+// pins every registry route id to it).
+const ROUTE_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 /** The registry route `routeId` of a source, or null — an exact id match only. */
 function getRoute(src, routeId) {
@@ -1184,23 +1197,32 @@ function getRoute(src, routeId) {
     return src.routes.find(r => r.id === routeId) || null;
 }
 
+// Invisible characters a copy-paste can carry into an env value.
+const INVISIBLE = /[­᠎​-‏⁠-⁤﻿]/g;
+
 /**
  * COLLECTORS_DISABLED_ROUTES parsed and validated against the registry
- * (never trusted from input): "slug/route" entries, comma-separated.
+ * (never trusted from input): "slug/route" entries, comma-separated. Each
+ * half is trimmed, stripped of invisible characters and lower-cased; in the
+ * slug a hyphen reads as an underscore (hugging-face → hugging_face), in
+ * the route an underscore as a hyphen — registry slugs never contain a
+ * hyphen and route ids never an underscore, so this only ever resolves an
+ * entry to the source and route it spells.
  * @returns {{ routes: Map<string, Set<string>>, held: Map<string, string[]>, invalid: string[] }}
  *   routes   slug → registry route ids switched off
  *   held     slug → entries naming a registry source with a route it does
  *            not have (killReason holds that source disabled — fail closed)
- *   invalid  entries naming no registry source (ignored; the scheduler logs them)
+ *   invalid  entries naming no registry source (killReason holds EVERY
+ *            source disabled — fail closed; the scheduler logs them too)
  */
 function parseDisabledRoutes(env = process.env) {
     const out = { routes: new Map(), held: new Map(), invalid: [] };
     const raw = env ? env[ROUTE_KILL_ENV] : undefined;
     if (!nonEmpty(raw)) return out;
-    for (const entry of raw.split(',').map(s => s.trim()).filter(Boolean)) {
+    for (const entry of raw.replace(INVISIBLE, '').split(',').map(s => s.trim()).filter(Boolean)) {
         const i = entry.indexOf('/');
-        const slug = i < 0 ? entry : entry.slice(0, i).trim();
-        const routeId = i < 0 ? '' : entry.slice(i + 1).trim();
+        const slug = (i < 0 ? entry : entry.slice(0, i)).trim().toLowerCase().replace(/-/g, '_');
+        const routeId = (i < 0 ? '' : entry.slice(i + 1)).trim().toLowerCase().replace(/_/g, '-');
         const src = BY_SLUG.get(slug);
         if (!src) { out.invalid.push(entry); continue; }
         if (!getRoute(src, routeId)) {
@@ -1215,9 +1237,30 @@ function parseDisabledRoutes(env = process.env) {
 }
 
 /**
+ * Database route kill switches of a source whose route id is NOT a registry
+ * route of it (a route renamed or removed since it was switched off). They
+ * hold the whole source disabled (sourceStatus) until cleared with
+ * `npm run source:enable -- <slug> --route <id>` — a recorded takedown never
+ * fails open (security review F3).
+ * @returns {string[]} the stale route ids, sorted
+ */
+function staleRouteKills(src, dbKills = []) {
+    return [...new Set((dbKills || [])
+        .filter(k => k && k.disabled_at && typeof k.route_id === 'string' && !getRoute(src, k.route_id))
+        .map(k => k.route_id))].sort();
+}
+
+/** The date part (UTC) of a timestamp, or null. */
+function utcDate(t) {
+    const d = t ? new Date(t) : null;
+    return d && !Number.isNaN(d.getTime()) ? d.toISOString().slice(0, 10) : null;
+}
+
+/**
  * The route kill switches of a source: the database switch (rows of
  * source_route_state with collection_disabled_at set — `dbKills`) and the
- * env list (COLLECTORS_DISABLED_ROUTES). Only registry routes count.
+ * env list (COLLECTORS_DISABLED_ROUTES). Only registry routes count here;
+ * staleRouteKills() has the others.
  * @param {object} src
  * @param {object} [env]
  * @param {Array<{ route_id: string, disabled_at: *, reason?: string|null, by?: string|null }>} [dbKills]
@@ -1233,7 +1276,9 @@ function routeKillReasons(src, env = process.env, dbKills = []) {
     for (const r of src.routes) {
         const k = db.get(r.id);
         if (k) {
-            out.set(r.id, `kill switch (database): route disabled${k.by ? ` by ${k.by}` : ''}${k.reason ? ` — ${k.reason}` : ''}`);
+            const since = utcDate(k.disabled_at);
+            out.set(r.id, `kill switch (database): route disabled${since ? ` since ${since}` : ''}${k.by ? ` by ${k.by}` : ''}`
+                + `${k.reason ? ` — ${k.reason}` : ''}`);
         } else if (listed.has(r.id)) {
             out.set(r.id, `kill switch ${ROUTE_KILL_ENV} lists ${src.slug}/${r.id}`);
         }
@@ -1355,6 +1400,14 @@ function sourceStatus(src, env = process.env, { routeKills = [] } = {}) {
 
     const killed = killReason(src, env);
     if (killed) return finish('disabled', killed);
+    // A database route kill naming a route the registry no longer has holds
+    // the whole source (fail closed, security review F3).
+    const stale = staleRouteKills(src, routeKills);
+    if (stale.length) {
+        return finish('disabled', `kill switch (database) names route${stale.length > 1 ? 's' : ''} ${stale.join(', ')}, which `
+            + `${stale.length > 1 ? 'are' : 'is'} not a route of ${src.slug} (routes: ${src.routes.map(r => r.id).join(', ')}); the whole `
+            + `source is held disabled until it is cleared with npm run source:enable -- ${src.slug} --route <id>`);
+    }
     // Blocked is a property of the source's terms, not of this process's
     // config: it is reported as blocked whatever else is (un)set.
     if (src.auth.kind === 'blocked' && routes.length === 0 && pending.length === 0) {
@@ -1659,9 +1712,11 @@ module.exports = {
     killSwitchEnv,
     killReason,
     ROUTE_KILL_ENV,
+    ROUTE_ID_PATTERN,
     getRoute,
     parseDisabledRoutes,
     routeKillReasons,
+    staleRouteKills,
     openRoutes,
     sourceStatus,
     pollIntervalSec,

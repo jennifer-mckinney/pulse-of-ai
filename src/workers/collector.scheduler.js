@@ -13,12 +13,17 @@
 //   - Stagger via `startDate` across the window (thundering-herd guard).
 //   - Stale cleanup: a scheduler whose source is no longer collecting (kill
 //     switch, retired, credential removed) is removed.
+//   - Route kill switches (migration 073): the env list and the database
+//     rows both count — a source with every route switched off is not
+//     scheduled, and a switched-off route's quota no longer sets the
+//     cadence. The runner re-checks them before every run.
 
 'use strict';
 
 const { recordGateTransitions, recordCorrelationGate } = require('../collectors/governance');
 
 const { dbAll } = require('../db/connection');
+const state = require('../collectors/state');
 const { COLLECT_QUEUES } = require('../queues/index');
 const {
     getSource, sourceStatus, pollIntervalSec, collectWindowMs, DEFAULT_COLLECT_WINDOW_MS, parseDisabledRoutes, ROUTE_KILL_ENV,
@@ -42,13 +47,22 @@ async function scheduleAllSources({ env = process.env, log = () => {} } = {}) {
     ) || [];
     const windowMs = collectWindowMs(env);
     // Migration 073: COLLECTORS_DISABLED_ROUTES entries that name no registry
-    // source switch nothing off — say so on every reschedule (an entry naming
-    // a registry source with an unknown route holds that source disabled,
-    // which sourceStatus reports).
+    // source hold EVERY source disabled (fail closed, sourceStatus) — say why
+    // on every reschedule (an entry naming a registry source with an unknown
+    // route holds that source disabled, which sourceStatus reports).
     const { invalid } = parseDisabledRoutes(env);
     if (invalid.length) {
-        log(`[scheduler] ${ROUTE_KILL_ENV}: ignored ${invalid.length} entr${invalid.length > 1 ? 'ies' : 'y'} naming no registry `
-            + `source (${invalid.map(e => JSON.stringify(e)).join(', ')}); entries are "slug/route"`);
+        log(`[scheduler] ${ROUTE_KILL_ENV}: ${invalid.length} entr${invalid.length > 1 ? 'ies name' : 'y names'} no registry `
+            + `source (${invalid.map(e => JSON.stringify(e)).join(', ')}); every source is held disabled until fixed — entries are "slug/route"`);
+    }
+    // The database route kill switches (grumpy #6). A failed read is logged
+    // and scheduling uses the env alone: the runner reads them again before
+    // every run and never fetches a switched-off route.
+    let routeKills = new Map();
+    try {
+        routeKills = await state.allRouteKillSwitches();
+    } catch (err) {
+        log(`[scheduler] route kill switches not read (${err.message}) — scheduling from the env alone; the runner still enforces them`);
     }
 
     const activeIdsByQueue = new Map();
@@ -56,7 +70,8 @@ async function scheduleAllSources({ env = process.env, log = () => {} } = {}) {
     for (const row of rows) {
         const src = getSource(row.name);
         if (!src) { log(`[scheduler] '${row.name}' is not a registry source — not scheduled`); continue; }
-        const st = sourceStatus(src, env);
+        const kills = routeKills.get(row.id) || [];
+        const st = sourceStatus(src, env, { routeKills: kills });
         if (st.status !== 'collecting') continue;
         const queue = QUEUE_BY_TYPE[row.source_type];
         if (!queue) {
@@ -65,7 +80,7 @@ async function scheduleAllSources({ env = process.env, log = () => {} } = {}) {
         }
         if (!activeIdsByQueue.has(queue)) activeIdsByQueue.set(queue, new Set());
         activeIdsByQueue.get(queue).add(row.name);
-        schedulable.push({ row, src, queue });
+        schedulable.push({ row, src, queue, kills });
     }
 
     for (const queue of Object.values(QUEUE_BY_TYPE)) {
@@ -84,10 +99,10 @@ async function scheduleAllSources({ env = process.env, log = () => {} } = {}) {
     const staggerMs = Math.floor(windowMs / schedulable.length);
     const now = Date.now();
     for (let i = 0; i < schedulable.length; i++) {
-        const { row, src, queue } = schedulable[i];
+        const { row, src, queue, kills } = schedulable[i];
         await queue.upsertJobScheduler(
             row.name,
-            { every: Math.max(windowMs, pollIntervalSec(src, env) * 1000), startDate: now + i * staggerMs },
+            { every: Math.max(windowMs, pollIntervalSec(src, env, { routeKills: kills }) * 1000), startDate: now + i * staggerMs },
             { name: 'collect', data: { slug: row.name, sourceId: row.id, sourceType: row.source_type } },
         );
     }
