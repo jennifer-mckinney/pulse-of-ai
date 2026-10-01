@@ -15,7 +15,7 @@ flowchart LR
 
   subgraph NORM["Normalise · base.js collect() → toPayload()"]
     direction TB
-    N1["17 · raw text capped, HTML to text (linear),<br/>identity redaction, ingest@1.7.0: e-mails, @handles,<br/>Reddit u/ names, phones, profile links, cc names,<br/>sign-offs, Wikipedia unsigned notes"]:::done
+    N1["17 · raw text capped, HTML to text (linear),<br/>identity redaction, ingest@1.8.0: e-mails, @handles,<br/>Reddit u/ names, phones, profile links, cc names,<br/>sign-offs, Wikipedia unsigned notes"]:::done
     N2["18 · allowlisted payload: title, text, link unless an<br/>identity link, published_at, language, city-level<br/>location (basis content or publisher), licence,<br/>attribution; an identity-bearing upstream id is<br/>stored only as route:fp:HMAC (an unkeyed<br/>SHA-256 when no key is set)"]:::done
     N3["19 · provenance_fingerprint = HMAC-SHA256(<br/>PROVENANCE_KEY or AUDIT_HASH_KEY,<br/>slug : upstream id : source URL)"]:::done
     N4["20 · drop items older than maxAgeDays (default 7);<br/>admission filter admission_filter@1.0.0<br/>(AI scope, ai-filter.js) on scope 'filter' routes;<br/>dedupe within the batch"]:::done
@@ -24,7 +24,7 @@ flowchart LR
 
   subgraph STORE["Store and score · pipeline/ingest.js"]
     direction TB
-    T1["21 · storeRawPost(): strip NUL, drop PII_FIELDS,<br/>SHA-256 content hash, dedupe on<br/>(source_id, external_id), insert raw_posts (text only<br/>in content) with provenance_fingerprint, ingest_mv_id<br/>and admission_mv_id, plus one data_retention_log<br/>row 'collected' in the same statement"]:::done
+    T1["21 · storeRawPost(): strip NUL, drop PII_FIELDS,<br/>SHA-256 content hash (integrity check, not a<br/>join key), dedupe on (source_id, external_id),<br/>insert raw_posts (text only in content) with<br/>provenance_fingerprint, ingest_mv_id and<br/>admission_mv_id, plus one data_retention_log<br/>row 'collected' in the same statement"]:::done
     T2{"new post?"}:::done
     T3["22 · the run's job: a scheduled run joins the cycle job<br/>(cycle.currentCycleJob(), advisory lock; the running<br/>cron job of this window or a new one; inflight_runs + 1);<br/>a refresh uses its pre-created job; npm run collect<br/>and standup create theirs at the first new post"]:::done
     T7{"scoreVia?"}:::done

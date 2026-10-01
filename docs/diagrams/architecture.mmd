@@ -1,7 +1,7 @@
 %% Title: High-level architecture (containers)
 %% Summary: Every running container of the compose stack, what runs inside it, the queues between them and the 52-source registry they collect from.
 %% Canonical source. architecture.html embeds this definition verbatim and architecture.png is rendered from it (bash docs/diagrams/render.sh).
-%% Sources: docker-compose.yml, src/server.js, src/routes/*, src/routes/health.js, src/queues/index.js, src/workers/start.js, src/workers/collect.worker.js, src/workers/ingest.worker.js, src/workers/maintenance.worker.js, src/workers/collector.scheduler.js, src/collectors/{runner,state,governance,source-health,retention-overdue}.js, src/collectors/reddit/maintenance.js, src/workers/heartbeat.js, scripts/watchdog.js, src/watchdog/*, public/index.html, src/config/source-registry.js, src/db/migrations/ (49 files, 001-065). Spec: TECHNICAL_SPEC.md sections 4, 7, 12, 17. Updated 2026-09-30.
+%% Sources: docker-compose.yml, src/server.js, src/routes/*, src/routes/health.js, src/queues/index.js, src/workers/start.js, src/workers/collect.worker.js, src/workers/ingest.worker.js, src/workers/maintenance.worker.js, src/workers/collector.scheduler.js, src/collectors/{runner,state,governance,source-health,retention-overdue}.js, src/collectors/reddit/maintenance.js, src/workers/heartbeat.js, scripts/watchdog.js, src/watchdog/*, public/index.html, src/config/source-registry.js, src/db/migrations/ (50 files, 001-066). Spec: TECHNICAL_SPEC.md sections 4, 7, 12, 17. Updated 2026-09-30.
 flowchart LR
 
   subgraph BROWSER["② Browser · public/"]
@@ -62,7 +62,7 @@ flowchart LR
 
   subgraph PG["⑦ postgres"]
     direction TB
-    D0["PostgreSQL 16 + pgvector<br/>49 migrations (001-065)"]:::done
+    D0["PostgreSQL 16 + pgvector<br/>50 migrations (001-066)"]:::done
     D1[("data_sources · source_collection_state<br/>source_runs · source_run_daily · processing_jobs")]:::done
     D2[("raw_posts · decision_audit_log · methodology_versions<br/>sentiment / relevance / discourse_results")]:::done
     D3[("post_embeddings VECTOR(384) HNSW<br/>bias_assessments · bias_window_* · alert_events<br/>alert_resolutions")]:::done

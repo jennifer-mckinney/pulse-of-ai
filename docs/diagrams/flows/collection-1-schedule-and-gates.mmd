@@ -9,7 +9,7 @@ flowchart LR
     SG["each reschedule also records gate changes:<br/>recordGateTransitions() → append-only<br/>source_gate_events gate_opened / gate_closed,<br/>approved_by = GATE_APPROVED_BY for a gated<br/>opening; the database kill switch counts as closed;<br/>correlation gate changes → correlation_gate_events"]:::done
     S2["2 · cadence: every max(COLLECT_WINDOW_MS,<br/>the source's poll interval), default 150 s;<br/>start times staggered across the window;<br/>schedulers of sources no longer collecting removed"]:::done
     S3["3 · job on collect.rss / collect.api / collect.bulk<br/>processCollectJob(slug) → runCollection<br/>with the cycle option, scoreVia queue,<br/>deadline = half the window"]:::done
-    S4["4 · resolveCurrentMethodology()<br/>sentiment@1.0.0 · relevance@1.2.0<br/>discourse@1.1.0-DQI · bias@1.6.0<br/>ingest@1.7.0 · admission_filter@1.0.0"]:::done
+    S4["4 · resolveCurrentMethodology()<br/>sentiment@1.0.0 · relevance@1.2.0<br/>discourse@1.1.0-DQI · bias@1.6.0<br/>ingest@1.8.0 · admission_filter@1.0.0"]:::done
     S1 --> SG
     S1 --> S2 --> S3 --> S4
   end
