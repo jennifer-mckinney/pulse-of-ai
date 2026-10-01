@@ -10,6 +10,14 @@
 //             cooldown and reported 'blocked_by_source' (F10-5); a clean
 //             probe starts a 24 h probation during which a refusal keeps
 //             escalating the cooldown (ADR 0001 note 2026-09-30)
+//     rate limit — src/collectors/rate-limit.js (diagnosis 2026-10-01): a
+//             host that rate-limited us (429, or a 403 with positive
+//             evidence) is backed off until the source's time, for EVERY
+//             source (one holds map per run, merged from all rows); a
+//             route whose hosts are all held is skipped without a request,
+//             and the whole source ('rate_limited') when every route is.
+//             NOT a refusal: no refusal count, probation or critical alert
+//             (the 5th body-only rate limit in a row is one — fail closed)
 //     claim — state.claim(): the source's poll interval is honoured across
 //             processes (worker schedule + POST /api/refresh)
 //     fetch — one collector per open route (src/collectors), through the
@@ -61,6 +69,9 @@ const cycle = require('./cycle');
 const { scrub } = require('./redact');
 const { classifyError } = require('./errors');
 const { refusalGate, refusalOf, resetEnv, probationOver, BLOCKED_BY_SOURCE } = require('./refusal');
+const rateLimit = require('./rate-limit');
+
+const { RATE_LIMITED } = rateLimit;
 
 /** Default queue hooks: lazily bind BullMQ (opening Redis only when needed). */
 function defaultQueues() {
@@ -163,6 +174,9 @@ async function runCollection(o = {}) {
         const mv = await resolveCurrentMethodology();
         const ids = await state.sourceIdsBySlug(slugs);
         let http = null;
+        // The run's ONE rate-limit holds map (hostname → hold), shared by
+        // the HTTP client (security F5).
+        const runHolds = {};
 
         for (const slug of slugs) {
             const src = getSource(slug);
@@ -214,10 +228,28 @@ async function runCollection(o = {}) {
                 log(`[collect] ${slug}: refusal cleared by ${resetEnv(slug)} (approved by ${approvedBy})`);
             }
 
+            // Diagnosis 2026-10-01: rate-limit holds (per HOST, migrations
+            // 075-076). Every source's stored holds are merged into the
+            // run's ONE map (security F5: a host held for any source is held
+            // for all), shared with the HTTP client. Every route held → the
+            // source is skipped before its claim, no request.
+            rateLimit.mergeHolds(runHolds, await state.loadHolds(), Date.now());
+            const myHosts = rateLimit.sourceHosts(src, env);
+            const held = rateLimit.holdGate(src, env, runHolds, Date.now());
+            if (held.state === 'all') {
+                row.status = RATE_LIMITED;
+                row.reason = held.reason;
+                row.rateLimitedUntil = held.until;
+                await state.saveHolds(sourceId, { hosts: myHosts, view: runHolds, routes: held.routes });
+                log(`[collect] ${slug}: skipped — ${held.reason}`);
+                continue;
+            }
+
             const claimed = await state.claim(sourceId, pollIntervalSec(src, env), o.cycle ? o.cycle.windowMs : collectWindowMs(env));
             if (!claimed) { row.reason = 'collected within its poll interval (rate limit)'; continue; }
             queried++;
-            http = http || new HttpClient({ env, transport: o.transport, sleep: o.collectorCtx && o.collectorCtx.sleep, signal });
+            http = http || new HttpClient({ env, transport: o.transport, sleep: o.collectorCtx && o.collectorCtx.sleep, signal, holds: runHolds });
+            http.drainHoldChanges();   // only this source's changes are saved on its row
             const startedAt = new Date();
             const before = http.requests;
             const cursor = claimed.cursor || {};
@@ -231,6 +263,9 @@ async function runCollection(o = {}) {
             let okRoutes = 0;
             let queueFailed = false;
             let collectors = [];
+            // Routes (or feeds) not requested because their host is still
+            // backing off: skipped, never a failure.
+            const heldRoutes = [];
             try {
                 collectors = buildCollectors(src, { env, http, cursor, httpCache, now: o.now, ...(o.collectorCtx || {}) });
             } catch (err) {
@@ -246,17 +281,26 @@ async function runCollection(o = {}) {
                 const snapshot = JSON.stringify({ cursor, httpCache });
                 let routeStoreFailed = false;
                 let result;
+                if (rateLimit.routeHeld(c.route, env, runHolds, Date.now())) {
+                    heldRoutes.push(c.route.id);
+                    continue;
+                }
                 try {
                     result = await c.collect();
                     okRoutes++;
                 } catch (err) {
+                    if (err && err.held === true) { heldRoutes.push(c.route.id); continue; }
                     fail(`${c.route.id}: ${err.message}`, err);
                     continue;
                 }
                 // G10-6: problems that did not stop the route (a broken or
                 // refused feed of a multi-feed source, a skipped message) are
                 // part of the run's errors, last_error and classification.
-                for (const w of result.warnings || []) fail(`${c.route.id}: ${w.text}`, w.err);
+                // A feed not requested because its host is backing off is not.
+                for (const w of result.warnings || []) {
+                    if (w.err && w.err.held === true) heldRoutes.push(c.route.id);
+                    else fail(`${c.route.id}: ${w.text}`, w.err);
+                }
                 row.fetched += result.fetched;
                 row.kept += result.payloads.length;
                 for (const payload of result.payloads) {
@@ -319,6 +363,35 @@ async function runCollection(o = {}) {
                 }
             }
             const classified = routeErrors.map(e => classifyError(e.err));
+            // Diagnosis 2026-10-01: the run's rate limit (if any). Its hold
+            // is already in the run's map (http.js); it is never passed to
+            // the refused state.
+            const limitedIdx = classified.findIndex(c => c.error_kind === RATE_LIMITED);
+            const limitedErr = limitedIdx >= 0 ? routeErrors[limitedIdx].err : null;
+            const rateLimitHeaders = limitedErr && limitedErr.headers && Object.keys(limitedErr.headers).length
+                ? limitedErr.headers : null;
+            const after = rateLimit.holdGate(src, env, runHolds, Date.now());
+            // Grumpy #10: per host, merged under a row lock — never a blind
+            // overwrite of another run's newer hold.
+            await state.saveHolds(sourceId, {
+                hosts: myHosts, changes: http.drainHoldChanges(), view: runHolds, routes: after.routes,
+                limited: !!limitedErr, headers: rateLimitHeaders,
+            });
+            if (heldRoutes.length) log(`[collect] ${slug}: not requested (rate-limit backoff, honoured): ${[...new Set(heldRoutes)].join(', ')}`);
+            if (okRoutes === 0 && routeErrors.length === 0 && heldRoutes.length > 0) {
+                // Every route that would have run was held (e.g. a hold
+                // learned after the pre-claim gate): nothing was requested,
+                // so this is a skip — not a failure, not a run row. Grumpy
+                // #9: the progress heartbeat still beats, and a source that
+                // sent nothing is not counted as queried. (Its claim stands:
+                // it is next asked one poll interval after this attempt.)
+                if (http.requests === before) queried--;
+                row.status = RATE_LIMITED;
+                row.reason = after.reason || 'every route is backing off after a rate limit';
+                row.rateLimitedUntil = after.until;
+                await touch();
+                continue;
+            }
             // F10-5: any refused route refuses the source (the source said no).
             const refused = refusalOf(classified);
             // G10-5: a store failure makes the run an error too.
@@ -326,7 +399,10 @@ async function runCollection(o = {}) {
             row.outcome = ok ? 'ok' : 'error';
             row.error = routeErrors.length ? scrub(routeErrors.map(e => e.text).join('; '), env) : null;
             const refusedIdx = refused ? classified.findIndex(c => c.error_kind === refused.kind) : -1;
-            const cls = routeErrors.length ? classified[refusedIdx >= 0 ? refusedIdx : 0] : { error_kind: null, http_status: null };
+            // The run's classification: a refusal first, then a rate limit
+            // (grumpy #8: its headers are stored with it), else the first error.
+            const leadIdx = refusedIdx >= 0 ? refusedIdx : (limitedIdx >= 0 ? limitedIdx : 0);
+            const cls = routeErrors.length ? classified[leadIdx] : { error_kind: null, http_status: null };
             row.errorKind = cls.error_kind;
             row.httpStatus = cls.http_status;
             if (row.error) summary.errors.push(`${slug}: ${row.error}`);
@@ -342,6 +418,14 @@ async function runCollection(o = {}) {
             const refusedErr = refusedIdx >= 0 ? routeErrors[refusedIdx].err : null;
             const refusalHeaders = refusedErr && refusedErr.headers && Object.keys(refusedErr.headers).length
                 ? refusedErr.headers : null;
+            if (limitedErr) row.rateLimitedUntil = after.until;
+            if (limitedErr && !refused) {
+                // Grumpy #13: only when nothing was refused (the refusal
+                // line below says what happened otherwise).
+                if (after.state === 'all') row.status = RATE_LIMITED;
+                log(`[collect] ${slug}: RATE LIMITED (not a refusal) — ${limitedErr.host || 'host'}: ${after.reason || 'backing off'}`);
+                if (rateLimitHeaders) log(`[collect] ${slug}: rate-limit response headers ${JSON.stringify(rateLimitHeaders)}`);
+            }
             if (refused) {
                 const r = await state.recordRefusal(sourceId, { ...refused, headers: refusalHeaders }, slug);
                 row.status = BLOCKED_BY_SOURCE;
@@ -367,7 +451,9 @@ async function runCollection(o = {}) {
                 sourceId, jobId, gateStatus: st.status, outcome: row.outcome, itemsFetched: row.fetched,
                 postsNew: row.new, requests: http.requests - before, error: row.error,
                 errorKind: row.errorKind, httpStatus: row.httpStatus, startedAt,
-                responseHeaders: refused ? refusalHeaders : null,
+                // Migration 075: a rate-limited run keeps its headers too —
+                // only under its own error kind (grumpy #8).
+                responseHeaders: refused ? refusalHeaders : (cls.error_kind === RATE_LIMITED ? rateLimitHeaders : null),
             });
             log(`[collect] ${slug}: ${row.outcome} fetched ${row.fetched}, kept ${row.kept}, new ${row.new}${row.error ? ` — ${row.error}` : ''}`);
             await touch();

@@ -116,9 +116,14 @@ async function recordCorrelationGate({ env = process.env, actor = SCHEDULER_ACTO
  * Never works around a wall: a blocked source, Reddit before approval, a
  * refusal (401/403/451, bot challenge) or a robots disallow is recorded as
  * unreachable / not fetched with the reason.
- * @param {{ http: import('./http').HttpClient, slugs?: string[] }} o
+ * A host backing off after a rate limit (any source's stored hold —
+ * diagnosis 2026-10-01, security F5) is not requested: the HTTP client
+ * refuses it unsent and the row says why.
+ * @param {{ http: import('./http').HttpClient, slugs?: string[], loadHolds?: Function }} o
+ *   loadHolds: the stored holds (default: every source's, from the database)
  */
-async function snapshotTerms({ http, slugs, log = () => {} }) {
+async function snapshotTerms({ http, slugs, log = () => {}, loadHolds = () => require('./state').loadHolds() }) {
+    if (typeof http.loadHolds === 'function') http.loadHolds(await loadHolds());
     const out = [];
     for (const src of SOURCES.filter(s => !slugs || slugs.includes(s.slug))) {
         const row = { slug: src.slug, terms_url: src.termsUrl, status: 'not_fetched', sha256: null, http_status: null, bytes: null, reason: null,

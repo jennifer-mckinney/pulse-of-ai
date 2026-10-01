@@ -5,6 +5,17 @@
 //   AccessDeniedError   401 / 403 / 451 or a bot challenge: the source said
 //                       no. NEVER retried and never worked around (ADR 0001
 //                       ruling 5) — the run stops and the error is recorded.
+//   RateLimitedError    the source RATE-LIMITED us, on positive evidence only
+//                       (src/collectors/rate-limit.js rateLimitSignal: HTTP
+//                       429; a 403 with x-ratelimit-remaining 0, or whose
+//                       JSON message is GitHub's rate-limit wording —
+//                       Retry-After alone never classifies). NOT a refusal:
+//                       no refusal count, probation or critical alert — the
+//                       host is backed off until the source's reset time
+//                       (diagnosis 2026-10-01, GitHub). The 5th body-only
+//                       one in a row is an AccessDeniedError (fail closed).
+//                       `held: true` marks a request that was never sent
+//                       because its host is still backing off.
 //   RobotsDisallowedError  robots.txt disallows the path for our User-Agent.
 //   GateClosedError     a collector was constructed without the credential
 //                       or permission its route requires (the blocked-4
@@ -30,6 +41,7 @@ class CollectorError extends Error {
 
 class HttpError extends CollectorError {}
 class AccessDeniedError extends CollectorError {}
+class RateLimitedError extends CollectorError {}
 class RobotsDisallowedError extends CollectorError {}
 class GateClosedError extends CollectorError {}
 class ParseError extends CollectorError {}
@@ -38,6 +50,8 @@ class ParseError extends CollectorError {}
 const ERROR_KINDS = Object.freeze([
     'access_denied', 'robots', 'robots_unreachable', 'gate', 'parse', 'timeout', 'network', 'http_4xx', 'http_5xx',
     'too_large', 'redirect_refused', 'host_refused', 'deadline', 'store', 'queue', 'internal',
+    // Diagnosis 2026-10-01: a rate limit is its own kind, never 'access_denied'.
+    'rate_limited',
 ]);
 
 const TIMEOUT_RE = /\b(timeout|timed out|aborted due to timeout)\b/i;
@@ -52,6 +66,7 @@ function classifyError(err) {
     const status = Number.isInteger(e.status) ? e.status : null;
     if (e.kind && ERROR_KINDS.includes(e.kind)) return { error_kind: e.kind, http_status: status };
     if (e instanceof AccessDeniedError) return { error_kind: 'access_denied', http_status: status };
+    if (e instanceof RateLimitedError) return { error_kind: 'rate_limited', http_status: status };
     if (e instanceof RobotsDisallowedError) return { error_kind: 'robots', http_status: null };
     if (e instanceof GateClosedError) return { error_kind: 'gate', http_status: null };
     if (e instanceof ParseError || e instanceof SyntaxError) return { error_kind: 'parse', http_status: status };
@@ -66,6 +81,6 @@ function classifyError(err) {
 }
 
 module.exports = {
-    CollectorError, HttpError, AccessDeniedError, RobotsDisallowedError, GateClosedError, ParseError,
+    CollectorError, HttpError, AccessDeniedError, RateLimitedError, RobotsDisallowedError, GateClosedError, ParseError,
     ERROR_KINDS, classifyError,
 };

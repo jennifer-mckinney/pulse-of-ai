@@ -8,6 +8,14 @@
 // 'blocked_by_source' (F10-5): a collecting source that refused access and
 // is in its cooldown or awaiting a probe; never online.
 //
+// 'rate_limited' (diagnosis 2026-10-01, migration 075): a collecting source
+// whose EVERY open route is held by a rate-limit backoff (src/collectors/
+// rate-limit.js; the held routes are stored by the worker) — nothing is
+// requested until its holds pass; never online, and NOT a refusal (it is
+// never counted as blocked_by_source). A source with only SOME routes held
+// stays 'collecting'; its held hosts (registry hosts only — security F3) and
+// routes are served in rate_limited_hosts / rate_limited_routes.
+//
 // "Online" = gate status 'collecting' AND a successful run within
 // ONLINE_WINDOW_MS that is not older than the last error (G10-19).
 // "Sources online N/<registry size>" counts exactly these: a source the
@@ -20,11 +28,14 @@ const { dbAll } = require('../db/connection');
 const { SOURCES, getSource, sourceStatus, killSwitchEnv, GATE_STATUSES } = require('../config/source-registry');
 const { DEMO_SOURCE_TYPE } = require('../config/data-mode');
 const { refusalGate, resetEnv, probationOver, BLOCKED_BY_SOURCE } = require('./refusal');
+const { activeHolds, publicHosts, holdReason, RATE_LIMITED } = require('./rate-limit');
 const { selectionStatus } = require('./reddit/selection');
 
 // Runtime statuses: the registry gate statuses plus 'blocked_by_source' (a
-// collecting source that refused us — F10-5; never online).
-const RUNTIME_STATUSES = Object.freeze([...GATE_STATUSES, BLOCKED_BY_SOURCE]);
+// collecting source that refused us — F10-5; never online) and
+// 'rate_limited' (every route backing off after a rate limit; never online,
+// never a refusal — diagnosis 2026-10-01).
+const RUNTIME_STATUSES = Object.freeze([...GATE_STATUSES, BLOCKED_BY_SOURCE, RATE_LIMITED]);
 
 const ONLINE_WINDOW_MS = 60 * 60 * 1000;
 
@@ -40,6 +51,27 @@ function isOnline(status, lastSuccessAt, now = Date.now(), lastErrorAt = null) {
     return !lastErrorAt || ok >= new Date(lastErrorAt).getTime();
 }
 
+/**
+ * The rate-limit backoff of a source as stored by the WORKER (grumpy #2: the
+ * web process cannot recompute route hosts — it sees only "set" for
+ * credential env vars): its active held routes { id: until } (registry
+ * route ids only), its active hosts as they may be published (security F3),
+ * when the last hold passes, and whether every open route is held.
+ */
+function rateLimitView(src, row, openRouteIds, now) {
+    const stored = row.rate_limited_routes && typeof row.rate_limited_routes === 'object' && !Array.isArray(row.rate_limited_routes)
+        ? row.rate_limited_routes : {};
+    const routeMap = {};
+    for (const r of src.routes) {
+        const t = Date.parse(stored[r.id]);
+        if (Number.isFinite(t) && t > now) routeMap[r.id] = new Date(t).toISOString();
+    }
+    const hosts = publicHosts(src, row.rate_limited_hosts, now);
+    const times = [...Object.values(routeMap), ...Object.values(activeHolds(row.rate_limited_hosts, now)).map(h => h.until)].sort();
+    const all = openRouteIds.length > 0 && openRouteIds.every(id => routeMap[id]);
+    return { routeMap, hosts, until: times.length ? times[times.length - 1] : null, all };
+}
+
 /** Registry fields for one data_sources row (null for non-registry rows). */
 function registryFields(row, env, now) {
     const src = getSource(row.name);
@@ -52,7 +84,10 @@ function registryFields(row, env, now) {
     const refused = st.status === 'collecting' && (gate.state === 'cooldown' || gate.state === 'probe');
     // F10-10: the database kill switch disables a source whatever its gate.
     const dbKilled = !!row.collection_disabled_at;
-    const status = dbKilled ? 'disabled' : (refused ? BLOCKED_BY_SOURCE : st.status);
+    // Diagnosis 2026-10-01: the rate-limit backoff (a refusal wins over it).
+    const held = rateLimitView(src, row, st.openRoutes, now);
+    const limited = st.status === 'collecting' && !refused && held.all;
+    const status = dbKilled ? 'disabled' : (refused ? BLOCKED_BY_SOURCE : (limited ? RATE_LIMITED : st.status));
     const dbReason = dbKilled
         ? `kill switch (database): disabled${row.collection_disabled_by ? ` by ${row.collection_disabled_by}` : ''}${row.collection_disabled_reason ? ` — ${row.collection_disabled_reason}` : ''}`
         : null;
@@ -65,7 +100,7 @@ function registryFields(row, env, now) {
         program: src.auth.program,
         signup_url: src.auth.signup,
         status,
-        status_reason: dbReason || (refused ? gate.reason : st.reason),
+        status_reason: dbReason || (refused ? gate.reason : (limited ? holdReason('all', held.routeMap, held.until) : st.reason)),
         collection_disabled_at: row.collection_disabled_at || null,
         missing_env: st.missing,
         open_routes: st.openRoutes,
@@ -79,6 +114,13 @@ function registryFields(row, env, now) {
         refusal_count: probationOver(row, now) ? 0 : (row.refusal_count || 0),
         probation_until: probationOver(row, now) ? null : (row.probation_until || null),
         reset_env: resetEnv(src.slug),
+        // Diagnosis 2026-10-01: the active rate-limit backoff — when the last
+        // hold passes (null when none), each held host (security F3: a
+        // registry host, else "configured host"; enums only) and the route
+        // ids the worker found held.
+        rate_limited_until: held.until,
+        rate_limited_hosts: held.hosts,
+        rate_limited_routes: Object.keys(held.routeMap),
         last_attempt_at: row.last_attempt_at || null,
         last_success_at: row.last_success_at || null,
         last_item_count: row.last_item_count === undefined ? null : row.last_item_count,
@@ -111,7 +153,8 @@ async function sourceRows({ includeInactive = false, env = process.env, now = Da
                 ds.collection_disabled_at, ds.collection_disabled_reason, ds.collection_disabled_by,
                 s.last_attempt_at, s.last_success_at, s.last_item_count, s.last_error_kind, s.last_http_status,
                 s.last_error_at, s.consecutive_failures,
-                s.access_denied_at, s.access_denied_status, s.access_denied_kind, s.refused_until, s.refusal_count, s.probation_until
+                s.access_denied_at, s.access_denied_status, s.access_denied_kind, s.refused_until, s.refusal_count, s.probation_until,
+                s.rate_limited_hosts, s.rate_limited_routes
          FROM data_sources ds
          LEFT JOIN source_collection_state s ON s.source_id = ds.id
          ${includeInactive ? '' : 'WHERE ds.active = true'}
@@ -143,6 +186,10 @@ function summarize(rows) {
         collecting: byStatus.collecting,
         online: reg.filter(r => r.online).length,
         by_status: byStatus,
+        // Diagnosis 2026-10-01: sources backing off after a rate limit (any
+        // route held — by_status.rate_limited counts those with EVERY route
+        // held). Never counted as a refusal.
+        rate_limited: reg.filter(r => r.rate_limited_until).length,
     };
 }
 

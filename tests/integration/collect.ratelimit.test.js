@@ -1,0 +1,386 @@
+// tests/integration/collect.ratelimit.test.js
+// Diagnosis 2026-10-01 (GitHub): a RATE LIMIT is a backoff, never a refusal.
+// A response with positive rate-limit evidence (429; a 403 with
+// x-ratelimit-remaining 0, a Retry-After, or a JSON message naming a rate
+// limit) holds the HOST it came from until the source's own time (60 s
+// floor, 24 h cap — migration 075). It never touches the refused state
+// (refusal count, cooldown, probation) and never opens the critical
+// source_refused alert; persistent throttling reaches the source_failing
+// WARNING at most. A plain 403 with none of those signals stays a refusal.
+
+'use strict';
+
+const request = require('supertest');
+const db = require('../../src/db/connection');
+const { dbGet, dbAll, dbRun } = db;
+const { runCollection } = require('../../src/collectors/runner');
+const { sourceRows, summarize } = require('../../src/collectors/status');
+const { evaluateSourceHealth, FAILING_AFTER } = require('../../src/collectors/source-health');
+const { seedSources, seedMethodology } = require('../../scripts/seed');
+const { fixtureTransport, RECORDED_AT, TEST_ENV } = require('../helpers/fixtureTransport');
+
+const NOW = () => Date.parse(RECORDED_AT);
+const SEARCH = /api\.github\.com\/search\//;
+const REPO_SEARCH = /api\.github\.com\/search\/repositories/;
+const ISSUE_SEARCH = /api\.github\.com\/search\/issues/;
+const BLOG = /github\.blog\/ai-and-ml\/feed/;
+const SEARCH_OK = [SEARCH, 'recorded/github-repos.json'];
+const BLOG_OK = [BLOG, 'recorded/bbc-technology.xml'];
+const HN = [/hn\.algolia\.com/, 'recorded/hn-algolia.json'];
+// The incident's response headers exactly (server Varnish, JSON) — no
+// rate-limit evidence at all.
+const INCIDENT_HEADERS = { date: 'Thu, 01 Oct 2026 02:47:54 GMT', server: 'Varnish', 'content-type': 'application/json; charset=utf-8' };
+const resetIn = sec => String(Math.floor(Date.now() / 1000) + sec);
+// GitHub's primary-limit 403: remaining 0, reset in epoch seconds.
+const spent403 = (sec = 600) => ({
+    status: 403,
+    headers: { ...INCIDENT_HEADERS, 'x-ratelimit-limit': '10', 'x-ratelimit-remaining': '0', 'x-ratelimit-used': '10',
+        'x-ratelimit-reset': resetIn(sec), 'x-ratelimit-resource': 'search', 'set-cookie': 'sid=secret' },
+    body: '{"message":"API rate limit exceeded for 203.0.113.7.","documentation_url":"https://docs.github.com/rest"}',
+});
+
+async function collect(routes, slugs = ['github'], env = TEST_ENV) {
+    const transport = fixtureTransport(routes);
+    const sleeps = [];
+    const summary = await runCollection({
+        slugs, triggeredBy: 'test', env, transport, now: NOW,
+        queues: { enqueueEmbeds: jest.fn().mockResolvedValue(), enqueueIngestRetry: jest.fn().mockResolvedValue() },
+        collectorCtx: { sleep: ms => { sleeps.push(ms); return Promise.resolve(); } },
+    });
+    return { summary, transport, sleeps };
+}
+
+const stateOf = slug => dbGet(
+    `SELECT s.* FROM source_collection_state s JOIN data_sources ds ON ds.id = s.source_id WHERE ds.name = $1`, [slug]);
+const alertsOf = (slug, type) => dbAll(
+    `SELECT a.alert_type, a.severity, a.resolved_at FROM alert_events a JOIN data_sources ds ON ds.id = a.source_id
+     WHERE ds.name = $1 ${type ? 'AND a.alert_type = $2' : ''} ORDER BY a.created_at`, type ? [slug, type] : [slug]);
+const runsOf = slug => dbAll(
+    `SELECT r.outcome, r.error_kind, r.http_status, r.response_headers FROM source_runs r
+     JOIN data_sources ds ON ds.id = r.source_id WHERE ds.name = $1 ORDER BY r.started_at`, [slug]);
+const nextPoll = slug => dbRun(
+    `UPDATE source_collection_state SET last_attempt_at = NOW() - interval '1 day'
+     WHERE source_id = (SELECT id FROM data_sources WHERE name = $1)`, [slug]);
+// Let every stored hold pass (as if the source's reset time went by).
+const endHolds = slug => dbRun(
+    `UPDATE source_collection_state
+     SET rate_limited_hosts = (SELECT COALESCE(jsonb_object_agg(k, v || jsonb_build_object('until', (NOW() - interval '1 second')::text)), '{}'::jsonb)
+                               FROM jsonb_each(rate_limited_hosts) AS e(k, v)),
+         rate_limited_until = NOW() - interval '1 second'
+     WHERE source_id = (SELECT id FROM data_sources WHERE name = $1)`, [slug]);
+const urls = t => t.calls.map(c => c.url).filter(u => !u.endsWith('/robots.txt'));
+const rowOf = async slug => (await sourceRows({ env: TEST_ENV })).find(r => r.slug === slug);
+
+beforeEach(async () => {
+    await seedSources();
+    await seedMethodology();
+});
+
+describe('a GitHub rate limit is a host backoff, not a refusal', () => {
+    it('403 + x-ratelimit-remaining 0: no refusal, no critical alert; api.github.com held until x-ratelimit-reset; github.blog still collected', async () => {
+        const reset = resetIn(900);
+        const res = spent403();
+        res.headers['x-ratelimit-reset'] = reset;
+        const { summary, transport } = await collect([[REPO_SEARCH, res], [ISSUE_SEARCH, 'recorded/github-repos.json'], BLOG_OK]);
+
+        // repo-search was asked ONCE; issue-search (same host) was not asked
+        // at all; the github.blog RSS route was.
+        expect(urls(transport).filter(u => REPO_SEARCH.test(u))).toHaveLength(1);
+        expect(urls(transport).filter(u => ISSUE_SEARCH.test(u))).toHaveLength(0);
+        expect(urls(transport).filter(u => BLOG.test(u))).toHaveLength(1);
+        expect(summary.sources[0].status).not.toBe('blocked_by_source');
+        expect(summary.sources[0].rateLimitedUntil).toBe(new Date(Number(reset) * 1000).toISOString());
+
+        const st = await stateOf('github');
+        expect(st).toMatchObject({ refusal_count: 0, refused_until: null, access_denied_at: null, probation_until: null });
+        expect(new Date(st.rate_limited_until).getTime()).toBe(Number(reset) * 1000);
+        expect(st.rate_limited_hosts).toEqual({
+            'api.github.com': { until: new Date(Number(reset) * 1000).toISOString(), http_status: 403, signal: 'ratelimit_remaining_zero', count: 1, weak: 0 },
+        });
+        // Grumpy #2: the held routes are stored by the worker.
+        expect(Object.keys(st.rate_limited_routes)).toEqual(['repo-search', 'issue-search']);
+        expect(st.rate_limited_at).not.toBeNull();
+        // The allow-listed headers are kept (x-ratelimit-* included); the
+        // cookie and the body never are.
+        expect(st.rate_limit_headers).toMatchObject({ server: 'Varnish', 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': reset,
+            'x-ratelimit-resource': 'search' });
+        expect(JSON.stringify(st.rate_limit_headers)).not.toMatch(/set-cookie|sid=secret|API rate limit exceeded|203\.0\.113/);
+
+        const [run] = await runsOf('github');
+        expect(run).toMatchObject({ error_kind: 'rate_limited', http_status: 403 });
+        expect(run.response_headers).toMatchObject({ 'x-ratelimit-remaining': '0' });
+        expect(await alertsOf('github', 'source_refused')).toEqual([]);
+
+        // /api/sources view: still collecting (the blog route is open), the
+        // held host and routes served; never blocked_by_source.
+        const row = await rowOf('github');
+        expect(row).toMatchObject({ status: 'collecting', refusal_count: 0, rate_limited_routes: ['repo-search', 'issue-search'],
+            rate_limited_until: new Date(Number(reset) * 1000).toISOString() });
+        expect(summarize(await sourceRows({ env: TEST_ENV })).by_status.blocked_by_source).toBe(0);
+    });
+
+    it('while held, a later poll never asks api.github.com (the blog still collects); after the reset it is asked again and the hold clears', async () => {
+        await collect([[SEARCH, spent403()], BLOG_OK]);
+        await nextPoll('github');
+        const held = await collect([SEARCH_OK, BLOG_OK]);
+        expect(urls(held.transport).filter(u => SEARCH.test(u))).toHaveLength(0);
+        expect(urls(held.transport).filter(u => BLOG.test(u))).toHaveLength(1);
+        expect(held.summary.sources[0].outcome).toBe('ok');
+
+        await nextPoll('github');
+        await endHolds('github');
+        const after = await collect([SEARCH_OK, BLOG_OK]);
+        expect(urls(after.transport).filter(u => SEARCH.test(u))).toHaveLength(2);
+        expect(after.summary.sources[0].outcome).toBe('ok');
+        const st = await stateOf('github');
+        expect(st).toMatchObject({ rate_limited_hosts: {}, rate_limited_until: null, refusal_count: 0 });
+        expect((await rowOf('github')).rate_limited_until).toBeNull();
+    });
+
+    it('regression (the 2026-10-01 incident): a plain 403 with no rate-limit signal still REFUSES the source', async () => {
+        const { summary } = await collect([[REPO_SEARCH, { status: 403, headers: INCIDENT_HEADERS, body: '{"message":"Forbidden"}' }],
+            [ISSUE_SEARCH, 'recorded/github-repos.json'], BLOG_OK]);
+        expect(summary.sources[0]).toMatchObject({ status: 'blocked_by_source', outcome: 'error' });
+        const st = await stateOf('github');
+        expect(st).toMatchObject({ refusal_count: 1, access_denied_status: 403, rate_limited_until: null, rate_limited_hosts: {} });
+        expect(await alertsOf('github', 'source_refused')).toEqual([expect.objectContaining({ severity: 'critical' })]);
+    });
+
+    it('a 403 whose JSON message names a secondary rate limit (no headers): held at the 60 s floor, body never stored', async () => {
+        const before = Date.now();
+        await collect([[REPO_SEARCH, { status: 403, headers: INCIDENT_HEADERS,
+            body: '{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again."}' }],
+        [ISSUE_SEARCH, 'recorded/github-repos.json'], BLOG_OK]);
+        const st = await stateOf('github');
+        expect(st.refusal_count).toBe(0);
+        expect(st.rate_limited_hosts['api.github.com']).toMatchObject({ http_status: 403, signal: 'body_rate_limit' });
+        const heldMs = new Date(st.rate_limited_until).getTime() - before;
+        expect(heldMs).toBeGreaterThanOrEqual(60000);
+        expect(heldMs).toBeLessThan(65000);
+        expect(JSON.stringify(st)).not.toMatch(/secondary rate limit/i);
+        expect(await alertsOf('github', 'source_refused')).toEqual([]);
+    });
+
+    it('a 429 with Retry-After 600 s is never retried early: one request, no sleep, held for 600 s', async () => {
+        const before = Date.now();
+        const { transport, sleeps } = await collect([[REPO_SEARCH, { status: 429, headers: { 'retry-after': '600' }, body: '' }],
+            [ISSUE_SEARCH, 'recorded/github-repos.json'], BLOG_OK]);
+        expect(urls(transport).filter(u => REPO_SEARCH.test(u))).toHaveLength(1);
+        expect(sleeps.filter(ms => ms >= 60000)).toEqual([]);
+        const st = await stateOf('github');
+        const heldMs = new Date(st.rate_limited_until).getTime() - before;
+        expect(heldMs).toBeGreaterThanOrEqual(600000);
+        expect(heldMs).toBeLessThan(605000);
+        expect(st.rate_limited_hosts['api.github.com']).toMatchObject({ http_status: 429, signal: 'http_429' });
+        expect((await runsOf('github'))[0]).toMatchObject({ error_kind: 'rate_limited', http_status: 429 });
+    });
+
+    it('security F5: a host held for ANOTHER source is held for this one too (one map per host) — zero requests', async () => {
+        // A hold on hn.algolia.com stored on github's row (as if github
+        // contacted it): hacker_news must not ask it either.
+        await collect([SEARCH_OK, BLOG_OK]);
+        await dbRun(`UPDATE source_collection_state
+                     SET rate_limited_hosts = jsonb_build_object('hn.algolia.com', jsonb_build_object(
+                         'until', to_char((NOW() + interval '10 minutes') AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+                         'http_status', 429, 'signal', 'http_429', 'count', 1, 'weak', 0))
+                     WHERE source_id = (SELECT id FROM data_sources WHERE name = 'github')`);
+        const { summary, transport } = await collect([HN], ['hacker_news']);
+        expect(transport.calls).toHaveLength(0);
+        expect(summary.sources[0]).toMatchObject({ outcome: 'skipped', status: 'rate_limited' });
+        // The shared hold is now on hacker_news's own row as well (its status shows it).
+        expect((await stateOf('hacker_news')).rate_limited_hosts).toHaveProperty(['hn.algolia.com']);
+        expect((await rowOf('hacker_news')).status).toBe('rate_limited');
+    });
+
+    it('security F5: the governance terms fetch never requests a host held in the database', async () => {
+        const { snapshotTerms } = require('../../src/collectors/governance');
+        const { HttpClient } = require('../../src/collectors/http');
+        await collect([SEARCH_OK, BLOG_OK]);
+        await dbRun(`UPDATE source_collection_state
+                     SET rate_limited_hosts = jsonb_build_object('docs.github.com', jsonb_build_object(
+                         'until', to_char((NOW() + interval '10 minutes') AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+                         'http_status', 429, 'signal', 'http_429', 'count', 1, 'weak', 0))
+                     WHERE source_id = (SELECT id FROM data_sources WHERE name = 'github')`);
+        const transport = fixtureTransport([[/./, { body: 'terms' }]]);
+        const [row] = await snapshotTerms({ http: new HttpClient({ env: TEST_ENV, transport, sleep: () => Promise.resolve() }), slugs: ['github'] });
+        expect(row.status).toBe('unreachable');
+        expect(transport.calls).toHaveLength(0);
+    });
+
+    it('a reset days away is capped at 24 h', async () => {
+        const before = Date.now();
+        await collect([[SEARCH, spent403(5 * 24 * 3600)], BLOG_OK]);
+        const heldMs = new Date((await stateOf('github')).rate_limited_until).getTime() - before;
+        expect(heldMs).toBeLessThanOrEqual(24 * 3600000 + 5000);
+        expect(heldMs).toBeGreaterThan(24 * 3600000 - 5000);
+    });
+});
+
+describe('security F1: weak evidence never keeps a source polled forever', () => {
+    it('consecutive body-only 403s grow the hold (60 → 120 → 240 → 480 s); the 5th refuses the source (fail closed)', async () => {
+        const WEAK = [REPO_SEARCH, { status: 403, headers: INCIDENT_HEADERS, body: '{"message":"You have exceeded a secondary rate limit."}' }];
+        const lengths = [];
+        for (let i = 1; i <= 4; i++) {
+            if (i > 1) { await nextPoll('github'); await endHolds('github'); }
+            const before = Date.now();
+            const { summary } = await collect([WEAK, [ISSUE_SEARCH, 'recorded/github-repos.json'], BLOG_OK]);
+            expect(summary.sources[0].status).not.toBe('blocked_by_source');
+            const st = await stateOf('github');
+            expect(st.rate_limited_hosts['api.github.com']).toMatchObject({ count: i, weak: i });
+            lengths.push(Math.round((new Date(st.rate_limited_until).getTime() - before) / 60000 * 2) / 2);
+        }
+        expect(lengths).toEqual([1, 2, 4, 8]);
+        expect(await alertsOf('github', 'source_refused')).toEqual([]);
+        await nextPoll('github');
+        await endHolds('github');
+        const { summary } = await collect([WEAK, [ISSUE_SEARCH, 'recorded/github-repos.json'], BLOG_OK]);
+        expect(summary.sources[0]).toMatchObject({ status: 'blocked_by_source', outcome: 'error' });
+        const st = await stateOf('github');
+        expect(st).toMatchObject({ refusal_count: 1, access_denied_status: 403 });
+        expect(st.rate_limited_hosts).not.toHaveProperty(['api.github.com']);
+        expect(await alertsOf('github', 'source_refused')).toEqual([expect.objectContaining({ severity: 'critical' })]);
+    });
+
+    it('a success from the host resets the streak (the next limit starts at 60 s again)', async () => {
+        const WEAK = [SEARCH, { status: 403, headers: INCIDENT_HEADERS, body: '{"message":"You have exceeded a secondary rate limit."}' }];
+        await collect([WEAK, BLOG_OK]);
+        await nextPoll('github'); await endHolds('github');
+        await collect([WEAK, BLOG_OK]);
+        expect((await stateOf('github')).rate_limited_hosts['api.github.com']).toMatchObject({ count: 2 });
+        await nextPoll('github'); await endHolds('github');
+        await collect([SEARCH_OK, BLOG_OK]);
+        expect((await stateOf('github')).rate_limited_hosts).toEqual({});
+        await nextPoll('github');
+        const before = Date.now();
+        await collect([WEAK, BLOG_OK]);
+        const st = await stateOf('github');
+        expect(st.rate_limited_hosts['api.github.com']).toMatchObject({ count: 1, weak: 1 });
+        expect(new Date(st.rate_limited_until).getTime() - before).toBeLessThan(65000);
+    });
+});
+
+describe('a source whose every route is held is skipped, not failed', () => {
+    it('hacker_news (one host) rate-limited → next poll: zero requests, status rate_limited, no run row, served by GET /api/sources', async () => {
+        await collect([[/hn\.algolia\.com/, { status: 429, headers: { 'retry-after': '300' }, body: '' }]], ['hacker_news']);
+        const runs = await runsOf('hacker_news');
+        expect(runs).toHaveLength(1);
+        await nextPoll('hacker_news');
+        const { summary, transport } = await collect([HN], ['hacker_news']);
+        expect(transport.calls).toHaveLength(0);
+        expect(summary.sources[0]).toMatchObject({ outcome: 'skipped', status: 'rate_limited',
+            reason: expect.stringMatching(/routes held: algolia-search .*not a refusal/) });
+        expect(await runsOf('hacker_news')).toHaveLength(1);
+
+        const st = await stateOf('hacker_news');
+        expect(st).toMatchObject({ refusal_count: 0, access_denied_at: null });
+
+        // The public API: status rate_limited with its until-time, never online.
+        const saved = { ...process.env };
+        Object.assign(process.env, TEST_ENV);
+        try {
+            const res = await request(require('../../src/server')).get('/api/sources');
+            expect(res.status).toBe(200);
+            const hn = res.body.find(s => s.slug === 'hacker_news');
+            expect(hn).toMatchObject({ status: 'rate_limited', online: false, rate_limited_routes: ['algolia-search'],
+                rate_limited_until: new Date(st.rate_limited_until).toISOString(), last_error_kind: 'rate_limited' });
+            expect(hn.rate_limited_hosts).toEqual([expect.objectContaining({ host: 'hn.algolia.com', http_status: 429, signal: 'http_429' })]);
+        } finally {
+            for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+            Object.assign(process.env, saved);
+        }
+    });
+
+    it('grumpy #9: a source found all-held only AFTER its claim — no request, the heartbeat beats, not counted as queried', async () => {
+        const rateLimit = require('../../src/collectors/rate-limit');
+        await collect([[/hn\.algolia\.com/, { status: 429, headers: { 'retry-after': '300' }, body: '' }]], ['hacker_news']);
+        await nextPoll('hacker_news');
+        // The pre-claim gate misses the hold (as if it were learned between
+        // the gate and the route — another process, a later route).
+        const spy = jest.spyOn(rateLimit, 'holdGate').mockReturnValueOnce({ state: 'none', until: null, next: null, routes: {}, reason: null });
+        try {
+            const { summary, transport } = await collect([HN], ['hacker_news']);
+            expect(transport.calls).toHaveLength(0);
+            expect(summary.sources[0]).toMatchObject({ outcome: 'skipped', status: 'rate_limited' });
+            expect(summary.sourcesQueried).toBe(0);
+            expect(await runsOf('hacker_news')).toHaveLength(1);
+        } finally {
+            spy.mockRestore();
+        }
+    });
+
+    it('security F3: a contract-feed host never reaches GET /api/sources', async () => {
+        await dbRun(`INSERT INTO source_collection_state (source_id, rate_limited_hosts, rate_limited_until, rate_limited_routes)
+                     SELECT id, jsonb_build_object('acme-123.feeds.example', jsonb_build_object(
+                         'until', to_char((NOW() + interval '10 minutes') AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+                         'http_status', 429, 'signal', 'http_429', 'count', 3, 'weak', 0)),
+                         NOW() + interval '10 minutes',
+                         jsonb_build_object('wire-store', to_char((NOW() + interval '10 minutes') AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))
+                     FROM data_sources WHERE name = 'cnn'
+                     ON CONFLICT (source_id) DO UPDATE SET rate_limited_hosts = EXCLUDED.rate_limited_hosts,
+                         rate_limited_until = EXCLUDED.rate_limited_until, rate_limited_routes = EXCLUDED.rate_limited_routes`);
+        const saved = { ...process.env };
+        Object.assign(process.env, TEST_ENV, { CNN_FEED_URL: 'https://acme-123.feeds.example/x', CNN_LICENSE_REF: 'L-1' });
+        try {
+            const res = await request(require('../../src/server')).get('/api/sources');
+            expect(res.status).toBe(200);
+            expect(JSON.stringify(res.body)).not.toMatch(/acme-123/);
+            const cnn = res.body.find(s => s.slug === 'cnn');
+            expect(cnn.rate_limited_hosts).toEqual([expect.objectContaining({ host: 'configured host' })]);
+            const health = await evaluateSourceHealth({ env: process.env });
+            expect(JSON.stringify(health)).not.toMatch(/acme-123/);
+            const details = await dbAll(`SELECT details FROM alert_events WHERE alert_type = 'source_rate_limited'`);
+            expect(JSON.stringify(details)).not.toMatch(/acme-123/);
+        } finally {
+            for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+            Object.assign(process.env, saved);
+        }
+    });
+});
+
+describe('rate limits never escalate the refused state', () => {
+    it('a source on probation (refusal count 2) that is rate-limited keeps its count and probation; no alert', async () => {
+        await collect([[SEARCH, 'recorded/github-repos.json'], BLOG_OK]);
+        await dbRun(`UPDATE source_collection_state SET refusal_count = 2, probation_until = NOW() + interval '12 hours',
+                     last_refused_at = NOW() - interval '1 hour'
+                     WHERE source_id = (SELECT id FROM data_sources WHERE name = 'github')`);
+        const { probation_until: probation } = await stateOf('github');
+        await nextPoll('github');
+        await collect([[SEARCH, spent403()], BLOG_OK]);
+        const st = await stateOf('github');
+        expect(st).toMatchObject({ refusal_count: 2, access_denied_at: null, refused_until: null });
+        expect(st.probation_until).toEqual(probation);
+        expect(st.rate_limited_until).not.toBeNull();
+        expect(await alertsOf('github', 'source_refused')).toEqual([]);
+    });
+
+    it(`${FAILING_AFTER} consecutive rate-limited runs open the source_failing and source_rate_limited WARNINGS, never a critical alert`, async () => {
+        const LIMITED = [/hn\.algolia\.com/, { status: 429, headers: { 'retry-after': '120' }, body: '' }];
+        for (let i = 0; i < FAILING_AFTER; i++) {
+            if (i > 0) { await nextPoll('hacker_news'); await endHolds('hacker_news'); }
+            const { transport } = await collect([LIMITED], ['hacker_news']);
+            expect(urls(transport)).toHaveLength(1);
+        }
+        const st = await stateOf('hacker_news');
+        expect(st).toMatchObject({ consecutive_failures: FAILING_AFTER, last_error_kind: 'rate_limited', refusal_count: 0 });
+        const r = await evaluateSourceHealth({ env: TEST_ENV });
+        expect(r.opened.sort((a, b) => a.type.localeCompare(b.type))).toEqual([
+            { slug: 'hacker_news', type: 'source_failing' }, { slug: 'hacker_news', type: 'source_rate_limited' }]);
+        const alerts = await alertsOf('hacker_news');
+        expect(alerts.map(a => [a.alert_type, a.severity]).sort()).toEqual([['source_failing', 'warning'], ['source_rate_limited', 'warning']]);
+    });
+
+    it('grumpy #5: GitHub\'s API throttled 3 runs in a row while its blog route succeeds → source_rate_limited WARNING (consecutive_failures stays 0); resolved by a success', async () => {
+        for (let i = 0; i < 3; i++) {
+            if (i > 0) { await nextPoll('github'); await endHolds('github'); }
+            const { summary } = await collect([[SEARCH, spent403(30)], BLOG_OK]);
+            expect(summary.sources[0].outcome).toBe('ok');
+        }
+        expect((await stateOf('github')).consecutive_failures).toBe(0);
+        const r = await evaluateSourceHealth({ env: TEST_ENV });
+        expect(r.opened).toEqual([{ slug: 'github', type: 'source_rate_limited' }]);
+        expect(await alertsOf('github', 'source_rate_limited')).toEqual([expect.objectContaining({ severity: 'warning', resolved_at: null })]);
+        await nextPoll('github'); await endHolds('github');
+        await collect([SEARCH_OK, BLOG_OK]);
+        expect((await evaluateSourceHealth({ env: TEST_ENV })).resolved).toEqual([{ slug: 'github', type: 'source_rate_limited' }]);
+    });
+});

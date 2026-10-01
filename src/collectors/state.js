@@ -12,6 +12,9 @@
 //   getRefusal / recordRefusal / endCooldown / decayRefusal / clearRefusal
 //       the refused state and its probation (F10-5, migrations 018 and
 //       062; src/collectors/refusal.js has the rules)
+//   loadHolds / saveHolds
+//       per-host rate-limit holds — a backoff, never a refusal (diagnosis
+//       2026-10-01, migration 075; src/collectors/rate-limit.js has the rules)
 
 'use strict';
 
@@ -287,8 +290,84 @@ async function clearRefusal(sourceId, resolution, { client = null } = {}) {
     }, client);
 }
 
+/**
+ * Diagnosis 2026-10-01 / security F5: every stored rate-limit hold, merged
+ * per host across sources (the later until, the longer streak), so a host
+ * held for one source is held for every source — and the governance terms
+ * fetch — that contacts it.
+ * @returns {Promise<object>} { hostname: hold } (rate-limit.js sanitizeHolds)
+ */
+async function loadHolds() {
+    const { mergeHolds } = require('./rate-limit');
+    const rows = await dbAll(
+        `SELECT rate_limited_hosts FROM source_collection_state WHERE rate_limited_hosts <> '{}'::jsonb`);
+    const out = {};
+    for (const r of rows) mergeHolds(out, r.rate_limited_hosts);
+    return out;
+}
+
+/**
+ * Store a source's rate-limit holds (src/collectors/rate-limit.js), per host
+ * (grumpy #10: never a blind overwrite of the whole map). Under a row lock:
+ *   - a host this run CHANGED takes the run's entry — unless the stored one
+ *     holds longer (a concurrent run's newer limit wins) — or is removed
+ *     when the run's success cleared it (null);
+ *   - a host of the source that this run did not change takes the shared
+ *     client view (`view`) when that holds longer (another source on the
+ *     same host was limited), else keeps what is stored;
+ *   - stale streaks are dropped (sanitizeHolds).
+ * rate_limited_until = when the LAST active hold passes (NULL when none);
+ * rate_limited_routes = the routes the worker found held ({ id: until },
+ * grumpy #2 — /api/sources reads it, never recomputing hosts from the web
+ * process's env). When this run hit a NEW rate limit (`limited`), its
+ * allow-listed, scrubbed response headers and the time are recorded too.
+ * Never touches the refused state (refusal count, probation,
+ * access_denied_*) and opens no alert: a rate limit is a backoff.
+ * @param {string} sourceId
+ * @param {{ hosts: string[], changes?: Map, view?: object, routes?: object,
+ *           limited?: boolean, headers?: object|null }} o
+ */
+async function saveHolds(sourceId, { hosts, changes = new Map(), view = {}, routes = {}, limited = false, headers = null }) {
+    const rl = require('./rate-limit');
+    const { dbTransaction } = require('../db/connection');
+    const now = Date.now();
+    await dbTransaction(async (client) => {
+        // A source skipped before its first claim has no state row yet.
+        await client.query('INSERT INTO source_collection_state (source_id) VALUES ($1) ON CONFLICT (source_id) DO NOTHING', [sourceId]);
+        const cur = await client.query(
+            'SELECT rate_limited_hosts FROM source_collection_state WHERE source_id = $1 FOR UPDATE', [sourceId]);
+        if (!cur.rows.length) return;
+        const stored = rl.sanitizeHolds(cur.rows[0].rate_limited_hosts, now);
+        const viewClean = rl.sanitizeHolds(view, now);
+        const later = (a, b) => (a && (!b || Date.parse(a.until) > Date.parse(b.until)) ? a : b);
+        for (const host of hosts) {
+            if (changes.has(host)) {
+                const next = changes.get(host);
+                if (next === null) delete stored[host];
+                else stored[host] = later(stored[host], rl.sanitizeHolds({ [host]: next }, now)[host]) || stored[host];
+            } else if (viewClean[host]) {
+                stored[host] = later(viewClean[host], stored[host]);
+            }
+        }
+        const active = Object.values(rl.activeHolds(stored, now)).map(h => h.until).sort();
+        const saved = headers && Object.keys(headers).length ? JSON.stringify(headers) : null;
+        await client.query(
+            `UPDATE source_collection_state
+             SET rate_limited_hosts  = $2::jsonb,
+                 rate_limited_until  = $3::timestamptz,
+                 rate_limited_routes = $4::jsonb,
+                 rate_limited_at     = CASE WHEN $5::boolean THEN NOW() ELSE rate_limited_at END,
+                 rate_limit_headers  = CASE WHEN $5::boolean THEN $6::jsonb ELSE rate_limit_headers END,
+                 updated_at = NOW()
+             WHERE source_id = $1`,
+            [sourceId, JSON.stringify(stored), active.length ? active[active.length - 1] : null, JSON.stringify(routes || {}),
+                limited, saved],
+        );
+    });
+}
+
 module.exports = {
     sourceIdsBySlug, claim, saveOutcome, recordRun, countUnchangedRun, getRefusal, recordRefusal, clearRefusal,
-    endCooldown, decayRefusal,
+    endCooldown, decayRefusal, loadHolds, saveHolds,
     dbKillSwitch, setDbKillSwitch, CLAIM_SLACK_SEC, CLAIM_SLACK_FRACTION, claimSlackSec,
 };

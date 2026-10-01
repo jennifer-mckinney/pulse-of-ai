@@ -136,6 +136,10 @@ class RobotsPolicy {
             // The run's deadline is not an answer from the origin: nothing
             // is cached (G10-9).
             if (err && err.kind === 'deadline') throw err;
+            // Nor is a request we did not send because its host is backing
+            // off after a rate limit (diagnosis 2026-10-01, security F5): the
+            // route is held, and nothing is cached as "unreachable".
+            if (err && err.held === true) throw err;
             entry = { denyAll: true, unreachable: true, reason: `robots.txt unreachable: ${err.message}` };
         }
         entry.at = this.now();

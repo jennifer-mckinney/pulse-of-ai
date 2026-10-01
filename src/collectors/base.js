@@ -247,10 +247,21 @@ class RssAtomCollector extends Collector {
             // first) with every feed's text, so the classification survives
             // (G10-6: a joined plain Error used to classify as 'internal').
             const { classifyError } = require('./errors');
-            const lead = errors.find(e => ['access_denied', 'robots'].includes(classifyError(e.err).error_kind)) || errors[0];
+            // Grumpy #6: a feed NOT requested (its host backing off) never
+            // hides a real failure of another feed.
+            const lead = errors.find(e => ['access_denied', 'robots'].includes(classifyError(e.err).error_kind))
+                || errors.find(e => !(e.err && e.err.held === true)) || errors[0];
             const cls = classifyError(lead.err);
+            const le = lead.err || {};
             throw Object.assign(new Error(errors.map(e => e.text).join('; ')), {
-                kind: cls.error_kind, status: cls.http_status, detail: lead.err && lead.err.detail,
+                kind: cls.error_kind, status: cls.http_status, detail: le.detail,
+                // A rate limit's details survive (its host, time, signal and
+                // allow-listed headers) for the run row and the hold.
+                ...(cls.error_kind === 'rate_limited'
+                    ? { host: le.host, retryAt: le.retryAt, signal: le.signal, ...(le.headers ? { headers: le.headers } : {}) } : {}),
+                // Diagnosis 2026-10-01: every feed's host was still backing
+                // off — nothing was requested, so this is a skip, not a failure.
+                ...(errors.every(e => e.err && e.err.held === true) ? { held: true } : {}),
             });
         }
         for (const e of errors) this.warn(e.text, e.err);

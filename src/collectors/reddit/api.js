@@ -91,11 +91,22 @@ class RedditApi {
         this.requests++;
     }
 
+    /**
+     * Diagnosis 2026-10-01 (grumpy #1 / #2): a host backing off after a rate
+     * limit is not asked — and no budget is spent nor a token fetched for a
+     * request that would only be refused unsent (RateLimitedError { held }).
+     */
+    assertNotHeld(host, url) {
+        const held = typeof this.http.heldError === 'function' ? this.http.heldError(host, url) : null;
+        if (held) throw held;
+    }
+
     /** The cached bearer token, or a new one. */
     async token() {
         const key = cacheKey(this.clientId);
         const hit = TOKENS.get(key);
         if (hit && hit.expiresAt - REFRESH_EARLY_MS > this.now()) return hit.token;
+        this.assertNotHeld(TOKEN_HOST, TOKEN_URL);
         await this.grant();
         const basic = Buffer.from(`${this.clientId}:${this.secret}`).toString('base64');
         const res = await this.http.json(TOKEN_URL, this.requestOptions({
@@ -129,6 +140,7 @@ class RedditApi {
      */
     async get(path, params = {}, retried = false) {
         if (!/^\/[A-Za-z0-9_/.-]*$/.test(path)) throw new Error(`invalid Reddit API path ${JSON.stringify(path).slice(0, 80)}`);
+        this.assertNotHeld(API_HOST, `${API_ORIGIN}${path}`);
         const token = await this.token();
         await this.grant();
         const q = new URLSearchParams({ ...params, raw_json: '1' });

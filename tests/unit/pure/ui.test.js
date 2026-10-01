@@ -618,6 +618,9 @@ describe('healthBanner / sourcesStat / methodologyModel', () => {
         expect(P.sourceStatusLabel({ status: 'collecting', online: true })).toBe('online');
         expect(P.sourceStatusLabel({ status: 'collecting', online: false })).toBe('collecting');
         expect(P.sourceStatusLabel({ status: 'odd' })).toBe('odd');
+        // Diagnosis 2026-10-01: a rate limit is a backoff, never shown as a refusal.
+        expect(P.sourceStatusLabel({ status: 'rate_limited' })).toBe('rate limited: backing off');
+        expect(P.sourceStatusLabel({ status: 'blocked_by_source' })).toBe('blocked by source: refused access');
         expect(P.sourceStatusLabel(null)).toBe('unknown');
     });
     test('sourceListModel: canon category order, rank order, terms cited for non-collecting sources', () => {

@@ -27,6 +27,7 @@
 const { SEARCH_TERMS, isAiRelated } = require('../ai-filter');
 const { pickAllowed, FULLNAME_RE, SUBREDDIT_RE } = require('./fields');
 const { BudgetExhaustedError } = require('./budget');
+const { RateLimitedError } = require('../errors');
 const { TOP_N, WINDOW_DAYS, DENY_LIST, minAiPosts, rankSubreddits } = require('./selection');
 
 const MAX_PAGES_PER_QUERY = 10;
@@ -125,6 +126,10 @@ async function discoverSubreddits({ api, env = process.env, now = () => Date.now
                 abouts.set(q.name.toLowerCase(), about ? { about } : { about: null, unavailable: 'not a subreddit' });
             } catch (err) {
                 if (err instanceof BudgetExhaustedError) throw err;
+                // Grumpy #1: a rate limit (a 429, or a rate-limit 403) is not
+                // the subreddit being unavailable — stop the discovery, never
+                // ask for the next one.
+                if (err instanceof RateLimitedError) throw err;
                 // A private, banned or missing subreddit answers 403 / 404;
                 // any other failure leaves it out of today's ranking.
                 if (err && (err.status === 403 || err.status === 404)) {
@@ -138,8 +143,9 @@ async function discoverSubreddits({ api, env = process.env, now = () => Date.now
         }
         return { complete: true, ...base, ...rankSubreddits({ counts, abouts, minPosts, top: TOP_N }) };
     } catch (err) {
-        if (err instanceof BudgetExhaustedError) {
-            return { complete: false, ...base, ranking: [], exclusions: [], selected: [], qualifying: [], reason: err.message };
+        if (err instanceof BudgetExhaustedError || err instanceof RateLimitedError) {
+            return { complete: false, ...base, ranking: [], exclusions: [], selected: [], qualifying: [], reason: err.message,
+                ...(err instanceof RateLimitedError ? { rateLimited: true } : {}) };
         }
         throw err;
     }

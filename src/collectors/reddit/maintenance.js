@@ -93,8 +93,12 @@ async function runRedditMaintenance({ env = process.env, transport, log = () => 
     const closed = await apiGateReason(env);
     if (closed) return { ...out, api: `skipped: ${closed}` };
     const src = getSource(SLUG);
+    // Grumpy #1 (diagnosis 2026-10-01): the stored rate-limit holds apply
+    // here too, and a rate limit met here is held — and saved on Reddit's
+    // row — for every later request (this run's and the collector's).
+    const http = api ? null : new HttpClient({ env, transport, holds: await state.loadHolds() });
     const client = api || new RedditApi({
-        http: new HttpClient({ env, transport }),
+        http,
         env,
         budget: new DbBudget(),
         reserve: runAllowance(collectWindowMs(env)),
@@ -126,6 +130,19 @@ async function runRedditMaintenance({ env = process.env, transport, log = () => 
             await finishJob(job, { complete: false, errorKind: cls.error_kind });
             out[job] = { error: cls.error_kind };
             log(`[reddit] ${job} failed: ${scrub(err && err.message, env)}`);
+        }
+    }
+    if (http) {
+        const changes = http.drainHoldChanges();
+        if (changes.size) {
+            const sourceId = (await state.sourceIdsBySlug([SLUG])).get(SLUG);
+            const rl = require('../rate-limit');
+            if (sourceId) {
+                await state.saveHolds(sourceId, {
+                    hosts: rl.sourceHosts(src, env), changes, view: http.holds,
+                    routes: rl.holdGate(src, env, http.holds, Date.now()).routes,
+                });
+            }
         }
     }
     return out;

@@ -1,0 +1,428 @@
+// tests/unit/pure/collectorRateLimit.test.js
+// Diagnosis 2026-10-01 (GitHub 403 escalated as a refusal): the pure rules
+// of src/collectors/rate-limit.js — what counts as POSITIVE evidence of a
+// rate limit (security review F2 / F6: strict, fail closed), when the
+// backoff ends (60 s floor growing per repeat, 24 h cap — F1 / F4), when
+// weak evidence escalates to a refusal (F1), which routes of a source a
+// host hold stops (grumpy #2), and what /api/sources may publish (F3).
+
+'use strict';
+
+const rl = require('../../../src/collectors/rate-limit');
+const { getSource } = require('../../../src/config/source-registry');
+const { TEST_ENV } = require('../../helpers/fixtureTransport');
+
+const NOW = Date.parse('2026-10-01T02:47:54Z');
+const EPOCH_RESET = Math.floor(NOW / 1000) + 600;   // GitHub: epoch seconds
+const HOUR = 3600000;
+const DAY = 24 * HOUR;
+const json = msg => JSON.stringify({ message: msg, documentation_url: 'https://docs.github.com/rest' });
+const iso = ms => new Date(ms).toISOString();
+
+describe('rateLimitSignal: positive evidence only', () => {
+    test('HTTP 429 is a rate limit (strong), with or without headers', () => {
+        expect(rl.rateLimitSignal({ status: 429, headers: {}, body: '' }, NOW)).toEqual({ signal: 'http_429', retryAt: null, weak: false });
+        expect(rl.rateLimitSignal({ status: 429, headers: { 'retry-after': '120' }, body: '' }, NOW))
+            .toEqual({ signal: 'http_429', retryAt: NOW + 120000, weak: false });
+    });
+
+    test('403 with x-ratelimit-remaining: 0 → strong; retryAt is x-ratelimit-reset (epoch seconds)', () => {
+        const res = { status: 403, headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(EPOCH_RESET) }, body: '' };
+        expect(rl.rateLimitSignal(res, NOW)).toEqual({ signal: 'ratelimit_remaining_zero', retryAt: EPOCH_RESET * 1000, weak: false });
+    });
+
+    test('x-ratelimit-reset as seconds-until-reset (Reddit) is read relative to now', () => {
+        const res = { status: 403, headers: { 'x-ratelimit-remaining': '0.0', 'x-ratelimit-reset': '42' }, body: '' };
+        expect(rl.rateLimitSignal(res, NOW)).toMatchObject({ signal: 'ratelimit_remaining_zero', retryAt: NOW + 42000 });
+    });
+
+    test.each([
+        'API rate limit exceeded for 203.0.113.7. (But here\'s the good news: Authenticated requests get a higher rate limit.)',
+        'You have exceeded a secondary rate limit. Please wait a few minutes before you try again.',
+        'You have triggered an abuse detection mechanism. Please wait a few minutes before you try again.',
+    ])('403 whose JSON message is GitHub\'s rate-limit wording (%#) → body_rate_limit (weak)', (msg) => {
+        expect(rl.rateLimitSignal({ status: 403, headers: { 'content-type': 'application/json' }, body: json(msg) }, NOW))
+            .toEqual({ signal: 'body_rate_limit', retryAt: null, weak: true });
+    });
+
+    test('security F2: Retry-After LENGTHENS a classified hold but never classifies a 403 on its own', () => {
+        const body = json('You have exceeded a secondary rate limit.');
+        expect(rl.rateLimitSignal({ status: 403, headers: { 'retry-after': '90' }, body }, NOW))
+            .toEqual({ signal: 'body_rate_limit', retryAt: NOW + 90000, weak: true });
+        expect(rl.rateLimitSignal({ status: 403, headers: { 'retry-after': '60' }, body: 'x' }, NOW)).toBeNull();
+        expect(rl.rateLimitSignal({ status: 403, headers: { 'retry-after': new Date(NOW + 90000).toUTCString() }, body: '' }, NOW)).toBeNull();
+    });
+
+    test.each(['0', '-5', '0x10', 'Thu, 01 Jan 1970 00:00:00 GMT', '1 2', 'soon', '1.5', ' 60 '])(
+        'security F2: a 403 with only Retry-After %p stays a refusal (null)', (ra) => {
+            expect(rl.rateLimitSignal({ status: 403, headers: { 'retry-after': ra }, body: '' }, NOW)).toBeNull();
+        });
+
+    test.each([
+        'This IP is permanently banned for rate limit abuse',
+        'Forbidden: rate limit policy violation, account suspended',
+        'Your access is blocked. API rate limit exceeded is not the reason.',
+    ])('security F2: a 403 message that merely MENTIONS a rate limit stays a refusal (%#)', (msg) => {
+        expect(rl.rateLimitSignal({ status: 403, headers: {}, body: json(msg) }, NOW)).toBeNull();
+    });
+
+    test('with Retry-After and a spent primary limit, the LATER time wins', () => {
+        const res = { status: 403, headers: { 'retry-after': '30', 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(EPOCH_RESET) }, body: '' };
+        expect(rl.rateLimitSignal(res, NOW).retryAt).toBe(EPOCH_RESET * 1000);
+    });
+
+    test('x-ratelimit-reset is ignored while the primary limit is not spent', () => {
+        const res = { status: 403, headers: { 'x-ratelimit-remaining': '7', 'x-ratelimit-reset': String(EPOCH_RESET) },
+            body: json('You have exceeded a secondary rate limit.') };
+        expect(rl.rateLimitSignal(res, NOW)).toEqual({ signal: 'body_rate_limit', retryAt: null, weak: true });
+    });
+
+    test('a plain 403 with no signal stays a refusal (null) — fail closed', () => {
+        expect(rl.rateLimitSignal({ status: 403, headers: { server: 'Varnish', 'content-type': 'application/json' }, body: json('Forbidden') }, NOW)).toBeNull();
+        expect(rl.rateLimitSignal({ status: 403, headers: { 'x-ratelimit-remaining': '12' }, body: '' }, NOW)).toBeNull();
+        expect(rl.rateLimitSignal({ status: 403, headers: {}, body: '<html>API rate limit exceeded</html>' }, NOW)).toBeNull();
+        expect(rl.rateLimitSignal({ status: 403, headers: {}, body: JSON.stringify({ error: 'API rate limit exceeded' }) }, NOW)).toBeNull();
+    });
+
+    test.each([401, 451, 404, 500, 503])('HTTP %i is never a rate limit, whatever its headers or body', (status) => {
+        const res = { status, headers: { 'x-ratelimit-remaining': '0', 'retry-after': '60' }, body: json('API rate limit exceeded') };
+        expect(rl.rateLimitSignal(res, NOW)).toBeNull();
+    });
+
+    test('a bot-wall challenge page wins: never a rate limit, even with remaining 0 or on a 429', () => {
+        const wall = '<script src="/cdn-cgi/challenge-platform/h/b/orchestrate">';
+        expect(rl.rateLimitSignal({ status: 403, headers: { 'x-ratelimit-remaining': '0' }, body: wall }, NOW)).toBeNull();
+        expect(rl.rateLimitSignal({ status: 429, headers: { 'retry-after': '5' }, body: wall }, NOW)).toBeNull();
+    });
+
+    test('security F6: Cloudflare\'s cf-mitigated: challenge header wins too (the body is not needed)', () => {
+        for (const v of ['challenge', 'Challenge', ['challenge']]) {
+            expect(rl.rateLimitSignal({ status: 403, headers: { 'cf-mitigated': v, 'retry-after': '30', 'x-ratelimit-remaining': '0' }, body: '' }, NOW)).toBeNull();
+            expect(rl.rateLimitSignal({ status: 429, headers: { 'cf-mitigated': v }, body: '' }, NOW)).toBeNull();
+        }
+    });
+});
+
+describe('parse helpers (security F2 / F4, grumpy #4)', () => {
+    test('parseRetryAfter: strict delay-seconds (> 0) or IMF-fixdate in the future; anything else → null', () => {
+        expect(rl.parseRetryAfter({ 'retry-after': '5' }, NOW)).toBe(5000);
+        expect(rl.parseRetryAfter({ 'retry-after': ['7', '9'] }, NOW)).toBe(7000);
+        expect(rl.parseRetryAfter({ 'retry-after': new Date(NOW + 90000).toUTCString() }, NOW)).toBe(90000);
+        for (const v of ['0', '-5', '0x10', '1.5', '1 2', 'later', '', new Date(NOW - 1000).toUTCString(), 'Thursday, 01-Oct-26 02:49:24 GMT']) {
+            expect([v, rl.parseRetryAfter({ 'retry-after': v }, NOW)]).toEqual([v, null]);
+        }
+        expect(rl.parseRetryAfter({}, NOW)).toBeNull();
+    });
+
+    test('security F4: an overflowing or non-finite Retry-After is Infinity (→ the 24 h cap), never "no time"', () => {
+        expect(rl.parseRetryAfter({ 'retry-after': '1e306' }, NOW)).toBe(Infinity);
+        expect(rl.parseRetryAfter({ 'retry-after': '9'.repeat(400) }, NOW)).toBe(Infinity);
+        expect(rl.parseRetryAfter({ 'retry-after': String(2 * 86400) }, NOW)).toBe(2 * DAY);
+    });
+
+    test('parseReset: epoch seconds, epoch MILLISECONDS (grumpy #4) or seconds-until-reset by magnitude; junk → null', () => {
+        expect(rl.parseReset(String(EPOCH_RESET), NOW)).toBe(EPOCH_RESET * 1000);
+        expect(rl.parseReset(String(EPOCH_RESET * 1000), NOW)).toBe(EPOCH_RESET * 1000);
+        expect(rl.parseReset('300', NOW)).toBe(NOW + 300000);
+        expect(rl.parseReset('abc', NOW)).toBeNull();
+        expect(rl.parseReset(undefined, NOW)).toBeNull();
+        expect(rl.parseReset('-5', NOW)).toBeNull();
+    });
+
+    test('security F4: an overflowing x-ratelimit-reset is Infinity (→ the 24 h cap)', () => {
+        expect(rl.parseReset('1e306', NOW)).toBe(Infinity);
+        const res = { status: 403, headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1e306' }, body: '' };
+        expect(rl.rateLimitSignal(res, NOW).retryAt).toBe(Infinity);
+    });
+});
+
+describe('backoffUntil: 60 s floor growing per repeat, 24 h cap', () => {
+    test('no time from the source → the floor (GitHub: wait at least one minute)', () => {
+        expect(rl.backoffUntil(null, NOW)).toBe(NOW + 60000);
+    });
+    test('a time in the past or under a minute → the floor', () => {
+        expect(rl.backoffUntil(NOW - 5000, NOW)).toBe(NOW + 60000);
+        expect(rl.backoffUntil(NOW + 5000, NOW)).toBe(NOW + 60000);
+    });
+    test('the source\'s time when inside the bounds', () => {
+        expect(rl.backoffUntil(NOW + 600000, NOW)).toBe(NOW + 600000);
+    });
+    test('never more than 24 h; Infinity (security F4) is the cap', () => {
+        expect(rl.backoffUntil(NOW + 7 * DAY, NOW)).toBe(NOW + DAY);
+        expect(rl.backoffUntil(Infinity, NOW)).toBe(NOW + DAY);
+        expect(rl.backoffUntil(NaN, NOW)).toBe(NOW + 60000);
+    });
+    test('security F1: the floor doubles with each consecutive rate limit of the host (1 → 60 s, 2 → 120 s, 3 → 240 s …)', () => {
+        expect([1, 2, 3, 4, 5].map(n => rl.backoffUntil(null, NOW, n) - NOW)).toEqual([60000, 120000, 240000, 480000, 960000]);
+        expect(rl.backoffUntil(NOW + 600000, NOW, 2)).toBe(NOW + 600000);   // the source's longer time still wins
+        expect(rl.backoffUntil(null, NOW, 40)).toBe(NOW + DAY);
+    });
+});
+
+describe('nextHold: the per-host streak (security F1)', () => {
+    const weak = { status: 403, signal: 'body_rate_limit', weak: true, retryAt: null };
+    const strong = { status: 429, signal: 'http_429', weak: false, retryAt: null };
+
+    test('consecutive rate limits grow the hold; strong ones never escalate', () => {
+        let prev = null;
+        const lengths = [];
+        for (let i = 0; i < 8; i++) {
+            const n = rl.nextHold(prev, strong, NOW);
+            expect(n.escalate).toBe(false);
+            lengths.push(Date.parse(n.entry.until) - NOW);
+            prev = n.entry;
+        }
+        expect(lengths.slice(0, 4)).toEqual([60000, 120000, 240000, 480000]);
+        expect(prev).toMatchObject({ count: 8, weak: 0, http_status: 429, signal: 'http_429' });
+    });
+
+    test(`${rl.ESCALATE_AFTER} consecutive WEAK (body-only) rate limits escalate to a refusal — fail closed`, () => {
+        let prev = null;
+        for (let i = 1; i < rl.ESCALATE_AFTER; i++) {
+            const n = rl.nextHold(prev, weak, NOW);
+            expect([i, n.escalate]).toEqual([i, false]);
+            expect(n.entry).toMatchObject({ count: i, weak: i });
+            prev = n.entry;
+        }
+        expect(rl.nextHold(prev, weak, NOW).escalate).toBe(true);
+    });
+
+    test('a strong signal in between restarts the weak streak (not the count)', () => {
+        let prev = null;
+        for (let i = 0; i < rl.ESCALATE_AFTER - 1; i++) prev = rl.nextHold(prev, weak, NOW).entry;
+        prev = rl.nextHold(prev, strong, NOW).entry;
+        expect(prev).toMatchObject({ count: rl.ESCALATE_AFTER, weak: 0 });
+        expect(rl.nextHold(prev, weak, NOW).escalate).toBe(false);
+    });
+
+    test('an expired previous hold still counts (only a success resets the streak)', () => {
+        const prev = { until: iso(NOW - HOUR), http_status: 429, signal: 'http_429', count: 3, weak: 0 };
+        expect(rl.nextHold(prev, strong, NOW).entry.count).toBe(4);
+    });
+});
+
+describe('stored holds', () => {
+    test('sanitizeHolds keeps streaks (even expired) but drops stale, malformed and invalid-host entries', () => {
+        const stored = {
+            'api.github.com': { until: iso(NOW + 60000), http_status: 403, signal: 'body_rate_limit', count: 2, weak: 2 },
+            'old.example': { until: iso(NOW - HOUR), http_status: 429, signal: 'http_429', count: 4 },
+            'stale.example': { until: iso(NOW - 8 * DAY), http_status: 429, signal: 'http_429', count: 9 },
+            'bad.example': { until: 'not a date' },
+            'worse.example': 'x',
+            'evil host/<x>': { until: iso(NOW + 60000) },
+            'odd.example': { until: iso(NOW + 60000), signal: 'made_up', count: -3, weak: 'x', http_status: 'y' },
+        };
+        expect(rl.sanitizeHolds(stored, NOW)).toEqual({
+            'api.github.com': { until: iso(NOW + 60000), http_status: 403, signal: 'body_rate_limit', count: 2, weak: 2 },
+            'old.example': { until: iso(NOW - HOUR), http_status: 429, signal: 'http_429', count: 4, weak: 0 },
+            'odd.example': { until: iso(NOW + 60000), http_status: null, signal: null, count: 1, weak: 0 },
+        });
+        expect(Object.keys(rl.activeHolds(stored, NOW)).sort()).toEqual(['api.github.com', 'odd.example']);
+        expect(rl.sanitizeHolds(null, NOW)).toEqual({});
+        expect(rl.sanitizeHolds('[]', NOW)).toEqual({});
+    });
+
+    test('mergeHolds keeps the later until and the longer streak per host', () => {
+        const a = { 'api.github.com': { until: iso(NOW + 60000), http_status: 403, signal: 'body_rate_limit', count: 1, weak: 1 } };
+        rl.mergeHolds(a, {
+            'api.github.com': { until: iso(NOW + 120000), http_status: 429, signal: 'http_429', count: 3, weak: 0 },
+            'github.blog': { until: iso(NOW + 30000), http_status: 429, signal: 'http_429', count: 1, weak: 0 },
+        }, NOW);
+        expect(a['api.github.com']).toEqual({ until: iso(NOW + 120000), http_status: 429, signal: 'http_429', count: 3, weak: 1 });
+        expect(Object.keys(a).sort()).toEqual(['api.github.com', 'github.blog']);
+    });
+
+    test('heldUntil: the active hold of a host (hostname, case-insensitive), else null', () => {
+        const holds = { 'api.github.com': { until: iso(NOW + 60000), http_status: 403, signal: 'body_rate_limit', count: 1, weak: 1 } };
+        expect(rl.heldUntil(holds, 'api.github.com', NOW)).toMatchObject({ until: NOW + 60000, http_status: 403 });
+        expect(rl.heldUntil(holds, 'API.GitHub.com', NOW)).not.toBeNull();
+        expect(rl.heldUntil(holds, 'api.github.com', NOW + 60000)).toBeNull();
+        expect(rl.heldUntil(holds, 'github.blog', NOW)).toBeNull();
+        expect(rl.heldUntil(undefined, 'github.blog', NOW)).toBeNull();
+    });
+});
+
+describe('route / host scoping (GitHub: the api.github.com limit never pauses github.blog)', () => {
+    const github = getSource('github');
+    const apiHeld = { 'api.github.com': { until: iso(NOW + 600000), http_status: 403, signal: 'ratelimit_remaining_zero', count: 1, weak: 0 } };
+
+    test('no holds → none', () => {
+        expect(rl.holdGate(github, TEST_ENV, {}, NOW)).toMatchObject({ state: 'none', until: null, routes: {} });
+    });
+
+    test('an api.github.com hold holds the two search routes only: partial, the blog RSS route still runs', () => {
+        const g = rl.holdGate(github, TEST_ENV, apiHeld, NOW);
+        expect(g.state).toBe('partial');
+        expect(g.routes).toEqual({ 'repo-search': iso(NOW + 600000), 'issue-search': iso(NOW + 600000) });
+        expect(g.until).toBe(iso(NOW + 600000));
+        // Security F3: the reason names routes, never a host.
+        expect(g.reason).toMatch(/routes held: repo-search, issue-search .*not a refusal/);
+        expect(g.reason).not.toMatch(/github\.com/);
+        const blog = github.routes.find(r => r.id === 'ai-ml-blog-rss');
+        expect(rl.routeHeld(blog, TEST_ENV, apiHeld, NOW)).toBe(false);
+    });
+
+    test('every route\'s hosts held → all; the source is asked again when the FIRST route frees', () => {
+        const both = { ...apiHeld, 'github.blog': { until: iso(NOW + 120000), http_status: 429, signal: 'http_429', count: 1, weak: 0 } };
+        const g = rl.holdGate(github, TEST_ENV, both, NOW);
+        expect(g.state).toBe('all');
+        expect(Object.keys(g.routes)).toEqual(['repo-search', 'issue-search', 'ai-ml-blog-rss']);
+        expect(g.until).toBe(iso(NOW + 600000));
+        expect(g.next).toBe(iso(NOW + 120000));
+    });
+
+    test('an expired hold holds nothing', () => {
+        expect(rl.holdGate(github, TEST_ENV, apiHeld, NOW + 600000).state).toBe('none');
+    });
+
+    test('grumpy #2: Reddit is held by its API host alone (www.reddit.com is only the token host)', () => {
+        const reddit = getSource('reddit');
+        const route = reddit.routes[0];
+        expect(rl.routeRequestHosts(route, TEST_ENV)).toEqual(['oauth.reddit.com']);
+        const holds = { 'oauth.reddit.com': { until: iso(NOW + 60000), http_status: 429, signal: 'http_429', count: 1, weak: 0 } };
+        expect(rl.routeHeld(route, TEST_ENV, holds, NOW)).toBe(true);
+    });
+
+    test('sourceHosts: every host any route of the source may contact', () => {
+        expect(rl.sourceHosts(github, TEST_ENV)).toEqual(['api.github.com', 'github.blog']);
+    });
+});
+
+describe('security F3: what /api/sources may publish about a hold', () => {
+    test('registry hosts are served; an env-derived (contract feed) host is masked as "configured host"', () => {
+        const cnn = getSource('cnn');
+        const env = { ...TEST_ENV, CNN_FEED_URL: 'https://acme-123.feeds.example/x' };
+        const holds = { 'acme-123.feeds.example': { until: iso(NOW + 60000), http_status: 429, signal: 'http_429', count: 2, weak: 0 } };
+        const pub = rl.publicHosts(cnn, holds, NOW);
+        expect(pub).toEqual([{ host: 'configured host', until: iso(NOW + 60000), http_status: 429, signal: 'http_429', count: 2 }]);
+        expect(JSON.stringify(rl.holdGate(cnn, env, holds, NOW))).not.toMatch(/acme-123/);
+        const gh = rl.publicHosts(getSource('github'),
+            { 'api.github.com': { until: iso(NOW + 60000), http_status: 403, signal: 'body_rate_limit', count: 1, weak: 1 } }, NOW);
+        expect(gh[0].host).toBe('api.github.com');
+    });
+});
+
+describe('classification and status: a rate limit is never a refusal', () => {
+    const { classifyError, RateLimitedError, ERROR_KINDS } = require('../../../src/collectors/errors');
+    const { refusalOf, REFUSED_KINDS } = require('../../../src/collectors/refusal');
+    const { registryFields, summarize, RUNTIME_STATUSES } = require('../../../src/collectors/status');
+    const at = s => iso(NOW + s * 1000);
+
+    test('classifyError → rate_limited; refusalOf ignores it; it is not a refused kind', () => {
+        expect(ERROR_KINDS).toContain('rate_limited');
+        expect(classifyError(new RateLimitedError('m', { status: 403 }))).toEqual({ error_kind: 'rate_limited', http_status: 403 });
+        expect(classifyError(new RateLimitedError('m', { held: true }))).toEqual({ error_kind: 'rate_limited', http_status: null });
+        expect(REFUSED_KINDS).not.toContain('rate_limited');
+        expect(refusalOf([{ error_kind: 'rate_limited', http_status: 403 }])).toBeNull();
+        expect(refusalOf([{ error_kind: 'rate_limited', http_status: 429 }, { error_kind: 'access_denied', http_status: 401 }]))
+            .toEqual({ kind: 'access_denied', status: 401 });
+    });
+
+    const hnHold = { 'hn.algolia.com': { until: at(300), http_status: 429, signal: 'http_429', count: 1, weak: 0 } };
+
+    test('/api/sources: every route held (as the worker stored it) → status rate_limited, never online, never blocked_by_source', () => {
+        expect(RUNTIME_STATUSES).toContain('rate_limited');
+        const base = { name: 'hacker_news', source_type: 'api', last_success_at: at(-60) };
+        const row = registryFields({ ...base, rate_limited_hosts: hnHold, rate_limited_routes: { 'algolia-search': at(300) } }, TEST_ENV, NOW);
+        expect(row).toMatchObject({
+            status: 'rate_limited', online: false, rate_limited_until: at(300), rate_limited_routes: ['algolia-search'],
+            rate_limited_hosts: [{ host: 'hn.algolia.com', until: at(300), http_status: 429, signal: 'http_429', count: 1 }],
+            refusal_count: 0, access_denied_at: null,
+        });
+        expect(row.status_reason).toMatch(/routes held: algolia-search .*not a refusal/);
+        // Expired: collecting again.
+        expect(registryFields({ ...base, rate_limited_hosts: hnHold, rate_limited_routes: { 'algolia-search': at(300) } }, TEST_ENV, NOW + 300000))
+            .toMatchObject({ status: 'collecting', rate_limited_until: null, rate_limited_hosts: [], rate_limited_routes: [] });
+        const sum = summarize([{ registry: true, ...row }]);
+        expect(sum.by_status).toMatchObject({ rate_limited: 1, blocked_by_source: 0 });
+        expect(sum.rate_limited).toBe(1);
+    });
+
+    test('/api/sources: some routes held → still collecting (and online), the held hosts and routes served', () => {
+        const row = registryFields({ name: 'github', source_type: 'api', last_success_at: at(-60),
+            rate_limited_hosts: { 'api.github.com': { until: at(600), http_status: 403, signal: 'ratelimit_remaining_zero', count: 1, weak: 0 } },
+            rate_limited_routes: { 'repo-search': at(600), 'issue-search': at(600) } }, TEST_ENV, NOW);
+        expect(row).toMatchObject({ status: 'collecting', online: true, rate_limited_until: at(600),
+            rate_limited_routes: ['repo-search', 'issue-search'] });
+        const sum = summarize([{ registry: true, ...row }]);
+        expect(sum.by_status.rate_limited).toBe(0);
+        expect(sum.rate_limited).toBe(1);
+    });
+
+    test('grumpy #2: the held routes come from the worker (stored), not from the web process\'s env', () => {
+        // The web process sees "set" for credential env vars: hosts cannot be
+        // recomputed there. The stored route map is authoritative.
+        const row = registryFields({ name: 'hacker_news', source_type: 'api', last_success_at: at(-60),
+            rate_limited_hosts: {}, rate_limited_routes: { 'algolia-search': at(120) } }, TEST_ENV, NOW);
+        expect(row).toMatchObject({ status: 'rate_limited', rate_limited_routes: ['algolia-search'] });
+    });
+
+    test('a refusal wins over a rate-limit backoff', () => {
+        const row = registryFields({ name: 'hacker_news', source_type: 'api', access_denied_at: at(-10), refused_until: at(3600),
+            access_denied_status: 403, refusal_count: 1, rate_limited_hosts: hnHold, rate_limited_routes: { 'algolia-search': at(300) } }, TEST_ENV, NOW);
+        expect(row.status).toBe('blocked_by_source');
+    });
+
+    test('security F3: a contract-feed host never reaches /api/sources (hosts or reason)', () => {
+        const env = { ...TEST_ENV, CNN_FEED_URL: 'https://acme-123.feeds.example/x' };
+        const row = registryFields({ name: 'cnn', source_type: 'news',
+            rate_limited_hosts: { 'acme-123.feeds.example': { until: at(300), http_status: 429, signal: 'http_429', count: 1, weak: 0 } },
+            rate_limited_routes: { 'wire-store': at(300) } }, env, NOW);
+        expect(JSON.stringify(row)).not.toMatch(/acme-123/);
+        expect(row.rate_limited_hosts).toEqual([expect.objectContaining({ host: 'configured host' })]);
+    });
+});
+
+describe('grumpy #6: a multi-feed RSS route whose feeds all fail', () => {
+    const { RssAtomCollector } = require('../../../src/collectors/base');
+    const { HttpClient } = require('../../../src/collectors/http');
+    const { classifyError } = require('../../../src/collectors/errors');
+    const { fixtureTransport } = require('../../helpers/fixtureTransport');
+    const route = { id: 'two-feeds', adapter: 'rss', params: { urls: ['https://held.example/feed', 'https://broken.example/feed'] } };
+
+    test('a held feed never hides the real failure of another (the lead is the 5xx, not the hold)', async () => {
+        const transport = fixtureTransport([[/broken\.example\/feed/, { status: 500, body: '' }]]);
+        const http = new HttpClient({ transport, env: TEST_ENV, sleep: () => Promise.resolve(),
+            holds: { 'held.example': { until: iso(Date.now() + 60000), http_status: 429, signal: 'http_429', count: 1, weak: 0 } } });
+        const c = new RssAtomCollector({ source: getSource('github'), route, env: TEST_ENV, http });
+        const err = await c.fetchItems().catch(e => e);
+        expect(classifyError(err).error_kind).toBe('http_5xx');
+        expect(err.held).toBeUndefined();
+        expect(transport.calls.filter(k => k.url.includes('held.example'))).toHaveLength(0);
+    });
+
+    test('a rate-limited lead keeps its host, time, signal and headers; all held → a skip (held: true)', async () => {
+        const transport = fixtureTransport([[/broken\.example\/feed/, { status: 429, headers: { 'retry-after': '600', server: 'edge' }, body: '' }]]);
+        const http = new HttpClient({ transport, env: TEST_ENV, sleep: () => Promise.resolve(),
+            holds: { 'held.example': { until: iso(Date.now() + 60000), http_status: 429, signal: 'http_429', count: 1, weak: 0 } } });
+        const c = new RssAtomCollector({ source: getSource('github'), route, env: TEST_ENV, http });
+        const err = await c.fetchItems().catch(e => e);
+        expect(classifyError(err).error_kind).toBe('rate_limited');
+        expect(err).toMatchObject({ host: 'broken.example', signal: 'http_429', headers: { 'retry-after': '600', server: 'edge' } });
+        expect(err.held).toBeUndefined();
+        expect(Number.isFinite(err.retryAt)).toBe(true);
+
+        http.holds['broken.example'] = { until: iso(Date.now() + 60000), http_status: 429, signal: 'http_429', count: 1, weak: 0 };
+        const all = await c.fetchItems().catch(e => e);
+        expect(all.held).toBe(true);
+    });
+});
+
+describe('source health: persistent throttling is a WARNING (grumpy #5)', () => {
+    const { conditionsFor, RATE_LIMITED_WARN_AFTER } = require('../../../src/collectors/source-health');
+    const github = getSource('github');
+
+    test(`a host rate-limited ${rl.WARN_AFTER} times in a row opens source_rate_limited (warning), even while another route succeeds`, () => {
+        expect(RATE_LIMITED_WARN_AFTER).toBe(rl.WARN_AFTER);
+        const row = { consecutive_failures: 0, rate_limited_hosts: {
+            'api.github.com': { until: iso(NOW + 60000), http_status: 403, signal: 'body_rate_limit', count: rl.WARN_AFTER, weak: rl.WARN_AFTER } } };
+        expect(conditionsFor(row, github, NOW).source_rate_limited).toMatchObject({ severity: 'warning', hosts: ['api.github.com'], max_count: rl.WARN_AFTER });
+        const below = { rate_limited_hosts: { 'api.github.com': { ...row.rate_limited_hosts['api.github.com'], count: rl.WARN_AFTER - 1 } } };
+        expect(conditionsFor(below, github, NOW).source_rate_limited).toBeUndefined();
+    });
+
+    test('a masked host is named "configured host" in the alert details too (security F3)', () => {
+        const row = { rate_limited_hosts: { 'acme-123.feeds.example': { until: iso(NOW), http_status: 429, signal: 'http_429', count: 9, weak: 0 } } };
+        expect(JSON.stringify(conditionsFor(row, getSource('cnn'), NOW))).not.toMatch(/acme-123/);
+    });
+});

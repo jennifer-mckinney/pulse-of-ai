@@ -15,7 +15,15 @@
 //           slug, rank, region, auth_kind, program, signup_url,
 //           status,                           // collecting | awaiting_key |
 //                                             // awaiting_approval | awaiting_licence |
-//                                             // blocked | disabled
+//                                             // blocked | disabled |
+//                                             // blocked_by_source (refused us) |
+//                                             // rate_limited (every route backing
+//                                             // off after a rate limit; NOT a refusal)
+//           rate_limited_until,               // when the last hold passes (ISO) or null
+//           rate_limited_hosts,               // [{ host, until, http_status, signal, count }]
+//                                             // host: a registry host, else "configured
+//                                             // host" (a contract feed host never leaks)
+//           rate_limited_routes,              // route ids the worker found held
 //           status_reason, missing_env,       // env var NAMES only, never values
 //           open_routes, licence_refs_on_file, kill_switch_env,
 //           online,                           // collecting + success in the last hour

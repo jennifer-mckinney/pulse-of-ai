@@ -359,6 +359,63 @@ describe('discovery (a-d) against a scripted API', () => {
     });
 });
 
+describe('rate limits (grumpy #1, diagnosis 2026-10-01): Reddit asked us to wait — we stop', () => {
+    const { RateLimitedError } = require('../../../src/collectors/errors');
+    const INFO = /oauth\.reddit\.com\/api\/info/;
+    const names = n => Array.from({ length: n }, (_, i) => `t3_r${i}`);
+    const apiOver = (routes, holds = {}) => {
+        const transport = fixtureTransport(routes);
+        const http = new HttpClient({ transport, env: ENV, sleep: noSleep, holds });
+        const bud = new budget.MemoryBudget({ now: () => NOW });
+        return { api: new RedditApi({ http, env: ENV, budget: bud, requestOptions: x => ({ robots: false, ...x }) }), http, transport, bud };
+    };
+
+    test('a 429 with Retry-After 600 on /api/info: one request, held; the next call sends nothing and spends no budget', async () => {
+        const { api, http, transport, bud } = apiOver([TOKEN, [INFO, { status: 429, headers: { 'retry-after': '600' }, body: '' }]]);
+        await expect(api.info(names(2))).rejects.toBeInstanceOf(RateLimitedError);
+        expect(transport.calls.filter(c => INFO.test(c.url))).toHaveLength(1);
+        expect(http.holds['oauth.reddit.com']).toMatchObject({ http_status: 429, signal: 'http_429' });
+        const used = bud.used;
+        await expect(api.info(names(2))).rejects.toMatchObject({ held: true, host: 'oauth.reddit.com' });
+        expect(transport.calls.filter(c => INFO.test(c.url))).toHaveLength(1);
+        expect(bud.used).toBe(used);
+    });
+
+    test('a held API host: no token is fetched and no request sent', async () => {
+        const holds = { 'oauth.reddit.com': { until: new Date(Date.now() + 60000).toISOString(), http_status: 429, signal: 'http_429', count: 1, weak: 0 } };
+        const { api, transport } = apiOver([TOKEN, [INFO, { body: '{}' }]], holds);
+        await expect(api.info(names(1))).rejects.toMatchObject({ held: true });
+        expect(transport.calls).toHaveLength(0);
+    });
+
+    test('discovery: a rate-limited about() stops the discovery (incomplete) — the next subreddit is never asked, none is dropped as unavailable', async () => {
+        const [q1] = buildQueries();
+        const many = (sub, n) => Array.from({ length: n }, (_, i) => ({ kind: 't3', data: { name: `t3_${sub}${i}`, subreddit: sub, title: 'New AI model', selftext: '', created_utc: 1790679600 } }));
+        const calls = [];
+        const api = {
+            async listing(path, params) { return params.q === q1 && !params.after ? { children: [...many('alpha', 30), ...many('beta', 30)], after: null } : { children: [], after: null }; },
+            async about(sub) {
+                calls.push(sub);
+                throw new RateLimitedError('oauth.reddit.com rate-limited us', { status: 429, host: 'oauth.reddit.com' });
+            },
+        };
+        const d = await discoverSubreddits({ api, env: {}, now: () => NOW });
+        expect(d).toMatchObject({ complete: false, selected: [], rateLimited: true });
+        expect(calls).toHaveLength(1);
+    });
+
+    test('discovery: a rate-limit 403 is not "subreddit unavailable (HTTP 403)"', async () => {
+        const [q1] = buildQueries();
+        const api = {
+            async listing(path, params) { return params.q === q1 && !params.after ? { children: Array.from({ length: 30 }, (_, i) => ({ kind: 't3', data: { name: `t3_g${i}`, subreddit: 'gamma', title: 'AI news', selftext: '', created_utc: 1790679600 } })), after: null } : { children: [], after: null }; },
+            async about() { throw new RateLimitedError('rate-limited', { status: 403, host: 'oauth.reddit.com', signal: 'ratelimit_remaining_zero' }); },
+        };
+        const d = await discoverSubreddits({ api, env: {}, now: () => NOW });
+        expect(d.complete).toBe(false);
+        expect(JSON.stringify(d.exclusions || [])).not.toMatch(/HTTP 403/);
+    });
+});
+
 describe('RedditApi guards', () => {
     test('rejects malformed paths and /api/info batches over 100', async () => {
         const api = new RedditApi({ http: {}, env: ENV, budget: new budget.MemoryBudget() });
