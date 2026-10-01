@@ -94,6 +94,17 @@ describe('index.html — mount points, script order, no-JS copy', () => {
         }
     });
 
+    test('the panel ships the notices as static markup equal to the config', () => {
+        // If legal.config.js fails to load the static list is what stays.
+        const panel = html.slice(html.indexOf('id="about-panel"'), html.indexOf('</ul>', html.indexOf('id="about-panel"')));
+        for (const n of legal.NOTICE) {
+            expect(panel).toContain(`data-notice="${n.id}"`);
+            if (n.href) expect(panel).toContain(`<a href="${n.href}" rel="noopener noreferrer">${n.text}</a>`);
+            else expect(panel).toContain(n.text);
+        }
+        expect((panel.match(/<li /g) || []).length).toBe(legal.NOTICE.length);
+    });
+
     test('no inline style attributes (strict CSP)', () => {
         expect(html).not.toMatch(/<[a-z][^>]*\sstyle=/i);
     });
@@ -109,9 +120,14 @@ describe('main.js — renders the notice through the DOM API only', () => {
         expect(main).toContain('renderLegalNotice();');
     });
 
-    test('a missing or malformed config hides the chip and warns, never a dead control', () => {
-        expect(main).toMatch(/chip\.hidden = true;/);
-        expect(main).toContain("console.warn('legal notices unavailable");
+    test('a missing or malformed config keeps the static notices and warns; the chip is never hidden', () => {
+        expect(main).not.toMatch(/chip\.hidden = true;/);
+        expect(main).toContain("console.warn('legal notices: PulseLegalConfig missing");
+    });
+
+    test('every drawer opening folds the panel away (observed, not one event)', () => {
+        expect(main).toContain('MutationObserver');
+        expect(main).toContain("['audit-drawer', 'health-drawer']");
     });
 
     test('never uses innerHTML / outerHTML / insertAdjacentHTML', () => {

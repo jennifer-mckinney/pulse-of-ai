@@ -60,6 +60,31 @@ test('legal notice: about chip opens the AGPL notices with the source link', asy
 // the wrapped notice lines must stay reachable: the panel is bounded to the
 // viewport below its top and scrolls (Copilot r4158623080). 320 x 240 CSS px
 // is a phone width at a high zoom.
+test('legal notice: the static notices remain when legal.config.js fails to load', async ({ page }) => {
+    // No console-error assertion: the aborted request is logged by the browser.
+    await page.route('**/js/config/legal.config.js', (route) => route.abort());
+    await gotoAndWaitForData(page);
+    const chip = page.locator('#about-chip');
+    await expect(chip).toBeVisible();
+    await chip.click();
+    const panel = page.locator('#about-panel');
+    await expect(panel).toBeVisible();
+    await expect(panel.locator('li.about-item')).toHaveCount(6);
+    await expect(panel.getByRole('link', { name: 'Built on Pulse of AI by Jennifer McKinney' })).toHaveAttribute('href', UPSTREAM);
+});
+
+test('legal notice: opening the receipt drawer folds the panel away', async ({ page }) => {
+    await gotoAndWaitForData(page);
+    const chip = page.locator('#about-chip');
+    await chip.click();
+    await expect(page.locator('#about-panel')).toBeVisible();
+    // The health drawer opens through the same class toggle every drawer uses.
+    await page.locator('#health-chip').click();
+    await expect(page.locator('#health-drawer')).toHaveClass(/open/);
+    await expect(page.locator('#about-panel')).toBeHidden();
+    await expect(chip).toHaveAttribute('aria-expanded', 'false');
+});
+
 test('legal notice: a short viewport bounds the panel and scrolls to the last notice', async ({ page }) => {
     const errors = consoleErrors(page);
     await page.setViewportSize({ width: 320, height: 240 });
