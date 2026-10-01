@@ -152,7 +152,7 @@ flowchart LR
   K5 -- "data_retention_log, reddit_* state" --&gt; D4
   Q5 --&gt; K7
   K7 -- "blank text, demo purge (raw_posts)" --&gt; D2
-  K7 -- "data_retention_log, monthly rollups, compaction_log" --&gt; D4
+  K7 -- "data_retention_log, monthly rollups, compaction_log, demo purge of user_platform_sightings / pseudonymous_users" --&gt; D4
   K7 -- "source_run_daily rollup, stale processing_jobs" --&gt; D1
   K7 -- "delete embeddings, bias_window_*, bias and terms_changed alerts" --&gt; D3
   K7 -- "terms snapshots" --&gt; D5
@@ -161,6 +161,7 @@ flowchart LR
   M1 -- "migrations + seed" --&gt; D0
   M2 -- "demo posts through the real scorers" --&gt; D2
   M2 -- "embed jobs" --&gt; Q3
+  M2 -- "GET /health (model loaded?)" --&gt; E1
   WD1 -- "GET /api/health" --&gt; W3
   WD1 -- "critical alert_events, alert_resolutions" --&gt; D3
   WD1 -- "SELECT 1, watchdog_state / _notifications" --&gt; D6

@@ -1,6 +1,6 @@
 %% Title: Data model 1 of 4 · sources, collection state, jobs, alerts, Reddit
 %% Summary: The tables that describe the 52 registry sources, their collection state and runs, the processing jobs every score belongs to, alerts, and Reddit's selection, budget and maintenance state.
-%% Sources: src/db/migrations/001, 003, 013, 016, 018, 019, 020, 021, 023, 025, 033, 037, 038, 040, 050, 062. Alert writers: src/pipeline/bias.js (writeAlertEvent), src/collectors/source-alerts.js, source-health.js, retention-overdue.js, state.js, governance.js, src/watchdog/store.js and conditions.js. raw_posts is shown with its keys only (full columns in data model 2); alert resolutions, run rollups, gate events and the watchdog tables are in data model 4. Dotted lines are logical links without a foreign key. NOTE_alert_type_values is a legend box, not a table.
+%% Sources: src/db/migrations/001, 003, 013, 016, 018, 019, 020, 021, 023, 025, 033, 037, 038, 040, 050, 062. Alert writers: src/pipeline/bias.js (writeAlertEvent), src/collectors/source-alerts.js, source-health.js, retention-overdue.js, state.js, governance.js, src/watchdog/store.js and conditions.js. raw_posts is shown with its keys only (full columns in data model 2); alert resolutions, run rollups, gate events and the watchdog tables are in data model 4. Dotted lines are logical links without a foreign key. NOTE_alert_type_values is a legend box, not a table. Spec: TECHNICAL_SPEC.md section 6.
 erDiagram
 
   data_sources {

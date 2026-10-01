@@ -35,8 +35,8 @@ flowchart LR
   subgraph FETCH["Fetch · one collector per open route"]
     direction TB
     F1["13 · buildCollectors(): one instance per open route;&lt;br/&gt;the constructor throws GateClosedError&lt;br/&gt;if route.requires is missing"]:::done
-    F2["14 · HttpClient checks every hop before sending it:&lt;br/&gt;https only, public host, route allowedHosts (SSRF guard),&lt;br/&gt;DNS answers checked and pinned;&lt;br/&gt;robots.txt for publisher RSS routes (conservative);&lt;br/&gt;redirects followed manually, max 4;&lt;br/&gt;a credentialed request never crosses origins"]:::done
-    F3["15 · User-Agent PulseOfAI/#lt;version#gt; (+contact URL);&lt;br/&gt;per-host spacing; 20 s timeout;&lt;br/&gt;2 retries on 429 / 5xx honouring Retry-After;&lt;br/&gt;ETag / Last-Modified → 304 not modified"]:::done
+    F2["14 · HttpClient checks every hop before sending it:&lt;br/&gt;https only, public host, route allowedHosts (SSRF guard),&lt;br/&gt;DNS answers checked and pinned;&lt;br/&gt;robots.txt for RSS / Atom feeds (not arXiv or&lt;br/&gt;licensed feeds), Pew's WordPress API and&lt;br/&gt;Discourse forums (conservative);&lt;br/&gt;redirects followed manually, max 4;&lt;br/&gt;a credentialed request never crosses origins"]:::done
+    F3["15 · User-Agent PulseOfAI/#lt;version#gt; (+contact URL);&lt;br/&gt;per-host spacing; 20 s timeout;&lt;br/&gt;at most 2 retries on 429 / 5xx (honouring Retry-After)&lt;br/&gt;and network errors (not DNS failures);&lt;br/&gt;ETag / Last-Modified → 304 not modified"]:::done
     F4["16 · caps: 5 MB decoded per response (route override),&lt;br/&gt;robots.txt 500 KiB, bulk file 50 MB;&lt;br/&gt;a DTD with entity declarations is refused"]:::done
     F5{"401 / 403 / 451, bot&lt;br/&gt;challenge or robots&lt;br/&gt;disallow?"}:::done
     F1 --&gt; F2 --&gt; F3 --&gt; F4 --&gt; F5
@@ -45,7 +45,7 @@ flowchart LR
   subgraph NORM["Normalise · base.js collect() → toPayload()"]
     direction TB
     N1["17 · raw text capped, HTML to text (linear),&lt;br/&gt;identity redaction, ingest@1.7.0: e-mails, @handles,&lt;br/&gt;Reddit u/ names, phones, profile links, cc names,&lt;br/&gt;sign-offs, Wikipedia unsigned notes"]:::done
-    N2["18 · allowlisted payload: title, text, link unless an&lt;br/&gt;identity link, published_at, language, city-level&lt;br/&gt;location (basis content or publisher), licence,&lt;br/&gt;attribution; an identity-bearing upstream id is&lt;br/&gt;stored only as route:fp:HMAC"]:::done
+    N2["18 · allowlisted payload: title, text, link unless an&lt;br/&gt;identity link, published_at, language, city-level&lt;br/&gt;location (basis content or publisher), licence,&lt;br/&gt;attribution; an identity-bearing upstream id is&lt;br/&gt;stored only as route:fp:HMAC (an unkeyed&lt;br/&gt;SHA-256 when no key is set)"]:::done
     N3["19 · provenance_fingerprint = HMAC-SHA256(&lt;br/&gt;PROVENANCE_KEY or AUDIT_HASH_KEY,&lt;br/&gt;slug : upstream id : source URL)"]:::done
     N4["20 · drop items older than maxAgeDays (default 7);&lt;br/&gt;admission filter admission_filter@1.0.0&lt;br/&gt;(AI scope, ai-filter.js) on scope 'filter' routes;&lt;br/&gt;dedupe within the batch"]:::done
     N1 --&gt; N2 --&gt; N3 --&gt; N4

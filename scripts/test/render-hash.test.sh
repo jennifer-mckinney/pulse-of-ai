@@ -82,13 +82,18 @@ else
 fi
 
 # 3. The audit's mutations, each on its own copy, must FAIL.
-# M2: one word of a label.
+# M2: one word of a drawn label (round-2 M2 was a rendered edit): "hour" in
+# the Tier 1 state label becomes "day", which changes the text in the PNG.
 mmd="$(copy_diagram m2)"
 python3 - "$mmd" <<'PY'
 import sys; p = sys.argv[1]; s = open(p, encoding="utf-8").read()
-s = s.replace("stored", "kept", 1); open(p, "w", encoding="utf-8").write(s)
+old = "shown on the page for its trailing hour"
+line = next(l for l in s.splitlines() if old in l)
+assert s.count(old) == 1 and not line.startswith("%%")   # a drawn state label, not a comment
+s2 = s.replace(old, "shown on the page for its trailing day", 1)
+assert s2 != s; open(p, "w", encoding="utf-8").write(s2)
 PY
-expect_stale "M2 one-word label edit fails" "$mmd"
+expect_stale "M2 one-word rendered label edit fails" "$mmd"
 # S1: one number (the first digit run in the file, which is in the %% Sources comment; the hash guard must fail any byte change, rendered or not).
 mmd="$(copy_diagram s1)"
 python3 - "$mmd" <<'PY'
@@ -97,9 +102,19 @@ s2 = re.sub(r"\d+", lambda m: str(int(m.group(0)) + 1), s, count=1)
 assert s2 != s; open(p, "w", encoding="utf-8").write(s2)
 PY
 expect_stale "S1 one-number edit fails" "$mmd"
-# S3: one status/colour class line changed (a class name appended to a node).
+# S3: one node's colour changed: detail is taken out of the done class line
+# and given the planned class (grey fill, dashed border), so its drawn
+# colour changes.
 mmd="$(copy_diagram s3)"
-printf '  class detail done\n' >> "$mmd"
+python3 - "$mmd" <<'PY'
+import sys; p = sys.argv[1]; s = open(p, encoding="utf-8").read()
+old = "  class detail, blanked, removed, purged, compacted done\n"
+assert s.count(old) == 1
+s2 = s.replace(old, "  class blanked, removed, purged, compacted done\n"
+               "  classDef planned fill:#f2f2f2,stroke:#8a8a8a,color:#4a4a4a,stroke-dasharray:2 3\n"
+               "  class detail planned\n", 1)
+assert s2 != s; open(p, "w", encoding="utf-8").write(s2)
+PY
 expect_stale "S3 one-node colour edit fails" "$mmd"
 # S4: one extra node.
 mmd="$(copy_diagram s4)"

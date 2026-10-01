@@ -62,7 +62,7 @@ flowchart LR
     R2{"10 · database kill switch?&lt;br/&gt;data_sources.collection_disabled_at&lt;br/&gt;(npm run source:disable, refused&lt;br/&gt;without GATE_APPROVED_BY)"}:::done
     R3{"11 · refused state?&lt;br/&gt;source_collection_state&lt;br/&gt;access_denied_at, refused_until"}:::done
     R4["SOURCE_#lt;SLUG#gt;_RESET date at or after the&lt;br/&gt;last refusal and a valid GATE_APPROVED_BY:&lt;br/&gt;clearRefusal() + source_gate_events&lt;br/&gt;refusal_reset, one transaction"]:::done
-    R5{"12 · claim: last attempt older than&lt;br/&gt;the poll interval? (state.claim,&lt;br/&gt;atomic across worker and refresh)"}:::done
+    R5{"12 · claim: last attempt older than&lt;br/&gt;the poll interval, less a jitter slack&lt;br/&gt;(at most 20 %)? (state.claim,&lt;br/&gt;atomic across worker and refresh)"}:::done
     R1 -- no --&gt; R2
     R2 -- no --&gt; R3
     R3 -- "reset by env" --&gt; R4 --&gt; R5
