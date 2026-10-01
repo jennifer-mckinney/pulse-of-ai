@@ -455,6 +455,33 @@ describe('bias history — lineage, pass summaries, truncation notice', () => {
         }]);
     });
 
+    // Grumpy final #2: a summary whose LATEST row is an insufficient sample
+    // (bias@1.6.0 states its value, e.g. a parity gap of 1.3 against τ 0.3)
+    // is not shown as a green PASS: it is an N/A row, and its first time is
+    // the first CHECK of the window (it may not have been a pass).
+    test('mapPassSummary: a latest insufficient-sample row is N/A, never a plain pass', () => {
+        const base = {
+            severity: 'pass', layer: 'Demographic parity', assessment_type: 'platform_sentiment_parity',
+            count: 1, insufficient: 1, first_time: '2026-09-28T07:55:00Z', last_time: '2026-09-28T07:55:00Z',
+            detail: '0 passing checks and 1 with an insufficient sample in the window · '
+                + 'latest max_comparative_diff 1.300 (insufficient sample, not compared with τ = 0.3).',
+            citation: 'c', model_name: 'bias-m', version: '1.6.0', lineage: 'recorded',
+        };
+        const [na] = P.mapPassSummary({ pass_summary: [{ ...base, latest_insufficient: true }] });
+        expect(na).toMatchObject({ severity: 'n-a', summary: true });
+        expect(na.detail).toBe(base.detail + ' First check 07:55 UTC.');
+        // Latest row passed, earlier ones insufficient: PASS, first CHECK.
+        const [mixed] = P.mapPassSummary({ pass_summary: [{ ...base, count: 3, latest_insufficient: false }] });
+        expect(mixed.severity).toBe('pass');
+        expect(mixed.detail).toMatch(/ First check 07:55 UTC\.$/);
+        // A legacy payload without the flag keeps its PASS.
+        expect(P.mapPassSummary({ pass_summary: [{ ...base, insufficient: 0 }] })[0].severity).toBe('pass');
+    });
+
+    test('alertBadge: the feed badge text per severity', () => {
+        expect(['alert', 'watch', 'pass', 'n-a'].map(P.alertBadge)).toEqual(['ALERT', 'WATCH', 'PASS', 'N/A']);
+    });
+
     test('mapPassSummary tolerates a missing / legacy payload', () => {
         expect(P.mapPassSummary(null)).toEqual([]);
         expect(P.mapPassSummary({ alerts: [] })).toEqual([]);

@@ -246,6 +246,46 @@ describe('insufficient-sample share (principal #11)', () => {
         expect(loc).toMatchObject({ count: 3, insufficient: 2 });
         expect(loc.detail).toMatch(/^1 passing check and 2 with an insufficient sample in the window · /);
     });
+
+    // Grumpy final #2: since bias@1.6.0 an insufficient-sample parity row
+    // states the real gap, which can be far above τ. As the LATEST row of the
+    // pass summary it read "latest max_comparative_diff 1.300 (τ = 0.3)"
+    // under a green PASS — a value four times the threshold, with nothing
+    // saying it was never compared with τ.
+    it('GET /api/bias/history: a latest insufficient-sample row above τ is named as such, never a plain pass', async () => {
+        const biasMv = await registerBias('1.6.0');
+        const mv = await sentimentMv();
+        // The finding's cycle: 4 developer posts at +0.4, 3 forums posts at -0.9.
+        const job = await insertJob('completed', { postsProcessed: 7 });
+        const dev = await insertSource('gf2-dev', 'developer');
+        const forums = await insertSource('gf2-forums', 'forums');
+        for (let i = 0; i < 4; i++) await scoredPost(dev, job, mv, { comparative: 0.4 });
+        for (let i = 0; i < 3; i++) await scoredPost(forums, job, mv, { comparative: -0.9 });
+        await runBiasChecks(job, biasMv);
+        const stored = await dbGet(`SELECT group_value, metric_value, threshold FROM bias_assessments
+                                    WHERE job_id = $1 AND assessment_type = 'platform_sentiment_parity'`, [job]);
+        expect(stored.group_value).toBe('insufficient sample');
+        expect(stored.metric_value).toBeCloseTo(1.3, 5);
+
+        const res = await request(app).get('/api/bias/history');
+        const parity = res.body.pass_summary.find(p => p.assessment_type === 'platform_sentiment_parity');
+        expect(parity).toMatchObject({ severity: 'pass', count: 1, insufficient: 1, latest_insufficient: true });
+        expect(parity.detail).toBe('0 passing checks and 1 with an insufficient sample in the window · '
+            + 'latest max_comparative_diff 1.300 (insufficient sample, not compared with τ = 0.3).');
+    });
+
+    it('GET /api/bias/history: a latest row that passed keeps the τ wording even when earlier rows were insufficient', async () => {
+        await registerBias('1.6.0');
+        const job = await insertJob('completed');
+        const PARITY = { assessmentType: 'platform_sentiment_parity', groupField: 'platform', metricName: 'max_comparative_diff', threshold: 0.3 };
+        await insertBiasAssessment(job, { ...PARITY, groupValue: 'insufficient sample', metricValue: 1.3, createdAt: new Date(Date.now() - 2 * 3600 * 1000) });
+        await insertBiasAssessment(job, { ...PARITY, groupValue: 'developer vs forums', metricValue: 0.12, createdAt: new Date(Date.now() - 3600 * 1000) });
+        const res = await request(app).get('/api/bias/history');
+        const parity = res.body.pass_summary.find(p => p.assessment_type === 'platform_sentiment_parity');
+        expect(parity).toMatchObject({ count: 2, insufficient: 1, latest_insufficient: false });
+        expect(parity.detail).toBe('1 passing check and 1 with an insufficient sample in the window · '
+            + 'latest max_comparative_diff 0.120 (τ = 0.3).');
+    });
 });
 
 describe('npm run bias:window (scripts/bias-window.js)', () => {
