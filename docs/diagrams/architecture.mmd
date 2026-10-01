@@ -123,7 +123,7 @@ flowchart LR
   K5 -- "data_retention_log, reddit_* state" --> D4
   Q5 --> K7
   K7 -- "blank text, demo purge (raw_posts)" --> D2
-  K7 -- "data_retention_log, monthly rollups, compaction_log" --> D4
+  K7 -- "data_retention_log, monthly rollups, compaction_log, demo purge of user_platform_sightings / pseudonymous_users" --> D4
   K7 -- "source_run_daily rollup, stale processing_jobs" --> D1
   K7 -- "delete embeddings, bias_window_*, bias and terms_changed alerts" --> D3
   K7 -- "terms snapshots" --> D5
