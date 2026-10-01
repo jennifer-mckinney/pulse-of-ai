@@ -5,6 +5,8 @@
 //     gate  — sourceStatus(): only 'collecting' sources run (kill switches,
 //             missing credentials, blocked: never fetched), then the
 //             database kill switch (data_sources.collection_disabled_at, F10-10)
+//             and the per-route database kill switch (source_route_state,
+//             migration 073): a disabled route is never fetched
 //     refusal — src/collectors/refusal.js: a source that refused access
 //             (401/403/451, bot wall, robots) is skipped through its
 //             cooldown and reported 'blocked_by_source' (F10-5); a clean
@@ -184,6 +186,9 @@ async function runCollection(o = {}) {
             const st = sourceStatus(src, env);
             const row = { slug, category: src.category, status: st.status, outcome: 'skipped', fetched: 0, kept: 0, new: 0, error: null };
             summary.sources.push(row);
+            // Migration 073 (grumpy #7): routes switched off by env are named
+            // in the summary too; the database check below adds its own.
+            if (st.disabledRoutes.length) row.disabledRoutes = st.disabledRoutes;
             if (st.status !== 'collecting') { row.reason = st.reason; continue; }
             if (!(await touch())) {
                 row.reason = 'the job was closed as stale before this source started';
@@ -204,6 +209,16 @@ async function runCollection(o = {}) {
                 row.status = 'disabled';
                 row.reason = `kill switch (database): disabled${killed.by ? ` by ${killed.by}` : ''}${killed.reason ? ` — ${killed.reason}` : ''}`;
                 continue;
+            }
+            // Migration 073: the per-route database kill switch, read before
+            // every run like the source switch. A disabled route is never
+            // built (no request); when every route that would run is
+            // disabled, the source is skipped as 'disabled'.
+            const routeKills = await state.routeKillSwitches(sourceId);
+            if (routeKills.length) {
+                const rst = sourceStatus(src, env, { routeKills });
+                row.disabledRoutes = rst.disabledRoutes;
+                if (rst.status !== 'collecting') { row.status = rst.status; row.reason = rst.reason; continue; }
             }
             // F10-5: a source that refused us is not asked again until its
             // cooldown ends (then one probe) or an operator resets it.
@@ -245,7 +260,7 @@ async function runCollection(o = {}) {
                 continue;
             }
 
-            const claimed = await state.claim(sourceId, pollIntervalSec(src, env), o.cycle ? o.cycle.windowMs : collectWindowMs(env));
+            const claimed = await state.claim(sourceId, pollIntervalSec(src, env, { routeKills }), o.cycle ? o.cycle.windowMs : collectWindowMs(env));
             if (!claimed) { row.reason = 'collected within its poll interval (rate limit)'; continue; }
             queried++;
             http = http || new HttpClient({ env, transport: o.transport, sleep: o.collectorCtx && o.collectorCtx.sleep, signal, holds: runHolds });
@@ -276,11 +291,30 @@ async function runCollection(o = {}) {
             // backing off: skipped, never a failure.
             const heldRoutes = [];
             try {
-                collectors = buildCollectors(src, { env, http, cursor, httpCache, now: o.now, ...(o.collectorCtx || {}) });
+                collectors = buildCollectors(src, { env, http, cursor, httpCache, now: o.now, ...(o.collectorCtx || {}), routeKills });
             } catch (err) {
                 fail(err.message, err);
             }
             let storeFailed = false;
+            // Security review F7: a takedown issued while this source's
+            // earlier routes ran applies before its next route — both
+            // database switches are read again before every route after the
+            // first (the first was gated just above). A failed read skips the
+            // route: a takedown never fails open.
+            const stillOpen = async (routeId) => {
+                try {
+                    if (await state.dbKillSwitch(sourceId)) return 'kill switch (database): the source was disabled during this run';
+                    const now = await state.routeKillSwitches(sourceId);
+                    const rst = sourceStatus(src, env, { routeKills: now });
+                    if (rst.status !== 'collecting' || !rst.openRoutes.includes(routeId)) {
+                        return 'kill switch (database): the route was disabled during this run';
+                    }
+                    return null;
+                } catch (err) {
+                    return `the kill switches could not be read again (${err.message}); the route is not fetched`;
+                }
+            };
+            let gated = false;
             // Security review M1: a throw anywhere in the route loop (a DB
             // error while storing, a queue failure that escapes) must not lose
             // a rate-limit hold learned earlier in the loop — the restart would
@@ -288,6 +322,15 @@ async function runCollection(o = {}) {
             // error continues unchanged.
             try {
                 for (const c of collectors) {
+                    if (gated) {
+                        const why = await stillOpen(c.route.id);
+                        if (why) {
+                            (row.skippedRoutes = row.skippedRoutes || []).push({ route: c.route.id, reason: why });
+                            log(`[collect] ${slug}/${c.route.id}: skipped — ${why}`);
+                            continue;
+                        }
+                    }
+                    gated = true;
                     // G10-5: the route's cursor and HTTP validators as they were
                     // before it ran. If any of its items fails to store, they are
                     // restored, so the next run fetches those items again (a

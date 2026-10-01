@@ -38,9 +38,9 @@ class UsageError extends Error {}
 
 /**
  * PR #22 security M2: the supervised run's READ-ONLY view of a source's
- * database governance state — the kill switch (data_sources, F10-10) and
- * the refusal state (source_collection_state, F10-5). One SELECT; nothing
- * is written.
+ * database governance state — the kill switch (data_sources, F10-10), the
+ * refusal state (source_collection_state, F10-5) and the disabled routes
+ * (source_route_state, migration 073). One SELECT; nothing is written.
  * @returns {Promise<object|null>} null when the source has no data_sources row
  */
 async function readGovernance(slug) {
@@ -48,7 +48,13 @@ async function readGovernance(slug) {
     const row = await dbGet(
         `SELECT ds.collection_disabled_at AS disabled_at, ds.collection_disabled_reason AS disabled_reason,
                 ds.collection_disabled_by AS disabled_by,
-                s.access_denied_at, s.access_denied_status, s.access_denied_kind, s.refused_until, s.refusal_count
+                s.access_denied_at, s.access_denied_status, s.access_denied_kind, s.refused_until, s.refusal_count,
+                -- Migration 073: the source's disabled routes, in the same read.
+                COALESCE((SELECT json_agg(json_build_object('route_id', rs.route_id, 'disabled_at', rs.collection_disabled_at,
+                                                            'reason', rs.collection_disabled_reason, 'by', rs.collection_disabled_by)
+                                          ORDER BY rs.route_id)
+                          FROM source_route_state rs
+                          WHERE rs.source_id = ds.id AND rs.collection_disabled_at IS NOT NULL), '[]'::json) AS route_kills
          FROM data_sources ds
          LEFT JOIN source_collection_state s ON s.source_id = ds.id
          WHERE ds.name = $1`,
@@ -112,14 +118,23 @@ async function supervisedRun({
     // apply to a supervised run as to every scheduled one (read-only).
     const gov = await governance(slug);
     assertDbGatesOpen(slug, gov, env);
-    out(`SUPERVISED DRY RUN — ${src.name} (${slug}); routes: ${st.openRoutes.join(', ')}`);
+    // Migration 073: a route disabled by the database route kill switch is
+    // not fetched by a supervised run either; when every route that would
+    // run is disabled, the run is refused.
+    const routeKills = (gov && gov.route_kills) || [];
+    const rst = routeKills.length ? sourceStatus(src, env, { routeKills }) : st;
+    if (rst.status !== 'collecting') {
+        throw new UsageError(`${slug} is not collecting: ${rst.reason}`);
+    }
+    out(`SUPERVISED DRY RUN — ${src.name} (${slug}); routes: ${rst.openRoutes.join(', ')}`
+        + `${rst.disabledRoutes.length ? ` (disabled: ${rst.disabledRoutes.join(', ')})` : ''}`);
     out('Nothing is stored: no posts, scores, cursors or collection state are written.');
     // Security F7: the stored rate-limit holds apply too (a held host is
     // never asked; the route reports "not requested … backing off").
     const http = new HttpClient({ env, transport, holds: (gov && gov.holds && typeof gov.holds === 'object') ? { ...gov.holds } : {} });
     const routes = [];
     const sample = [];
-    for (const c of buildCollectors(src, { env, http, cursor: {}, httpCache: {} })) {
+    for (const c of buildCollectors(src, { env, http, cursor: {}, httpCache: {}, routeKills })) {
         try {
             const r = await c.collect();
             const warnings = (r.warnings || []).map(w => scrub(w.text, env));

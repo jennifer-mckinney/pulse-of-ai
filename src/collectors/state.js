@@ -15,6 +15,8 @@
 //   loadHolds / saveHolds
 //       per-host rate-limit holds — a backoff, never a refusal (diagnosis
 //       2026-10-01, migration 075; src/collectors/rate-limit.js has the rules)
+//   routeKillSwitches / allRouteKillSwitches / setRouteKillSwitch
+//       the per-route database kill switch (migration 073)
 
 'use strict';
 
@@ -136,6 +138,76 @@ async function setDbKillSwitch(sourceId, disabled, { reason = null, by = null, c
              WHERE id = $1 RETURNING id`, [sourceId, reason, by]]
         : [`UPDATE data_sources SET collection_disabled_at = NULL, collection_disabled_reason = NULL, collection_disabled_by = NULL
              WHERE id = $1 RETURNING id`, [sourceId]];
+    const row = client ? (await client.query(sql, params)).rows[0] : await dbGet(sql, params);
+    return !!row;
+}
+
+// ─── Per-route kill switch (migration 073) ──────────────────────────────────
+// The database switch of ONE route of a source (source_route_state). The
+// route id is validated against the registry by the caller
+// (scripts/source-admin.js); the table's CHECK is a second line.
+
+const ROUTE_KILL_COLUMNS = `route_id, collection_disabled_at AS disabled_at, collection_disabled_reason AS reason,
+                collection_disabled_by AS by`;
+
+/**
+ * The disabled routes of a source.
+ * @returns {Promise<Array<{ route_id, disabled_at, reason, by }>>} [] when none
+ */
+async function routeKillSwitches(sourceId) {
+    return (await dbAll(
+        `SELECT ${ROUTE_KILL_COLUMNS} FROM source_route_state
+         WHERE source_id = $1 AND collection_disabled_at IS NOT NULL ORDER BY route_id`,
+        [sourceId],
+    )) || [];
+}
+
+/**
+ * Every disabled route, by source id (status, governance and health read
+ * all sources at once).
+ * @returns {Promise<Map<string, Array<{ route_id, disabled_at, reason, by }>>>}
+ */
+async function allRouteKillSwitches() {
+    const rows = (await dbAll(
+        `SELECT source_id, ${ROUTE_KILL_COLUMNS} FROM source_route_state
+         WHERE collection_disabled_at IS NOT NULL ORDER BY source_id, route_id`,
+    )) || [];
+    const out = new Map();
+    for (const { source_id: id, ...k } of rows) {
+        if (!out.has(id)) out.set(id, []);
+        out.get(id).push(k);
+    }
+    return out;
+}
+
+/**
+ * Set (disabled=true) or clear the database kill switch of one route.
+ * Pass `client` to write it in the caller's transaction, together with its
+ * source_gate_events row (scripts/source-admin.js; PR #22 L6 / L16).
+ * @returns {Promise<boolean>} whether a row changed (clearing a route that
+ *   was never disabled changes nothing)
+ */
+async function setRouteKillSwitch(sourceId, routeId, disabled, { reason = null, by = null, client = null } = {}) {
+    // Copilot round 2: the database CHECK of migration 073 accepts a NULL
+    // approver (a NULL regex result passes a CHECK). Until a follow-up
+    // migration closes that, the write path refuses it here: a takedown
+    // always records why and the named approval behind it.
+    if (disabled) {
+        const { namedApproval } = require('../config/source-registry');
+        if (typeof reason !== 'string' || !reason.trim()) throw new Error('a route takedown needs a reason');
+        if (!namedApproval({ GATE_APPROVED_BY: by }).ok) throw new Error('a route takedown needs a named approval ("Name YYYY-MM-DD") as `by`');
+    }
+    const [sql, params] = disabled
+        ? [`INSERT INTO source_route_state (source_id, route_id, collection_disabled_at, collection_disabled_reason, collection_disabled_by, updated_at)
+            VALUES ($1, $2, NOW(), $3, $4, NOW())
+            ON CONFLICT (source_id, route_id) DO UPDATE
+            SET collection_disabled_at = NOW(), collection_disabled_reason = EXCLUDED.collection_disabled_reason,
+                collection_disabled_by = EXCLUDED.collection_disabled_by, updated_at = NOW()
+            RETURNING route_id`, [sourceId, routeId, reason, by]]
+        : [`UPDATE source_route_state
+            SET collection_disabled_at = NULL, collection_disabled_reason = NULL, collection_disabled_by = NULL, updated_at = NOW()
+            WHERE source_id = $1 AND route_id = $2 AND collection_disabled_at IS NOT NULL
+            RETURNING route_id`, [sourceId, routeId]];
     const row = client ? (await client.query(sql, params)).rows[0] : await dbGet(sql, params);
     return !!row;
 }
@@ -433,5 +505,5 @@ async function saveHoldChanges(changes, view, { env = process.env } = {}) {
 module.exports = {
     sourceIdsBySlug, claim, saveOutcome, recordRun, countUnchangedRun, getRefusal, recordRefusal, clearRefusal,
     endCooldown, decayRefusal, loadHolds, saveHolds, saveHoldChanges,
-    dbKillSwitch, setDbKillSwitch, CLAIM_SLACK_SEC, CLAIM_SLACK_FRACTION, claimSlackSec,
+    dbKillSwitch, setDbKillSwitch, routeKillSwitches, allRouteKillSwitches, setRouteKillSwitch, CLAIM_SLACK_SEC, CLAIM_SLACK_FRACTION, claimSlackSec,
 };

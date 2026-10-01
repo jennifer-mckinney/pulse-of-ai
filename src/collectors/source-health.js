@@ -111,12 +111,16 @@ async function evaluateSourceHealth({ env = process.env, now = Date.now() } = {}
         [TYPES],
     );
     const openBy = new Map(open.map(a => [`${a.alert_type}:${a.source_id}`, a]));
+    const routeKills = await require('./state').allRouteKillSwitches();
     const opened = [];
     const resolved = [];
     for (const row of rows) {
         const src = getSource(row.name);
         if (!src) continue;
-        const collecting = sourceStatus(src, env).status === 'collecting' && !row.collection_disabled_at;
+        // Migration 073: a source whose every runnable route is switched off
+        // by the database route kill switch is not collecting either.
+        const collecting = sourceStatus(src, env, { routeKills: routeKills.get(row.id) || [] }).status === 'collecting'
+            && !row.collection_disabled_at;
         const cond = collecting ? conditionsFor(row, src, now) : {};
         for (const type of TYPES) {
             const existing = openBy.get(`${type}:${row.id}`);

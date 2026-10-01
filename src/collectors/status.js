@@ -21,6 +21,16 @@
 // "Sources online N/<registry size>" counts exactly these: a source the
 // registry would collect but that has not succeeded recently, or has failed
 // since, is not online.
+//
+// Per-route kill switch (migration 073): `routes` lists every registry route
+// with its status ('open' | 'disabled' | 'closed') and reason, and
+// `disabled_routes` the ids switched off (env COLLECTORS_DISABLED_ROUTES or
+// the database switch, npm run source:disable -- <slug> --route <id>). A
+// source with SOME routes off still collects (and counts as collecting /
+// online); its status_reason names the routes that are off. `open_routes`
+// lists only routes that run now: none for a disabled source or one in its
+// refusal cooldown, and never a disabled route. A database route kill naming
+// a route the registry no longer has holds the whole source disabled.
 
 'use strict';
 
@@ -30,6 +40,7 @@ const { DEMO_SOURCE_TYPE } = require('../config/data-mode');
 const { refusalGate, resetEnv, probationOver, BLOCKED_BY_SOURCE } = require('./refusal');
 const { activeHolds, collectionHolds, publicHosts, holdReason, RATE_LIMITED } = require('./rate-limit');
 const { selectionStatus } = require('./reddit/selection');
+const { allRouteKillSwitches } = require('./state');
 
 // Runtime statuses: the registry gate statuses plus 'blocked_by_source' (a
 // collecting source that refused us — F10-5; never online) and
@@ -72,16 +83,21 @@ function rateLimitView(src, row, openRouteIds, now) {
     return { routeMap, hosts, until: times.length ? times[times.length - 1] : null, all };
 }
 
-/** Registry fields for one data_sources row (null for non-registry rows). */
-function registryFields(row, env, now) {
+
+/**
+ * Registry fields for one data_sources row (null for non-registry rows).
+ * @param {object[]} [routeKills]  the source's database route kill switches (state.routeKillSwitches)
+ */
+function registryFields(row, env, now, routeKills = []) {
     const src = getSource(row.name);
     if (!src || row.source_type === DEMO_SOURCE_TYPE) return null;
-    const st = sourceStatus(src, env);
+    const st = sourceStatus(src, env, { routeKills });
     // F10-5: a collecting source in the refused state (cooldown or awaiting
     // its probe) is reported as blocked_by_source until it succeeds again
     // or is reset.
     const gate = refusalGate(row, src.slug, env, now);
     const refused = st.status === 'collecting' && (gate.state === 'cooldown' || gate.state === 'probe');
+    const cooling = refused && gate.state === 'cooldown';
     // F10-10: the database kill switch disables a source whatever its gate.
     const dbKilled = !!row.collection_disabled_at;
     // Diagnosis 2026-10-01: the rate-limit backoff (a refusal wins over it).
@@ -103,7 +119,21 @@ function registryFields(row, env, now) {
         status_reason: dbReason || (refused ? gate.reason : (limited ? holdReason('all', held.routeMap, held.until) : st.reason)),
         collection_disabled_at: row.collection_disabled_at || null,
         missing_env: st.missing,
-        open_routes: st.openRoutes,
+        // Only the routes that run now: a source switched off by the
+        // database kill switch, or cooling down after a refusal, has none
+        // (sourceStatus already empties them for every other non-collecting
+        // status), and a disabled route is never among them. A source
+        // awaiting its post-cooldown probe keeps them: the probe runs them.
+        open_routes: dbKilled || cooling ? [] : st.openRoutes,
+        disabled_routes: st.disabledRoutes,
+        routes: st.routes.map((r) => {
+            if (r.status !== 'open') return r;
+            if (dbKilled) return { ...r, status: 'closed', reason: 'the source is disabled' };
+            // Grumpy #11: a refused source's routes say why they are not
+            // collecting normally (closed through the cooldown, open for the probe).
+            if (refused) return { ...r, status: cooling ? 'closed' : 'open', reason: gate.reason };
+            return r;
+        }),
         licence_refs_on_file: st.recorded,
         kill_switch_env: killSwitchEnv(src.slug),
         online: isOnline(status, row.last_success_at, now, row.last_error_at),
@@ -147,6 +177,7 @@ function registryFields(row, env, now) {
  * @returns {Promise<object[]>} data_sources rows (registry rows enriched), registry order first
  */
 async function sourceRows({ includeInactive = false, env = process.env, now = Date.now() } = {}) {
+    const routeKills = await allRouteKillSwitches();
     const rows = await dbAll(
         `SELECT ds.id, ds.name, ds.display_name, ds.source_type, ds.category, ds.active,
                 ds.retired_at, ds.retired_note,
@@ -166,7 +197,7 @@ async function sourceRows({ includeInactive = false, env = process.env, now = Da
             category: r.category, active: r.active, retired: !!r.retired_at,
         };
         if (r.retired_at) base.retired_note = r.retired_note;
-        const reg = registryFields(r, env, now);
+        const reg = registryFields(r, env, now, routeKills.get(r.id) || []);
         return reg ? { ...base, ...reg } : { ...base, registry: false };
     });
     // Reddit's subreddit selection (rule, current list, latest snapshot).

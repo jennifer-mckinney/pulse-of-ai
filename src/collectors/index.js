@@ -1,7 +1,8 @@
 // src/collectors/index.js
 // Adapter registry: registry route `adapter` key → collector class, and
 // buildCollectors(), which instantiates one collector per OPEN route of a
-// source (src/config/source-registry.js openRoutes). Closed routes are never
+// source (src/config/source-registry.js openRoutes). Closed routes — and
+// routes switched off by a route kill switch (migration 073) — are never
 // built; a class constructed without its credential throws GateClosedError.
 
 'use strict';
@@ -65,17 +66,20 @@ const ADAPTERS = Object.freeze({
 
 /**
  * @param {object} source  registry entry
- * @param {object} ctx     { env, http, cursor (per-source, keyed by route id), httpCache, now, imapFactory }
- * @returns {Array<import('./base').Collector>}
+ * @param {object} ctx     { env, http, cursor (per-source, keyed by route id), httpCache, now, imapFactory,
+ *                          routeKills (the source's database route kill switches, migration 073) }
+ * @returns {Array<import('./base').Collector>}  one per OPEN route: a route
+ *   switched off by a route kill switch (env or database) is never built
  */
 function buildCollectors(source, ctx) {
-    const env = ctx.env || process.env;
-    const cursor = ctx.cursor || {};
-    return openRoutes(source, env).map((route) => {
+    const { routeKills = [], ...rest } = ctx;
+    const env = rest.env || process.env;
+    const cursor = rest.cursor || {};
+    return openRoutes(source, env, { routeKills }).map((route) => {
         const Cls = ADAPTERS[route.adapter];
         if (!Cls) throw new Error(`no collector adapter '${route.adapter}' (${source.slug}/${route.id})`);
         if (!cursor[route.id]) cursor[route.id] = {};
-        return new Cls({ ...ctx, env, source, route, cursor: cursor[route.id] });
+        return new Cls({ ...rest, env, source, route, cursor: cursor[route.id] });
     });
 }
 

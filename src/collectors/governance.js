@@ -7,7 +7,11 @@
 //                          calls it with the env it runs under). The
 //                          database kill switch counts (PR #22 grumpy L14),
 //                          and an opening of a gated route carries its
-//                          named approver, GATE_APPROVED_BY (decision G5)
+//                          named approver, GATE_APPROVED_BY (decision G5).
+//                          The route kill switches count too (migration
+//                          073): a change of an open gate's routes (a route
+//                          switched off or back on, by env or database) is
+//                          a new gate_opened naming the routes that run
 //   recordCorrelationGate  append a correlation_gate_events row whenever the
 //                          correlation DPIA gate changes (principal #19)
 //   snapshotTerms          fetch each source's terms page politely; keep its
@@ -35,11 +39,26 @@ const SCHEDULER_ACTOR = 'worker scheduler (runtime env)';
 async function recordGateEvent({
     sourceId, slug, event, gateStatus = null, actor, reason = null, approvedBy = null, routes = null, client = null,
 }) {
+    // Copilot round 2: migration 073's CHECK accepts ARRAY[NULL] (a NULL
+    // regex result passes a CHECK). Until a follow-up migration closes that,
+    // a route event must name exactly one well-formed route id here.
+    if ((event === 'route_disabled' || event === 'route_enabled')
+        && !(Array.isArray(routes) && routes.length === 1 && typeof routes[0] === 'string'
+             && require('../config/source-registry').ROUTE_ID_PATTERN.test(routes[0]))) {
+        throw new Error(`a ${event} event names exactly one route id`);
+    }
     const sql = `INSERT INTO source_gate_events (source_id, slug, event, gate_status, actor, reason, approved_by, routes)
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8::text[])`;
     const params = [sourceId, slug, event, gateStatus, actor, reason, approvedBy, routes];
     if (client) await client.query(sql, params);
     else await dbRun(sql, params);
+}
+
+/** Whether two route-id lists hold the same ids (order-insensitive; null = []). */
+function sameSet(a, b) {
+    const x = [...new Set(a || [])].sort();
+    const y = [...new Set(b || [])].sort();
+    return x.length === y.length && x.every((v, i) => v === y[i]);
 }
 
 /**
@@ -50,18 +69,23 @@ async function recordGateEvent({
 async function recordGateTransitions({ env = process.env, actor = SCHEDULER_ACTOR } = {}) {
     const rows = await dbAll(
         `SELECT ds.id, ds.name, ds.collection_disabled_at, ds.collection_disabled_reason, ds.collection_disabled_by,
-                last.gate_status AS last_status, last.approved_by AS last_approved_by
+                last.gate_status AS last_status, last.approved_by AS last_approved_by, last.routes AS last_routes
          FROM data_sources ds
          LEFT JOIN LATERAL (
-             SELECT e.gate_status, e.approved_by FROM source_gate_events e
+             SELECT e.gate_status, e.approved_by, e.routes FROM source_gate_events e
              WHERE e.source_id = ds.id AND e.event IN ('gate_opened', 'gate_closed')
              ORDER BY e.occurred_at DESC, e.id DESC LIMIT 1) last ON TRUE
          WHERE ds.name = ANY($1::text[])`,
         [SOURCES.map(s => s.slug)],
     );
+    // Migration 073: the database route kill switches count too — a source
+    // whose every runnable route is switched off is closed, and a change of
+    // an open gate's routes is recorded (below), so the latest gate_opened
+    // never lists a route that is switched off.
+    const routeKills = await require('./state').allRouteKillSwitches();
     const written = [];
     for (const r of rows) {
-        let st = sourceStatus(getSource(r.name), env);
+        let st = sourceStatus(getSource(r.name), env, { routeKills: routeKills.get(r.id) || [] });
         // Grumpy L14: the database kill switch closes the gate whatever the
         // env says, so the log never shows a disabled source as open.
         if (r.collection_disabled_at && st.status === 'collecting') {
@@ -73,9 +97,16 @@ async function recordGateTransitions({ env = process.env, actor = SCHEDULER_ACTO
         }
         const open = st.status === 'collecting';
         const approvedBy = open ? st.approvedBy || null : null;
-        // Recorded on the first observation, on every change of status, and
-        // when an open gate's named approver changes (G5).
-        if (r.last_status === st.status && (!open || (r.last_approved_by || null) === approvedBy)) continue;
+        // Recorded on the first observation, on every change of status, when
+        // an open gate's named approver changes (G5), and when an open gate's
+        // routes change (a route kill switch set or cleared by env or
+        // database — security review F5: an env route change leaves a record).
+        // A gate event written before migration 056 has no routes (NULL):
+        // the first run after deploy records ONE baseline gate_opened with
+        // its routes, which every later route change is compared with
+        // (Copilot: treating NULL as "same" would hide every later change).
+        const sameRoutes = r.last_routes != null && sameSet(r.last_routes, st.openRoutes);
+        if (r.last_status === st.status && (!open || ((r.last_approved_by || null) === approvedBy && sameRoutes))) continue;
         const event = open ? 'gate_opened' : 'gate_closed';
         await recordGateEvent({
             sourceId: r.id, slug: r.name, event, gateStatus: st.status, actor: approvedBy || actor, reason: st.reason,
