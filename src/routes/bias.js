@@ -2,7 +2,9 @@
 // GET /api/bias/latest
 //
 // Returns the most recent bias assessment results.
-// Scoped to the most recently completed processing job.
+// Scoped to the most recently started processing job that completed AND
+// processed posts (status = 'completed' AND posts_processed > 0): a job that
+// scored nothing has no fairness assessment to show.
 //
 // Returns:
 //   200 {

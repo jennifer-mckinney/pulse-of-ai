@@ -61,7 +61,6 @@ jobs:
       EMBEDDINGS_SERVICE_URL:     http://localhost:8000
       REDIS_PORT:                 6379
       RETENTION_DETAIL_DAYS:      90
-      CORRELATION_MIN_CONFIDENCE: "0.85"
       # Deterministic all-zeros salt — safe for test-only; not a production secret
       CORRELATION_SALT: "0000000000000000000000000000000000000000000000000000000000000000"
       # CI-only HMAC key so /api/audit's keyed input_hash path is exercised in CI.

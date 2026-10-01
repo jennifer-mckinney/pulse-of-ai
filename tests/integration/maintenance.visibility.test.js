@@ -90,6 +90,38 @@ describe('retention_overdue', () => {
         expect(closed.resolved_by).toMatch(/retention-overdue evaluator/);
     });
 
+    // Docs audit round 4: web's process env decides /api/health's
+    // retention_overdue (compose now passes RETENTION_OVERDUE_GRACE_MINUTES to
+    // web), and the watchdog's retention_overdue condition reads that report.
+    describe('a non-default RETENTION_OVERDUE_GRACE_MINUTES on web', () => {
+        const saved = process.env.RETENTION_OVERDUE_GRACE_MINUTES;
+        afterEach(() => {
+            if (saved === undefined) delete process.env.RETENTION_OVERDUE_GRACE_MINUTES;
+            else process.env.RETENTION_OVERDUE_GRACE_MINUTES = saved;
+        });
+        const { evaluate } = require('../../src/watchdog/conditions');
+        const { readConfig } = require('../../src/watchdog/config');
+        const watchdogSees = (health) => evaluate(
+            { health, httpStatus: 200, fetchError: null, dbReachable: true },
+            { now: new Date(), thresholds: readConfig({}).thresholds },
+        ).conditions.map(c => c.condition);
+
+        it('/api/health and the watchdog condition honour it', async () => {
+            // 48 h reddit window + 40 min: past a 30 min grace, inside the 60 min default.
+            await post('reddit', 48 + 40 / 60, 'r-grace');
+
+            delete process.env.RETENTION_OVERDUE_GRACE_MINUTES;
+            let res = await request(app).get('/api/health');
+            expect(res.body.maintenance.retention_overdue).toEqual({ posts: 0, sources: [] });
+            expect(watchdogSees(res.body)).not.toContain('retention_overdue');
+
+            process.env.RETENTION_OVERDUE_GRACE_MINUTES = '30';
+            res = await request(app).get('/api/health');
+            expect(res.body.maintenance.retention_overdue).toMatchObject({ posts: 1, sources: [{ slug: 'reddit', posts: 1 }] });
+            expect(watchdogSees(res.body)).toContain('retention_overdue');
+        });
+    });
+
     it('reports a misconfigured window instead of a fake zero', async () => {
         await expect(overdue.overdueBySource({ env: { RETENTION_DETAIL_DAYS: '0' } })).rejects.toThrow(/RETENTION_DETAIL_DAYS/);
         expect(overdue.graceMinutes({})).toBe(60);

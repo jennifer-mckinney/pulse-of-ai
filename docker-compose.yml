@@ -43,12 +43,17 @@ x-app-env: &app-env
   AUDIT_HASH_KEY: ${AUDIT_HASH_KEY:-}
   # D2 provenance fingerprint key; empty falls back to AUDIT_HASH_KEY.
   PROVENANCE_KEY: ${PROVENANCE_KEY:-}
-  CORRELATION_MIN_CONFIDENCE: ${CORRELATION_MIN_CONFIDENCE:-0.85}
   # Spec §20 DPIA gate: correlation stays off until a completed DPIA is
   # recorded AND the operator enables it (src/pipeline/correlation-gate.js).
   CORRELATION_DPIA_REF: ${CORRELATION_DPIA_REF:-}
   CORRELATION_ENABLED: ${CORRELATION_ENABLED:-false}
   RETENTION_DETAIL_DAYS: ${RETENTION_DETAIL_DAYS:-90}
+  # Minutes past a source's retention window before text still stored counts
+  # as overdue (default 60, 10..1440; src/collectors/retention-overdue.js).
+  # Every role gets the SAME value: the worker opens the retention_overdue
+  # alert with it, and web reports /api/health's retention_overdue (which the
+  # watchdog's retention_overdue condition reads) with it. Not a secret.
+  RETENTION_OVERDUE_GRACE_MINUTES: ${RETENTION_OVERDUE_GRACE_MINUTES:-}
   DEMO_FEED_INTERVAL_MS: ${DEMO_FEED_INTERVAL_MS:-150000}
   DEMO_FEED_BATCH: ${DEMO_FEED_BATCH:-}
 
@@ -366,6 +371,11 @@ services:
       PULSE_CONTAINER_PUBLISHED_ADDR: ${PULSE_BIND_ADDR:-127.0.0.1}
       REFRESH_TOKEN: ${REFRESH_TOKEN:-}
       REFRESH_STALE_MINUTES: ${REFRESH_STALE_MINUTES:-30}
+      # web's PostgreSQL pool (src/db/connection.js, default 10). The worker
+      # budgets web's pool from the same value (src/db/pool-size.js
+      # connectionBudget), so both get it from the same interpolation. Not a
+      # secret; migrate and populate keep the default (the one-shot reserve).
+      PG_POOL_MAX: ${PG_POOL_MAX:-}
     ports:
       - "${PULSE_BIND_ADDR:-127.0.0.1}:${WEB_PORT:-3000}:3000"
     depends_on:
@@ -404,6 +414,10 @@ services:
       # PR #22 security L1: the per-deployment correlation salt goes to the
       # worker ONLY (the embed and correlate jobs compute pseudonyms).
       CORRELATION_SALT: ${CORRELATION_SALT:-}
+      # The worker never sizes its own pool from PG_POOL_MAX; it budgets
+      # web's pool with it (src/db/pool-size.js). Passed here as well as in
+      # the env file so it is the value web receives, not a different file's.
+      PG_POOL_MAX: ${PG_POOL_MAX:-}
     # Healthy = the worker's heartbeat file is fresh (P9-7). It is written
     # every 15 s only after the heartbeat reached Redis, so a stuck worker or
     # one that lost Redis turns unhealthy (src/workers/heartbeat.js).
