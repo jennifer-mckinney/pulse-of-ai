@@ -455,7 +455,7 @@ describe('rate limits are not refusals (diagnosis 2026-10-01)', () => {
         expect(err).toMatchObject({ status: 403, signal: 'ratelimit_remaining_zero', retryAt: RESET * 1000, host: 'api.github.com' });
         expect(classifyError(err)).toEqual({ error_kind: 'rate_limited', http_status: 403 });
         expect(transport.calls).toHaveLength(1);
-        expect(http.holds).toEqual({ 'api.github.com': { until: iso(RESET * 1000), http_status: 403, signal: 'ratelimit_remaining_zero', count: 1, weak: 0, at: iso(NOW) } });
+        expect(http.holds).toEqual({ 'api.github.com': { until: iso(RESET * 1000), http_status: 403, signal: 'ratelimit_remaining_zero', count: 1, weak: 0, strong403: 1, at: iso(NOW) } });
         expect([...http.drainHoldChanges().keys()]).toEqual(['api.github.com']);
         // The rate-limit headers are kept (allow-listed, scrubbed); the body never.
         expect(err.headers).toMatchObject({ 'x-ratelimit-limit': '10', 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(RESET),
@@ -488,6 +488,42 @@ describe('rate limits are not refusals (diagnosis 2026-10-01)', () => {
         expect(lengths.slice(0, 4)).toEqual([60000, 120000, 240000, 480000]);
         expect(lengths[11]).toBe(86400000);
         expect(http.holds['api.github.com']).toMatchObject({ count: 12, weak: 0 });
+    });
+
+    test('security review L3: ten strong 403s (x-ratelimit-remaining: 0) in a row on a host become a refusal; a success or a 429 resets the run', async () => {
+        let t = NOW;
+        const strong = { status: 403, headers: { 'x-ratelimit-remaining': '0' }, body: '' };
+        const { http } = client([[/strong\.example/, strong]], { now: () => t });
+        const U = 'https://strong.example/x';
+        for (let i = 1; i <= 9; i++) {
+            const err = await http.request(U).catch(e => e);
+            expect([i, err.constructor.name]).toEqual([i, 'RateLimitedError']);
+            expect(http.holds['strong.example']).toMatchObject({ count: i, weak: 0, strong403: i });
+            t = Date.parse(http.holds['strong.example'].until);
+        }
+        const tenth = await http.request(U).catch(e => e);
+        expect(tenth).toBeInstanceOf(AccessDeniedError);
+        expect(tenth.message).toMatch(/10 rate-limit 403s in a row/);
+        // The refused state takes over: the streak is dropped.
+        expect(http.holds['strong.example']).toBeUndefined();
+        // A 429 in between ends the run of strong 403s.
+        const r = client([[/mix\.example/, { status: 403, headers: { 'x-ratelimit-remaining': '0' }, body: '' }]], { now: () => t });
+        await r.http.request('https://mix.example/x').catch(e => e);
+        expect(r.http.holds['mix.example'].strong403).toBe(1);
+        const e429 = require('../../../src/collectors/rate-limit').nextHold(r.http.holds['mix.example'], { retryAt: null, status: 429, signal: 'http_429', weak: false }, t).entry;
+        expect(e429.strong403).toBeUndefined();
+    });
+
+    test('security review L6: an error message names a registry host, never an env-configured one', async () => {
+        const reg = await at([[/api\.github\.com/, { status: 429, headers: { 'retry-after': '60' }, body: '' }]]).http.request(URL_).catch(e => e);
+        expect(reg.message).toMatch(/^api\.github\.com rate-limited us/);
+        const { http } = at([[/acme-123\.feeds\.example/, { status: 429, headers: { 'retry-after': '60' }, body: '' }]]);
+        const first = await http.request('https://acme-123.feeds.example/x').catch(e => e);
+        expect(first.message).not.toMatch(/acme-123/);
+        expect(first.message).toMatch(/^configured host rate-limited us/);
+        const held = await http.request('https://acme-123.feeds.example/x').catch(e => e);
+        expect(held.message).not.toMatch(/acme-123/);
+        expect(held.message).toMatch(/^not requested: configured host is rate-limiting us/);
     });
 
     test('N1: the same response from another host is a REFUSAL (GitHub\'s wording is evidence from api.github.com only)', async () => {

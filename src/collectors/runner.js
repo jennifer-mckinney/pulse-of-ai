@@ -281,99 +281,112 @@ async function runCollection(o = {}) {
                 fail(err.message, err);
             }
             let storeFailed = false;
-            for (const c of collectors) {
-                // G10-5: the route's cursor and HTTP validators as they were
-                // before it ran. If any of its items fails to store, they are
-                // restored, so the next run fetches those items again (a
-                // moved since-id or an ETag / 304 would otherwise skip them
-                // for good; a bulk file would be marked seen unstored).
-                const snapshot = JSON.stringify({ cursor, httpCache });
-                let routeStoreFailed = false;
-                let result;
-                if (rateLimit.routeHeld(c.route, env, runHolds, Date.now())) {
-                    heldRoutes.push(c.route.id);
-                    continue;
-                }
-                try {
-                    result = await c.collect();
-                    okRoutes++;
-                } catch (err) {
-                    if (err && err.held === true) { heldRoutes.push(c.route.id); continue; }
-                    fail(`${c.route.id}: ${err.message}`, err);
-                    continue;
-                }
-                // G10-6: problems that did not stop the route (a broken or
-                // refused feed of a multi-feed source, a skipped message) are
-                // part of the run's errors, last_error and classification.
-                // A feed not requested because its host is backing off is not.
-                for (const w of result.warnings || []) {
-                    if (w.err && w.err.held === true) heldRoutes.push(c.route.id);
-                    else fail(`${c.route.id}: ${w.text}`, w.err);
-                }
-                row.fetched += result.fetched;
-                row.kept += result.payloads.length;
-                for (const payload of result.payloads) {
-                    let stored;
-                    try {
-                        stored = await storeRawPost(payload, sourceId, { ingestMvId: mv.ingestMvId, admissionMvId: mv.admissionMvId });
-                    } catch (err) {
-                        routeStoreFailed = true;
-                        fail(`${c.route.id}: store failed: ${err.message}`, Object.assign(new Error('store'), { kind: 'store' }));
-                        continue;
-                    }
-                    if (!stored.isNew) continue;
-                    row.new++;
-                    await ensureJob();
-                    if (scoreVia === 'queue') {
-                        // The slot is reserved BEFORE the enqueue, so the
-                        // cycle cannot close between the two (G10-2).
-                        await cycle.reserveRetry(jobId);
-                        try {
-                            await queues.enqueueIngest({ rawPostId: stored.postId, sourceId, jobId, reserved: true });
-                            queuedForScoring++;
-                        } catch (qerr) {
-                            await cycle.releaseRetry(jobId).catch(() => {});
-                            // G10-4: never swallowed; the sweep re-queues it.
-                            queueFailed = true;
-                            fail(`${c.route.id}: the scoring job could not be queued (${qerr.message})`,
-                                Object.assign(new Error('queue'), { kind: 'queue' }));
-                        }
+            // Security review M1: a throw anywhere in the route loop (a DB
+            // error while storing, a queue failure that escapes) must not lose
+            // a rate-limit hold learned earlier in the loop — the restart would
+            // re-poll a host that just limited us. The hold is saved, then the
+            // error continues unchanged.
+            try {
+                for (const c of collectors) {
+                    // G10-5: the route's cursor and HTTP validators as they were
+                    // before it ran. If any of its items fails to store, they are
+                    // restored, so the next run fetches those items again (a
+                    // moved since-id or an ETag / 304 would otherwise skip them
+                    // for good; a bulk file would be marked seen unstored).
+                    const snapshot = JSON.stringify({ cursor, httpCache });
+                    let routeStoreFailed = false;
+                    let result;
+                    if (rateLimit.routeHeld(c.route, env, runHolds, Date.now())) {
+                        heldRoutes.push(c.route.id);
                         continue;
                     }
                     try {
-                        await scorePost(stored.postId, jobId, mv);
-                        newPostIds.push(stored.postId);
+                        result = await c.collect();
+                        okRoutes++;
                     } catch (err) {
-                        summary.scoringRetries++;
-                        // The retry holds a slot on this job until it has
-                        // scored, so the job's bias checks wait for it.
-                        await cycle.reserveRetry(jobId);
+                        if (err && err.held === true) { heldRoutes.push(c.route.id); continue; }
+                        fail(`${c.route.id}: ${err.message}`, err);
+                        continue;
+                    }
+                    // G10-6: problems that did not stop the route (a broken or
+                    // refused feed of a multi-feed source, a skipped message) are
+                    // part of the run's errors, last_error and classification.
+                    // A feed not requested because its host is backing off is not.
+                    for (const w of result.warnings || []) {
+                        if (w.err && w.err.held === true) heldRoutes.push(c.route.id);
+                        else fail(`${c.route.id}: ${w.text}`, w.err);
+                    }
+                    row.fetched += result.fetched;
+                    row.kept += result.payloads.length;
+                    for (const payload of result.payloads) {
+                        let stored;
                         try {
-                            await queues.enqueueIngestRetry({ rawPostId: stored.postId, sourceId, jobId, reserved: true });
-                            log(`[collect] ${slug}: scoring failed for ${stored.postId} (${err.message}) — queued for retry`);
-                        } catch (qerr) {
-                            await cycle.releaseRetry(jobId).catch(() => {});
-                            // G10-4: never swallowed. The run is an error; the
-                            // unscored post is re-queued by the sweep
-                            // (src/collectors/sweep.js) within 24 h.
-                            queueFailed = true;
-                            fail(`${c.route.id}: scoring failed and the retry could not be queued (${qerr.message})`,
-                                Object.assign(new Error('queue'), { kind: 'queue' }));
+                            stored = await storeRawPost(payload, sourceId, { ingestMvId: mv.ingestMvId, admissionMvId: mv.admissionMvId });
+                        } catch (err) {
+                            routeStoreFailed = true;
+                            fail(`${c.route.id}: store failed: ${err.message}`, Object.assign(new Error('store'), { kind: 'store' }));
+                            continue;
+                        }
+                        if (!stored.isNew) continue;
+                        row.new++;
+                        await ensureJob();
+                        if (scoreVia === 'queue') {
+                            // The slot is reserved BEFORE the enqueue, so the
+                            // cycle cannot close between the two (G10-2).
+                            await cycle.reserveRetry(jobId);
+                            try {
+                                await queues.enqueueIngest({ rawPostId: stored.postId, sourceId, jobId, reserved: true });
+                                queuedForScoring++;
+                            } catch (qerr) {
+                                await cycle.releaseRetry(jobId).catch(() => {});
+                                // G10-4: never swallowed; the sweep re-queues it.
+                                queueFailed = true;
+                                fail(`${c.route.id}: the scoring job could not be queued (${qerr.message})`,
+                                    Object.assign(new Error('queue'), { kind: 'queue' }));
+                            }
+                            continue;
+                        }
+                        try {
+                            await scorePost(stored.postId, jobId, mv);
+                            newPostIds.push(stored.postId);
+                        } catch (err) {
+                            summary.scoringRetries++;
+                            // The retry holds a slot on this job until it has
+                            // scored, so the job's bias checks wait for it.
+                            await cycle.reserveRetry(jobId);
+                            try {
+                                await queues.enqueueIngestRetry({ rawPostId: stored.postId, sourceId, jobId, reserved: true });
+                                log(`[collect] ${slug}: scoring failed for ${stored.postId} (${err.message}) — queued for retry`);
+                            } catch (qerr) {
+                                await cycle.releaseRetry(jobId).catch(() => {});
+                                // G10-4: never swallowed. The run is an error; the
+                                // unscored post is re-queued by the sweep
+                                // (src/collectors/sweep.js) within 24 h.
+                                queueFailed = true;
+                                fail(`${c.route.id}: scoring failed and the retry could not be queued (${qerr.message})`,
+                                    Object.assign(new Error('queue'), { kind: 'queue' }));
+                            }
                         }
                     }
+                    if (routeStoreFailed) {
+                        storeFailed = true;
+                        const prev = JSON.parse(snapshot);
+                        for (const k of Object.keys(cursor)) delete cursor[k];
+                        Object.assign(cursor, prev.cursor);
+                        // Validators roll back. A rate-limit hold learned in this
+                        // route is NOT in the HTTP cache (it lives in the run's
+                        // holds, saved to rate_limited_hosts), so it is never
+                        // rolled back (PR #44 Copilot re-review).
+                        for (const k of Object.keys(httpCache)) delete httpCache[k];
+                        Object.assign(httpCache, prev.httpCache);
+                    }
                 }
-                if (routeStoreFailed) {
-                    storeFailed = true;
-                    const prev = JSON.parse(snapshot);
-                    for (const k of Object.keys(cursor)) delete cursor[k];
-                    Object.assign(cursor, prev.cursor);
-                    // Validators roll back. A rate-limit hold learned in this
-                    // route is NOT in the HTTP cache (it lives in the run's
-                    // holds, saved to rate_limited_hosts), so it is never
-                    // rolled back (PR #44 Copilot re-review).
-                    for (const k of Object.keys(httpCache)) delete httpCache[k];
-                    Object.assign(httpCache, prev.httpCache);
-                }
+            } catch (loopErr) {
+                await state.saveHolds(sourceId, {
+                    hosts: myHosts, changes: http.drainHoldChanges(), view: runHolds,
+                    routes: rateLimit.holdGate(src, env, runHolds, Date.now()).routes, src,
+                }).catch(serr => log(`[collect] ${slug}: could not save the rate-limit holds (${scrub(serr.message, env)})`));
+                throw loopErr;
             }
             const classified = routeErrors.map(e => classifyError(e.err));
             // Diagnosis 2026-10-01: the run's rate limit (if any). Its hold

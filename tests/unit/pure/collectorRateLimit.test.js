@@ -583,3 +583,53 @@ describe('legacyHolds: PR #44 HTTP-cache hold keys → the one hold store', () =
         expect(rl.legacyHolds({ 'https://x.example/': { etag: 'e' } }, NOW)).toEqual({ holds: {}, cache: { 'https://x.example/': { etag: 'e' } } });
     });
 });
+
+describe('security review L3-L6', () => {
+    test('L4: a 5xx Retry-After holds a host at most MAX_5XX_HOLD_MS (a rate limit still up to 24 h); an existing longer hold is never shortened', () => {
+        const five = rl.nextHold(null, { retryAt: NOW + 20 * HOUR, status: 503, signal: 'retry_after_5xx', weak: false }, NOW);
+        expect(Date.parse(five.entry.until)).toBe(NOW + rl.MAX_5XX_HOLD_MS);
+        expect(five.entry.count).toBe(0);
+        const limit = rl.nextHold(null, { retryAt: NOW + 20 * HOUR, status: 429, signal: 'http_429', weak: false }, NOW);
+        expect(Date.parse(limit.entry.until)).toBe(NOW + 20 * HOUR);
+        const prev = { ...limit.entry };
+        expect(rl.nextHold(prev, { retryAt: NOW + 20 * HOUR, status: 503, signal: 'retry_after_5xx', weak: false }, NOW).entry.until).toBe(prev.until);
+        // A legacy PR #44 503 key is capped the same way.
+        const legacy = rl.legacyHolds({ 'retry-after:a.example': { until: iso(NOW + 20 * HOUR), status: 503 } }, NOW);
+        expect(Date.parse(legacy.holds['a.example'].until)).toBe(NOW + rl.MAX_5XX_HOLD_MS);
+    });
+
+    test('L5: a stored until is never read beyond the 24 h cap', () => {
+        const stored = { 'far.example': { until: iso(NOW + 3650 * DAY), http_status: 429, signal: 'http_429', count: 1, weak: 0, at: iso(NOW) } };
+        expect(Date.parse(rl.sanitizeHolds(stored, NOW)['far.example'].until)).toBe(NOW + rl.MAX_BACKOFF_MS);
+        expect(Date.parse(rl.activeHolds(stored, NOW)['far.example'].until)).toBe(NOW + rl.MAX_BACKOFF_MS);
+    });
+
+    test('L3: strong403 counts consecutive 403s with remaining 0 only (a 429, a body signal and a 5xx hold do not extend it)', () => {
+        const s403 = { retryAt: null, status: 403, signal: 'ratelimit_remaining_zero', weak: false };
+        let e = rl.nextHold(null, s403, NOW).entry;
+        e = rl.nextHold(e, s403, NOW).entry;
+        expect(e.strong403).toBe(2);
+        // A 5xx hold leaves it; a 429 or a GitHub body signal ends it.
+        expect(rl.nextHold(e, { retryAt: null, status: 503, signal: 'retry_after_5xx', weak: false }, NOW).entry.strong403).toBe(2);
+        expect(rl.nextHold(e, { retryAt: null, status: 429, signal: 'http_429', weak: false }, NOW).entry.strong403).toBeUndefined();
+        expect(rl.nextHold(e, { retryAt: null, status: 403, signal: 'body_rate_limit_retry_after', weak: false }, NOW).entry.strong403).toBeUndefined();
+        // The 10th escalates; the 9th does not.
+        let n = null;
+        const outcomes = [];
+        for (let i = 0; i < rl.ESCALATE_STRONG_403_AFTER; i++) {
+            const r = rl.nextHold(n, s403, NOW);
+            outcomes.push(r.escalate);
+            n = r.entry;
+        }
+        expect(outcomes.slice(0, -1).every(x => x === false)).toBe(true);
+        expect(outcomes[outcomes.length - 1]).toBe(true);
+        // Survives a store round trip.
+        expect(rl.sanitizeHolds({ 'x.example': n }, NOW)['x.example'].strong403).toBe(rl.ESCALATE_STRONG_403_AFTER);
+    });
+
+    test('L6: publicHostName names registry hosts only', () => {
+        expect(rl.publicHostName('api.github.com')).toBe('api.github.com');
+        expect(rl.publicHostName('API.GITHUB.COM')).toBe('API.GITHUB.COM');
+        expect(rl.publicHostName('acme-123.feeds.example')).toBe(rl.CONFIGURED_HOST);
+    });
+});

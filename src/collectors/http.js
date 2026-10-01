@@ -248,7 +248,7 @@ class HttpClient {
     heldError(hostname, url) {
         const hold = rateLimit.heldUntil(this.holds, hostname, this.now());
         if (!hold) return null;
-        return new RateLimitedError(`not requested: ${hostname} is rate-limiting us (HTTP ${hold.http_status || '?'}`
+        return new RateLimitedError(`not requested: ${rateLimit.publicHostName(hostname)} is rate-limiting us (HTTP ${hold.http_status || '?'}`
             + `${hold.signal ? `, ${hold.signal}` : ''}) — backing off until ${new Date(hold.until).toISOString()}, honoured`, {
             held: true, host: hostname, url: redactUrl(url), retryAt: hold.until,
         });
@@ -315,12 +315,16 @@ class HttpClient {
         if (!sig) return null;
         const { entry, escalate } = this.recordHold(host, { ...sig, status: res.status });
         if (escalate) {
-            return new AccessDeniedError(`${host} refused access (HTTP ${res.status}): ${rateLimit.ESCALATE_AFTER} rate limits in a row`
-                + ' on body text alone — treated as a refusal (fail closed), not retried, not worked around', {
+            // L3: a body-only streak (ESCALATE_AFTER) or a long run of strong 403s.
+            const why = sig.weak
+                ? `${rateLimit.ESCALATE_AFTER} rate limits in a row on body text alone`
+                : `${rateLimit.ESCALATE_STRONG_403_AFTER} rate-limit 403s in a row`;
+            return new AccessDeniedError(`${rateLimit.publicHostName(host)} refused access (HTTP ${res.status}): ${why}`
+                + ' — treated as a refusal (fail closed), not retried, not worked around', {
                 status: res.status, url: redactUrl(url), headers: refusalHeaders(res.headers, this.env),
             });
         }
-        return new RateLimitedError(`${host} rate-limited us (HTTP ${res.status}, ${sig.signal}) — not a refusal; not retried,`
+        return new RateLimitedError(`${rateLimit.publicHostName(host)} rate-limited us (HTTP ${res.status}, ${sig.signal}) — not a refusal; not retried,`
             + ` backing off until ${entry.until}`, {
             status: res.status, url: redactUrl(url), host, signal: sig.signal, retryAt: Date.parse(entry.until),
             headers: refusalHeaders(res.headers, this.env),

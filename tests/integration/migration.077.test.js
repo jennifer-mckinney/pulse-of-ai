@@ -65,12 +65,34 @@ describe('migration 077_rate_limit_hold_store_unify.sql', () => {
 
         // GitHub: the port is dropped; the existing #45 record keeps its
         // streak with the later until; a 503 is retry_after_5xx (count 0),
-        // capped at 24 h.
+        // capped at 1 h (rate-limit.js MAX_5XX_HOLD_MS).
         expect(once.github.http_cache).toEqual({});
         expect(once.github.rate_limited_hosts['api.github.com']).toEqual({ ...existing, until: iso(now + 600 * 1000) });
         const srv = once.github.rate_limited_hosts['srv.example'];
         expect(srv).toMatchObject({ http_status: 503, signal: 'retry_after_5xx', count: 0, weak: 0 });
-        expect(Math.abs(Date.parse(srv.until) - (now + rl.MAX_BACKOFF_MS))).toBeLessThan(60 * 1000);
+        expect(Math.abs(Date.parse(srv.until) - (now + rl.MAX_5XX_HOLD_MS))).toBeLessThan(60 * 1000);
         expect(new Date(once.github.rate_limited_until).toISOString()).toBe(srv.until);
+    });
+
+    it('security review L1/L2: an impossible timestamp never aborts the migration; a key with a path still names its host', async () => {
+        const now = Date.now();
+        const tldr = await idOf('tldr');
+        const github = await idOf('github');
+        await dbRun(`INSERT INTO source_collection_state (source_id, http_cache) VALUES ($1, $2::jsonb)`, [tldr, JSON.stringify({
+            'retry-after:impossible.example': { until: '2026-13-45T99:99:99Z', status: 429 },
+            'retry-after:path.example/feed': { until: iso(now + 600 * 1000), status: 429 },
+        })]);
+        // An existing #45 entry whose until is impossible keeps the legacy until.
+        await dbRun(`INSERT INTO source_collection_state (source_id, http_cache, rate_limited_hosts) VALUES ($1, $2::jsonb, $3::jsonb)`, [github, JSON.stringify({
+            'retry-after:api.github.com': { until: iso(now + 300 * 1000), status: 429 },
+        }), JSON.stringify({ 'api.github.com': { until: '2026-99-99T00:00:00Z', http_status: 403, signal: 'http_429', count: 2, weak: 0, at: iso(now) } })]);
+        await dbTransaction(c => c.query(SQL_077));
+        const t = await stateOf('tldr');
+        expect(t.http_cache).toEqual({});
+        expect(Object.keys(t.rate_limited_hosts)).toEqual(['path.example']);
+        const g = await stateOf('github');
+        expect(g.rate_limited_hosts['api.github.com']).toMatchObject({ count: 2, until: iso(now + 300 * 1000) });
+        // The helper function is gone (a second run in this session recreates it).
+        await dbTransaction(c => c.query(SQL_077));
     });
 });

@@ -95,7 +95,7 @@ describe('a GitHub rate limit is a host backoff, not a refusal', () => {
         expect(st).toMatchObject({ refusal_count: 0, refused_until: null, access_denied_at: null, probation_until: null });
         expect(new Date(st.rate_limited_until).getTime()).toBe(Number(reset) * 1000);
         expect(st.rate_limited_hosts).toEqual({
-            'api.github.com': { until: new Date(Number(reset) * 1000).toISOString(), http_status: 403, signal: 'ratelimit_remaining_zero', count: 1, weak: 0,
+            'api.github.com': { until: new Date(Number(reset) * 1000).toISOString(), http_status: 403, signal: 'ratelimit_remaining_zero', count: 1, weak: 0, strong403: 1,
                 at: expect.any(String) },
         });
         // Grumpy #2: the held routes are stored by the worker.
@@ -367,6 +367,27 @@ describe('a source whose every route is held is skipped, not failed', () => {
         } finally {
             spy.mockRestore();
         }
+    });
+
+    it('security review M1: a throw in the route loop after a rate limit was learned still saves the hold (a restart never re-polls the limited host)', async () => {
+        const rateLimit = require('../../src/collectors/rate-limit');
+        const real = rateLimit.routeHeld;
+        let calls = 0;
+        // Route 1 (repo-search) is requested and rate-limited; the loop then
+        // throws at route 2 — outside every per-route try/catch.
+        const spy = jest.spyOn(rateLimit, 'routeHeld').mockImplementation((...a) => {
+            if (++calls === 2) throw new Error('boom between routes');
+            return real(...a);
+        });
+        try {
+            await collect([[REPO_SEARCH, spent403(600)], [ISSUE_SEARCH, SEARCH_OK], BLOG_OK]).catch(() => null);
+        } finally {
+            spy.mockRestore();
+        }
+        expect(calls).toBeGreaterThanOrEqual(2);
+        const hosts = (await stateOf('github')).rate_limited_hosts;
+        expect(hosts['api.github.com']).toMatchObject({ http_status: 403, signal: 'ratelimit_remaining_zero', count: 1 });
+        expect(Date.parse(hosts['api.github.com'].until)).toBeGreaterThan(Date.now());
     });
 
     it('security F3: a contract-feed host never reaches GET /api/sources', async () => {

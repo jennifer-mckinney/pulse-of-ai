@@ -82,10 +82,22 @@ const LEGACY_HOLD_PREFIX = 'retry-after:';
 // Security F1: consecutive weak (body-only) rate limits of one host before
 // the next one is treated as the refusal it may really be.
 const ESCALATE_AFTER = 5;
+// Security review L3: a 403 with `x-ratelimit-remaining: 0` is a strong signal
+// from ANY host (GitHub's body wording, by contrast, counts only from
+// api.github.com and never escalates — N1), so a host that really refuses could add the header and never
+// be treated as refusing (ADR 0001 ruling 5). Consecutive STRONG 403s (not
+// 429s) of one host therefore escalate too, at a higher threshold: by the
+// 10th the doubling floor is hours, far past any real window reset, and a
+// success resets the streak.
+const ESCALATE_STRONG_403_AFTER = 10;
 // Grumpy #5: consecutive rate limits of one host before the source_rate_limited
 // warning opens (a run whose other routes succeed never fails, so
 // consecutive_failures cannot see this).
 const WARN_AFTER = 3;
+// Security review L4: a hold from a 5xx's Retry-After (not a rate limit) is
+// capped lower than a rate limit's 24 h: any host that answers 5xx with a huge
+// Retry-After would otherwise park every source on that host for a day.
+const MAX_5XX_HOLD_MS = 60 * 60 * 1000;
 // A streak whose last hold ended this long ago is forgotten.
 const STALE_MS = 7 * 24 * 60 * 60 * 1000;
 const STREAK_MAX = 1000;
@@ -258,8 +270,11 @@ function sanitizeHolds(stored, now = Date.now()) {
     for (const [rawHost, h] of Object.entries(stored)) {
         const host = String(rawHost).toLowerCase();
         if (!validHost(host) || !h || typeof h !== 'object') continue;
-        const until = Date.parse(h.until);
-        if (!Number.isFinite(until) || until <= now - STALE_MS) continue;
+        // Security review L5: a stored `until` is never read beyond the
+        // 24 h cap (a poisoned or legacy row could hold a host for years).
+        const rawUntil = Date.parse(h.until);
+        if (!Number.isFinite(rawUntil) || rawUntil <= now - STALE_MS) continue;
+        const until = Math.min(rawUntil, now + MAX_BACKOFF_MS);
         // `at`: when the hold was recorded — the NEWEST record of a host wins
         // a merge (Copilot review: never a fieldwise maximum, which would
         // resurrect a weak streak a later strong limit reset). Legacy
@@ -273,6 +288,7 @@ function sanitizeHolds(stored, now = Date.now()) {
             // Retry-After — grumpy N4); a legacy entry without one is 1.
             count: h.count === undefined ? 1 : streak(h.count),
             weak: streak(h.weak),
+            ...(streak(h.strong403) ? { strong403: streak(h.strong403) } : {}),
             at: new Date(Number.isFinite(at) && at <= until ? at : until - MIN_BACKOFF_MS).toISOString(),
         };
     }
@@ -301,19 +317,23 @@ function nextHold(prev, { retryAt = null, status = null, signal = null, weak = f
     const prevWeak = prev ? streak(prev.weak) : 0;
     const count = notLimit ? prevCount : Math.min(STREAK_MAX, prevCount + 1);
     const weakCount = notLimit ? prevWeak : (weak ? Math.min(STREAK_MAX, prevWeak + 1) : 0);
+    // L3: consecutive strong 403s of the host (a 429 or a weak limit ends it).
+    const prevStrong = prev ? streak(prev.strong403) : 0;
+    const strong403 = notLimit ? prevStrong : (status === 403 && signal === 'ratelimit_remaining_zero' ? Math.min(STREAK_MAX, prevStrong + 1) : 0);
     let until = backoffUntil(retryAt, now, notLimit ? 1 : count);
     // PR #44: a 429 without any time of the source's holds at least
     // NO_TIME_429_HOLD_MS (the doubling floor may already be longer).
     if (signal === 'http_429' && (retryAt === null || retryAt === undefined)) {
         until = Math.max(until, now + NO_TIME_429_HOLD_MS);
     }
+    if (notLimit) until = Math.min(until, now + MAX_5XX_HOLD_MS);
     // A later hold already in force is never shortened.
     const prevUntil = prev ? Date.parse(prev.until) : NaN;
     if (Number.isFinite(prevUntil) && prevUntil > until) until = prevUntil;
     return {
         entry: { until: new Date(until).toISOString(), http_status: status, signal: SIGNALS.includes(signal) ? signal : null,
-            count, weak: weakCount, at: new Date(now).toISOString() },
-        escalate: !notLimit && weak && weakCount >= ESCALATE_AFTER,
+            count, weak: weakCount, ...(strong403 ? { strong403 } : {}), at: new Date(now).toISOString() },
+        escalate: !notLimit && ((weak && weakCount >= ESCALATE_AFTER) || strong403 >= ESCALATE_STRONG_403_AFTER),
     };
 }
 
@@ -450,6 +470,20 @@ function collectionHolds(src, holds) {
     return Object.fromEntries(Object.entries(holds).filter(([h]) => String(h).toLowerCase() !== terms));
 }
 
+let registryHostSet = null;
+/**
+ * Security review L6: a hostname as an error message (stored in last_error and
+ * mailed by the watchdog) may name: a host the REGISTRY lists (env-free) is
+ * named; any other (from a contract feed URL in the env) is CONFIGURED_HOST.
+ */
+function publicHostName(host) {
+    if (!registryHostSet) {
+        const { SOURCES, routeAllowedHosts } = require('../config/source-registry');
+        registryHostSet = new Set(SOURCES.flatMap(src => src.routes.flatMap(r => routeAllowedHosts(r, {}))));
+    }
+    return registryHostSet.has(String(host).toLowerCase()) ? host : CONFIGURED_HOST;
+}
+
 /**
  * The hosts of a source's active holds as /api/sources may publish them
  * (security F3): a host the REGISTRY names (env-free) is served; any other
@@ -485,7 +519,7 @@ function legacyHolds(httpCache, now = Date.now()) {
         if (!host || !Number.isFinite(until) || until <= now) continue;
         const status = e.status === 503 ? 503 : 429;
         const rec = sanitizeHolds({ [host]: {
-            until: new Date(Math.min(until, now + MAX_BACKOFF_MS)).toISOString(), http_status: status,
+            until: new Date(Math.min(until, now + (status === 503 ? MAX_5XX_HOLD_MS : MAX_BACKOFF_MS))).toISOString(), http_status: status,
             signal: status === 503 ? 'retry_after_5xx' : 'http_429', count: status === 503 ? 0 : 1, weak: 0,
             at: new Date(now).toISOString(),
         } }, now)[host];
@@ -495,7 +529,7 @@ function legacyHolds(httpCache, now = Date.now()) {
 }
 
 module.exports = {
-    MIN_BACKOFF_MS, MAX_BACKOFF_MS, MAX_IN_RUN_WAIT_MS, NO_TIME_429_HOLD_MS, LEGACY_HOLD_PREFIX, ESCALATE_AFTER, WARN_AFTER, STALE_MS, RATE_LIMITED, SIGNALS,
+    MIN_BACKOFF_MS, MAX_BACKOFF_MS, MAX_5XX_HOLD_MS, publicHostName, MAX_IN_RUN_WAIT_MS, NO_TIME_429_HOLD_MS, LEGACY_HOLD_PREFIX, ESCALATE_AFTER, ESCALATE_STRONG_403_AFTER, WARN_AFTER, STALE_MS, RATE_LIMITED, SIGNALS,
     WEAK_SIGNALS, BODY_HOSTS, CONFIGURED_HOST, BODY_RE,
     parseRetryAfter, parseReset, bodyNamesRateLimit, rateLimitSignal, backoffUntil,
     sanitizeHolds, activeHolds, nextHold, mergeHolds, combineHold, collectionHolds, heldUntil, hostOf,

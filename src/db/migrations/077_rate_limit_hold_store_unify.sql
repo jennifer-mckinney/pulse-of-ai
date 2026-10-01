@@ -17,7 +17,8 @@
 --   - 429 → { signal: "http_429", count: 1 }, 503 → { signal:
 --     "retry_after_5xx", count: 0 } (a 5xx's Retry-After is not a rate
 --     limit), weak 0, http_status the key's status, at NOW();
---   - until is capped at NOW() + 24 h (rate-limit.js MAX_BACKOFF_MS);
+--   - until is capped at NOW() + 24 h (rate-limit.js MAX_BACKOFF_MS), a 503's
+--     (not a rate limit) at NOW() + 1 h (rate-limit.js MAX_5XX_HOLD_MS);
 --   - a host that already has a #45 entry keeps it (its streaks), with the
 --     LATER until of the two (never shortened — security N6);
 --   - rate_limited_until becomes the later of its value and the moved holds'.
@@ -26,13 +27,31 @@
 -- (rate-limit.js legacyHolds), for a previous-release worker that writes one
 -- during a rolling deploy.
 --
+-- A timestamp that does not exist (month 13, hour 99) reads as unparseable
+-- instead of aborting the migration (pg_temp.hold_ts, dropped at the end); the
+-- host is the key's text before any path, query, fragment or port, as the
+-- runner's hostOf() reads it.
+--
 -- Additive data move, idempotent: a second run finds no `retry-after:` key.
+
+CREATE OR REPLACE FUNCTION pg_temp.hold_ts(v text) RETURNS timestamptz AS $fn$
+BEGIN
+    IF v IS NULL OR v !~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})$' THEN
+        RETURN NULL;
+    END IF;
+    RETURN v::timestamptz;
+EXCEPTION WHEN others THEN
+    RETURN NULL;
+END
+$fn$ LANGUAGE plpgsql IMMUTABLE;
 
 WITH legacy AS (
     SELECT s.source_id,
-           lower(split_part(substring(e.key FROM length('retry-after:') + 1), ':', 1)) AS host,
-           CASE WHEN (e.value ->> 'until') ~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})$'
-                THEN LEAST((e.value ->> 'until')::timestamptz, NOW() + interval '24 hours') END AS until,
+           lower(split_part(regexp_replace(substring(e.key FROM length('retry-after:') + 1), '[/?#].*$', ''), ':', 1)) AS host,
+           -- LEAST ignores NULL: an unparseable until must stay NULL (never a hold).
+           CASE WHEN pg_temp.hold_ts(e.value ->> 'until') IS NULL THEN NULL
+                ELSE LEAST(pg_temp.hold_ts(e.value ->> 'until'),
+                           NOW() + CASE WHEN (e.value ->> 'status') = '503' THEN interval '1 hour' ELSE interval '24 hours' END) END AS until,
            CASE WHEN (e.value ->> 'status') = '503' THEN 503 ELSE 429 END AS status
     FROM source_collection_state s, jsonb_each(s.http_cache) e
     WHERE e.key LIKE 'retry-after:%'
@@ -48,8 +67,7 @@ entries AS (
            jsonb_object_agg(l.host, CASE
                WHEN s.rate_limited_hosts ? l.host THEN
                    (s.rate_limited_hosts -> l.host) || jsonb_build_object('until', to_char(
-                       GREATEST(l.until, CASE WHEN (s.rate_limited_hosts -> l.host ->> 'until') ~ '^\d{4}-\d{2}-\d{2}T'
-                                              THEN (s.rate_limited_hosts -> l.host ->> 'until')::timestamptz END)
+                       GREATEST(l.until, pg_temp.hold_ts(s.rate_limited_hosts -> l.host ->> 'until'))
                        AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))
                ELSE jsonb_build_object(
                    'until', to_char(l.until AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
@@ -72,3 +90,5 @@ SET rate_limited_hosts = s.rate_limited_hosts || COALESCE(e.holds, '{}'::jsonb),
 FROM (SELECT DISTINCT source_id FROM legacy) moved
 LEFT JOIN entries e ON e.source_id = moved.source_id
 WHERE s.source_id = moved.source_id;
+
+DROP FUNCTION IF EXISTS pg_temp.hold_ts(text);
