@@ -54,6 +54,7 @@ PRs #24–#28 and #31–#34 merged after v1.2.0 (`master` @ `7291490`; #29 and #
 - **Audit round 3 corrections (no code change behind them):** §2 text retention also blanks on the Reddit deletion re-check; §5 compose profiles per service and the model's disk size; §6 the migration index, the schema sketch's foreign keys, the provenance id format, the migration gaps (063–064), DDL comments (`decision_audit_log`, `alert_events`, `data_retention_log`, `source_type`, `source_runs.job_id`) and the index note; §7 the health queue list, the proxy headers of the refresh token rule, the bias layer status `n-a`, the served error fields and `retired_note` of `/api/sources`; §8 the SSRF refusal list, the safe-id rule and the `verify-provenance` exit codes; §9 the window-run alert and lineage columns; §12 the embedding code comments; §13 the PRs after #22; §17 the cadence band (120–180 s) and the Stack Overflow / GitLab cadences; §19 the retention tiers, the Reddit re-check's refusal condition and the rollup coverage example; §20 the pseudonym history and the HMAC signal hash.
 - **Audit round 4 corrections (2026-09-30; no code change behind them):** this changelog's PR list (#29 and #30 were closed unmerged); §1 provenance fingerprints need a key and demo posts carry none; §3 the per-source `online` rule; §5 the watchdog shares the app image, and the MongoDB, `all-mpnet-base-v2`, IVFFlat and Infinity rows; §6 `processing_jobs` row creation, `content_hash` (stored and indexed, joined by nothing) and the `alert_resolution_approvals` foreign key; §8 `.env.example` holds defaults and placeholders, `content_hash`, and the error-response rule (environment variable names may be served where they tell the operator what to set; secrets never are; owner ruling, no code change); §9 source health runs on every cycle-timer tick; §12 and §15 every external benchmark figure is now cited to its primary source (sbert.net pretrained-models table, the Tembo pgvector benchmark, the e5-large model card, the `sentiment` README) or corrected, and the unsourced ones (CPU throughput, STS-B 84-85%, 3-4%, Infinity's 30-40% and 2-4x, e5-large 8GB+ RAM, RoBERTa 6GB RAM, "comparable to VADER") are withdrawn; §15 MongoDB has multi-document ACID transactions (since 4.0) and a vector search feature; §16 Discourse forums are collected (four routes); §17 refusal headers stay on the state row only while the refused state lasts; §20 the pseudonym upsert was removed in PR #22.
 - **Reconciliation with PRs #35, #37, #38 and #39 (2026-09-30; #36 is an issue, not a PR):** header, §11, §13, §21 the master SHA 0356a00 and the status line names PR #39; §3, §10 ingest@1.8.0 and audit_narration@1.4.0 (migration 066, wording only: the content hash is an integrity check, not a join key; errata on ingest 1.0.0–1.7.0); §6 50 migrations (001–066); §8, §12 python/start.sh binds 127.0.0.1 (`EMBEDDINGS_HOST`, PR #35); ADR 0001 `CORRELATION_MIN_CONFIDENCE` (PRs #37, #39).
+- **Audit round 5 corrections, §12–§16 (2026-09-30; no code change behind them):** §12 the model's 22.7M parameters (Hugging Face metadata), the `populate` role's `GET /health` readiness check, the Infinity CLI (`infinity_emb v2 --model-id`); §13 a comma in the PR list; §14 the refresh-interval row (collecting sources only, D4 exceptions), correlation latency **PLANNED**, the per-queue backlog limit, the accuracy targets marked not yet measured; §15 MySQL's native `JSON` type, a RoBERTa upgrade needs a registry entry, migration and inference code; §16 X needs `X_BEARER_TOKEN` and `GATE_APPROVED_BY`, the cold-start rule is ≥ 0.85 confidence only.
 
 **v1.1.0 Amendments (historical record; v1.2.0 supersedes the source count and categories, the pseudonym format and the retention schedule where the sections below say so):**
 - Scope: Global (not US-only)
@@ -1509,7 +1510,7 @@ Themes (default "Midnight") and the 8 category colours are defined in the same f
 | Property | Value |
 |---|---|
 | Dimensions | 384 |
-| Parameters | 22M |
+| Parameters | 22.7M (22,713,728, [Hugging Face model metadata at the pinned revision](https://huggingface.co/api/models/sentence-transformers/all-MiniLM-L6-v2/revision/1110a243fdf4706b3f48f1d95db1a4f5529b4d41)) |
 | Disk size | ~91 MB (float32 weights, `model.safetensors` 90,868,376 bytes at the pinned revision) |
 | Encoding speed | 14,200 sentences/s on a V100 GPU ([sbert.net pretrained models](https://www.sbert.net/docs/sentence_transformer/pretrained_models.html)); no CPU figure is published by that source or measured by this project |
 | Benchmark quality | 68.06 average over 14 sentence-embedding tasks, 49.54 over 6 semantic-search tasks ([sbert.net pretrained models](https://www.sbert.net/docs/sentence_transformer/pretrained_models.html)); the Hugging Face model card at the pinned revision publishes no benchmark score |
@@ -1517,7 +1518,7 @@ Themes (default "Midnight") and the 8 category colours are defined in the same f
 
 ### Deployment: the embeddings service (`python/embeddings_service.py`)
 
-A FastAPI app over sentence-transformers, built as the compose service `embeddings`. It publishes no port: only the worker reaches it, on the compose network.
+A FastAPI app over sentence-transformers, built as the compose service `embeddings`. It publishes no port: only the worker (`POST /embeddings`) and the demo `populate` role (`GET /health`, its readiness check) reach it, on the compose network.
 - `POST /embeddings` — OpenAI-compatible: `{ "input": [text], "model": "…" }` → `{ "data": [ { "index": 0, "embedding": [384 floats] } ] }`; vectors are L2-normalised.
 - `GET /health`.
 - The model is loaded at a pinned Hugging Face commit (`EMBED_MODEL_REVISION`, default `1110a243fdf4706b3f48f1d95db1a4f5529b4d41`) with sentence-transformers 6.1.0 (transformers 5.18.0, huggingface_hub 1.33.0, tokenizers 0.23.2, torch 2.12.1+cpu; hash-locked in `python/requirements-service.txt`), registered as `embedding@1.1.0` (migration 065; it supersedes `embedding@1.0.0` of migration 012, sentence-transformers 2.7.0, whose vectors were bit-identical on the comparison set and are not re-embedded). Every new vector records `1.1.0` in `post_embeddings.methodology_version` (NULL when `EMBED_MODEL` / `EMBED_MODEL_REVISION` override the registered model or revision); vectors stored earlier keep `1.0.0`.
@@ -1525,12 +1526,13 @@ A FastAPI app over sentence-transformers, built as the compose service `embeddin
 
 **PLANNED — not implemented as of v1.2.0: Infinity (`infinity-emb`) as the production server.** v1.1 chose it for dynamic batching, a ctranslate2 backend ([Infinity README](https://github.com/michaelfeil/infinity)) and the same OpenAI-compatible API, so it can replace the FastAPI service without Node changes:
 ```bash
-pip install infinity-emb
-infinity_emb start \
-  --model-name-or-path sentence-transformers/all-MiniLM-L6-v2 \
-  --batch-size 64 \
-  --model-warmup true
+pip install "infinity-emb[all]"
+infinity_emb v2 \
+  --model-id sentence-transformers/all-MiniLM-L6-v2 \
+  --revision 1110a243fdf4706b3f48f1d95db1a4f5529b4d41 \
+  --batch-size 64
 ```
+(Infinity CLI `v2`, [Infinity README](https://github.com/michaelfeil/infinity); model warm-up is on by default, [`infinity_emb/env.py`](https://github.com/michaelfeil/infinity/blob/main/libs/infinity_emb/infinity_emb/env.py) `model_warmup` default `true`.)
 The code comments name the FastAPI service that runs and describe Infinity as the planned alternative (`src/pipeline/embeddings.js`, `python/embeddings_service.py`, `python/requirements.txt`); only the header comment of migration `004_vector_support.sql` still says the embeddings are generated by "the Infinity service".
 
 ### Node.js Integration (`src/pipeline/embeddings.js`, `src/workers/embed.worker.js`)
@@ -1563,7 +1565,7 @@ Nothing on `master` queries the vectors yet; they are stored for the uses below.
 
 ## 13. Implementation Phases (TDD)
 
-**Status (v1.2.1):** Phases A to E are done on `master`; the lists below are the original plan, kept for traceability, with the deviations marked. Later work landed as PR #8 (story frontend), PR #9 (one-command standup), PR #10 (source collectors, ADR 0001) and PR #22 (PR #10 Part 2: collection hardening, maintenance schedule, rolling bias window, watchdog, Valkey); then PR #24 (refresh-job finalization and bias attribution, `bias@1.6.0`, `scripts/seed-demo.js` removed), PRs #25, #26 and #32 (Dependabot, black target, CPU-only torch in CI), PR #33 (refusal probation and refusal headers, the Internet Archive 304 fix) PR #34 (`embedding@1.1.0`, sentence-transformers 6.1.0), PR #35 (`python/start.sh` binds 127.0.0.1, `EMBEDDINGS_HOST`), PRs #37 and #39 (compose web gets the retention grace and pool settings; `CORRELATION_MIN_CONFIDENCE` dropped and blanked on the worker) and PR #38 (`ingest@1.8.0` / `audit_narration@1.4.0`, content-hash wording, migration 066); PRs #13–#21, #23, #27, #28 and #31 are dependency bumps.
+**Status (v1.2.1):** Phases A to E are done on `master`; the lists below are the original plan, kept for traceability, with the deviations marked. Later work landed as PR #8 (story frontend), PR #9 (one-command standup), PR #10 (source collectors, ADR 0001) and PR #22 (PR #10 Part 2: collection hardening, maintenance schedule, rolling bias window, watchdog, Valkey); then PR #24 (refresh-job finalization and bias attribution, `bias@1.6.0`, `scripts/seed-demo.js` removed), PRs #25, #26 and #32 (Dependabot, black target, CPU-only torch in CI), PR #33 (refusal probation and refusal headers, the Internet Archive 304 fix), PR #34 (`embedding@1.1.0`, sentence-transformers 6.1.0), PR #35 (`python/start.sh` binds 127.0.0.1, `EMBEDDINGS_HOST`), PRs #37 and #39 (compose web gets the retention grace and pool settings; `CORRELATION_MIN_CONFIDENCE` dropped and blanked on the worker) and PR #38 (`ingest@1.8.0` / `audit_narration@1.4.0`, content-hash wording, migration 066); PRs #13–#21, #23, #27, #28 and #31 are dependency bumps.
 
 ### TDD Rule: Every component follows Red → Green → Refactor
 Write the failing test first. Write only enough code to make it pass. Refactor. Never write production code without a failing test.
@@ -1632,16 +1634,18 @@ Only after all backend tests pass. **As built:** the FuN.zip prototype frontend 
 |---|---|---|
 | Page load | < 3s | Chrome DevTools Lighthouse |
 | DB query (aggregated-by-location) | < 500ms | EXPLAIN ANALYZE |
-| Data refresh interval | 2–3 min | per-source BullMQ schedulers inside the collection window (the 52 registry sources) |
+| Data refresh interval | 2–3 min | one BullMQ job scheduler per collecting registry source (none on a fresh clone; 23 of the 52 with `COLLECTOR_CONTACT_URL`, 31 with `GATE_APPROVED_BY` and `PERMISSION_GATED_FEEDS_ACCEPTED_BY` as well, all 52 once every key is also set), staggered across the 150 s collection window and run every max(window, the source's poll interval), so the D4 quota exceptions such as keyless Stack Overflow (900 s) run slower (§16 item 1) |
 | System uptime | 99% | Process health check |
-| Cross-platform correlation latency | < 30s per batch | processing_jobs.completed_at - started_at |
+| Cross-platform correlation latency (**PLANNED**; gated off on `master` pending a DPIA, §20) | < 30s per batch | processing_jobs.completed_at - started_at |
 
 ### System watchdog (`scripts/watchdog.js`, `src/watchdog/`, PR #22)
-The "99% uptime" target is watched from outside the processes it watches. The `watchdog` compose service (profile `full`, the same image, its own container) reads `GET /api/health` and runs its own `SELECT 1` against PostgreSQL every `WATCHDOG_POLL_INTERVAL_S` (default 120 s; first poll after `WATCHDOG_INITIAL_DELAY_S`, default 60 s). It holds one **critical** `alert_events` row per condition (`alert_type` `watchdog_<condition>`, `source_table 'watchdog'`, at most one open per condition, migration 050): web API unreachable, database unreachable, Valkey unreachable, worker down (heartbeat older than its 90 s TTL), maintenance failing or overdue (retention 30 min, daily 26 h, terms 8 days), text retention overdue, collection failing (sources collecting but none online in the last hour), queue backlog (more than 5,000 waiting + delayed jobs) and failed jobs abnormal (more than 25 queue failures or 3 failed cycles in an hour). A condition that cannot be evaluated (health unreadable, Valkey down) is unknown, never a problem or a recovery. A cleared condition is resolved with an `alert_resolutions` row.
+The "99% uptime" target is watched from outside the processes it watches. The `watchdog` compose service (profile `full`, the same image, its own container) reads `GET /api/health` and runs its own `SELECT 1` against PostgreSQL every `WATCHDOG_POLL_INTERVAL_S` (default 120 s; first poll after `WATCHDOG_INITIAL_DELAY_S`, default 60 s). It holds one **critical** `alert_events` row per condition (`alert_type` `watchdog_<condition>`, `source_table 'watchdog'`, at most one open per condition, migration 050): web API unreachable, database unreachable, Valkey unreachable, worker down (heartbeat older than its 90 s TTL), maintenance failing or overdue (retention 30 min, daily 26 h, terms 8 days), text retention overdue, collection failing (sources collecting but none online in the last hour), queue backlog (a queue holding more than 5,000 waiting + delayed jobs) and failed jobs abnormal (more than 25 queue failures or 3 failed cycles in an hour). A condition that cannot be evaluated (health unreadable, Valkey down) is unknown, never a problem or a recovery. A cleared condition is resolved with an `alert_resolutions` row.
 - **Dashboard:** the alert appears in `active_alerts` with `system: true`; the header chip turns into a red SYSTEM ALERT and the health drawer shows a SYSTEM WATCHDOG section (`/api/health` `watchdog`, §7).
 - **E-mail (optional):** when `SMTP_HOST`, `SMTP_FROM` and `SMTP_TO` are set, one message when a condition opens and one when it clears, at most `WATCHDOG_EMAIL_MAX_PER_HOUR` (12); TLS is required unless `SMTP_REQUIRE_TLS=false`. Without them the status is "email alerting not configured". Every send decision is an append-only `watchdog_notifications` row, and `watchdog_state` holds the last poll and e-mail status. The watchdog is the only role that receives `SMTP_PASSWORD`.
 
 ### Accuracy Targets (v1.1.0 — 99% target across all components)
+**Status:** targets, not yet measured. No benchmark set, labelled sample, monthly review or DQI calibration exists on `master`; the "How to Measure" column is the **PLANNED** method, not a running process.
+
 | Component | Target | How to Measure |
 |---|---|---|
 | Sentiment v1 (AFINN) | ≥ 99% on validated sample | Hand-labeled 500-post benchmark set, re-run monthly |
@@ -1671,7 +1675,7 @@ The "99% uptime" target is watched from outside the processes it watches. The `w
 |---|---|---|
 | SQLite | Existing in project, zero setup | No pgvector; no row-level security; no concurrent writes; not production-grade |
 | MongoDB | Flexible JSONB-like documents | Poor JOIN performance for audit queries; vector search is a separate MongoDB Vector Search feature ([MongoDB Vector Search overview](https://www.mongodb.com/docs/atlas/atlas-vector-search/vector-search-overview/)), not an extension inside one relational store with the audit tables. (v1.1 also said "no ACID transactions across collections"; that was wrong: MongoDB supports multi-document ACID transactions across collections and databases, on replica sets since 4.0 and sharded clusters since 4.2, [MongoDB transactions](https://www.mongodb.com/docs/manual/core/transactions/).) |
-| MySQL + separate Pinecone | Familiar + managed vector | Pinecone sends data to external API (GDPR risk); MySQL lacks JSONB; additional infrastructure |
+| MySQL + separate Pinecone | Familiar + managed vector | Pinecone sends data to external API (GDPR risk); vectors would live in a second, external store apart from the audit tables (MySQL's native binary `JSON` type, [MySQL JSON data type](https://dev.mysql.com/doc/refman/8.4/en/json.html), would serve the JSON columns); additional infrastructure |
 | Neo4j | Graph relationships between topics | Excellent for Phase 2 topic graphs; too complex for Phase 1 foundation; add later |
 
 ### Vector Index
@@ -1695,7 +1699,7 @@ The "99% uptime" target is watched from outside the processes it watches. The `w
 | Alternative | Why Considered | Why Not Chosen |
 |---|---|---|
 | VADER (Python) | Designed for social media | Requires Python subprocess call; `sentiment` npm runs synchronously in Node. No VADER comparison has been run for this project; `sentiment` publishes its own accuracy on the UCI labelled sentences: Amazon 0.726, IMDB 0.765, Yelp 0.696 ([sentiment README, Validation](https://github.com/thisandagain/sentiment#validation)) |
-| RoBERTa (Phase 1) | The pre-v1.1 80% accuracy target (v1.1 raised every target to 99%) | Deferred to Phase 2: it needs a Python inference service, and no RoBERTa model has been chosen or measured for this project, so no speed or memory figure is claimed; methodology_versions allows upgrade without code changes |
+| RoBERTa (Phase 1) | The pre-v1.1 80% accuracy target (v1.1 raised every target to 99%) | Deferred to Phase 2: it needs a Python inference service, and no RoBERTa model has been chosen or measured for this project, so no speed or memory figure is claimed; an upgrade ships as a new `methodology_versions` row (registry entry in `src/config/methodology-registry.js` plus a migration from `scripts/generate-methodology-migration.js`) beside the new inference code, so earlier scores keep their version |
 | AWS Comprehend | Managed, accurate | Data leaves infrastructure; per-request cost at scale |
 | TextBlob | Simple Python NLP | Requires Python service for Phase 1; not worth the overhead vs `sentiment` npm |
 
@@ -1714,8 +1718,8 @@ The "99% uptime" target is watched from outside the processes it watches. The `w
 1. **Location inference**: Reddit posts don't include location metadata. Inference approach options: (a) user flair text extraction, (b) subreddit geography mapping (r/unitedkingdom → UK), (c) content NLP for mentioned locations, (d) IP geolocation at collection time (GDPR risk). Recommended: (b) + (c) as GDPR-safe combination.
 2. **Discourse API vs "discourse"**: Resolved. The legacy `discourse.db` (`scripts/init-database.js`, `scripts/load-data-to-db.js`) refers to the project name, not the Discourse platform. Discourse forums are collected: the registry has four keyless `discourse` routes (`DiscourseCollector`, `src/collectors/adapters/developer.js`) on OpenStreetMap (`community.openstreetmap.org`, tag `ai`), GitLab (`forum.gitlab.com`), Docker Hub (`forums.docker.com`) and Hugging Face (`discuss.huggingface.co`); usernames and avatars are dropped. All sources defined in §17.
 3. **Academic source access**: ✅ Resolved by the registry (§17): arXiv and PubMed are open; SpringerLink needs a free key; ScienceDirect and JSTOR need approval; IEEE Xplore needs a licence; ResearchGate is blocked. Semantic Scholar and the ACM Digital Library are not in the workbook.
-4. **Twitter/X API cost**: ✅ Resolved by the registry (§17): X (#8) stays in the registry, built on the paid recent-search route and closed (`awaiting_licence`) until its key is set. Mastodon and Bluesky are not in the workbook.
-5. **Cross-platform correlation cold start**: intended position: single-platform authors receive no pseudonymous ID and are counted as unlinked in analytics (the ≥ 2-sighting and ≥ 0.85 confidence rules of §20). Not implemented: correlation is gated off pending a DPIA of the signal design, `correlateUser()` throws and no profile is ever created (§20).
+4. **Twitter/X API cost**: ✅ Resolved by the registry (§17): X (#8) stays in the registry, built on the paid recent-search route and closed (`awaiting_licence`) until its key (`X_BEARER_TOKEN`) and a named approval (`GATE_APPROVED_BY`, decision G5) are both set. Mastodon and Bluesky are not in the workbook.
+5. **Cross-platform correlation cold start**: intended position: single-platform authors receive no pseudonymous ID and are counted as unlinked in analytics (the ≥ 0.85 confidence rule of §20). Not implemented: correlation is gated off pending a DPIA of the signal design, `correlateUser()` throws and no profile is ever created (§20).
 
 ### Future Phases (not in scope for Phase 1)
 Every row below is **PLANNED — not implemented as of v1.2.0** unless it says otherwise.
