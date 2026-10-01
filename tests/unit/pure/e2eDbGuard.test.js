@@ -1,8 +1,11 @@
 // tests/unit/pure/e2eDbGuard.test.js
 // The e2e globalSetup DROPS and recreates its database on every run so a
 // reused e2e database can never carry fixture rows seeded under an older
-// methodology version. These tests pin the guard in front of that drop
-// (tests/e2e/e2e-db-guard.js) and its wiring into tests/e2e/global-setup.js:
+// methodology version. These tests pin the guard in front of that drop (the
+// DROP rule of scripts/lib/fixture-db-guard.js — one module with the fixture
+// WRITE rule since the PR #42 / PR #44 reconciliation; the write rule and the
+// shared definition are pinned in fixtureDbGuard.test.js) and its wiring
+// into tests/e2e/global-setup.js:
 // only pulse_of_ai_e2e[_suffix] may be dropped, never the dev database, the
 // Jest test database or the test Postgres port, and a refusal happens before
 // any connection is opened. Pure: pg, dotenv and child_process are mocked.
@@ -16,7 +19,7 @@ const {
     parsePort,
     quoteIdentifier,
     recreateE2eDatabase,
-} = require('../../e2e/e2e-db-guard');
+} = require('../../../scripts/lib/fixture-db-guard');
 
 // The environment shape of a developer .env (dev DB on 5434, Jest DB on 5433).
 const DEV_ENV = Object.freeze({
@@ -211,7 +214,7 @@ describe('tests/e2e/global-setup.js wiring', () => {
      * Load global-setup with pg / dotenv / child_process mocked. Returns the
      * setup function plus the doubles to inspect.
      */
-    function loadGlobalSetup() {
+    function loadGlobalSetup({ guardOverrides } = {}) {
         const client = fakeClient();
         client.connect = jest.fn(async () => {});
         client.end = jest.fn(async () => {});
@@ -222,6 +225,12 @@ describe('tests/e2e/global-setup.js wiring', () => {
             jest.doMock('dotenv', () => ({ config: jest.fn() }));
             jest.doMock('pg', () => ({ Client }));
             jest.doMock('child_process', () => ({ execFileSync }));
+            if (guardOverrides) {
+                jest.doMock('../../../scripts/lib/fixture-db-guard', () => ({
+                    ...jest.requireActual('../../../scripts/lib/fixture-db-guard'),
+                    ...guardOverrides,
+                }));
+            }
             setup = require('../../e2e/global-setup');
         });
         return { setup, Client, client, execFileSync };
@@ -280,5 +289,31 @@ describe('tests/e2e/global-setup.js wiring', () => {
         }
         expect(Client).toHaveBeenCalledWith(expect.objectContaining({ database: 'postgres', port: 5432 }));
         expect(client.queries[0]).toBe('DROP DATABASE IF EXISTS "pulse_of_ai_e2e" WITH (FORCE)');
+    });
+
+    // PR #42 / PR #44 reconciliation: globalSetup also checks the fixture
+    // WRITE rule against the exact env its steps get, before connecting — so
+    // the drop can never run and the fixture steps then refuse mid-provisioning.
+    test('checks the WRITE rule against the provisioning steps\' env, before any connection', async () => {
+        const assertFixtureTarget = jest.fn(() => { throw new Error('write rule refused'); });
+        const { setup, Client, execFileSync } = loadGlobalSetup({ guardOverrides: { assertFixtureTarget } });
+        await expect(setup()).rejects.toThrow('write rule refused');
+        expect(assertFixtureTarget).toHaveBeenCalledWith(
+            expect.objectContaining({ POSTGRES_DB: 'pulse_of_ai_e2e', NODE_ENV: 'development', POSTGRES_PORT: '5434' }));
+        expect(Client).not.toHaveBeenCalled();
+        expect(execFileSync).not.toHaveBeenCalled();
+    });
+
+    test('a FIXTURE_DB_ALLOW in the caller\'s env opts nothing into the drop', async () => {
+        process.env.E2E_DB = 'pulse_of_ai';
+        process.env.FIXTURE_DB_ALLOW = 'pulse_of_ai';
+        try {
+            const { setup, Client, execFileSync } = loadGlobalSetup();
+            await expect(setup()).rejects.toThrow(/\[e2e db guard\] refusing/);
+            expect(Client).not.toHaveBeenCalled();
+            expect(execFileSync).not.toHaveBeenCalled();
+        } finally {
+            delete process.env.FIXTURE_DB_ALLOW;
+        }
     });
 });

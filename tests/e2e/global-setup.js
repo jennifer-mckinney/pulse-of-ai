@@ -2,12 +2,12 @@
 // Playwright globalSetup — provisions the suite's ISOLATED database
 // (pulse_of_ai_e2e on the dev Postgres, see tests/e2e/e2e-env.js) before
 // every run:
-//   1. DROP + CREATE the e2e database (tests/e2e/e2e-db-guard.js): every run
-//      starts from an empty database, so no row seeded under an older
-//      methodology version (or left behind by an earlier run) survives. The
-//      guard refuses anything that is not an e2e database: never the dev
-//      database (pulse_of_ai / POSTGRES_DB), never the Jest test Postgres
-//      (port 5433 / POSTGRES_TEST_PORT);
+//   1. DROP + CREATE the e2e database (scripts/lib/fixture-db-guard.js, the
+//      drop rule): every run starts from an empty database, so no row seeded
+//      under an older methodology version (or left behind by an earlier run)
+//      survives. The guard refuses anything that is not an e2e database:
+//      never the dev database (pulse_of_ai / POSTGRES_DB), never the Jest
+//      test Postgres (port 5433 / POSTGRES_TEST_PORT);
 //   2. npm run migrate            (all migrations);
 //   3. npm run seed               (sources + methodology registry);
 //   4. npm run seed:e2e           (deterministic fixture dataset);
@@ -15,10 +15,14 @@
 //      the trailing hour so the suite never decays
 //      (docs/evidence/e2e-findings/2026-09-28-dev-seed-staleness.md).
 // Steps 2-5 run with POSTGRES_DB=<the e2e database>, so the dev database is
-// never read or written by the suite.
+// never read or written by the suite. Steps 4-5 are the fixture scripts,
+// which apply the same module's write rule themselves; this setup checks
+// that rule against the exact environment it hands them, up front, so the
+// two rules can never disagree mid-run (one guard module since the PR #42 /
+// PR #44 reconciliation).
 //
-// Failure policy: a guard refusal always aborts the run (it is checked
-// before any connection is opened). If Postgres is unreachable, warn loudly
+// Failure policy: a guard refusal (drop or write rule) always aborts the run
+// (both are checked before any connection is opened). If Postgres is unreachable, warn loudly
 // and continue — the demo-fallback spec is deliberately runnable without a
 // DB, and the live-data specs will fail with their own honest errors. Any
 // other failure aborts the run: silently running e2e against a
@@ -32,7 +36,9 @@ const { execFileSync } = require('child_process');
 const path = require('path');
 const { Client } = require('pg');
 const { E2E_DB } = require('./e2e-env');
-const { assertDisposableE2eDatabase, parsePort, recreateE2eDatabase } = require('./e2e-db-guard');
+const {
+    assertDisposableE2eDatabase, assertFixtureTarget, parsePort, recreateE2eDatabase,
+} = require('../../scripts/lib/fixture-db-guard');
 
 const ROOT = path.join(__dirname, '..', '..');
 const UNREACHABLE = /ECONNREFUSED|ETIMEDOUT|ENOTFOUND|Connection terminated|timeout expired/i;
@@ -69,11 +75,16 @@ async function recreateDatabase(port) {
     }
 }
 
+/** The environment every provisioning step (migrate, seed, fixture) runs with. */
+function stepEnv() {
+    return { ...process.env, POSTGRES_DB: E2E_DB, NODE_ENV: 'development' };
+}
+
 function run(cmd, args) {
     const out = execFileSync(cmd, args, {
         cwd: ROOT,
         encoding: 'utf8',
-        env: { ...process.env, POSTGRES_DB: E2E_DB, NODE_ENV: 'development' },
+        env: stepEnv(),
     });
     process.stdout.write(out);
 }
@@ -83,6 +94,8 @@ module.exports = async () => {
     // unreachable" leniency below can never mask a refusal.
     const portSetting = postgresPortSetting();
     assertDisposableE2eDatabase({ database: E2E_DB, port: portSetting, env: process.env });
+    // The write rule the fixture steps will apply, against their own env.
+    assertFixtureTarget(stepEnv());
     try {
         // The guard accepted the setting, so it parses strictly to a port.
         await recreateDatabase(parsePort(portSetting));

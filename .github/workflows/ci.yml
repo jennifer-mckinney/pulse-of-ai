@@ -273,7 +273,7 @@ jobs:
 
     # Dev-DB service container on the dev port. The Playwright globalSetup
     # (tests/e2e/global-setup.js) drops and recreates the isolated
-    # pulse_of_ai_e2e database on it (guarded: tests/e2e/e2e-db-guard.js
+    # pulse_of_ai_e2e database on it (guarded: scripts/lib/fixture-db-guard.js
     # refuses the dev database pulse_of_ai and the test Postgres port), then
     # migrates, seeds (sources + methodology registry),
     # loads the deterministic e2e fixture (seed:e2e) and freshens its
@@ -327,7 +327,11 @@ jobs:
 
       # The fixture scripts refuse any non-e2e database
       # (scripts/lib/fixture-db-guard.js); this job's pulse_of_ai is a
-      # disposable service container, so it is named as such.
+      # disposable service container, so it is named as such. Step-scoped on
+      # purpose: the Playwright step does not need it (its globalSetup seeds
+      # pulse_of_ai_e2e), and FIXTURE_DB_ALLOW never opts a database into the
+      # globalSetup's DROP (tests/unit/pure/fixtureDbGuard.test.js pins this
+      # job's settings against both rules).
       - name: Seed dev DB
         run: npm run seed && npm run seed:e2e
         env:

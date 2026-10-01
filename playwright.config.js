@@ -7,7 +7,7 @@
 // the dev Postgres (compose project pulse-of-ai, port 5434), served by its
 // OWN server on port 3100. The globalSetup (tests/e2e/global-setup.js)
 // drops and recreates that database (guarded: e2e names only, never the dev
-// or Jest test database — tests/e2e/e2e-db-guard.js), migrates it, runs
+// or Jest test database — scripts/lib/fixture-db-guard.js), migrates it, runs
 // `seed` + `seed:e2e` (the deterministic fixture dataset) and freshens its
 // timestamps. Every run therefore starts from the same rows as a fresh CI
 // database: nothing the suite asserts can be shadowed by whatever the dev

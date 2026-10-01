@@ -20,11 +20,11 @@ npm run teardown       # stop it (keeps volumes); `-- --purge` deletes volumes a
 |---|---|
 | `npm run db:reset` | Drop + re-migrate + seed dev DB |
 | `npm run seed` | Load 50 data sources + methodology versions (from `src/config/methodology-registry.js`) |
-| `npm run seed:e2e` | Load the deterministic Playwright fixture dataset (`scripts/test/seed-e2e.js`) |
+| `npm run seed:e2e` | Load the deterministic Playwright fixture dataset (`scripts/test/seed-e2e.js`); refuses any non-e2e DB unless `FIXTURE_DB_ALLOW` names it (disposable DBs only) |
 | `npm run standup` / `npm run teardown` | One-command Docker standup of the whole solution / stop it (see README "Stand it up") |
 | `npm run replay -- --post <id>` | Re-run a post's stored decisions through `src/pipeline` and print PASS / DIVERGENCE / NOT RE-RUNNABLE per stage |
 | `npm run verify` | Full gate: Jest + coverage, pytest, black (needs `python/.venv`) |
-| `npm run test:e2e` | Playwright suite; globalSetup DROPS + recreates its own `pulse_of_ai_e2e` DB (guarded: e2e names only, never `pulse_of_ai` or the 5433 test DB), then migrates, seeds, `seed:e2e`, freshens timestamps |
+| `npm run test:e2e` | Playwright suite; globalSetup DROPS + recreates its own `pulse_of_ai_e2e` DB (guarded by `scripts/lib/fixture-db-guard.js`: e2e names only, never `pulse_of_ai` or the 5433 test DB; `FIXTURE_DB_ALLOW` never applies to the drop), then migrates, seeds, `seed:e2e`, freshens timestamps |
 | `npm run coverage:frontend` | Non-gating coverage of the pure namespaces of globe/story/ui/main |
 | `npm run test:unit` | Unit tests (no DB required) |
 | `npm run test:int` | Integration tests (needs docker:up) |
