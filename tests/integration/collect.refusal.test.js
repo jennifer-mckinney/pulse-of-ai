@@ -47,6 +47,15 @@ const endCooldown = slug => dbRun(
 const endProbation = slug => dbRun(
     `UPDATE source_collection_state SET probation_until = NOW() - interval '1 second'
      WHERE source_id = (SELECT id FROM data_sources WHERE name = $1)`, [slug]);
+// Grumpy final #1: a reset date must be at or after the refusal AND not in
+// the future. The date used here is the stored refusal time itself (the
+// inclusive lower bound); the wait covers a database clock a few ms ahead of
+// the host's, so the date is never "in the future" for the runner.
+async function resetDateAtRefusal(slug, column = 'access_denied_at') {
+    const at = new Date((await stateOf(slug))[column]).getTime();
+    while (Date.now() <= at) await new Promise(r => setTimeout(r, 5));
+    return new Date(at).toISOString();
+}
 const cooldownHours = st => Math.round((new Date(st.refused_until) - new Date(st.access_denied_at)) / 3600000);
 const rowOf = async slug => (await sourceRows({ env: TEST_ENV })).find(r => r.slug === slug);
 
@@ -117,12 +126,12 @@ describe('the refused state (F10-5)', () => {
         expect(row.probation_until).not.toBeNull();
     });
 
-    it('an env reset newer than the refusal clears it and the source is asked again; an older one does not', async () => {
+    it('an env reset at or after the refusal clears it and the source is asked again; an older one does not', async () => {
         await collect([DENIED]);
         await nextPoll('hacker_news');
         const old = { ...TEST_ENV, SOURCE_HACKER_NEWS_RESET: '2000-01-01' };
         expect((await collect([HN], old)).transport.calls).toHaveLength(0);
-        const fresh = { ...TEST_ENV, SOURCE_HACKER_NEWS_RESET: new Date(Date.now() + 1000).toISOString() };
+        const fresh = { ...TEST_ENV, SOURCE_HACKER_NEWS_RESET: await resetDateAtRefusal('hacker_news') };
         const { summary, transport } = await collect([HN], fresh);
         expect(transport.calls).toHaveLength(1);
         expect(summary.sources[0].outcome).toBe('ok');
@@ -138,13 +147,35 @@ describe('the refused state (F10-5)', () => {
         await collect([DENIED]);
         await nextPoll('hacker_news');
         const { GATE_APPROVED_BY: _drop, ...unapproved } = TEST_ENV;
-        const env = { ...unapproved, SOURCE_HACKER_NEWS_RESET: new Date(Date.now() + 1000).toISOString() };
+        const env = { ...unapproved, SOURCE_HACKER_NEWS_RESET: await resetDateAtRefusal('hacker_news') };
         const { summary, transport } = await collect([HN], env);
         expect(transport.calls).toHaveLength(0);
         expect(summary.sources[0]).toMatchObject({ outcome: 'skipped', status: 'blocked_by_source',
             reason: expect.stringMatching(/SOURCE_HACKER_NEWS_RESET is set but awaiting named approval/) });
         expect((await stateOf('hacker_news')).refusal_count).toBe(1);
         expect(await db.dbAll(`SELECT 1 FROM source_gate_events WHERE event = 'refusal_reset'`)).toEqual([]);
+    });
+
+    // Grumpy final #1: an approved reset date in the FUTURE never clears a
+    // refusal. Before the fix it cleared every refusal recorded before the
+    // date, so a source that refused again was re-requested on the very
+    // next poll (one refusal_reset gate event and one alert per cycle).
+    it('an approved env reset dated in the future is ignored: no request, no reset event, the reason says why', async () => {
+        await collect([DENIED]);
+        const future = new Date(Date.now() + 2 * 3600 * 1000).toISOString();
+        const env = { ...TEST_ENV, SOURCE_HACKER_NEWS_RESET: future };
+        for (let poll = 0; poll < 3; poll++) {
+            await nextPoll('hacker_news');
+            const { summary, transport } = await collect([HN], env);
+            expect(transport.calls).toHaveLength(0);
+            expect(summary.sources[0]).toMatchObject({ outcome: 'skipped', status: 'blocked_by_source',
+                reason: expect.stringContaining(`SOURCE_HACKER_NEWS_RESET (${future}) is in the future and is ignored until then`) });
+        }
+        expect(await stateOf('hacker_news')).toMatchObject({ refusal_count: 1, access_denied_status: 403 });
+        expect(await db.dbAll(`SELECT 1 FROM source_gate_events WHERE event = 'refusal_reset'`)).toEqual([]);
+        expect((await alertsOf('hacker_news')).filter(a => !a.resolved_at)).toHaveLength(1);
+        // /api/sources says the same.
+        expect((await rowOf('hacker_news')).status).toBe('blocked_by_source');
     });
 
     it('npm run source:reset clears the refused state (the DB flag) and resolves the alert with the note', async () => {
@@ -423,6 +454,43 @@ describe('refusal transitions (grumpy review #5)', () => {
         await collect([HN]);
         expect(await stateOf('hacker_news')).toMatchObject({ refusal_count: 0, probation_until: null, last_refused_at: null });
     });
+
+    // Grumpy final #4: migration 062 added last_refused_at without a
+    // backfill, so a source REFUSED before 062 (access_denied_at set,
+    // last_refused_at NULL) went on probation with no last refusal time, and
+    // an approved env reset then silently did nothing. endCooldown now
+    // carries access_denied_at over when last_refused_at is NULL.
+    it('(iv) a pre-062 REFUSED row: its probe keeps the refusal time, so an approved env reset clears the probation', async () => {
+        await collect([DENIED]);
+        // As written before 062: refused, no last_refused_at.
+        await setState('hacker_news', 'last_refused_at = NULL');
+        const refusedAt = (await stateOf('hacker_news')).access_denied_at;
+        await nextPoll('hacker_news');
+        await endCooldown('hacker_news');
+        await collect([HN]);                             // probe ok → probation
+        const st = await stateOf('hacker_news');
+        expect(st).toMatchObject({ access_denied_at: null, refusal_count: 1 });
+        expect(st.probation_until).not.toBeNull();
+        expect(new Date(st.last_refused_at).getTime()).toBe(new Date(refusedAt).getTime());
+
+        await nextPoll('hacker_news');
+        const resetAt = await resetDateAtRefusal('hacker_news', 'last_refused_at');
+        await collect([HN], { ...TEST_ENV, SOURCE_HACKER_NEWS_RESET: resetAt });
+        expect(await stateOf('hacker_news')).toMatchObject({ refusal_count: 0, probation_until: null, last_refused_at: null });
+        expect(await dbAll(`SELECT event FROM source_gate_events WHERE slug = 'hacker_news' AND event = 'refusal_reset'`))
+            .toEqual([{ event: 'refusal_reset' }]);
+    });
+
+    it('(iv) endCooldown never overwrites a last_refused_at that is already set', async () => {
+        await collect([DENIED]);
+        const before = await stateOf('hacker_news');
+        expect(before.last_refused_at).not.toBeNull();
+        await setState('hacker_news', "last_refused_at = access_denied_at - interval '1 hour'");
+        const kept = (await stateOf('hacker_news')).last_refused_at;
+        const id = await idOf('hacker_news');
+        expect(await state.endCooldown(id, before.access_denied_at)).not.toBeNull();
+        expect(new Date((await stateOf('hacker_news')).last_refused_at).getTime()).toBe(new Date(kept).getTime());
+    });
 });
 
 // Security review: the listed tests.
@@ -500,7 +568,7 @@ describe('probationOver pins PRIOR_COUNT_SQL (grumpy #4)', () => {
 // Grumpy #3 (option b): the env reset clears a PROBATION too, with the same
 // named approval and 'refusal_reset' gate event as a reset of the refused state.
 describe('env reset during probation (grumpy #3)', () => {
-    it('an approved SOURCE_<SLUG>_RESET newer than the last refusal clears the count; unapproved or older does not', async () => {
+    it('an approved SOURCE_<SLUG>_RESET at or after the last refusal clears the count; unapproved, older or future does not', async () => {
         await collect([DENIED]);
         await probeThenRefuseQuick();                    // refusal 2
         await nextPoll('hacker_news');
@@ -508,13 +576,17 @@ describe('env reset during probation (grumpy #3)', () => {
         await collect([HN]);                             // probe ok → probation, count 2
         expect(await stateOf('hacker_news')).toMatchObject({ access_denied_at: null, refusal_count: 2 });
 
-        const resetAt = new Date(Date.now() + 1000).toISOString();
+        const resetAt = await resetDateAtRefusal('hacker_news', 'last_refused_at');
         const { GATE_APPROVED_BY: _drop, ...unapproved } = TEST_ENV;
         await nextPoll('hacker_news');
         await collect([HN], { ...unapproved, SOURCE_HACKER_NEWS_RESET: resetAt });
         expect((await stateOf('hacker_news')).refusal_count).toBe(2);
         await nextPoll('hacker_news');
         await collect([HN], { ...TEST_ENV, SOURCE_HACKER_NEWS_RESET: '2000-01-01' });
+        expect((await stateOf('hacker_news')).refusal_count).toBe(2);
+        // Grumpy final #1: a future date does not clear a probation either.
+        await nextPoll('hacker_news');
+        await collect([HN], { ...TEST_ENV, SOURCE_HACKER_NEWS_RESET: new Date(Date.now() + 3600 * 1000).toISOString() });
         expect((await stateOf('hacker_news')).refusal_count).toBe(2);
         expect(await dbAll(`SELECT 1 FROM source_gate_events WHERE event = 'refusal_reset'`)).toEqual([]);
 

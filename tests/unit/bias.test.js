@@ -710,3 +710,127 @@ describe('bias@1.6.0 — parity "insufficient sample" states the computed gap', 
         expect(a.evidence.value_basis).toBeUndefined();
     });
 });
+
+// ─── Grumpy final #5: parity rows in category order, whatever the plan ───────
+// The per-category query had GROUP BY ds.category and no ORDER BY, so the row
+// order (and with it evidence.rows, worst_pair and the violation's
+// group_value — maxPairwiseGap names the pair in row order and keeps the
+// first pair on a tie) followed the query plan: PostgreSQL's HashAggregate
+// returns hash order (on PostgreSQL 16, "news" before "academic"). With
+// ORDER BY ds.category the stored evidence is the same on every plan.
+//
+// Today's plan happens to be sorted (COUNT(DISTINCT …) makes PostgreSQL 16
+// group with a sorted GroupAggregate), but without ORDER BY nothing
+// guarantees it. The checks below therefore also run against a database
+// that returns an UNORDERED grouped result in another order: a copy of
+// src/pipeline/bias.js whose dbAll runs the real query on the real test
+// database and, when the per-category SQL has no ORDER BY, hands the groups
+// back reversed — as any plan change may. Same rows; only the order differs.
+
+describe('bias checks — stored row order is deterministic (grumpy final #5)', () => {
+    const { METHODOLOGY_VERSIONS } = require('../../src/config/methodology-registry');
+    const cfg = v => METHODOLOGY_VERSIONS.find(m => m.component === 'bias' && m.version === v).config;
+    const realDb = require('../../src/db/connection');
+
+    // What the ORDER BY leaves undecided comes back in another order: a
+    // grouped result with no ORDER BY reversed; ties of an ORDER BY
+    // post_count DESC with no tie-breaker reversed (Array#sort is stable).
+    function anotherOrder(sql, rows) {
+        if (!/GROUP BY/i.test(sql)) return rows;
+        const order = (sql.match(/ORDER BY\s+([\s\S]+)$/i) || [])[1];
+        if (!order) return rows.slice().reverse();
+        if (/^\s*post_count DESC\s*$/i.test(order)) return rows.slice().reverse().sort((a, b) => b.post_count - a.post_count);
+        return rows;
+    }
+    function checksOnAnotherPlan() {
+        let mod;
+        jest.isolateModules(() => {
+            jest.doMock('../../src/db/connection', () => ({
+                ...realDb,
+                dbAll: async (sql, params = []) => anotherOrder(sql, await realDb.dbAll(sql, params)),
+            }));
+            mod = require('../../src/pipeline/bias');
+        });
+        jest.dontMock('../../src/db/connection');
+        return mod;
+    }
+    const PLANS = [
+        ['another plan', () => checksOnAnotherPlan()],
+        ['the default plan', () => ({ checkPlatformSentimentParity, checkLocationConcentration, checkNegativeDominance })],
+    ];
+
+    async function job(prefix, perCategory, values) {
+        const jobId = await insertJob();
+        const mvIds = await insertMethodologyVersions();
+        for (const [category, comparative] of Object.entries(values)) {
+            const src = await insertSource(`${prefix}-${category}`, category);
+            for (let i = 0; i < perCategory; i++) {
+                await insertPostWithSentiment(src, jobId, mvIds.sentimentMvId, { comparative, externalId: `${prefix}-${category}-${i}` });
+            }
+        }
+        return jobId;
+    }
+
+    it.each(PLANS)('under %s: a violation names its pair and lists its rows in category order', async (_plan, parity) => {
+        const jobId = await job('ord-a', 2, { news: 0.5, academic: -0.5 });
+        const biasMv = await insertBiasMv();
+        const r = await parity().checkPlatformSentimentParity(jobId, biasMv);
+        expect(r).toMatchObject({ isViolation: true, groupValue: 'academic vs news' });
+        const a = await dbGet(`SELECT group_value, evidence FROM bias_assessments WHERE job_id = $1`, [jobId]);
+        expect(a.group_value).toBe('academic vs news');
+        expect(a.evidence.rows.map(x => x.category)).toEqual(['academic', 'news']);
+    });
+
+    it.each(PLANS)('under %s: on an exact tie the alphabetically first pair is kept', async (_plan, parity) => {
+        // academic–news and news–social both differ by 1.0.
+        const jobId = await job('ord-b', 2, { social: 0.5, news: -0.5, academic: 0.5 });
+        const biasMv = await insertBiasMv();
+        const r = await parity().checkPlatformSentimentParity(jobId, biasMv);
+        expect(r.groupValue).toBe('academic vs news');
+        const a = await dbGet(`SELECT evidence FROM bias_assessments WHERE job_id = $1`, [jobId]);
+        expect(a.evidence.rows.map(x => x.category)).toEqual(['academic', 'news', 'social']);
+    });
+
+    it.each(PLANS)('under %s: an insufficient-sample row (bias@1.6.0) states worst_pair and rows in category order', async (_plan, parity) => {
+        const jobId = await job('ord-c', 3, { news: 0.9, academic: -0.9 });
+        const biasMv = await insertBiasMv(cfg('1.6.0'));
+        await parity().checkPlatformSentimentParity(jobId, biasMv);
+        const a = await dbGet(`SELECT evidence FROM bias_assessments WHERE job_id = $1`, [jobId]);
+        expect(a.evidence).toMatchObject({ insufficient_sample: true, worst_pair: 'academic vs news' });
+        expect(a.evidence.rows.map(x => x.category)).toEqual(['academic', 'news']);
+    });
+
+    // Same family, found while fixing #5: location concentration takes the
+    // FIRST row of ORDER BY post_count DESC as the dominant location, so two
+    // locations tied on the top count named a plan-dependent group_value,
+    // dominantLocation and alert location. Ties now go to the location name.
+    it.each(PLANS)('under %s: a tie for the top location names the alphabetically first one', async (_plan, checks) => {
+        const src = await insertSource('ord-loc', 'news');
+        const jobId = await insertJob();
+        const mvIds = await insertMethodologyVersions();
+        for (const location of ['Berlin', 'Austin']) {
+            for (let i = 0; i < 3; i++) {
+                await insertPostWithSentiment(src, jobId, mvIds.sentimentMvId, { location, externalId: `ord-loc-${location}-${i}` });
+            }
+        }
+        const r = await checks().checkLocationConcentration(jobId, await insertBiasMv());
+        expect(r).toMatchObject({ isViolation: false, groupValue: 'Austin' });
+        const a = await dbGet(`SELECT group_value, evidence FROM bias_assessments WHERE job_id = $1`, [jobId]);
+        expect(a.group_value).toBe('Austin');
+        expect(a.evidence.dominantLocation).toBe('Austin');
+        expect(a.evidence.rows.map(x => x.location)).toEqual(['Austin', 'Berlin']);
+    });
+
+    it.each(PLANS)('under %s: negative dominance lists its indicator rows in a fixed order', async (_plan, checks) => {
+        const src = await insertSource('ord-neg', 'news');
+        const jobId = await insertJob();
+        const mvIds = await insertMethodologyVersions();
+        let n = 0;
+        for (const indicator of ['positive', 'negative', 'neutral']) {
+            await insertPostWithSentiment(src, jobId, mvIds.sentimentMvId, { indicator, externalId: `ord-neg-${n++}` });
+        }
+        await checks().checkNegativeDominance(jobId, await insertBiasMv());
+        const a = await dbGet(`SELECT evidence FROM bias_assessments WHERE job_id = $1`, [jobId]);
+        expect(a.evidence.rows.map(x => x.indicator)).toEqual(['negative', 'neutral', 'positive']);
+    });
+});
