@@ -12,9 +12,12 @@
 #
 # Runs against the database named by POSTGRES_DB on POSTGRES_PORT. The e2e
 # globalSetup invokes it with POSTGRES_DB=pulse_of_ai_e2e (the suite's
-# isolated database); run bare, it targets the dev database from .env. Uses
-# the project's own node/pg connection so no local psql client is
-# required. Safe to re-run; a no-op when raw_posts is empty.
+# isolated database). It shifts EVERY post's collected_at, so it refuses any
+# database that is not an e2e database or named in FIXTURE_DB_ALLOW
+# (scripts/lib/fixture-db-guard.js, diagnosis 2026-10-01) — run bare it used
+# to rewrite the dev database's real collection times. Uses the project's
+# own node/pg connection so no local psql client is required. Safe to
+# re-run; a no-op when raw_posts is empty.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
@@ -22,6 +25,8 @@ cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 node - <<'EOF'
 'use strict';
 require('dotenv').config();
+// Never the dev database (diagnosis 2026-10-01): refused before connecting.
+try { require('./scripts/lib/fixture-db-guard').assertFixtureTarget(process.env); } catch (err) { console.error(require('./src/collectors/redact').scrub(`freshen-seed: ${err.message}`)); process.exit(1); }
 const { dbGet, closePool } = require('./src/db/connection');
 
 (async () => {
