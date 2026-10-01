@@ -178,7 +178,7 @@ The frontend is the primary experience for the journalist (P1) and the general p
 
 ## 7. Phase Roadmap
 
-Status reflects `master` @ `0356a00` (PRs #8, #9, #10, #22, #24–#35 and #37–#39) as of 2026-09-30.
+Status reflects `master` @ `0356a00` (PRs #8, #9, #10, #22, #24–#28, #31–#35 and #37–#39; #29 and #30 were closed without merging) as of 2026-09-30.
 
 | Phase | Content | Status |
 |---|---|---|
