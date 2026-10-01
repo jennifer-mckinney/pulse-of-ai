@@ -78,7 +78,8 @@ const HOLD_STATUSES = Object.freeze([429, 503]);
 const MAX_REDIRECTS = 4;
 
 // Diagnosis 2026-10-01: the process-wide Retry-After holds of the network
-// transport, host → epoch ms (shared by every client, like the robots cache).
+// transport, host → { until (epoch ms), status } (shared by every client,
+// like the robots cache).
 const RATE_LIMIT_HOLDS = new Map();
 
 /** The collector User-Agent. @throws when the contact URL is missing */
@@ -272,9 +273,13 @@ class HttpClient {
         return until;
     }
 
-    /** A success from `url` ends its hold (the validators stay). */
+    /**
+     * A success from `url` drops its persisted (expired) hold; the
+     * validators stay. The host map is left alone: an expired entry is
+     * already dropped by activeHold, and a hold another source on the same
+     * host set while this request was in flight must survive.
+     */
     clearHold(url, cache) {
-        this.holds.delete(new URL(url).host);
         const entry = cache && cache[url];
         if (!entry || !('retry_after_until' in entry || 'retry_after_status' in entry)) return;
         const rest = { ...entry };

@@ -247,6 +247,16 @@ describe('Retry-After holds (diagnosis 2026-10-01, TLDR deadline)', () => {
         expect(holds.size).toBe(0);
     });
 
+    test('a success never clears a hold another source set on the same host while it was in flight', async () => {
+        const holds = new Map();
+        const { http } = holdClient([[URL_, () => {
+            holds.set('feed.example', { until: T0 + 300000, status: 429 });   // set by a concurrent run
+            return { body: 'ok' };
+        }]], { holds });
+        expect((await http.request(URL_)).body).toBe('ok');
+        expect(holds.get('feed.example')).toEqual({ until: T0 + 300000, status: 429 });
+    });
+
     test('a hold on one host never blocks another host', async () => {
         const holds = new Map([['feed.example', { until: T0 + 300000, status: 429 }]]);
         const { http, transport } = holdClient([['https://other.example/rss', { body: 'ok' }]], { holds });
