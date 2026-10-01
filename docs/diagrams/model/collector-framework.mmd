@@ -79,12 +79,15 @@ classDiagram
   class HttpClient {
     <<http.js>>
     +requests number
-    +constructor(o: transport, env, limiter, sleep, timeoutMs 20000, robotsCache, signal)
+    +holdStore object
+    +constructor(o: transport, env, limiter, sleep, timeoutMs 20000, robotsCache, signal, now, rateLimitHolds)
     +request(url, o) response
     +json(url, o) object
     +text(url, o) response
     +fetchRobots(url)
     +checkDeadline()
+    +activeHold / setHold / clearHold(url, cache)
+    +holdMsFor(res) ms
   }
   class HostLimiter {
     +wait(host, minIntervalMs)

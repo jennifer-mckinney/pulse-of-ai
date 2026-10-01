@@ -36,7 +36,7 @@ flowchart LR
     direction TB
     F1["13 · buildCollectors(): one instance per open route;&lt;br/&gt;the constructor throws GateClosedError&lt;br/&gt;if route.requires is missing"]:::done
     F2["14 · HttpClient checks every hop before sending it:&lt;br/&gt;https only, public host, route allowedHosts (SSRF guard),&lt;br/&gt;DNS answers checked and pinned;&lt;br/&gt;robots.txt for RSS / Atom feeds (not arXiv or&lt;br/&gt;licensed feeds), Pew's WordPress API and&lt;br/&gt;Discourse forums (conservative);&lt;br/&gt;redirects followed manually, max 4;&lt;br/&gt;a credentialed request never crosses origins"]:::done
-    F3["15 · User-Agent PulseOfAI/#lt;version#gt; (+contact URL);&lt;br/&gt;per-host spacing; 20 s timeout;&lt;br/&gt;at most 2 retries on 429 / 5xx (honouring Retry-After)&lt;br/&gt;and network errors (not DNS failures);&lt;br/&gt;ETag / Last-Modified → 304 not modified"]:::done
+    F3["15 · User-Agent PulseOfAI/#lt;version#gt; (+contact URL);&lt;br/&gt;per-host spacing; 20 s timeout;&lt;br/&gt;at most 2 retries on 429 / 5xx (a Retry-After ≤ 10 s&lt;br/&gt;waited out) and network errors (not DNS failures);&lt;br/&gt;a longer Retry-After on 429 / 503, or a 429 after the&lt;br/&gt;retries (5 min), holds the host up to 24 h: nothing sent,&lt;br/&gt;robots.txt included; ETag / Last-Modified → 304 not modified"]:::done
     F4["16 · caps: 5 MB decoded per response (route override),&lt;br/&gt;robots.txt 500 KiB, bulk file 50 MB;&lt;br/&gt;a DTD with entity declarations is refused"]:::done
     F5{"401 / 403 / 451, bot&lt;br/&gt;challenge or robots&lt;br/&gt;disallow?"}:::done
     F1 --&gt; F2 --&gt; F3 --&gt; F4 --&gt; F5
@@ -60,7 +60,7 @@ flowchart LR
     T4["23 · queue (scheduled and refresh runs):&lt;br/&gt;reserveRetry (inflight_runs + 1), then one&lt;br/&gt;ingest job per new post (id score-#lt;post#gt;);&lt;br/&gt;ingest.worker scores it under its own job,&lt;br/&gt;releases the slot, applies the embed gate"]:::done
     T8["23 · inline (npm run collect, standup):&lt;br/&gt;scorePost(): sentiment, relevance, discourse;&lt;br/&gt;each writes its *_results row and one&lt;br/&gt;decision_audit_log row (current methodology)"]:::done
     T5["inline scoring failed → reserveRetry + ingest&lt;br/&gt;retry job; an enqueue failed (either mode) →&lt;br/&gt;slot released, run error, the 24 h&lt;br/&gt;unscored sweep re-queues the post"]:::done
-    T6["store failed → restore the route's cursor&lt;br/&gt;and HTTP validators, run error"]:::done
+    T6["store failed → restore the route's cursor&lt;br/&gt;and HTTP validators (Retry-After holds kept),&lt;br/&gt;run error"]:::done
     T1 --&gt; T2
     T2 -- yes --&gt; T3 --&gt; T7
     T7 -- queue --&gt; T4
@@ -70,7 +70,7 @@ flowchart LR
   subgraph RECORD["Record the run · state.js, runner.js"]
     direction TB
     V1["24 · classify errors: error_kind + http_status only;&lt;br/&gt;error text scrubbed of every secret (redact.js)"]:::done
-    V2["25 · saveOutcome() on source_collection_state:&lt;br/&gt;cursor, HTTP validators, last success / error,&lt;br/&gt;last_new_post_at, consecutive_failures"]:::done
+    V2["25 · saveOutcome() on source_collection_state:&lt;br/&gt;cursor, HTTP validators and Retry-After holds,&lt;br/&gt;last success / error,&lt;br/&gt;last_new_post_at, consecutive_failures"]:::done
     V3["26 · refused → recordRefusal(): refused_until,&lt;br/&gt;refusal_count + 1, one critical source_refused&lt;br/&gt;alert; a successful probe ends the refused state&lt;br/&gt;and starts a 24 h probation (a refusal on probation&lt;br/&gt;escalates the cooldown, up to 24 h; 24 h clean decays the count);&lt;br/&gt;then unchanged run → unchanged_runs + 1,&lt;br/&gt;else one source_runs row"]:::done
     V4["27 · inline runs: embed gate relevance ≥ 1/21&lt;br/&gt;(relevance@1.2.0, one of its 21 terms) → one&lt;br/&gt;embed job per new post (queued runs: the&lt;br/&gt;ingest worker applies the same gate)"]:::done
     V5["28 · scheduled run: leaveCycle(): counts added,&lt;br/&gt;inflight_runs − 1 (always, in finally); a one-shot&lt;br/&gt;job touches last_progress_at before and after&lt;br/&gt;every source, then completes or awaits&lt;br/&gt;its scoring retries → part 3"]:::done

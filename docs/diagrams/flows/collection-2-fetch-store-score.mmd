@@ -7,7 +7,7 @@ flowchart LR
     direction TB
     F1["13 · buildCollectors(): one instance per open route;<br/>the constructor throws GateClosedError<br/>if route.requires is missing"]:::done
     F2["14 · HttpClient checks every hop before sending it:<br/>https only, public host, route allowedHosts (SSRF guard),<br/>DNS answers checked and pinned;<br/>robots.txt for RSS / Atom feeds (not arXiv or<br/>licensed feeds), Pew's WordPress API and<br/>Discourse forums (conservative);<br/>redirects followed manually, max 4;<br/>a credentialed request never crosses origins"]:::done
-    F3["15 · User-Agent PulseOfAI/#lt;version#gt; (+contact URL);<br/>per-host spacing; 20 s timeout;<br/>at most 2 retries on 429 / 5xx (honouring Retry-After)<br/>and network errors (not DNS failures);<br/>ETag / Last-Modified → 304 not modified"]:::done
+    F3["15 · User-Agent PulseOfAI/#lt;version#gt; (+contact URL);<br/>per-host spacing; 20 s timeout;<br/>at most 2 retries on 429 / 5xx (a Retry-After ≤ 10 s<br/>waited out) and network errors (not DNS failures);<br/>a longer Retry-After on 429 / 503, or a 429 after the<br/>retries (5 min), holds the host up to 24 h: nothing sent,<br/>robots.txt included; ETag / Last-Modified → 304 not modified"]:::done
     F4["16 · caps: 5 MB decoded per response (route override),<br/>robots.txt 500 KiB, bulk file 50 MB;<br/>a DTD with entity declarations is refused"]:::done
     F5{"401 / 403 / 451, bot<br/>challenge or robots<br/>disallow?"}:::done
     F1 --> F2 --> F3 --> F4 --> F5
@@ -31,7 +31,7 @@ flowchart LR
     T4["23 · queue (scheduled and refresh runs):<br/>reserveRetry (inflight_runs + 1), then one<br/>ingest job per new post (id score-#lt;post#gt;);<br/>ingest.worker scores it under its own job,<br/>releases the slot, applies the embed gate"]:::done
     T8["23 · inline (npm run collect, standup):<br/>scorePost(): sentiment, relevance, discourse;<br/>each writes its *_results row and one<br/>decision_audit_log row (current methodology)"]:::done
     T5["inline scoring failed → reserveRetry + ingest<br/>retry job; an enqueue failed (either mode) →<br/>slot released, run error, the 24 h<br/>unscored sweep re-queues the post"]:::done
-    T6["store failed → restore the route's cursor<br/>and HTTP validators, run error"]:::done
+    T6["store failed → restore the route's cursor<br/>and HTTP validators (Retry-After holds kept),<br/>run error"]:::done
     T1 --> T2
     T2 -- yes --> T3 --> T7
     T7 -- queue --> T4
@@ -41,7 +41,7 @@ flowchart LR
   subgraph RECORD["Record the run · state.js, runner.js"]
     direction TB
     V1["24 · classify errors: error_kind + http_status only;<br/>error text scrubbed of every secret (redact.js)"]:::done
-    V2["25 · saveOutcome() on source_collection_state:<br/>cursor, HTTP validators, last success / error,<br/>last_new_post_at, consecutive_failures"]:::done
+    V2["25 · saveOutcome() on source_collection_state:<br/>cursor, HTTP validators and Retry-After holds,<br/>last success / error,<br/>last_new_post_at, consecutive_failures"]:::done
     V3["26 · refused → recordRefusal(): refused_until,<br/>refusal_count + 1, one critical source_refused<br/>alert; a successful probe ends the refused state<br/>and starts a 24 h probation (a refusal on probation<br/>escalates the cooldown, up to 24 h; 24 h clean decays the count);<br/>then unchanged run → unchanged_runs + 1,<br/>else one source_runs row"]:::done
     V4["27 · inline runs: embed gate relevance ≥ 1/21<br/>(relevance@1.2.0, one of its 21 terms) → one<br/>embed job per new post (queued runs: the<br/>ingest worker applies the same gate)"]:::done
     V5["28 · scheduled run: leaveCycle(): counts added,<br/>inflight_runs − 1 (always, in finally); a one-shot<br/>job touches last_progress_at before and after<br/>every source, then completes or awaits<br/>its scoring retries → part 3"]:::done

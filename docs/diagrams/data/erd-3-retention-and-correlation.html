@@ -29,13 +29,13 @@
 <pre class="mermaid">
 %% Title: Data model 3 of 4 · retention, rollups, correlation, migrations
 %% Summary: The GDPR lifecycle log, the monthly rollups and compaction log of the layered retention model, the pseudonymous cross-platform correlation tables (never written: correlateUser throws; the demo purge of compaction only deletes demo sightings and the profiles they leave unreferenced, and recounts the others), the correlation gate log, and the migration ledger.
-%% Sources: src/db/migrations/002 (data_retention_log), 005, 006, 036 and 056 (correlation_gate_events, append-only trigger); scripts/migrate.js (schema_migrations). Writers: src/pipeline/ingest.js (collected), src/collectors/retention.js (blanked_platform_terms, text_removed_detail_window), src/collectors/run-retention.js (rolled_up_source_runs), scripts/compact.js (compacted, purged_demo, compaction_log), src/collectors/governance.js (correlation_gate_events, with the status from src/pipeline/correlation-gate.js), scripts/compact.js (demo purge of user_platform_sightings and pseudonymous_users); src/pipeline/correlation.js writes nothing (correlateUser throws). Spec: TECHNICAL_SPEC.md sections 19 (layered retention) and 20 (correlation). raw_posts and data_sources are shown with their keys only. Dotted lines are logical links without a foreign key.
+%% Sources: src/db/migrations/002 (data_retention_log), 005, 006, 036 and 056 (correlation_gate_events, append-only trigger); scripts/migrate.js (schema_migrations). Writers: src/pipeline/ingest.js (collected), src/collectors/retention.js (blanked_platform_terms, text_removed_detail_window), src/collectors/run-retention.js (rolled_up_source_runs), scripts/compact.js (compacted, purged_demo, compaction_log), scripts/correct-legacy-seed-attribution.js (source_reattributed; manual, --apply with GATE_APPROVED_BY), src/collectors/governance.js (correlation_gate_events, with the status from src/pipeline/correlation-gate.js), scripts/compact.js (demo purge of user_platform_sightings and pseudonymous_users); src/pipeline/correlation.js writes nothing (correlateUser throws). Spec: TECHNICAL_SPEC.md sections 19 (layered retention) and 20 (correlation). raw_posts and data_sources are shown with their keys only. Dotted lines are logical links without a foreign key.
 erDiagram
 
   data_retention_log {
     uuid id PK
     uuid raw_post_id "not enforced; NULL on batch rows"
-    text action "collected | blanked_platform_terms | text_removed_detail_window | rolled_up_source_runs | compacted | purged_demo"
+    text action "collected | blanked_platform_terms | text_removed_detail_window | rolled_up_source_runs | compacted | purged_demo | source_reattributed"
     text reason "JSON on batch rows"
     text legal_basis
     timestamptz performed_at

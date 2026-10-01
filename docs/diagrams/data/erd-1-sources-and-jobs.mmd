@@ -22,7 +22,7 @@ erDiagram
   source_collection_state {
     uuid source_id PK, FK
     jsonb cursor "per-route since ids"
-    jsonb http_cache "ETag / Last-Modified"
+    jsonb http_cache "ETag / Last-Modified; Retry-After hold per host"
     timestamptz last_attempt_at
     timestamptz last_success_at
     int last_item_count
