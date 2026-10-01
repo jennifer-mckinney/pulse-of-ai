@@ -14,7 +14,7 @@
 // builders over stored facts. Because the wording itself is part of the
 // auditable surface, this module is registered in methodology_versions
 // (component 'audit_narration') via src/config/methodology-registry.js
-// (seed.js + migrations 009 / 011 / 017 / 066) — changes to the wording
+// (seed.js + migrations 009 / 011 / 017 / 066 / 067) — changes to the wording
 // MUST bump NARRATION_VERSION and add a new methodology row, never edit the
 // registered version in place.
 
@@ -40,7 +40,15 @@ const NARRATION_COMPONENT = 'audit_narration';
 // no longer calls the content hash "the immutable join key across the
 // decision audit log" (no query joins on it); it states what the hash is
 // (INGEST_HASH_NOTE). Every other sentence is unchanged from 1.3.0.
-const NARRATION_VERSION   = '1.4.0';
+// 1.5.0 (wording only, migration 067; relevance-accuracy Stage 0 P0): the
+// relevance step's public view no longer says that a post with no AI term
+// "does not count toward AI-discourse totals" — every stored post counts
+// toward the totals today, whatever its relevance score (no aggregate query
+// filters on relevance_results; the score only gates embedding). Jennifer's
+// D1 ("Count only AI-relevant (Recommended)") takes effect with the next
+// relevance version, after its gold-set gate; the wording says so
+// (RELEVANCE_PUBLIC). Every other sentence is unchanged from 1.4.0.
+const NARRATION_VERSION   = '1.5.0';
 const NARRATION_MODEL     = 'pulse-narration-templates-v1';
 
 // Reproduce-command template surfaced in every researcher view. It runs
@@ -63,6 +71,16 @@ const PROVENANCE_VERIFIABLE = 'verifiable: provide the original URL or id to rep
 const INGEST_HASH_NOTE = 'The stored text is SHA-256 hashed at ingest; each scoring step records the same digest of the '
     + 'text it scored as input_hash, which npm run replay re-checks against the stored text and this receipt serves '
     + 'only keyed (HMAC-SHA256 with AUDIT_HASH_KEY). It is an integrity check, not a join key.';
+
+// 1.5.0: the relevance step's public sentences, registered verbatim as
+// audit_narration@1.5.0 config.relevance_public. `matched` no longer says a
+// post counts "because" it is about AI (it counts whatever it matched), and
+// `no_match` no longer says the post is left out of the totals (it is not).
+const RELEVANCE_PUBLIC = Object.freeze({
+    matched:  'This post matched the AI topic list, and it counts toward the AI-discourse totals.',
+    no_match: 'This post did not match the AI topic list. Today it still counts toward the AI-discourse totals; '
+        + 'from the next relevance version, only AI-relevant posts will count.',
+});
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -150,9 +168,9 @@ function renderRelevance(decision, postId) {
     const score = out.score ?? null;
     const pct = score === null ? 'n/a' : `${Math.round(score * 100)}%`;
 
-    const publicText = matched.length
-        ? 'It counts toward the map because it’s clearly talking about AI.'
-        : 'This post did not match the AI topic list, so it does not count toward AI-discourse totals.';
+    // 1.5.0: was 'It counts toward the map because it’s clearly talking
+    // about AI.' / '… so it does not count toward AI-discourse totals.'
+    const publicText = matched.length ? RELEVANCE_PUBLIC.matched : RELEVANCE_PUBLIC.no_match;
 
     const plainText = `Rated ${pct} relevant to AI discourse via keyword matching`
         + (matched.length ? ` — matched terms: ${quoteList(matched)}.` : '.');
@@ -358,6 +376,7 @@ module.exports = {
     VERIFY_PROVENANCE_COMMAND,
     PROVENANCE_VERIFIABLE,
     INGEST_HASH_NOTE,
+    RELEVANCE_PUBLIC,
     renderAudiences,
     deriveScore,
     deriveStatus,
