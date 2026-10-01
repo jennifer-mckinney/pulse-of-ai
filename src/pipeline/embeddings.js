@@ -100,13 +100,18 @@ function healthMismatches(health) {
 /**
  * The embedding methodology version to stamp on a vector the service just
  * produced: the registered version when the worker's model/revision are the
- * registered ones (embeddingMethodologyVersion) AND the service's GET /health
- * reports the registered model, revision and library; null otherwise.
+ * registered ones (embeddingMethodologyVersion), the vector is stored under
+ * the registered model name, AND the service's GET /health reports the
+ * registered model, revision and library; null otherwise.
  * Throws when /health cannot be read (the job is retried).
+ * @param {string} [modelName]  the model_name the vector is stored under
  * @returns {Promise<string|null>}
  */
-async function verifiedMethodologyVersion() {
+async function verifiedMethodologyVersion(modelName = MODEL_NAME) {
     if (METHODOLOGY_VERSION === null) return null;     // an override claims nothing
+    // Copilot review on PR #43: a vector stored under another model name
+    // never carries the registered methodology, whatever the service runs.
+    if (modelName !== EMBEDDING_METHODOLOGY.model_name) return null;
     let res;
     try {
         res = await axios.get(`${EMBEDDINGS_SERVICE_URL}/health`, {
@@ -170,7 +175,7 @@ async function saveEmbedding(postId, embedding, modelName = MODEL_NAME) {
     // methodology_version (P9-5): which registered embedding methodology
     // (model + pinned revision + library) produced this vector — only once
     // the running service is verified to be it (grumpy final #3).
-    const methodologyVersion = await verifiedMethodologyVersion();
+    const methodologyVersion = await verifiedMethodologyVersion(modelName);
     const row = await dbRun(
         `INSERT INTO post_embeddings (raw_post_id, embedding, model_name, methodology_version)
          VALUES ($1, $2::vector, $3, $4)
@@ -289,7 +294,7 @@ async function embedPost(postId) {
     const embedding   = await generateEmbedding(post.content);
     // Grumpy final #3: the stamp is verified against the service that just
     // produced the vector (NULL on a mismatch; throws if /health is down).
-    const methodologyVersion = await verifiedMethodologyVersion();
+    const methodologyVersion = await verifiedMethodologyVersion(MODEL_NAME);
     const embeddingId = await saveEmbeddingIfTextStored(postId, embedding, methodologyVersion);
     if (!embeddingId) {
         // Purged or blanked while the vector was being computed: re-read.

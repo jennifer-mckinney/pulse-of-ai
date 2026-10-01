@@ -125,17 +125,21 @@ describe('saveEmbedding()', () => {
         expect(row.raw_post_id).toBe(postId);
     });
 
-    it('stores the model_name on the row', async () => {
+    // Copilot review on PR #43: a vector stored under another model name
+    // must not carry the registered methodology, even with a verified
+    // service — the stamp is gated on the stored model_name too.
+    it('stores the model_name on the row; another model is stamped NULL', async () => {
         const srcId  = await insertSource();
         const postId = await insertRawPost(srcId, 'save-emb-2');
 
         await saveEmbedding(postId, fakeEmbedding(), 'test-model-v1');
 
         const row = await dbGet(
-            'SELECT model_name FROM post_embeddings WHERE raw_post_id = $1',
+            'SELECT model_name, methodology_version FROM post_embeddings WHERE raw_post_id = $1',
             [postId],
         );
         expect(row.model_name).toBe('test-model-v1');
+        expect(row.methodology_version).toBeNull();
     });
 
     it('is idempotent: re-saving the same postId does not create a duplicate row', async () => {
