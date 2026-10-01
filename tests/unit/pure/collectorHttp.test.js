@@ -574,6 +574,38 @@ describe('rate limits are not refusals (diagnosis 2026-10-01)', () => {
         expect(b.transport.calls.filter(c => c.url.includes('/page'))).toHaveLength(0);
     });
 
+    test('Copilot (3rd): robots.txt goes through the same classification — a bot wall is a REFUSAL, never "allow all"', async () => {
+        const robotsCache = new Map();
+        const { http, transport } = at([
+            ['https://a.example/robots.txt', { status: 403, headers: {}, body: '<div id="cf-chl-widget">' }],
+            [/a\.example\/page/, { body: 'ok' }],
+        ], { robotsCache });
+        await expect(http.request('https://a.example/page', { robots: true })).rejects.toBeInstanceOf(AccessDeniedError);
+        expect(transport.calls.filter(c => c.url.includes('/page'))).toHaveLength(0);
+        expect(robotsCache.size).toBe(0);
+    });
+
+    test('Copilot (3rd): an undecodable robots.txt is classified too (rate-limit headers → hold; a challenge header → refusal)', async () => {
+        const undecodable = (status, headers) => () => { throw Object.assign(new Error('incorrect header check'), { decode: true, status, headers }); };
+        const a = at([['https://a.example/robots.txt', undecodable(429, { 'retry-after': '600' })], [/a\.example\/page/, { body: 'ok' }]], { robotsCache: new Map() });
+        await expect(a.http.request('https://a.example/page', { robots: true })).rejects.toBeInstanceOf(RateLimitedError);
+        expect(a.http.holds['a.example']).toMatchObject({ until: iso(NOW + 600000) });
+        expect(a.transport.calls.filter(c => c.url.includes('/page'))).toHaveLength(0);
+        const b = at([['https://b.example/robots.txt', undecodable(403, { 'cf-mitigated': 'challenge' })], [/b\.example\/page/, { body: 'ok' }]], { robotsCache: new Map() });
+        await expect(b.http.request('https://b.example/page', { robots: true })).rejects.toBeInstanceOf(AccessDeniedError);
+        expect(b.transport.calls.filter(c => c.url.includes('/page'))).toHaveLength(0);
+    });
+
+    test('Copilot (3rd): a successful robots.txt ends the host\'s expired streak (a success is a success)', async () => {
+        const { http } = at([['https://a.example/robots.txt', { body: 'User-agent: *\nDisallow: /private' }], [/a\.example\/page/, { body: 'ok' }]],
+            { robotsCache: new Map() });
+        http.holds['a.example'] = { until: iso(NOW - 1000), http_status: 403, signal: 'body_rate_limit', count: 4, weak: 4, at: iso(NOW - 600000) };
+        http.holds['b.example'] = { until: iso(NOW - 1000), http_status: 429, signal: 'http_429', count: 2, weak: 0, at: iso(NOW - 600000) };
+        await expect(http.request('https://a.example/private/x', { robots: true })).rejects.toBeInstanceOf(RobotsDisallowedError);
+        expect(http.holds).not.toHaveProperty(['a.example']);
+        expect(http.holds).toHaveProperty(['b.example']);
+    });
+
     test('security F5: the governance terms fetch never requests a held host', async () => {
         const { snapshotTerms } = require('../../../src/collectors/governance');
         const { http, transport } = at([[/./, { body: 'terms' }]]);

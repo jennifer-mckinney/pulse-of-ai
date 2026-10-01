@@ -292,7 +292,9 @@ async function clearRefusal(sourceId, resolution, { client = null } = {}) {
 
 /**
  * Diagnosis 2026-10-01 / security F5: every stored rate-limit hold, merged
- * per host across sources (the later until, the longer streak), so a host
+ * per host across sources by rate-limit.js combineHold — the streaks and
+ * signal of the NEWEST record (`at`; never a fieldwise maximum, which would
+ * resurrect a reset weak streak), the hold until the LATEST until — so a host
  * held for one source is held for every source — and the governance terms
  * fetch — that contacts it.
  * @returns {Promise<object>} { hostname: hold } (rate-limit.js sanitizeHolds)

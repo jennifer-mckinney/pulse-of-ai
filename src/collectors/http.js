@@ -300,6 +300,27 @@ class HttpClient {
     }
 
     /**
+     * Copilot review: a robots.txt response goes through the same response
+     * state as any request — a RATE LIMIT holds the host (thrown, never
+     * cached as "unreachable" or read as "allow all"), a BOT WALL is a
+     * refusal (never worked around), and a success ends the host's streak.
+     * RobotsPolicy rethrows both errors uncached. A plain 4xx without either
+     * still means "allow all" (RFC 9309).
+     */
+    classifyRobots(url, res) {
+        const host = new URL(url).hostname;
+        if (res.status === 429 || res.status === 403) {
+            const limited = this.rateLimitError(url, res);
+            if (limited) throw limited;
+        }
+        if (res.status >= 400 && isChallenge(res)) {
+            throw new AccessDeniedError(`${host} refused access (HTTP ${res.status}, bot wall on robots.txt) — not retried, not worked around`,
+                { status: res.status, url: redactUrl(url), headers: refusalHeaders(res.headers, this.env) });
+        }
+        if (res.status >= 200 && res.status < 300) this.clearHold(host);
+    }
+
+    /**
      * robots.txt itself: follows up to 5 redirects (RFC 9309 §2.3.1.2 — they
      * may cross authorities; no credential is ever sent). Every hop is
      * checked: https, public host (F10-2). Capped at 500 KiB (F10-4).
@@ -308,14 +329,17 @@ class HttpClient {
         let current = url;
         for (let hop = 0; hop < 5; hop++) {
             checkUrl(current);
-            const res = await this.raw(current, { headers: {}, maxBytes: ROBOTS_MAX_BYTES }, 0);
-            // Copilot review: robots.txt answering with a RATE LIMIT holds the
-            // host like any other response (never cached as "unreachable" or
-            // read as "allow all"); RobotsPolicy rethrows it uncached.
-            if (res.status === 429 || res.status === 403) {
-                const limited = this.rateLimitError(current, res);
-                if (limited) throw limited;
+            let res;
+            try {
+                res = await this.raw(current, { headers: {}, maxBytes: ROBOTS_MAX_BYTES }, 0);
+            } catch (err) {
+                // Copilot review: an undecodable robots.txt is classified like
+                // any response from its headers (the body cannot be read).
+                if (!(err && err.decode && Number.isInteger(err.status))) throw err;
+                this.classifyRobots(current, { status: err.status, headers: err.headers || {}, body: '' });
+                throw err;
             }
+            this.classifyRobots(current, res);
             if (!REDIRECTS.includes(res.status) || !res.headers.location) return res;
             current = new URL(res.headers.location, current).toString();
         }
