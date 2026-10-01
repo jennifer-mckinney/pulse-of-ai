@@ -60,14 +60,25 @@ async def test_health_reports_pinned_model_revision(client):
     assert all(c in "0123456789abcdef" for c in MODEL_REVISION)
 
 
+# The current embedding methodology row's config.library (embedding@1.1.0,
+# src/config/methodology-registry.js). A fixed value on purpose: deriving it
+# from sentence_transformers.__version__ would repeat the service's own
+# expression and could never fail. tests/unit/pure/embeddingLibraryPins.test.js
+# holds this constant, the registry and every requirement file to the same
+# string, so a library bump (a new embedding version) has to update it here too.
+REGISTERED_LIBRARY = "sentence-transformers==6.1.0"
+
+
 @pytest.mark.asyncio
-async def test_health_reports_the_installed_library(client):
-    """/health names the sentence-transformers version it runs, in the form of
-    the embedding methodology row's config.library."""
-    import sentence_transformers
+async def test_health_reports_the_registered_library(client):
+    """/health names the library of the current embedding methodology row, and
+    the installed distribution (read from its package metadata, not from the
+    module the service imports) is that version."""
+    from importlib.metadata import version
 
     body = (await client.get("/health")).json()
-    assert body["library"] == f"sentence-transformers=={sentence_transformers.__version__}"
+    assert body["library"] == REGISTERED_LIBRARY
+    assert f"sentence-transformers=={version('sentence-transformers')}" == REGISTERED_LIBRARY
 
 
 @pytest.mark.asyncio
