@@ -256,6 +256,13 @@ describe('scripts/gold-label.js', () => {
             }
         });
 
+        it('Unicode padding (NBSP, BOM) on another secret does not bypass equality; the dev fallback key is trimmed', () => {
+            const v = k();
+            expect(() => store.hashKey({ GOLD_HASH_KEY: v, PROVENANCE_KEY: `\u00a0${v}\ufeff` }, jest.fn())).toThrow(/equals PROVENANCE_KEY/);
+            expect(() => store.hashKey({ GOLD_HASH_KEY: v, CORRELATION_SALT: `${v}\n` }, jest.fn())).toThrow(/equals CORRELATION_SALT/);
+            expect(store.hashKey({ AUDIT_HASH_KEY: `${v}\n` }, jest.fn())).toBe(v);
+        });
+
         it('a GOLD_HASH_KEY with leading or trailing whitespace is refused (GOLD carries the whitespace)', () => {
             const v = k();
             for (const g of [`${v} `, `${v}\n`, ` ${v}`, '   ']) {
@@ -291,7 +298,7 @@ describe('scripts/gold-label.js', () => {
                 store.hashKey({ AUDIT_HASH_KEY: a });
                 expect(spy).toHaveBeenCalledTimes(1);
                 expect(String(spy.mock.calls[0][0])).not.toContain(a);
-                expect(String(spy.mock.calls[0][0])).toMatch(/orphan|read as changed/);
+                expect(String(spy.mock.calls[0][0])).toMatch(/read as changed/);
             } finally {
                 spy.mockRestore();
                 store.resetNoticeForTests();
