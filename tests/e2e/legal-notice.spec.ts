@@ -178,7 +178,7 @@ test('legal notice: a drawer opened from a focused notice link returns focus to 
     await expect(page.locator('#about-chip')).toBeFocused();
 });
 
-for (const width of [320, 540, 600]) {
+for (const width of [320, 540, 600, 700]) {
     test(`legal notice: at ${width}px the panel opens below the header and inside the viewport`, async ({ page }) => {
         await page.setViewportSize({ width, height: 800 });
         await gotoAndWaitForData(page);

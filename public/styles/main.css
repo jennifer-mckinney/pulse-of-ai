@@ -150,7 +150,7 @@ body {
   max-width: min(360px, calc(100% - 56px));
   /* .stage is fixed and clips overflow: at a narrow or zoomed viewport the
      wrapped notices would run below it, so the panel is bounded to the
-     space under its top (64px, clear of the one-row header chips, which end near 50px; the 520px block below handles the wrapped header) less a 16px margin and scrolls (Copilot
+     space under its top (64px, clear of the one-row header chips, which end near 50px; the 640px block below handles the wrapped header) less a 16px margin and scrolls (Copilot
      r4158623080). Percentages resolve against the full-viewport .stage. */
   max-height: calc(100% - 80px); overflow-y: auto; overscroll-behavior: contain;
   border: 1px solid var(--line); border-radius: 4px; padding: 10px 14px;
@@ -529,7 +529,7 @@ body {
    then the time-to-insight and credits chips, then the health chip), about
    96px tall, so the explore filter column starts below it (e2e asserts the
    gap). */
-@media (max-width: 520px) {
+@media (max-width: 640px) {
   /* the brand takes the first row; the chips wrap beneath it */
   .hdr { padding: 12px 14px; flex-wrap: wrap; row-gap: 8px; }
   .hdr-brand { flex: 1 1 100%; min-width: 0; }
