@@ -11,12 +11,16 @@
 //
 // Targets the database named by POSTGRES_DB on POSTGRES_PORT. The e2e
 // globalSetup runs it against the suite's isolated database
-// (pulse_of_ai_e2e — tests/e2e/e2e-env.js); run bare, it loads the fixture
-// into the dev database from .env. Idempotent: when the first fixture post
+// (pulse_of_ai_e2e — tests/e2e/e2e-env.js); run bare against the dev
+// database from .env it refuses (scripts/lib/fixture-db-guard.js). Idempotent: when the first fixture post
 // already exists the whole seed is skipped, so the job, bias rows and alert
-// are never duplicated. collected_at offsets are relative to NOW(); the
-// Playwright globalSetup (scripts/test/freshen-seed.sh) re-shifts them into
-// the trailing hour before every run.
+// are never duplicated. A skipped seed also keeps the methodology lineage
+// the rows were first written with (audit rows and bias assessments link to
+// the version current AT SEED TIME), which is why the e2e globalSetup
+// recreates its database from scratch on every run instead of relying on
+// this skip (scripts/lib/fixture-db-guard.js). collected_at offsets are relative
+// to NOW(); the Playwright globalSetup (scripts/test/freshen-seed.sh)
+// re-shifts them into the trailing hour before every run.
 //
 // Scores are FIXTURE values, not pipeline output: `npm run replay` on these
 // posts reports DIVERGENCE, which is the honest answer for synthetic rows.

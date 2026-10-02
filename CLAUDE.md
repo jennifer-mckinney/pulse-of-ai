@@ -24,7 +24,7 @@ npm run teardown       # stop it (keeps volumes); `-- --purge` deletes volumes a
 | `npm run standup` / `npm run teardown` | One-command Docker standup of the whole solution / stop it (see README "Quick start") |
 | `npm run replay -- --post <id>` | Re-run a post's stored decisions through `src/pipeline` and print PASS / DIVERGENCE / NOT RE-RUNNABLE per stage |
 | `npm run verify` | Full gate: Jest + coverage, pytest, black (needs `python/.venv`) |
-| `npm run test:e2e` | Playwright suite on its own database `pulse_of_ai_e2e` (on the dev Postgres, needs `docker:up`) and its own server on 3100; globalSetup creates, migrates and seeds it, runs `seed:e2e` and freshens timestamps; the dev database is never touched |
+| `npm run test:e2e` | Playwright suite on its own database `pulse_of_ai_e2e` (on the dev Postgres, needs `docker:up`) and its own server on 3100; globalSetup DROPS + recreates that database from scratch every run (guarded by `scripts/lib/fixture-db-guard.js`: e2e names only, never `pulse_of_ai` or the 5433 test DB; `FIXTURE_DB_ALLOW` never applies to the drop), then migrates, seeds, `seed:e2e`, freshens timestamps; the dev database is never touched |
 | `npm run coverage:frontend` | Non-gating coverage of the pure namespaces of globe/story/ui/main |
 | `npm run test:unit` | Unit tests (needs the test DB: `npm run docker:up`; jest's globalSetup migrates and seeds port 5433) |
 | `npm run test:pure` | Pure unit tests under `tests/unit/pure/` (no DB, no Docker) |
