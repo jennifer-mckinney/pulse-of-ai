@@ -436,6 +436,25 @@ describe('a source whose every route is held is skipped, not failed', () => {
         expect(row.rate_limited_routes).not.toContain('issue-search');
     });
 
+    it('Copilot: a 503 with a long Retry-After is honoured (no request next poll) but is NOT served as a rate limit', async () => {
+        await collect([[/hn\.algolia\.com/, { status: 503, headers: { 'retry-after': '3600' }, body: '' }]], ['hacker_news']);
+        const st = await stateOf('hacker_news');
+        expect(st.rate_limited_hosts['hn.algolia.com']).toMatchObject({ signal: 'retry_after_5xx', count: 0 });
+        expect(st.rate_limited_until).toBeNull();
+        expect(st.rate_limited_routes).toEqual({});
+        const row = await rowOf('hacker_news');
+        expect(row.status).toBe('collecting');
+        expect(row.rate_limited_until).toBeNull();
+        expect(row.rate_limited_hosts).toEqual([expect.objectContaining({ host: 'hn.algolia.com', signal: 'retry_after_5xx' })]);
+        expect(Date.parse(row.server_backoff_until)).toBeGreaterThan(Date.now());
+        await nextPoll('hacker_news');
+        const { summary, transport } = await collect([HN], ['hacker_news']);
+        expect(transport.calls).toHaveLength(0);
+        expect(summary.sources[0]).toMatchObject({ outcome: 'skipped', status: 'backing_off' });
+        expect(summary.sources[0].reason).toMatch(/server error/);
+        expect(summary.sources[0].reason).not.toMatch(/backing off after a rate limit/);
+    });
+
     it('security F3: a contract-feed host never reaches GET /api/sources', async () => {
         await dbRun(`INSERT INTO source_collection_state (source_id, rate_limited_hosts, rate_limited_until, rate_limited_routes)
                      SELECT id, jsonb_build_object('acme-123.feeds.example', jsonb_build_object(

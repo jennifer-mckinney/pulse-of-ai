@@ -454,9 +454,10 @@ async function saveHolds(sourceId, { hosts, changes = new Map(), view = {}, rout
         }
         // rate_limited_until: the source's COLLECTION holds only — a held
         // terms page (src given) is not the source being rate-limited.
-        const active = Object.values(rl.activeHolds(src ? rl.collectionHolds(src, stored) : stored, now)).map(h => h.until).sort();
+        // A 5xx hold (retry_after_5xx) is not a rate limit: never in rate_limited_until.
+        const active = Object.values(rl.activeHolds(rl.rateLimitHolds(src ? rl.collectionHolds(src, stored) : stored), now)).map(h => h.until).sort();
         const saved = headers && Object.keys(headers).length ? JSON.stringify(headers) : null;
-        const routeMap = src ? rl.holdGate(src, env, stored, now, { routeKills: kills }).routes : (routes || {});
+        const routeMap = src ? rl.holdGate(src, env, stored, now, { routeKills: kills }).limitedRoutes : (routes || {});
         await client.query(
             `UPDATE source_collection_state
              SET rate_limited_hosts  = $2::jsonb,

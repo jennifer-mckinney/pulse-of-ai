@@ -252,7 +252,8 @@ async function runCollection(o = {}) {
             const myHosts = rateLimit.sourceHosts(src, env);
             const held = rateLimit.holdGate(src, env, runHolds, Date.now(), { routeKills });
             if (held.state === 'all') {
-                row.status = RATE_LIMITED;
+                // A 5xx's Retry-After hold is honoured but is not a rate limit.
+                row.status = held.kind === 'server' ? 'backing_off' : RATE_LIMITED;
                 row.reason = held.reason;
                 row.rateLimitedUntil = held.until;
                 await state.saveHolds(sourceId, { hosts: myHosts, view: runHolds, routes: held.routes, src, env, routeKills });
@@ -455,7 +456,7 @@ async function runCollection(o = {}) {
                 // sent nothing is not counted as queried. (Its claim stands:
                 // it is next asked one poll interval after this attempt.)
                 if (http.requests === before) queried--;
-                row.status = RATE_LIMITED;
+                row.status = after.kind === 'server' ? 'backing_off' : RATE_LIMITED;
                 row.reason = after.reason || 'every route is backing off after a rate limit';
                 row.rateLimitedUntil = after.until;
                 await touch();

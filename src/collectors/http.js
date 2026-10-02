@@ -538,7 +538,7 @@ class HttpClient {
                 throw limited;
             }
             if (REFUSAL_STATUSES.includes(res.status) || (res.status >= 400 && isChallenge(res)) || challengeHeader(res.headers)) {
-                throw new AccessDeniedError(`${new URL(current).host} refused access (HTTP ${res.status}) — not retried, not worked around`,
+                throw new AccessDeniedError(`${rateLimit.publicHostName(new URL(current).hostname)} refused access (HTTP ${res.status}) — not retried, not worked around`,
                     { status: res.status, url: redactUrl(current), headers: refusalHeaders(res.headers, this.env) });
             }
             if (res.status < 200 || res.status >= 300) {
@@ -584,7 +584,7 @@ class HttpClient {
                 // any 4xx that Cloudflare marks as a challenge (F6).
                 if (err && err.decode && (REFUSAL_STATUSES.includes(err.status)
                     || challengeHeader(err.headers))) {
-                    throw new AccessDeniedError(`${new URL(url).host} refused access (HTTP ${err.status}; body undecodable) — not retried, not worked around`,
+                    throw new AccessDeniedError(`${rateLimit.publicHostName(new URL(url).hostname)} refused access (HTTP ${err.status}; body undecodable) — not retried, not worked around`,
                         { status: err.status, url: redactUrl(url), headers: refusalHeaders(err.headers, this.env) });
                 }
                 if (attempt < MAX_RETRIES && !/network disabled/.test(err.message) && !isDeterministic(err)) {

@@ -425,18 +425,46 @@ function routeHeld(route, env, holds, now = Date.now()) {
 }
 
 /** The public reason of a hold: routes and enums only, never a host (F3). */
-function holdReason(state, routes, until) {
+function holdReason(state, routes, until, kind = 'rate_limit') {
     const ids = Object.keys(routes);
-    return `backing off after a rate limit until ${until}: routes held: ${ids.join(', ')}`
+    // Copilot review: a server error's Retry-After (retry_after_5xx) is honoured
+    // but is not a rate limit, and is never described as one.
+    const what = kind === 'server' ? 'a server error (HTTP 5xx with Retry-After)' : 'a rate limit';
+    return `backing off after ${what} until ${until}: routes held: ${ids.join(', ')}`
         + (state === 'partial' ? ' (the source\'s other routes keep collecting)' : '')
-        + ' — honouring x-ratelimit-reset / Retry-After; not a refusal';
+        + (kind === 'server' ? ' — honouring Retry-After; not a rate limit, not a refusal' : ' — honouring x-ratelimit-reset / Retry-After; not a refusal');
+}
+
+/**
+ * When the last active 5xx hold (retry_after_5xx) of a source's collection
+ * hosts passes (ISO), or null — a server error's Retry-After, honoured but
+ * never reported as a rate limit (Copilot review).
+ */
+function serverBackoffUntil(src, holds, now = Date.now()) {
+    const only = Object.fromEntries(Object.entries(collectionHolds(src, holds) || {})
+        .filter(([, h]) => h && h.signal === 'retry_after_5xx'));
+    const times = Object.values(activeHolds(only, now)).map(h => h.until).sort();
+    return times.length ? times[times.length - 1] : null;
+}
+
+/**
+ * The holds that are RATE LIMITS: a hold from a 5xx's Retry-After
+ * (retry_after_5xx) is enforced but is not one, so it never reads as
+ * "rate limited" in a status, a reason, a time or a host list (Copilot review).
+ */
+function rateLimitHolds(holds) {
+    if (!holds || typeof holds !== 'object') return holds;
+    return Object.fromEntries(Object.entries(holds).filter(([, h]) => !(h && h.signal === 'retry_after_5xx')));
 }
 
 /**
  * The rate-limit gate of a source: which of its OPEN routes its active holds
  * stop (computed by the worker, which sees the real env).
- * @returns {{ state: 'none'|'partial'|'all', until: string|null, next: string|null,
- *             routes: { [routeId]: string }, reason: string|null }}
+ * @returns {{ state: 'none'|'partial'|'all', kind: 'rate_limit'|'server'|null, until: string|null,
+ *             next: string|null, routes: { [routeId]: string },
+ *             limitedRoutes: { [routeId]: string }, reason: string|null }}
+ *   routes: every held route (enforcement); limitedRoutes: those held by a real
+ *   rate limit (what /api/sources reports — a 5xx hold is `kind: 'server'`)
  *   until: when the LAST held route frees (ISO); next: the FIRST
  */
 function holdGate(src, env, holds, now = Date.now(), { routeKills = [] } = {}) {
@@ -446,15 +474,22 @@ function holdGate(src, env, holds, now = Date.now(), { routeKills = [] } = {}) {
     // state.routeKillSwitches rows.
     const routes = openRoutes(src, env, { routeKills });
     const held = {};
+    const limited = {};
+    const limitedHolds = rateLimitHolds(holds);
     for (const r of routes) {
         const t = routeHeldUntil(r, env, holds, now);
-        if (t) held[r.id] = t;
+        if (!t) continue;
+        held[r.id] = t;
+        const tl = routeHeldUntil(r, env, limitedHolds, now);
+        if (tl) limited[r.id] = tl;
     }
     const times = Object.values(held).sort();
-    if (!times.length) return { state: 'none', until: null, next: null, routes: {}, reason: null };
+    if (!times.length) return { state: 'none', kind: null, until: null, next: null, routes: {}, limitedRoutes: {}, reason: null };
     const state = times.length === routes.length ? 'all' : 'partial';
     const until = times[times.length - 1];
-    return { state, until, next: times[0], routes: held, reason: holdReason(state, held, until) };
+    // 'rate_limit' when any held route is held by a real rate limit, else 'server'.
+    const kind = Object.keys(limited).length ? 'rate_limit' : 'server';
+    return { state, kind, until, next: times[0], routes: held, limitedRoutes: limited, reason: holdReason(state, held, until, kind) };
 }
 
 /**
@@ -532,7 +567,7 @@ function legacyHolds(httpCache, now = Date.now()) {
 }
 
 module.exports = {
-    MIN_BACKOFF_MS, MAX_BACKOFF_MS, MAX_5XX_HOLD_MS, publicHostName, MAX_IN_RUN_WAIT_MS, NO_TIME_429_HOLD_MS, LEGACY_HOLD_PREFIX, ESCALATE_AFTER, ESCALATE_STRONG_403_AFTER, WARN_AFTER, STALE_MS, RATE_LIMITED, SIGNALS,
+    MIN_BACKOFF_MS, MAX_BACKOFF_MS, MAX_5XX_HOLD_MS, publicHostName, rateLimitHolds, serverBackoffUntil, MAX_IN_RUN_WAIT_MS, NO_TIME_429_HOLD_MS, LEGACY_HOLD_PREFIX, ESCALATE_AFTER, ESCALATE_STRONG_403_AFTER, WARN_AFTER, STALE_MS, RATE_LIMITED, SIGNALS,
     WEAK_SIGNALS, BODY_HOSTS, CONFIGURED_HOST, BODY_RE,
     parseRetryAfter, parseReset, bodyNamesRateLimit, rateLimitSignal, backoffUntil,
     sanitizeHolds, activeHolds, nextHold, mergeHolds, combineHold, collectionHolds, heldUntil, hostOf,

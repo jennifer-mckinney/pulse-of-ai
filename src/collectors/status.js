@@ -38,7 +38,7 @@ const { dbAll } = require('../db/connection');
 const { SOURCES, getSource, sourceStatus, killSwitchEnv, GATE_STATUSES } = require('../config/source-registry');
 const { DEMO_SOURCE_TYPE } = require('../config/data-mode');
 const { refusalGate, resetEnv, probationOver, BLOCKED_BY_SOURCE } = require('./refusal');
-const { activeHolds, collectionHolds, publicHosts, holdReason, RATE_LIMITED } = require('./rate-limit');
+const { activeHolds, collectionHolds, rateLimitHolds, serverBackoffUntil, publicHosts, holdReason, RATE_LIMITED } = require('./rate-limit');
 const { selectionStatus } = require('./reddit/selection');
 const { allRouteKillSwitches } = require('./state');
 
@@ -78,9 +78,9 @@ function rateLimitView(src, row, openRouteIds, now) {
         if (Number.isFinite(t) && t > now) routeMap[r.id] = new Date(t).toISOString();
     }
     const hosts = publicHosts(src, row.rate_limited_hosts, now);
-    const times = [...Object.values(routeMap), ...Object.values(activeHolds(collectionHolds(src, row.rate_limited_hosts), now)).map(h => h.until)].sort();
+    const times = [...Object.values(routeMap), ...Object.values(activeHolds(rateLimitHolds(collectionHolds(src, row.rate_limited_hosts)), now)).map(h => h.until)].sort();
     const all = openRouteIds.length > 0 && openRouteIds.every(id => routeMap[id]);
-    return { routeMap, hosts, until: times.length ? times[times.length - 1] : null, all };
+    return { routeMap, hosts, until: times.length ? times[times.length - 1] : null, all, serverUntil: serverBackoffUntil(src, row.rate_limited_hosts, now) };
 }
 
 
@@ -151,6 +151,10 @@ function registryFields(row, env, now, routeKills = []) {
         // registry host, else "configured host"; enums only) and the route
         // ids the worker found held.
         rate_limited_until: held.until,
+        // Copilot review: a 5xx's Retry-After is honoured too, but it is not a
+        // rate limit — it never sets the status or rate_limited_until; its own
+        // time is here (the host list carries signal retry_after_5xx).
+        server_backoff_until: held.serverUntil,
         rate_limited_hosts: held.hosts,
         rate_limited_routes: Object.keys(held.routeMap),
         last_attempt_at: row.last_attempt_at || null,

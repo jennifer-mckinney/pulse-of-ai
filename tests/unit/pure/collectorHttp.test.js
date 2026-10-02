@@ -514,6 +514,21 @@ describe('rate limits are not refusals (diagnosis 2026-10-01)', () => {
         expect(e429.strong403).toBeUndefined();
     });
 
+    test('Copilot (6th): a refusal (plain 403, undecodable 403) never names an env-configured host either', async () => {
+        const { http } = at([[/acme-123\.feeds\.example/, { status: 403, headers: {}, body: 'no' }]]);
+        const err = await http.request('https://acme-123.feeds.example/x').catch(e => e);
+        expect(err).toBeInstanceOf(AccessDeniedError);
+        expect(err.message).not.toMatch(/acme-123/);
+        expect(err.message).toMatch(/^configured host refused access/);
+        const gh = at([[/api\.github\.com/, { status: 403, headers: {}, body: 'no' }]]);
+        expect((await gh.http.request(URL_).catch(e => e)).message).toMatch(/^api\.github\.com refused access/);
+        const undecodable = () => { throw Object.assign(new Error('incorrect header check'), { decode: true, status: 403, headers: {} }); };
+        const u = at([[/acme-123\.feeds\.example/, undecodable]]);
+        const uerr = await u.http.request('https://acme-123.feeds.example/x').catch(e => e);
+        expect(uerr).toBeInstanceOf(AccessDeniedError);
+        expect(uerr.message).not.toMatch(/acme-123/);
+    });
+
     test('security review L6: an error message names a registry host, never an env-configured one', async () => {
         const reg = await at([[/api\.github\.com/, { status: 429, headers: { 'retry-after': '60' }, body: '' }]]).http.request(URL_).catch(e => e);
         expect(reg.message).toMatch(/^api\.github\.com rate-limited us/);

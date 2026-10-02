@@ -635,6 +635,25 @@ describe('security review L3-L6', () => {
         expect(Object.keys(rl.holdGate(src, TEST_ENV, hold, NOW, { routeKills: [kill] }).routes)).toEqual(['repo-search']);
     });
 
+    test('Copilot: a 5xx Retry-After hold is enforced but never reads as a rate limit (kind server, no limitedRoutes, not in publicHosts)', () => {
+        const src = getSource('hacker_news');
+        const five = { 'hn.algolia.com': { until: iso(NOW + 600000), http_status: 503, signal: 'retry_after_5xx', count: 0, weak: 0, at: iso(NOW) } };
+        const g = rl.holdGate(src, TEST_ENV, five, NOW);
+        expect(g).toMatchObject({ state: 'all', kind: 'server', limitedRoutes: {} });
+        expect(Object.keys(g.routes)).toEqual(['algolia-search']);
+        expect(g.reason).toMatch(/server error/);
+        expect(g.reason).not.toMatch(/backing off after a rate limit/);
+        // Served: the host with its distinct signal, and its own time — never as a rate limit.
+        expect(rl.publicHosts(src, five, NOW)).toEqual([expect.objectContaining({ host: 'hn.algolia.com', signal: 'retry_after_5xx', count: 0 })]);
+        expect(rl.serverBackoffUntil(src, five, NOW)).toBe(iso(NOW + 600000));
+        expect(rl.serverBackoffUntil(src, {}, NOW)).toBeNull();
+        const limit = { 'hn.algolia.com': { ...five['hn.algolia.com'], http_status: 429, signal: 'http_429', count: 1 } };
+        const l = rl.holdGate(src, TEST_ENV, limit, NOW);
+        expect(l).toMatchObject({ state: 'all', kind: 'rate_limit' });
+        expect(Object.keys(l.limitedRoutes)).toEqual(['algolia-search']);
+        expect(l.reason).toMatch(/a rate limit/);
+    });
+
     test('L6: publicHostName names registry hosts only', () => {
         expect(rl.publicHostName('api.github.com')).toBe('api.github.com');
         expect(rl.publicHostName('API.GITHUB.COM')).toBe('API.GITHUB.COM');
