@@ -83,8 +83,8 @@ def read_chunks(data):
 
 
 def _check_structure(chunks):
-    """Require the PNG skeleton: exactly one 13-byte IHDR as the FIRST chunk
-    and an empty IEND as the LAST (the signature, CRCs and IEND position are
+    """Require the PNG skeleton: exactly one 13-byte IHDR as the FIRST chunk,
+    at least one IDAT, and an empty IEND as the LAST (the signature, CRCs and IEND position are
     already verified by read_chunks)."""
     if chunks[0][0] != b"IHDR":
         raise ValueError("first chunk is not IHDR")
@@ -92,6 +92,8 @@ def _check_structure(chunks):
         raise ValueError("IHDR is not 13 bytes")
     if sum(1 for c in chunks if c[0] == b"IHDR") != 1:
         raise ValueError("duplicate IHDR")
+    if not any(c[0] == b"IDAT" for c in chunks):
+        raise ValueError("no IDAT chunk (no image data)")
     if chunks[-1][0] != b"IEND" or len(chunks[-1][1]) != 0:
         raise ValueError("IEND is not an empty last chunk")
 

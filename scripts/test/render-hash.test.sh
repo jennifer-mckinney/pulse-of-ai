@@ -192,12 +192,14 @@ elif mode == "bad-crc":
     data[i + 8] ^= 0xFF
 elif mode == "trailing":
     data += b"junk"
-elif mode in ("no-ihdr", "dup-ihdr", "misplaced-ihdr", "iend-payload"):
+elif mode in ("no-ihdr", "dup-ihdr", "misplaced-ihdr", "iend-payload", "no-idat"):
     chunks = h.read_chunks(bytes(data))
     if mode == "no-ihdr":
         chunks = [c for c in chunks if c[0] != b"IHDR"]
     elif mode == "dup-ihdr":
         chunks.insert(1, chunks[0])
+    elif mode == "no-idat":
+        chunks = [c for c in chunks if c[0] != b"IDAT"]
     elif mode == "misplaced-ihdr":
         ihdr = chunks.pop(0)
         chunks.insert(1, ihdr)
@@ -228,6 +230,7 @@ expect_damaged "a PNG with bytes after IEND fails" trailing "after IEND"
 expect_damaged "a PNG with no IHDR fails" no-ihdr "first chunk is not IHDR"
 expect_damaged "a PNG with a duplicate IHDR fails" dup-ihdr "duplicate IHDR"
 expect_damaged "a PNG with a misplaced IHDR fails" misplaced-ihdr "first chunk is not IHDR"
+expect_damaged "a PNG with no IDAT image data fails" no-idat "no IDAT chunk"
 expect_damaged "a PNG with a non-empty IEND fails" iend-payload "IEND is not an empty last chunk"
 expect_damaged "a PNG over the size cap fails before it is parsed" oversize "larger than"
 
