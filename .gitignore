@@ -54,6 +54,7 @@ scrollama-main/
 *.corrupted
 *.save
 *.save2
+backups/
 
 # Claude Code local config — contains machine-specific absolute paths
 .claude/
