@@ -1,0 +1,31 @@
+// src/config/key-strength.js
+// Whether a configured secret is plausible as an HMAC key: long enough, not a template value, and with enough
+// estimated entropy that a keyed digest of a post cannot be brute-forced offline. Shared by the gold tools
+// (GOLD_HASH_KEY / AUDIT_HASH_KEY) and the erasure-request path (AUDIT_HASH_KEY).
+
+'use strict';
+
+const MIN_KEY_LENGTH = 32;
+// Estimated Shannon entropy of the whole key, in bits. `openssl rand -hex 32` (64 hex characters) is about 240;
+// a repeated short alphabet ("abcdefgh" x 4) is 96 and is refused.
+const MIN_KEY_ENTROPY_BITS = 128;
+// Template values shipped in .env.example are public: never a key.
+const PLACEHOLDER_KEY_RE = /^(?:replace|changeme|change[-_]me|example|your[-_]|xxx|todo)/i;
+
+/** Estimated entropy of a string in bits: length x the Shannon entropy of its character frequencies. */
+function entropyBits(s) {
+    const counts = new Map();
+    for (const ch of s) counts.set(ch, (counts.get(ch) || 0) + 1);
+    const n = [...s].length;
+    let h = 0;
+    for (const c of counts.values()) h -= (c / n) * Math.log2(c / n);
+    return h * n;
+}
+
+/** True when `v` is usable as a keyed-hash key. */
+function isStrongKey(v) {
+    return typeof v === 'string' && v.length >= MIN_KEY_LENGTH && !PLACEHOLDER_KEY_RE.test(v)
+        && entropyBits(v) >= MIN_KEY_ENTROPY_BITS;
+}
+
+module.exports = { MIN_KEY_LENGTH, MIN_KEY_ENTROPY_BITS, entropyBits, isStrongKey };

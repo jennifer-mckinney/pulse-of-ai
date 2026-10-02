@@ -26,7 +26,8 @@
 //   KEEP  the row, the external id, the provenance fingerprint (anyone with
 //         the original URL can still prove the match: npm run
 //         verify-provenance), the content hash, and every score and
-//         decision_audit_log row.
+//         decision_audit_log row. (An ERASURE REQUEST, removeTextOnRequest, also replaces the
+//         unkeyed content hash and the audit rows' input_hash by HMAC-keyed values.)
 //   DROP  for a platform-terms source, the post's post_embeddings row, in
 //         the same transaction (PR #22 decision G3, Jennifer 2026-09-29:
 //         the embedding is derived from the text). The §19 detail window
@@ -48,6 +49,7 @@
 const { dbAll, dbTransaction } = require('../db/connection');
 const { getSource, retentionHours, retentionDetailDays } = require('../config/source-registry');
 const { DEMO_SOURCE_TYPE } = require('../config/data-mode');
+const { isStrongKey } = require('../config/key-strength');
 // P1-8: every payload key ingest declares as text (ingest@1.6.0
 // payload_text_keys_not_stored), so a legacy row's body / content /
 // selftext copy is removed too, not only text and title.
@@ -97,11 +99,12 @@ function removalNoticeFor(slug) {
  *          for any source
  * @returns {Promise<string[]>} ids changed
  */
-async function removeTextBatch(client, slug, postIds, { reason, rule, performedBy, platform, deleteEmbeddings = platform, legalBasis = null }) {
+async function removeTextBatch(client, slug, postIds, { reason, rule, performedBy, platform, deleteEmbeddings = platform, legalBasis = null, erasure = false }) {
     if (!postIds.length) return [];
     const src = getSource(slug);
-    const notice = platform ? removalNoticeFor(slug) : DETAIL_NOTICE;
-    const keepUrl = platform && src && src.retention && src.retention.keepUrlPrefix ? src.retention.keepUrlPrefix : null;
+    // An erasure request says so in the stored notice and keeps no url at all (a Reddit permalink still identifies the post).
+    const notice = erasure ? ERASURE_NOTICE : (platform ? removalNoticeFor(slug) : DETAIL_NOTICE);
+    const keepUrl = !erasure && platform && src && src.retention && src.retention.keepUrlPrefix ? src.retention.keepUrlPrefix : null;
     // Lock exactly the rows the UPDATE will touch, in id order first: the gold sampler locks posts in
     // the same order (FOR SHARE, which FOR NO KEY UPDATE still conflicts with), so the two can never
     // wait on each other in opposite orders. NO KEY UPDATE is enough (no key column changes) and
@@ -155,7 +158,7 @@ async function removeTextBatch(client, slug, postIds, { reason, rule, performedB
             [platform ? BLANK_ACTION : DETAIL_ACTION, JSON.stringify({
                 summary: `Text of ${ids.length} ${name} post(s) replaced by the removal notice.`,
                 source: slug, rule, reason, post_ids: ids,
-                retained: platform ? RETAINED_NOTE : 'Scores, audit rows and monthly rollups are retained (spec §19).',
+                retained: erasure ? ERASURE_RETAINED_NOTE : (platform ? RETAINED_NOTE : 'Scores, audit rows and monthly rollups are retained (spec §19).'),
                 ...(deleteEmbeddings ? { embeddings_deleted: embeddingsDeleted } : {}),
                 ...(platform && src.retention.byAnalogy ? { applied_by_analogy: src.retention.byAnalogy } : {}),
             }), legal, performedBy],
@@ -164,28 +167,91 @@ async function removeTextBatch(client, slug, postIds, { reason, rule, performedB
     return ids;
 }
 
+const ERASURE_NOTICE = '[removed: erasure request]';
 const ERASURE_LEGAL_BASIS = 'GDPR Article 17 - right to erasure: the post text was removed on request; '
     + 'scores and audit rows are retained (they hold no post text).';
+const ERASURE_RETAINED_NOTE = 'Scores and audit rows are retained (they hold no post text). The post embedding and gold-set rows are deleted, '
+    + 'and the unkeyed content hash (raw_posts.content_hash, decision_audit_log.input_hash) is replaced by an HMAC-keyed value, '
+    + 'so a guessed text can no longer be confirmed against it.';
+const ERASED_HASH_PREFIX = 'erased:';
+
+/** The key that replaces a post's text digests on an erasure request (AUDIT_HASH_KEY, the key the audit API already uses). */
+function erasureKey(env = process.env) {
+    const k = env.AUDIT_HASH_KEY;
+    if (!isStrongKey(k)) {
+        throw new Error('an erasure request needs AUDIT_HASH_KEY (at least 32 characters, about 128 bits of entropy, e.g. openssl rand -hex 32, not a template value) to key the post\'s text digests');
+    }
+    return k;
+}
+
+/**
+ * Replace the unkeyed SHA-256 digests of a post's text (raw_posts.content_hash and its audit rows'
+ * input_hash, which are the same digest) by HMAC-keyed values, once ('erased:' prefix = already done).
+ * Anyone with database read access could otherwise confirm a guessed text against the digest.
+ * @returns {Promise<number>} digests replaced
+ */
+async function keyTextDigests(client, postId, key) {
+    const keyed = (h) => ERASED_HASH_PREFIX + require('crypto').createHmac('sha256', key).update(`erased-hash:v1\0${h}`).digest('hex');
+    let n = 0;
+    const own = (await client.query('SELECT content_hash FROM raw_posts WHERE id = $1::uuid', [postId])).rows[0];
+    if (own && !own.content_hash.startsWith(ERASED_HASH_PREFIX)) {
+        await client.query('UPDATE raw_posts SET content_hash = $2 WHERE id = $1::uuid', [postId, keyed(own.content_hash)]);
+        n += 1;
+    }
+    const hashes = (await client.query(
+        `SELECT DISTINCT input_hash FROM decision_audit_log WHERE raw_post_id = $1::uuid AND input_hash NOT LIKE $2`,
+        [postId, `${ERASED_HASH_PREFIX}%`])).rows;
+    for (const { input_hash: h } of hashes) {
+        n += (await client.query('UPDATE decision_audit_log SET input_hash = $3 WHERE raw_post_id = $1::uuid AND input_hash = $2',
+            [postId, h, keyed(h)])).rowCount;
+    }
+    return n;
+}
 
 /**
  * Remove ONE post's text on an erasure request (any real source, platform terms or not), in one
- * transaction: the same scrub as retention (text, raw_payload text keys, url), the post's embedding
- * deleted, its gold-set rows erased (gold_erase_post), and a data_retention_log row written.
+ * transaction: the same scrub as retention (text, raw_payload text keys, url - no permalink kept), the
+ * post's embedding deleted, its gold-set rows erased (gold_erase_post), the unkeyed text digests replaced
+ * by keyed ones, and a data_retention_log row written. A post whose text retention already removed still
+ * gets the rest (embedding, gold rows, digests, a log row): the request is never a silent no-op.
  * @param {string} postId
- * @param {{ performedBy?: string }} [o]
- * @returns {Promise<{ removed: boolean, source: string|null }>}  removed=false when it had no text left (or is a demo post)
+ * @param {{ performedBy?: string, env?: object }} [o]
+ * @returns {Promise<{ removed: boolean, source: string|null, goldErased: number }>}  removed=false when it had no
+ *          text left (or is a demo post); goldErased counts the gold items erased by this call
  */
-async function removeTextOnRequest(postId, { performedBy = 'scripts/gold-erase.js' } = {}) {
+async function removeTextOnRequest(postId, { performedBy = 'scripts/gold-erase.js', env = process.env } = {}) {
     return dbTransaction(async (client) => {
         const row = (await client.query(
-            `SELECT ds.name FROM raw_posts rp JOIN data_sources ds ON ds.id = rp.source_id WHERE rp.id = $1::uuid`, [postId])).rows[0];
-        if (!row) return { removed: false, source: null };
+            `SELECT ds.name, ds.source_type FROM raw_posts rp JOIN data_sources ds ON ds.id = rp.source_id WHERE rp.id = $1::uuid`, [postId])).rows[0];
+        if (!row) return { removed: false, source: null, goldErased: 0 };
+        // Demo posts are never touched here (they are purged whole by compaction).
+        if (row.source_type === DEMO_SOURCE_TYPE) return { removed: false, source: row.name, goldErased: 0 };
+        const key = erasureKey(env);    // fail closed BEFORE anything changes
+        // Lock the post first (same mode and order as retention and the sampler), then count what is erased.
+        await client.query('SELECT id FROM raw_posts WHERE id = $1::uuid FOR NO KEY UPDATE', [postId]);
+        const goldErased = (await client.query(
+            'SELECT COUNT(*)::int AS n FROM relevance_gold_items WHERE raw_post_id = $1::uuid AND erased_at IS NULL', [postId])).rows[0].n;
         const src = getSource(row.name);
+        const platform = !!(src && src.retention);
         const ids = await removeTextBatch(client, row.name, [postId], {
             reason: 'erasure request', rule: 'erasure request', performedBy,
-            platform: !!(src && src.retention), deleteEmbeddings: true, legalBasis: ERASURE_LEGAL_BASIS,
+            platform, deleteEmbeddings: true, legalBasis: ERASURE_LEGAL_BASIS, erasure: true,
         });
-        return { removed: ids.length === 1, source: row.name };
+        const digests = await keyTextDigests(client, postId, key);
+        if (!ids.length) {
+            // The text was already removed (retention, upstream deletion): finish what that left behind.
+            const embeddingsDeleted = (await client.query('DELETE FROM post_embeddings WHERE raw_post_id = $1::uuid', [postId])).rowCount;
+            await client.query('SELECT gold_erase_post($1::uuid)', [postId]);
+            await client.query(
+                `INSERT INTO data_retention_log (raw_post_id, action, reason, legal_basis, performed_by)
+                 VALUES (NULL, $1, $2, $3, $4)`,
+                [DETAIL_ACTION, JSON.stringify({
+                    summary: `Erasure request for a ${row.name} post whose text was already removed: remaining derived data erased.`,
+                    source: row.name, rule: 'erasure request', reason: 'erasure request', post_ids: [postId],
+                    retained: ERASURE_RETAINED_NOTE, embeddings_deleted: embeddingsDeleted, text_digests_keyed: digests,
+                }), ERASURE_LEGAL_BASIS, performedBy]);
+        }
+        return { removed: ids.length === 1, source: row.name, goldErased };
     });
 }
 
@@ -308,6 +374,6 @@ function retentionStatus(slug, { collectedAt, textRemovedAt, textRemovedReason }
 
 module.exports = {
     BLANK_ACTION, DETAIL_ACTION, REMOVAL_NOTICE, DETAIL_NOTICE, RETAINED_NOTE, DETAIL_LEGAL_BASIS,
-    retentionSources, removalNoticeFor, removeTextBatch, removeTextOnRequest, blankPlatformPosts, blankPosts,
+    retentionSources, removalNoticeFor, removeTextBatch, removeTextOnRequest, erasureKey, ERASURE_NOTICE, blankPlatformPosts, blankPosts,
     blankExpired, postsWithText, retentionStatus,
 };

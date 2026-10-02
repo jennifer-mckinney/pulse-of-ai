@@ -197,6 +197,13 @@ describe('scripts/gold-label.js', () => {
         expect(store.hashKey({ GOLD_HASH_KEY: '', AUDIT_HASH_KEY: audit })).toBe(audit);   // unset or empty: the audit key
     });
 
+    it('a low-entropy key is refused however long it is; a random 64-hex key is accepted', () => {
+        expect(() => store.hashKey({ GOLD_HASH_KEY: 'abcdefgh'.repeat(4) })).toThrow(/GOLD_HASH_KEY is set but invalid/);   // 96 bits
+        expect(() => store.hashKey({ GOLD_HASH_KEY: 'ab12'.repeat(8) })).toThrow(/entropy/);
+        const strong = require('crypto').randomBytes(32).toString('hex');
+        expect(store.hashKey({ GOLD_HASH_KEY: strong })).toBe(strong);
+    });
+
     it('prints post text with terminal escapes neutralised', async () => {
         await dbRun(`UPDATE raw_posts SET content = $2 WHERE id = $1`, [ids.vacuum, 'robot vacuum \u001b]52;c;QQ==\u0007 on sale']);
         await goldSample.main(['--total', '6', '--seed', 'seed-esc', '--min-per-stratum', '1', '--sample-id', 'gold-esc', '--write'], { out: quiet });

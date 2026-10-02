@@ -13,6 +13,8 @@ const retention = require('../../src/collectors/retention');
 const { insertJob, insertMethodologyVersions, insertPostWithFullPipeline } = require('./helpers');
 
 process.env.GOLD_HASH_KEY = process.env.GOLD_HASH_KEY || 'integration-test-gold-hash-key-0123456789';
+// The erasure request keys the post's text digests with AUDIT_HASH_KEY (it fails closed without one).
+process.env.AUDIT_HASH_KEY = 'integration-test-audit-hash-key-0123456789-abcdef';
 process.env.POSTGRES_HOST = process.env.POSTGRES_HOST || 'localhost';
 const TEST_PORT = String(process.env.POSTGRES_TEST_PORT || '5433');
 if (!['5433', '5434'].includes(TEST_PORT)) process.env.GOLD_ALLOW_DB_PORT = TEST_PORT;
@@ -62,10 +64,51 @@ describe('gold-erase --post --remove-text (erasure request)', () => {
         const log = await db.dbGet(`SELECT reason, legal_basis, performed_by FROM data_retention_log ORDER BY performed_at DESC LIMIT 1`);
         expect(JSON.parse(log.reason)).toMatchObject({ rule: 'erasure request', reason: 'erasure request', embeddings_deleted: 1 });
         expect(log.legal_basis).toMatch(/Article 17/);
+        // The stored notice says it was an erasure request, not a retention expiry.
+        expect(p.content).toBe(retention.ERASURE_NOTICE);
         expect(out.join('\n')).toMatch(/removed/);
-        // Re-running is harmless: the text is already gone.
+        // The unkeyed SHA-256 of the text is gone from the post and its audit rows (keyed values, not confirmable by a guess).
+        const hashes = await db.dbAll(
+            `SELECT content_hash AS h FROM raw_posts WHERE id = $1 UNION ALL SELECT input_hash FROM decision_audit_log WHERE raw_post_id = $1`, [post]);
+        expect(hashes.length).toBeGreaterThan(1);
+        for (const { h } of hashes) expect(h).toMatch(/^erased:[0-9a-f]{64}$/);
+        // Re-running is harmless: the text is already gone, nothing is re-keyed, nothing more is erased.
         const again = await goldErase.main(['--post', post, '--remove-text'], { env: LOCAL, out: quiet });
         expect(again.erased).toBe(0);
+        expect((await db.dbAll(`SELECT content_hash AS h FROM raw_posts WHERE id = $1`, [post]))[0].h).toBe(hashes[0].h);
+    });
+
+    it('fails closed, changing nothing, when AUDIT_HASH_KEY is missing or weak', async () => {
+        const { post } = await setup();
+        await expect(retention.removeTextOnRequest(post, { env: {} })).rejects.toThrow(/AUDIT_HASH_KEY/);
+        await expect(retention.removeTextOnRequest(post, { env: { AUDIT_HASH_KEY: 'abcdefgh'.repeat(4) } })).rejects.toThrow(/entropy/);
+        const p = await db.dbGet('SELECT text_removed_at FROM raw_posts WHERE id = $1', [post]);
+        expect(p.text_removed_at).toBeNull();
+    });
+
+    it('a post whose text retention already removed still gets its embedding, gold rows and digests erased, once, with a log row', async () => {
+        const { post, item } = await setup();
+        await db.dbTransaction(client => retention.removeTextBatch(client, 'hacker_news', [post], {
+            reason: 'detail window ended', rule: 'detail window', performedBy: 'test', platform: false,
+        }));
+        // Retention (a detail-window post) left the embedding and the digests; its gold rows went with the text.
+        const out = [];
+        const r = await goldErase.main(['--post', post, '--remove-text'], { env: LOCAL, out: l => out.push(l) });
+        expect(out.join('\n')).toMatch(/already gone/);
+        expect((await db.dbGet('SELECT COUNT(*)::int AS n FROM post_embeddings WHERE raw_post_id = $1', [post])).n).toBe(0);
+        expect((await db.dbGet('SELECT content_hash FROM raw_posts WHERE id = $1', [post])).content_hash).toMatch(/^erased:/);
+        const log = await db.dbGet(`SELECT reason FROM data_retention_log ORDER BY performed_at DESC LIMIT 1`);
+        expect(JSON.parse(log.reason)).toMatchObject({ rule: 'erasure request', embeddings_deleted: 1 });
+        expect(r.erased).toBe(0);
+    });
+
+    it('the erased-item count is what the call erased: an already-erased item is not counted twice', async () => {
+        const { post } = await setup();
+        await db.dbTransaction(client => retention.removeTextBatch(client, 'hacker_news', [post], {
+            reason: 'detail window ended', rule: 'detail window', performedBy: 'test', platform: false,
+        }));
+        const r = await retention.removeTextOnRequest(post);
+        expect(r).toMatchObject({ removed: false, source: 'hacker_news', goldErased: 0 });
     });
 
     it('parseArgs: --remove-text goes only with --post', () => {
@@ -75,7 +118,7 @@ describe('gold-erase --post --remove-text (erasure request)', () => {
 
     it('removeTextOnRequest on an unknown post reports no source and changes nothing', async () => {
         await seedSources();
-        expect(await retention.removeTextOnRequest('99999999-9999-4999-8999-999999999999')).toEqual({ removed: false, source: null });
+        expect(await retention.removeTextOnRequest('99999999-9999-4999-8999-999999999999')).toEqual({ removed: false, source: null, goldErased: 0 });
     });
 });
 
@@ -97,7 +140,7 @@ describe('retention row lock vs the gold sampler lock', () => {
         expect(ids).toEqual([post]);
     });
 
-    it('does not lock a post of another source or one whose text is already removed', async () => {
+    it('does not lock a post of another source (the source filter)', async () => {
         const { post } = await setup();
         await db.dbTransaction(async (holder) => {
             await holder.query('SELECT id FROM raw_posts WHERE id = $1 FOR SHARE', [post]);
@@ -105,6 +148,21 @@ describe('retention row lock vs the gold sampler lock', () => {
             const ids = await db.dbTransaction(async (client) => {
                 await client.query("SET LOCAL lock_timeout = '300ms'");
                 return retention.removeTextBatch(client, 'guardian', [post], {
+                    reason: 'lock test', rule: 'lock test', performedBy: 'test', platform: false,
+                });
+            });
+            expect(ids).toEqual([]);
+        });
+    });
+
+    it('does not lock a post whose text is already removed (the text_removed_at filter)', async () => {
+        const { post } = await setup();
+        await db.dbRun('UPDATE raw_posts SET text_removed_at = NOW() WHERE id = $1', [post]);
+        await db.dbTransaction(async (holder) => {
+            await holder.query('SELECT id FROM raw_posts WHERE id = $1 FOR SHARE', [post]);
+            const ids = await db.dbTransaction(async (client) => {
+                await client.query("SET LOCAL lock_timeout = '300ms'");   // would throw if the lock query matched the row
+                return retention.removeTextBatch(client, 'hacker_news', [post], {
                     reason: 'lock test', rule: 'lock test', performedBy: 'test', platform: false,
                 });
             });
