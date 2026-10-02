@@ -94,15 +94,17 @@ async function countUnchangedRun(sourceId) {
  * (migration 062); null on every other run.
  * `dropped`: the collector's dropped counters summed over the run's routes,
  * { invalid, old, outOfScope, duplicate } (migration 068, relevance-accuracy
- * R1); counts only. Missing keys are 0: every run written from now on
- * records them (NULL is kept for rows from before the migration).
+ * R1); counts only. `dropped: null` (a run that evaluated no route: gate
+ * closed, skipped, refused or failed before any route finished) stores NULL,
+ * never a fake 0; so does every row from before the migration. Within an
+ * object, a missing key is 0.
  */
 async function recordRun({
     sourceId, jobId, gateStatus, outcome, itemsFetched = 0, postsNew = 0, requests = 0,
-    error = null, errorKind = null, httpStatus = null, startedAt, responseHeaders = null, dropped = {},
+    error = null, errorKind = null, httpStatus = null, startedAt, responseHeaders = null, dropped = null,
 }) {
     const headers = responseHeaders && Object.keys(responseHeaders).length ? JSON.stringify(responseHeaders) : null;
-    const d = (k) => (Number.isInteger(dropped && dropped[k]) && dropped[k] >= 0 ? dropped[k] : 0);
+    const d = (k) => (dropped == null ? null : (Number.isInteger(dropped[k]) && dropped[k] >= 0 ? dropped[k] : 0));
     await dbRun(
         `INSERT INTO source_runs
             (source_id, job_id, gate_status, outcome, items_fetched, posts_new, requests, error, error_kind, http_status,

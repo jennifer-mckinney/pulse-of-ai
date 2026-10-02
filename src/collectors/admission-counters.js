@@ -42,6 +42,10 @@
 // Counts are EVALUATIONS: an item a feed serves again on a later fetch (no
 // ETag / 304 and no cursor) is evaluated, and counted, again; the counts
 // cannot be de-duplicated without keeping ids, which this design rules out.
+// A route is counted only when all of its items stored: a route whose store
+// failed is fetched again by the next run, and counting both would count the
+// same items twice (source_runs.dropped_* stays per run, so it is not
+// affected: it describes that run).
 
 'use strict';
 
@@ -211,15 +215,23 @@ async function admissionBySource({ days = API_WINDOW_DAYS } = {}) {
  * counts per admission_filter version (GET /api/health).
  */
 async function admissionTotals({ days = API_WINDOW_DAYS, env = process.env } = {}) {
+    // One statement, so the rule totals and the source count come from the
+    // same snapshot.
     const list = await db().dbAll(
-        `SELECT mv.version, h.rule_id, SUM(h.admitted_count)::bigint AS admitted, SUM(h.rejected_count)::bigint AS rejected,
-                COUNT(DISTINCT h.source_id)::int AS sources
-         FROM admission_rule_hits h JOIN methodology_versions mv ON mv.id = h.admission_mv_id
-         WHERE h.${WINDOW_SQL}
-         GROUP BY mv.version, h.rule_id
-         ORDER BY mv.version, h.rule_id`, [days]);
-    const sources = await db().dbGet(
-        `SELECT COUNT(DISTINCT source_id)::int AS n FROM admission_rule_hits WHERE ${WINDOW_SQL}`, [days]);
+        `WITH w AS (SELECT * FROM admission_rule_hits WHERE ${WINDOW_SQL})
+         SELECT mv.version, w.rule_id, SUM(w.admitted_count)::bigint AS admitted, SUM(w.rejected_count)::bigint AS rejected,
+                (SELECT COUNT(DISTINCT source_id)::int FROM w) AS sources
+         FROM w JOIN methodology_versions mv ON mv.id = w.admission_mv_id
+         GROUP BY mv.version, w.rule_id`, [days]);
+    // Version order is numeric (1.10.0 after 1.9.0), which SQL's text sort is not.
+    const ver = (v) => String(v).split('.').map(n => parseInt(n, 10) || 0);
+    const byVersion = (a, b) => {
+        const x = ver(a), y = ver(b);
+        for (let i = 0; i < Math.max(x.length, y.length); i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0);
+        return 0;
+    };
+    list.sort((a, b) => byVersion(a.version, b.version) || (a.rule_id < b.rule_id ? -1 : a.rule_id > b.rule_id ? 1 : 0));
+    const sourcesReporting = list.length ? list[0].sources : 0;
     const outcome = {};
     const patterns = [];
     for (const r of list) {
@@ -232,16 +244,20 @@ async function admissionTotals({ days = API_WINDOW_DAYS, env = process.env } = {
         o.admitted += c.admitted;
         o.rejected += c.rejected;
     }
-    let retentionDays;
-    try { retentionDays = ruleHitsRetentionDays(env); } catch { retentionDays = null; }
+    // A malformed ADMISSION_RULE_HITS_DAYS makes the daily retention step
+    // fail (nothing is removed); say so here instead of only a null window.
+    let retentionDays; let retentionInvalid = false;
+    try { retentionDays = ruleHitsRetentionDays(env); } catch { retentionDays = null; retentionInvalid = true; }
     return {
         window_days: days,
         day_basis: 'UTC',
-        counted_as: 'evaluations: an item a feed serves again on a later fetch is counted again',
-        sources_reporting: sources ? sources.n : 0,
+        counted_as: 'evaluations: an item a feed serves again on a later fetch is counted again; '
+            + 'a route whose store failed is counted only by the run that completes it',
+        sources_reporting: sourcesReporting,
         ...summary(outcome),
         patterns,
         retention_days: retentionDays,
+        retention_invalid: retentionInvalid,
     };
 }
 

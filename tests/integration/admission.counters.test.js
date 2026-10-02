@@ -24,6 +24,19 @@ const { seedSources, seedMethodology } = require('../../scripts/seed');
 const { fixtureTransport, RECORDED_AT, TEST_ENV } = require('../helpers/fixtureTransport');
 const { admissionFeedXml, EXPECTED_FILTER, EXPECTED_DROPPED_FILTER } = require('../helpers/admissionFeed');
 
+// storeRawPost fails for the next `mockFailStores` calls, then stores.
+let mockFailStores = 0;
+jest.mock('../../src/pipeline/ingest', () => {
+    const real = jest.requireActual('../../src/pipeline/ingest');
+    return {
+        ...real,
+        storeRawPost: async (...a) => {
+            if (mockFailStores > 0) { mockFailStores--; throw new Error('db blip'); }
+            return real.storeRawPost(...a);
+        },
+    };
+});
+
 const NOW = () => Date.parse(RECORDED_AT);
 const BBC = 'https://feeds.bbci.co.uk/news/technology/rss.xml';
 const DAY = 86400000;
@@ -106,6 +119,61 @@ describe('collection run → counters', () => {
     });
 });
 
+describe('what is counted, and when', () => {
+    it('a route whose store failed is not counted; the run that completes it is (no double count)', async () => {
+        mockFailStores = 1;
+        try {
+            const failed = await collectBbc();
+            expect(failed.sources[0].outcome).toBe('error');
+            expect(await hitsByRule()).toEqual({});
+        } finally {
+            mockFailStores = 0;
+        }
+        await releaseClaim();
+        const retry = await collectBbc();
+        expect(retry.sources[0]).toMatchObject({ outcome: 'ok' });
+        expect(await hitsByRule()).toEqual(EXPECTED_FILTER);
+    });
+
+    it('a run that evaluated no route records NULL dropped counts, not a fake 0; an object records its counts', async () => {
+        const { recordRun } = require('../../src/collectors/state');
+        const base = { sourceId: await bbcId(), jobId: null, gateStatus: 'collecting', itemsFetched: 0, postsNew: 0 };
+        await recordRun({ ...base, outcome: 'skipped' });
+        await recordRun({ ...base, outcome: 'ok', dropped: { invalid: 0, old: 2 } });
+        const rows = await dbAll('SELECT dropped_invalid, dropped_old, dropped_out_of_scope, dropped_duplicate FROM source_runs ORDER BY started_at, outcome DESC');
+        const byOld = Object.fromEntries(rows.map(r => [String(r.dropped_old), r]));
+        expect(byOld.null).toEqual({ dropped_invalid: null, dropped_old: null, dropped_out_of_scope: null, dropped_duplicate: null });
+        expect(byOld['2']).toEqual({ dropped_invalid: 0, dropped_old: 2, dropped_out_of_scope: 0, dropped_duplicate: 0 });
+    });
+});
+
+describe('a malformed retention window is visible', () => {
+    it('admissionTotals flags retention_invalid and reports no window', async () => {
+        const t = await counters.admissionTotals({ env: { ADMISSION_RULE_HITS_DAYS: 'abc' } });
+        expect(t).toMatchObject({ retention_days: null, retention_invalid: true });
+    });
+});
+
+describe('an optional metric never takes the status endpoints down', () => {
+    it('GET /api/health answers 200 with admission null when the admission query fails', async () => {
+        const spy = jest.spyOn(counters, 'admissionTotals').mockRejectedValue(new Error('relation does not exist'));
+        const err = jest.spyOn(console, 'error').mockImplementation(() => {});
+        try {
+            const res = await request(app).get('/api/health');
+            expect(res.status).toBe(200);
+            expect(res.body.admission).toBeNull();
+        } finally { spy.mockRestore(); err.mockRestore(); }
+    });
+    it('GET /api/sources answers 200 with admission null when the admission query fails', async () => {
+        const spy = jest.spyOn(counters, 'admissionBySource').mockRejectedValue(new Error('timeout'));
+        try {
+            const res = await request(app).get('/api/sources');
+            expect(res.status).toBe(200);
+            expect(res.body.find(r => r.slug === 'bbc_news').admission).toBeNull();
+        } finally { spy.mockRestore(); }
+    });
+});
+
 describe('admission_rule_hits refuses anything but counts', () => {
     const insert = async (route, ruleId) => dbRun(
         `INSERT INTO admission_rule_hits (day, source_id, route, admission_mv_id, rule_id, admitted_count, rejected_count)
@@ -155,7 +223,7 @@ describe('the API serves aggregates only', () => {
                 rejected: { total: 4, out_of_scope: 1, old: 1, invalid: 1, duplicate: 1 },
                 patterns: ['pattern:00', 'pattern:06', 'pattern:09', 'pattern:10', 'pattern:14', 'pattern:19']
                     .map(rule_id => ({ admission_filter: '1.0.0', rule_id, admitted: 1, rejected: 0 })),
-                retention_days: 400,
+                retention_days: 400, retention_invalid: false,
             });
             // Aggregates only: no source id, route, title or text.
             const json = JSON.stringify(res.body.admission);

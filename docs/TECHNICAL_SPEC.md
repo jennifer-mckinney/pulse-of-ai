@@ -488,7 +488,7 @@ CREATE INDEX idx_embeddings_hnsw ON post_embeddings
 All responses: `Content-Type: application/json`. All errors follow: `{ "error": "descriptive message" }`. Stack traces, SQL errors, and file paths are never returned to clients.
 
 ### `GET /api/health`
-Returns system status, last job info, and active unresolved alerts. The response is cached in process for 5 s, keyed on the path alone (it fans out to the queue store and the database; PR #22 security L2). It also carries `bias_sample` (the insufficient-sample share per bias check, §9), `correlation` (§20) and `admission` (migration 068): over the last 7 UTC days and all sources together, items evaluated, admitted (and admitted on AI-specific feeds although no admission pattern matched) and rejected by reason (out of scope, too old, invalid, duplicate), plus admissions per admission-filter pattern. Counts are per evaluation: an item a feed serves again is counted again.
+Returns system status, last job info, and active unresolved alerts. The response is cached in process for 5 s, keyed on the path alone (it fans out to the queue store and the database; PR #22 security L2). It also carries `bias_sample` (the insufficient-sample share per bias check, §9), `correlation` (§20) and `admission` (migration 068): over the last 7 UTC days and all sources together, items evaluated, admitted (and admitted on AI-specific feeds although no admission pattern matched) and rejected by reason (out of scope, too old, invalid, duplicate), plus admissions per admission-filter pattern. Counts are per evaluation: an item a feed serves again is counted again; a route whose store failed is counted only by the run that completes it. `admission` is `null` (the endpoint still answers) if its query fails, and `retention_invalid` is true when `ADMISSION_RULE_HITS_DAYS` is malformed.
 
 **Response 200:**
 ```json
@@ -1551,7 +1551,7 @@ TIER 3: Permanent Archival (automatic — no expiry)
   Access: GET /api/methodology, GET /api/audit/:post_id (audit skeleton)
 ```
 
-**Admission counters (migration 068).** `admission_rule_hits` holds counts only (no text, no ids, no personal data). It is kept `ADMISSION_RULE_HITS_DAYS` days, default 400 (a year plus a month, so a month can be compared with the same month a year earlier), then removed by the `daily` maintenance task with a `data_retention_log` summary row (`expired_admission_rule_hits`). A bad value (not a whole number of days from 35 to 3650) fails that step and removes nothing. The per-source daily rejection totals are not lost with it: they are rolled up from `source_runs` into `source_run_daily` (Tier 3, kept permanently).
+**Admission counters (migration 068).** `source_runs.dropped_*` is NULL for a run that evaluated no route (not a fake 0) and for rows from before the migration; the `source_run_daily` roll-up sums the recorded runs only, so a day that mixes both is a partial total. `admission_rule_hits` holds counts only (no text, no ids, no personal data). It is kept `ADMISSION_RULE_HITS_DAYS` days, default 400 (a year plus a month, so a month can be compared with the same month a year earlier), then removed by the `daily` maintenance task with a `data_retention_log` summary row (`expired_admission_rule_hits`). A bad value (not a whole number of days from 35 to 3650) fails that step and removes nothing. The per-source daily rejection totals are not lost with it: they are rolled up from `source_runs` into `source_run_daily` (Tier 3, kept permanently).
 
 ### Migration 005 — Retention & Compaction Tables
 

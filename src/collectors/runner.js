@@ -267,16 +267,6 @@ async function runCollection(o = {}) {
                 row.fetched += result.fetched;
                 row.kept += result.payloads.length;
                 droppedByRoute.push(result.dropped);
-                // R1: this route's admission rule counts for today (UTC),
-                // under the admission_filter version that ran. Counts only. A
-                // failed write is a run warning (G10-6): it never costs a post.
-                try {
-                    await counters.recordRuleHits({
-                        sourceId, route: c.route.id, admissionMvId: mv.admissionMvId, tally: result.ruleHits,
-                    });
-                } catch (err) {
-                    fail(`${c.route.id}: admission counters not recorded: ${err.message}`, err);
-                }
                 for (const payload of result.payloads) {
                     let stored;
                     try {
@@ -325,6 +315,21 @@ async function runCollection(o = {}) {
                             fail(`${c.route.id}: scoring failed and the retry could not be queued (${qerr.message})`,
                                 Object.assign(new Error('queue'), { kind: 'queue' }));
                         }
+                    }
+                }
+                // R1: this route's admission rule counts for today (UTC), under
+                // the admission_filter version that ran. Counts only. Written
+                // only when every item stored: a route whose store failed is
+                // fetched and evaluated again by the next run (G10-5), which
+                // would count the same items twice. A failed write is a run
+                // warning (G10-6): it never costs a post.
+                if (!routeStoreFailed) {
+                    try {
+                        await counters.recordRuleHits({
+                            sourceId, route: c.route.id, admissionMvId: mv.admissionMvId, tally: result.ruleHits,
+                        });
+                    } catch (err) {
+                        fail(`${c.route.id}: admission counters not recorded: ${err.message}`, err);
                     }
                 }
                 if (routeStoreFailed) {
@@ -389,7 +394,8 @@ async function runCollection(o = {}) {
                 postsNew: row.new, requests: http.requests - before, error: row.error,
                 errorKind: row.errorKind, httpStatus: row.httpStatus, startedAt,
                 responseHeaders: refused ? refusalHeaders : null,
-                dropped: counters.mergeDropped(droppedByRoute),
+                // NULL when no route finished: nothing was evaluated, so there is no 0 to record.
+                dropped: droppedByRoute.length ? counters.mergeDropped(droppedByRoute) : null,
             });
             log(`[collect] ${slug}: ${row.outcome} fetched ${row.fetched}, kept ${row.kept}, new ${row.new}${row.error ? ` — ${row.error}` : ''}`);
             await touch();

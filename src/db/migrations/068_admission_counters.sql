@@ -12,7 +12,8 @@
 --    (not recorded), never a fake 0.
 -- 2. source_run_daily.dropped_* — the same counts, rolled up with the run
 --    after SOURCE_RUNS_RAW_DAYS (src/collectors/run-retention.js); spec §19
---    Tier 3 (kept permanently). NULL when no rolled-up run recorded them.
+--    Tier 3 (kept permanently). NULL when no rolled-up run recorded them; a
+--    day mixing recorded and unrecorded runs is a partial total (SUM skips NULL).
 -- 3. admission_rule_hits — per UTC day, source, route, admission_filter
 --    version and rule: admitted_count and rejected_count, upserted by the
 --    collector. rule_id and route are CHECKed against closed vocabularies
@@ -29,10 +30,10 @@ ALTER TABLE source_runs ADD COLUMN IF NOT EXISTS dropped_old INTEGER CHECK (drop
 ALTER TABLE source_runs ADD COLUMN IF NOT EXISTS dropped_out_of_scope INTEGER CHECK (dropped_out_of_scope >= 0);
 ALTER TABLE source_runs ADD COLUMN IF NOT EXISTS dropped_duplicate INTEGER CHECK (dropped_duplicate >= 0);
 
-ALTER TABLE source_run_daily ADD COLUMN IF NOT EXISTS dropped_invalid BIGINT;
-ALTER TABLE source_run_daily ADD COLUMN IF NOT EXISTS dropped_old BIGINT;
-ALTER TABLE source_run_daily ADD COLUMN IF NOT EXISTS dropped_out_of_scope BIGINT;
-ALTER TABLE source_run_daily ADD COLUMN IF NOT EXISTS dropped_duplicate BIGINT;
+ALTER TABLE source_run_daily ADD COLUMN IF NOT EXISTS dropped_invalid BIGINT CHECK (dropped_invalid >= 0);
+ALTER TABLE source_run_daily ADD COLUMN IF NOT EXISTS dropped_old BIGINT CHECK (dropped_old >= 0);
+ALTER TABLE source_run_daily ADD COLUMN IF NOT EXISTS dropped_out_of_scope BIGINT CHECK (dropped_out_of_scope >= 0);
+ALTER TABLE source_run_daily ADD COLUMN IF NOT EXISTS dropped_duplicate BIGINT CHECK (dropped_duplicate >= 0);
 
 CREATE TABLE IF NOT EXISTS admission_rule_hits (
     day             DATE NOT NULL,
@@ -45,7 +46,9 @@ CREATE TABLE IF NOT EXISTS admission_rule_hits (
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (day, source_id, route, admission_mv_id, rule_id)
 );
-CREATE INDEX IF NOT EXISTS idx_admission_rule_hits_source_day ON admission_rule_hits (source_id, day);
+-- The API reads the last 7 days of every source (/api/sources, /api/health):
+-- day first, so that is a range seek, not a scan of the whole retention window.
+CREATE INDEX IF NOT EXISTS idx_admission_rule_hits_day_source ON admission_rule_hits (day, source_id);
 
 COMMENT ON TABLE admission_rule_hits IS
     'Counts only (no text, no ids): per UTC day, source, route, admission_filter version and rule, how many fetched items were admitted or rejected. Counted per evaluation (a re-served item counts again). Kept ADMISSION_RULE_HITS_DAYS (default 400) days. Migration 068; src/collectors/admission-counters.js.';

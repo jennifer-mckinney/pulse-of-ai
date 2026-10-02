@@ -88,7 +88,7 @@ const { sourceRows, summarize } = require('../collectors/status');
 const { overdueBySource } = require('../collectors/retention-overdue');
 const { scrub } = require('../collectors/redact');
 const { insufficientSampleReport } = require('../pipeline/bias-window');
-const { admissionTotals } = require('../collectors/admission-counters');
+const admissionCounters = require('../collectors/admission-counters');
 
 const router = Router();
 
@@ -323,7 +323,12 @@ router.get('/health', responseCache(HEALTH_CACHE_TTL_MS, { key: () => 'GET /api/
         const biasSample = await insufficientSampleReport();
         // Relevance-accuracy R1 (migration 068): admission counts over the
         // last 7 UTC days, all sources together — aggregates only.
-        const admission = await admissionTotals();
+        // An optional metric must not take the liveness/watchdog signal down
+        // (a web deploy ahead of migration 068, a lock, a timeout): null instead.
+        const admission = await admissionCounters.admissionTotals().catch((err) => {
+            logRouteError('GET /api/health admission', err);
+            return null;
+        });
 
         return res.json({
             status:        dbConnected ? 'healthy' : 'degraded',

@@ -130,7 +130,9 @@ async function sourceRows({ includeInactive = false, env = process.env, now = Da
         return reg ? { ...base, ...reg } : { ...base, registry: false };
     });
     if (admission) {
-        const bySource = await require('./admission-counters').admissionBySource();
+        // Optional metric: a failing lookup leaves `admission` null, it does not fail the listing.
+        let bySource = new Map();
+        try { bySource = await require('./admission-counters').admissionBySource(); } catch { /* admission stays null */ }
         for (const r of out) if (r.registry) r.admission = bySource.get(r.id) || null;
     }
     // Reddit's subreddit selection (rule, current list, latest snapshot).

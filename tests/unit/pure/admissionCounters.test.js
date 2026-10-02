@@ -60,6 +60,11 @@ describe('rule ids are a closed vocabulary', () => {
         expect(() => counters.patternRuleId('3')).toThrow();
     });
 
+    test('the registered patterns fit the closed pattern-id vocabulary (00..99)', () => {
+        // patternRuleId throws past 99; a longer list would stop a route's collection.
+        expect(filter.PATTERNS.length).toBeLessThanOrEqual(100);
+    });
+
     test('RULE_ID_RE accepts exactly the outcome ids and pattern ids', () => {
         for (const id of ['invalid', 'old', 'duplicate', 'no_pattern', 'any_pattern', 'pattern:00', 'pattern:19']) {
             expect(counters.RULE_ID_RE.test(id)).toBe(true);
