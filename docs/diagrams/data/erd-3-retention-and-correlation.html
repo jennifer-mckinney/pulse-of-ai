@@ -30,7 +30,7 @@
 <pre class="mermaid">
 %% Title: Data model 3 of 4 · retention, rollups, correlation, migrations
 %% Summary: The GDPR lifecycle log, the monthly rollups and compaction log of the layered retention model, the pseudonymous cross-platform correlation tables (never written: correlateUser throws; the demo purge of compaction only deletes demo sightings and the profiles they leave unreferenced, and recounts the others), the correlation gate log, and the migration ledger.
-%% Sources: src/db/migrations/002 (data_retention_log), 005, 006, 036 and 056 (correlation_gate_events, append-only trigger), 070 (relevance_gold_items, relevance_gold_labels: append-only offline gold set; written by src/gold/store.js, erased by gold_erase_post, which src/collectors/retention.js calls in the same transaction as a post's text removal); scripts/migrate.js (schema_migrations). Writers: src/pipeline/ingest.js (collected), src/collectors/retention.js (blanked_platform_terms, text_removed_detail_window), src/collectors/run-retention.js (rolled_up_source_runs), scripts/compact.js (compacted, purged_demo, compaction_log), scripts/correct-legacy-seed-attribution.js (source_reattributed; manual, --apply with GATE_APPROVED_BY), src/collectors/governance.js (correlation_gate_events, with the status from src/pipeline/correlation-gate.js), scripts/compact.js (demo purge of user_platform_sightings and pseudonymous_users); src/pipeline/correlation.js writes nothing (correlateUser throws). Spec: TECHNICAL_SPEC.md sections 19 (layered retention) and 20 (correlation). raw_posts and data_sources are shown with their keys only. Dotted lines are logical links without a foreign key.
+%% Sources: src/db/migrations/002 (data_retention_log), 005, 006, 036 and 056 (correlation_gate_events, append-only trigger), 070 (relevance_gold_items, relevance_gold_labels: append-only offline gold set; written by src/gold/store.js, erased by gold_erase_post, which src/collectors/retention.js calls in the same transaction as a post's text removal); scripts/migrate.js (schema_migrations). Writers: src/pipeline/ingest.js (collected), src/collectors/retention.js (blanked_platform_terms, text_removed_detail_window), src/collectors/run-retention.js (rolled_up_source_runs), scripts/compact.js (compacted, purged_demo, compaction_log), scripts/correct-legacy-seed-attribution.js (source_reattributed; manual, --apply with GATE_APPROVED_BY), src/collectors/governance.js (correlation_gate_events, with the status from src/pipeline/correlation-gate.js), scripts/compact.js (demo purge of user_platform_sightings and pseudonymous_users); src/pipeline/correlation.js writes nothing (correlateUser throws). Spec: TECHNICAL_SPEC.md sections 19 (layered retention) and 20 (correlation). raw_posts, data_sources and methodology_versions are shown with their keys only. Dotted lines are logical links without a foreign key.
 erDiagram
 
   data_retention_log {
@@ -123,10 +123,18 @@ erDiagram
     text category "NOT NULL"
     text scope "filter | ai | unknown"
     text decision "relevant | not_relevant | unscored"
+    text script "latin | cjk | cyrillic | arabic | other"
     text stratum "NOT NULL"
+    int stratum_population "NOT NULL, &gt; 0"
+    int stratum_sample_size "NOT NULL, &gt; 0"
+    numeric stratum_weight "NOT NULL, &gt; 0"
     numeric design_weight "NOT NULL"
     text draw_rank "sha256 hex; random once erased"
+    uuid relevance_mv_id FK "methodology_versions"
+    text sampler_version "NOT NULL"
+    text seed "NOT NULL"
     timestamptz erased_at "set by gold_erase_post"
+    timestamptz created_at "NOT NULL DEFAULT NOW()"
   }
 
   relevance_gold_labels {
@@ -134,11 +142,15 @@ erDiagram
     bigint seq "GENERATED ALWAYS AS IDENTITY; orders corrections"
     uuid item_id FK "NOT NULL"
     text label "AI_CENTRAL | AI_INCIDENTAL | NOT_AI"
+    text_array flags "SPAM | BOT_GENERATED | LANG"
     text method "human | llm_proposed | adjudicated"
     text labeller "NOT NULL; llm: namespace for LLM labels"
+    text model_id "llm_proposed only"
+    text codebook_version "NOT NULL"
     text input_hash "NULL once erased"
     text note "max 200 chars; NULL once erased"
     timestamptz erased_at
+    timestamptz created_at "NOT NULL DEFAULT NOW()"
   }
 
   schema_migrations {
@@ -156,6 +168,10 @@ erDiagram
     uuid id PK
   }
 
+  methodology_versions {
+    uuid id PK
+  }
+
   data_retention_log }o..o| raw_posts : "raw_post_id"
   data_sources |o--o{ monthly_source_rollups : "source_id"
   pseudonymous_users ||--o{ user_platform_sightings : "pseudo_user_id"
@@ -164,6 +180,7 @@ erDiagram
   data_sources ||--o{ raw_posts : "source_id"
   relevance_gold_items ||--o{ relevance_gold_labels : "item_id"
   relevance_gold_items }o..o| raw_posts : "raw_post_id"
+  methodology_versions |o--o{ relevance_gold_items : "relevance_mv_id"
 </pre>
 <script>mermaid.initialize({ startOnLoad: true, theme: 'forest', securityLevel: 'strict', maxTextSize: 200000 });</script>
 </body>

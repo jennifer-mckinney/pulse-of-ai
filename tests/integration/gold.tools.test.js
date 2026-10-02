@@ -170,7 +170,7 @@ describe('scripts/gold-label.js', () => {
 
     it('a different hash key makes every item read as changed (never labelled from a stale fingerprint)', async () => {
         const saved = process.env.GOLD_HASH_KEY;
-        process.env.GOLD_HASH_KEY = 'a-different-gold-hash-key-entirely';
+        process.env.GOLD_HASH_KEY = 'k7Qz-4mXv9-Rb2Tn-eL8s-Wp3Yd-0cHj-5uGa';
         try {
             const { lines, io } = fakeIo(['c']);
             const r = await goldLabel.main(['--sample', 'gold-lab', '--labeller', 'ann'], { env: LOCAL, io });
@@ -197,9 +197,9 @@ describe('scripts/gold-label.js', () => {
         expect(store.hashKey({ GOLD_HASH_KEY: '', AUDIT_HASH_KEY: audit })).toBe(audit);   // unset or empty: the audit key
     });
 
-    it('a low-entropy key is refused however long it is; a random 64-hex key is accepted', () => {
+    it('a low-variety key is refused however long it is; a random 64-hex key is accepted', () => {
         expect(() => store.hashKey({ GOLD_HASH_KEY: 'abcdefgh'.repeat(4) })).toThrow(/GOLD_HASH_KEY is set but invalid/);   // 96 bits
-        expect(() => store.hashKey({ GOLD_HASH_KEY: 'ab12'.repeat(8) })).toThrow(/entropy/);
+        expect(() => store.hashKey({ GOLD_HASH_KEY: 'ab12'.repeat(8) })).toThrow(/character variety/);
         const strong = require('crypto').randomBytes(32).toString('hex');
         expect(store.hashKey({ GOLD_HASH_KEY: strong })).toBe(strong);
     });

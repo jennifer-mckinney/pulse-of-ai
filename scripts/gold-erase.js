@@ -9,12 +9,15 @@
 // about the sample, no text). An erased item can no longer be labelled.
 //
 //   --post POST_ID [--remove-text]   erase the gold rows of one post whose text is already gone;
-//                    with --remove-text (the erasure request) the post's text, embedding and
-//                    text digests (content_hash, audit input_hash: replaced by HMAC-keyed values,
-//                    needs AUDIT_HASH_KEY) go too, in one transaction, even when retention already
-//                    removed the text (an erasure request goes through the post's text removal first: erasing
-//                    only the gold rows of a post that still has text would let a later
-//                    sample draw it again; retention does both in one transaction)
+//                    with --remove-text (the erasure request) the post's text, raw_payload text
+//                    keys and url (no Reddit permalink kept), embedding and gold rows go in one
+//                    transaction with a data_retention_log row, even when retention already
+//                    removed the text. ADR 0001 ruling 9 is non-negotiable: scores, audit rows,
+//                    the content hash and the provenance fingerprint are RETAINED, an erasure
+//                    request included (residual risk accepted by the owner: a guessed text can be
+//                    confirmed against the unkeyed content hash). Erasing only the gold rows of a
+//                    post that still has text would let a later sample draw it again, so --post
+//                    alone refuses such a post.
 //   --removed        erase every item whose post is gone, has had its text
 //                    removed by retention, or is empty (run it after the
 //                    retention job, before reporting any gold statistic)
@@ -60,10 +63,11 @@ async function main(argv, { env = process.env, out = l => process.stdout.write(l
     const store = require('../src/gold/store');
     let erased = 0;
     if (opts.post && opts.removeText) {
-        // Erasure request: remove the text (scrub, embedding, retention log), key its digests AND erase the gold rows in one
+        // Erasure request: remove the text (scrub, embedding, retention log) AND erase the gold rows in one
         // transaction; the count is what that transaction erased (never a separate, racy read).
         const r = await require('../src/collectors/retention').removeTextOnRequest(opts.post.toLowerCase());
-        out(r.source ? `gold erase: text of the post ${r.removed ? 'removed' : 'was already gone (derived data erased)'} (${r.source})` : 'gold erase: no such post');
+        out(r.skipped === 'demo' ? `gold erase: demo post (${r.source}): not erasable here, demo posts are purged whole by compaction`
+            : r.source ? `gold erase: text of the post ${r.removed ? 'removed' : 'was already gone (derived data erased)'} (${r.source})` : 'gold erase: no such post');
         erased = r.goldErased;
     } else if (opts.post) {
         if (!(await store.postTextGone(opts.post.toLowerCase()))) {

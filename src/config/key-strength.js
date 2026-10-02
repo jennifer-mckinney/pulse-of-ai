@@ -1,6 +1,7 @@
 // src/config/key-strength.js
-// Whether a configured secret is plausible as an HMAC key: long enough, not a template value, and with enough
-// estimated entropy that a keyed digest of a post cannot be brute-forced offline. Shared by the gold tools
+// A MINIMUM-VARIETY check on a configured secret before it is used as an HMAC key: long enough, not a template value
+// and with enough character variety. It is a sanity filter against careless keys, NOT a proof of entropy: generate
+// keys with `openssl rand -hex 32` (64 hex characters). Shared by the gold tools
 // (GOLD_HASH_KEY / AUDIT_HASH_KEY) and the erasure-request path (AUDIT_HASH_KEY).
 
 'use strict';

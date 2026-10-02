@@ -13,8 +13,6 @@ const retention = require('../../src/collectors/retention');
 const { insertJob, insertMethodologyVersions, insertPostWithFullPipeline } = require('./helpers');
 
 process.env.GOLD_HASH_KEY = process.env.GOLD_HASH_KEY || 'integration-test-gold-hash-key-0123456789';
-// The erasure request keys the post's text digests with AUDIT_HASH_KEY (it fails closed without one).
-process.env.AUDIT_HASH_KEY = 'integration-test-audit-hash-key-0123456789-abcdef';
 process.env.POSTGRES_HOST = process.env.POSTGRES_HOST || 'localhost';
 const TEST_PORT = String(process.env.POSTGRES_TEST_PORT || '5433');
 if (!['5433', '5434'].includes(TEST_PORT)) process.env.GOLD_ALLOW_DB_PORT = TEST_PORT;
@@ -23,6 +21,10 @@ const goldErase = require('../../scripts/gold-erase');
 const LOCAL = { POSTGRES_HOST: 'localhost', NODE_ENV: 'test', POSTGRES_TEST_PORT: TEST_PORT, GOLD_ALLOW_DB_PORT: process.env.GOLD_ALLOW_DB_PORT };
 const quiet = () => {};
 const H = (c) => c.repeat(64);
+// The post's content hash and its audit rows' input hashes: ADR 0001 ruling 9 keeps them through an erasure request.
+const hashState = async (post) => db.dbAll(
+    `SELECT 'post' AS k, content_hash AS h FROM raw_posts WHERE id = $1
+     UNION ALL SELECT 'audit:' || id::text, input_hash FROM decision_audit_log WHERE raw_post_id = $1 ORDER BY 1`, [post]);
 
 async function setup() {
     await seedSources();
@@ -49,6 +51,8 @@ describe('gold-erase --post --remove-text (erasure request)', () => {
 
     it('removes text, payload text keys, url, embedding and gold rows together, and logs it', async () => {
         const { post, item } = await setup();
+        const before = await hashState(post);
+        expect(before.length).toBeGreaterThan(1);   // the post's own hash and its audit rows
         const out = [];
         const r = await goldErase.main(['--post', post, '--remove-text'], { env: LOCAL, out: l => out.push(l) });
         expect(r.erased).toBe(1);
@@ -67,48 +71,82 @@ describe('gold-erase --post --remove-text (erasure request)', () => {
         // The stored notice says it was an erasure request, not a retention expiry.
         expect(p.content).toBe(retention.ERASURE_NOTICE);
         expect(out.join('\n')).toMatch(/removed/);
-        // The unkeyed SHA-256 of the text is gone from the post and its audit rows (keyed values, not confirmable by a guess).
-        const hashes = await db.dbAll(
-            `SELECT content_hash AS h FROM raw_posts WHERE id = $1 UNION ALL SELECT input_hash FROM decision_audit_log WHERE raw_post_id = $1`, [post]);
-        expect(hashes.length).toBeGreaterThan(1);
-        for (const { h } of hashes) expect(h).toMatch(/^erased:[0-9a-f]{64}$/);
-        // Re-running is harmless: the text is already gone, nothing is re-keyed, nothing more is erased.
+        // ADR 0001 ruling 9 (non-negotiable): the content hash and every audit row are untouched by an erasure request.
+        expect(await hashState(post)).toEqual(before);
+        // Re-running is harmless: the text is already gone, nothing more is erased, and no new log row is written.
+        const logsBefore = (await db.dbGet('SELECT COUNT(*)::int AS n FROM data_retention_log')).n;
         const again = await goldErase.main(['--post', post, '--remove-text'], { env: LOCAL, out: quiet });
         expect(again.erased).toBe(0);
-        expect((await db.dbAll(`SELECT content_hash AS h FROM raw_posts WHERE id = $1`, [post]))[0].h).toBe(hashes[0].h);
+        expect((await db.dbGet('SELECT COUNT(*)::int AS n FROM data_retention_log')).n).toBe(logsBefore);
+        expect(await hashState(post)).toEqual(before);
     });
 
-    it('fails closed, changing nothing, when AUDIT_HASH_KEY is missing or weak', async () => {
+    it('a post whose text retention already removed still gets its embedding, url and notice erased, with one log row', async () => {
         const { post } = await setup();
-        await expect(retention.removeTextOnRequest(post, { env: {} })).rejects.toThrow(/AUDIT_HASH_KEY/);
-        await expect(retention.removeTextOnRequest(post, { env: { AUDIT_HASH_KEY: 'abcdefgh'.repeat(4) } })).rejects.toThrow(/entropy/);
-        const p = await db.dbGet('SELECT text_removed_at FROM raw_posts WHERE id = $1', [post]);
-        expect(p.text_removed_at).toBeNull();
-    });
-
-    it('a post whose text retention already removed still gets its embedding, gold rows and digests erased, once, with a log row', async () => {
-        const { post, item } = await setup();
         await db.dbTransaction(client => retention.removeTextBatch(client, 'hacker_news', [post], {
             reason: 'detail window ended', rule: 'detail window', performedBy: 'test', platform: false,
         }));
-        // Retention (a detail-window post) left the embedding and the digests; its gold rows went with the text.
+        const before = await hashState(post);
         const out = [];
         const r = await goldErase.main(['--post', post, '--remove-text'], { env: LOCAL, out: l => out.push(l) });
         expect(out.join('\n')).toMatch(/already gone/);
+        expect(r.erased).toBe(0);   // retention already erased the gold rows with the text
         expect((await db.dbGet('SELECT COUNT(*)::int AS n FROM post_embeddings WHERE raw_post_id = $1', [post])).n).toBe(0);
-        expect((await db.dbGet('SELECT content_hash FROM raw_posts WHERE id = $1', [post])).content_hash).toMatch(/^erased:/);
+        expect((await db.dbGet('SELECT content FROM raw_posts WHERE id = $1', [post])).content).toBe(retention.ERASURE_NOTICE);
+        expect(await hashState(post)).toEqual(before);
         const log = await db.dbGet(`SELECT reason FROM data_retention_log ORDER BY performed_at DESC LIMIT 1`);
-        expect(JSON.parse(log.reason)).toMatchObject({ rule: 'erasure request', embeddings_deleted: 1 });
-        expect(r.erased).toBe(0);
+        expect(JSON.parse(log.reason)).toMatchObject({ rule: 'erasure request', embeddings_deleted: 1, url_and_notice_scrubbed: true });
+        const logs = (await db.dbGet('SELECT COUNT(*)::int AS n FROM data_retention_log')).n;
+        await goldErase.main(['--post', post, '--remove-text'], { env: LOCAL, out: quiet });
+        expect((await db.dbGet('SELECT COUNT(*)::int AS n FROM data_retention_log')).n).toBe(logs);   // nothing left to do: no new row
     });
 
-    it('the erased-item count is what the call erased: an already-erased item is not counted twice', async () => {
-        const { post } = await setup();
-        await db.dbTransaction(client => retention.removeTextBatch(client, 'hacker_news', [post], {
-            reason: 'detail window ended', rule: 'detail window', performedBy: 'test', platform: false,
-        }));
+    it('a live gold item of a post whose text is already gone is erased and counted once', async () => {
+        const { post, item } = await setup();
+        // The text went by another route (a restored backup): the gold item is still live.
+        await db.dbRun(`UPDATE raw_posts SET text_removed_at = NOW(), text_removed_reason = 'other' WHERE id = $1`, [post]);
         const r = await retention.removeTextOnRequest(post);
-        expect(r).toMatchObject({ removed: false, source: 'hacker_news', goldErased: 0 });
+        expect(r).toMatchObject({ removed: false, source: 'hacker_news', goldErased: 1 });
+        const g = await db.dbGet('SELECT raw_post_id, erased_at FROM relevance_gold_items WHERE id = $1', [item]);
+        expect(g.raw_post_id).toBeNull();
+        expect(g.erased_at).toBeTruthy();
+        expect((await retention.removeTextOnRequest(post)).goldErased).toBe(0);   // not counted twice
+    });
+
+    it('a Reddit post already blanked by retention loses its permalink and platform notice on an erasure request', async () => {
+        await seedSources();
+        const reddit = (await db.dbGet("SELECT id FROM data_sources WHERE name = 'reddit'")).id;
+        const mv = await insertMethodologyVersions();
+        const jobId = await insertJob();
+        const post = await insertPostWithFullPipeline(reddit, jobId, mv, { externalId: 'erase-reddit-1', location: '' });
+        await db.dbRun('UPDATE raw_posts SET raw_payload = $2::jsonb WHERE id = $1',
+            [post, JSON.stringify({ title: 'a secret title', url: 'https://www.reddit.com/r/test/comments/abc123/a_secret_title/' })]);
+        await db.dbTransaction(client => retention.blankPlatformPosts(client, 'reddit', [post], {
+            reason: 'removed upstream', rule: 'test', performedBy: 'test',
+        }));
+        const kept = await db.dbGet('SELECT raw_payload FROM raw_posts WHERE id = $1', [post]);
+        expect(kept.raw_payload.url).toBe('https://www.reddit.com/r/test/comments/abc123/');   // retention keeps the permalink
+        await retention.removeTextOnRequest(post);
+        const p = await db.dbGet('SELECT content, raw_payload FROM raw_posts WHERE id = $1', [post]);
+        expect(p.content).toBe(retention.ERASURE_NOTICE);
+        expect(p.raw_payload).not.toHaveProperty('url');
+    });
+
+    it('a demo post is skipped: nothing changes and the tool says so', async () => {
+        await seedSources();
+        const demo = await db.dbGet(
+            `INSERT INTO data_sources (name, display_name, source_type, category, active)
+             VALUES ('erase_demo_feed', 'Erase demo feed', 'demo', 'forums', true)
+             ON CONFLICT (name) DO UPDATE SET source_type = 'demo' RETURNING id, name`);
+        const mv = await insertMethodologyVersions();
+        const jobId = await insertJob();
+        const post = await insertPostWithFullPipeline(demo.id, jobId, mv, { externalId: 'erase-demo-1', location: '' });
+        const out = [];
+        const r = await goldErase.main(['--post', post, '--remove-text'], { env: LOCAL, out: l => out.push(l) });
+        expect(r.erased).toBe(0);
+        expect(out.join('\n')).toMatch(/demo post .*not erasable here/);
+        expect((await db.dbGet('SELECT text_removed_at FROM raw_posts WHERE id = $1', [post])).text_removed_at).toBeNull();
+        expect(await retention.removeTextOnRequest(post)).toMatchObject({ removed: false, skipped: 'demo', goldErased: 0 });
     });
 
     it('parseArgs: --remove-text goes only with --post', () => {
