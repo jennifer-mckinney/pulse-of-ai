@@ -100,7 +100,7 @@ describe('a GitHub rate limit is a host backoff, not a refusal', () => {
         expect(new Date(st.rate_limited_until).getTime()).toBe(Number(reset) * 1000);
         expect(st.rate_limited_hosts).toEqual({
             'api.github.com': { until: new Date(Number(reset) * 1000).toISOString(), http_status: 403, signal: 'ratelimit_remaining_zero', count: 1, weak: 0, strong403: 1,
-                at: expect.any(String) },
+                limit_at: expect.any(String), at: expect.any(String) },
         });
         // Grumpy #2: the held routes are stored by the worker.
         expect(Object.keys(st.rate_limited_routes)).toEqual(['repo-search', 'issue-search']);
@@ -248,7 +248,8 @@ describe('a GitHub rate limit is a host backoff, not a refusal', () => {
         const newer = { until: new Date(Date.now() + 60000).toISOString(), http_status: 429, signal: 'http_429', count: 5, weak: 0, at: new Date().toISOString() };
         await st.saveHolds(ghId, { hosts: ['api.github.com'], changes: new Map([['api.github.com', newer]]) });
         const saved = (await stateOf('github')).rate_limited_hosts['api.github.com'];
-        expect(saved).toMatchObject({ signal: 'http_429', count: 5, weak: 0 });
+        // Streaks from the newer rate limit; the cause stays that of the record with the later until.
+        expect(saved).toMatchObject({ signal: 'body_rate_limit', count: 5, weak: 0 });
         expect(Date.parse(saved.until) - Date.now()).toBeGreaterThan(55 * 60000);
     });
 
@@ -302,7 +303,8 @@ describe('security F1: weak evidence never keeps a source polled forever', () =>
         expect(summary.sources[0]).toMatchObject({ status: 'blocked_by_source', outcome: 'error' });
         const st = await stateOf('github');
         expect(st).toMatchObject({ refusal_count: 1, access_denied_status: 403 });
-        expect(st.rate_limited_hosts).not.toHaveProperty(['api.github.com']);
+        // The refusal keeps the host held with its streak (security review F9).
+        expect(st.rate_limited_hosts['api.github.com']).toMatchObject({ count: 5, weak: 5 });
         expect(await alertsOf('github', 'source_refused')).toEqual([expect.objectContaining({ severity: 'critical' })]);
     });
 
@@ -445,7 +447,8 @@ describe('a source whose every route is held is skipped, not failed', () => {
         const row = await rowOf('hacker_news');
         expect(row.status).toBe('collecting');
         expect(row.rate_limited_until).toBeNull();
-        expect(row.rate_limited_hosts).toEqual([expect.objectContaining({ host: 'hn.algolia.com', signal: 'retry_after_5xx' })]);
+        expect(row.rate_limited_hosts).toEqual([]);
+        expect(row.server_backoff_hosts).toEqual([expect.objectContaining({ host: 'hn.algolia.com', signal: 'retry_after_5xx' })]);
         expect(Date.parse(row.server_backoff_until)).toBeGreaterThan(Date.now());
         // The held route does not run now: out of open_routes, in server_backoff_routes, never in rate_limited_routes.
         expect(row.open_routes).toEqual([]);

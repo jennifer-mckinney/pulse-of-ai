@@ -462,6 +462,31 @@ describe('discovery: plain 403s on /about (Copilot review)', () => {
         await expect(discoverSubreddits({ api, env: {}, now: () => NOW })).rejects.toBeInstanceOf(AccessDeniedError);
     });
 
+    test('a bot wall at any status, a 451 or an escalated refusal is rethrown at once — never a private subreddit (grumpy 3)', async () => {
+        for (const e of [
+            new AccessDeniedError('bot wall', { status: 200, refusal: 'bot_wall' }),
+            new AccessDeniedError('bot wall', { status: 302, refusal: 'bot_wall' }),
+            new AccessDeniedError('bot wall', { status: 403, refusal: 'bot_wall' }),
+            new AccessDeniedError('escalated', { status: 403, refusal: 'escalated' }),
+            new AccessDeniedError('refused', { status: 451 }),
+        ]) {
+            const api = { listing: listing(['alpha', 'beta']), async about() { throw e; } };
+            await expect(discoverSubreddits({ api, env: {}, now: () => NOW })).rejects.toBe(e);
+        }
+    });
+
+    test('a 404 between 403s ends the run of 403s (security F8)', async () => {
+        const seq = ['403', '403', '404', '403', '403', 'ok'];
+        let i = 0;
+        const api = { listing: listing(['a1', 'b1', 'c1', 'd1', 'e1', 'f1']), async about() {
+            const k = seq[i++];
+            if (k === '403') throw denied();
+            if (k === '404') throw Object.assign(new Error('nf'), { status: 404 });
+            return ok();
+        } };
+        expect((await discoverSubreddits({ api, env: {}, now: () => NOW })).complete).toBe(true);
+    });
+
     test('a success between 403s resets the run', async () => {
         const seq = [true, true, false, true, true, false];
         let i = 0;

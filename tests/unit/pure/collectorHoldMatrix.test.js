@@ -213,3 +213,52 @@ describe('matrix: combineHold is order-independent (concurrent merge, both order
         expect(fwd).toEqual(rev);
     });
 });
+
+describe('matrix: held-host aliases and mid-flight holds', () => {
+    test('a redirect into an already-held host holds the host first asked too (grumpy 8)', async () => {
+        const t = build('redirect', { status: 200, body: 'ok' });
+        t.http.holds['b.example'] = { until: iso(NOW + 600000), http_status: 429, signal: 'http_429', count: 1, weak: 0, at: iso(NOW) };
+        const err = await t.run().catch(e => e);
+        expect(err).toMatchObject({ held: true });
+        expect(t.http.holds['a.example']).toMatchObject({ signal: 'http_429', until: iso(NOW + 600000) });
+        expect([...t.http.drainHoldChanges().keys()]).toContain('a.example');
+    });
+
+    test('a trailing-dot or www. twin of a held host is held too (security F4)', async () => {
+        const { http, transport } = (() => {
+            const tr = fixtureTransport([[/./, { body: 'ok' }]]);
+            return { http: new HttpClient({ transport: tr, env: TEST_ENV, now: () => NOW, sleep: noSleep, robotsCache: new Map() }), transport: tr };
+        })();
+        http.holds['h.example'] = { until: iso(NOW + 600000), http_status: 429, signal: 'http_429', count: 1, weak: 0, at: iso(NOW) };
+        for (const u of ['https://h.example./x', 'https://H.EXAMPLE/x', 'https://www.h.example/x']) {
+            expect(await http.request(u).catch(e => e)).toMatchObject({ held: true });
+        }
+        expect(transport.calls).toHaveLength(0);
+    });
+
+    test('a hold set between attempts is the answer, not a swallowed retry (grumpy 1)', async () => {
+        const sleeps = [];
+        let http;
+        const tr = fixtureTransport([[/h\.example/, () => {
+            http.holds['h.example'] = { until: iso(NOW + 600000), http_status: 429, signal: 'http_429', count: 1, weak: 0, at: iso(NOW) };
+            return { status: 500, body: '' };
+        }]]);
+        http = new HttpClient({ transport: tr, env: TEST_ENV, now: () => NOW, sleep: ms => { sleeps.push(ms); return Promise.resolve(); }, robotsCache: new Map() });
+        const err = await http.request('https://h.example/x').catch(e => e);
+        expect(err).toBeInstanceOf(RateLimitedError);
+        expect(err.held).toBe(true);
+    });
+
+    test('an undecodable 503 with a long Retry-After holds the host (grumpy 14)', async () => {
+        const t = build('page', () => { throw Object.assign(new Error('incorrect header check'), { decode: true, status: 503, headers: { 'retry-after': '3600' } }); });
+        const err = await t.run().catch(e => e);
+        expect(err).toBeInstanceOf(HttpError);
+        expect(t.http.holds['a.example']).toMatchObject({ signal: 'retry_after_5xx' });
+    });
+
+    test('a 403 on /robots.txt with a bare remaining: 0 is a refusal, never a rate limit (security F1 / P1)', async () => {
+        const t = build('robots', { status: 403, headers: { 'x-ratelimit-remaining': '0' }, body: '' });
+        expect(await t.run().catch(e => e)).toBeInstanceOf(AccessDeniedError);
+        expect(t.http.holds).toEqual({});
+    });
+});
