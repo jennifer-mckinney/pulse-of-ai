@@ -77,6 +77,12 @@ async function apiGateReason(env) {
     const sourceId = ids.get(SLUG);
     if (!sourceId) return 'data_sources row missing — run `npm run seed`';
     if (await state.dbKillSwitch(sourceId)) return 'kill switch (database)';
+    // Migration 073: the per-route database kill switch (Reddit's one route).
+    const routeKills = await state.routeKillSwitches(sourceId);
+    if (routeKills.length) {
+        const rst = sourceStatus(src, env, { routeKills });
+        if (rst.status !== 'collecting') return rst.reason;
+    }
     const gate = refusalGate(await state.getRefusal(sourceId), SLUG, env, Date.now());
     if (gate.state === 'cooldown') return gate.reason;
     return null;

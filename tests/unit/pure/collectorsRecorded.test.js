@@ -12,17 +12,29 @@ const { ADAPTERS, buildCollectors } = require('../../../src/collectors');
 const { getSource } = require('../../../src/config/source-registry');
 const { safeSourceUrl } = require('../../../src/config/attribution');
 const { PII_FIELDS } = require('../../../src/pipeline/ingest');
-const { fixtureTransport, RECORDED_AT, TEST_ENV } = require('../../helpers/fixtureTransport');
+const { fixtureTransport, RECORDED_AT, recordedAtOf, TEST_ENV } = require('../../helpers/fixtureTransport');
 
 const NOW = Date.parse(RECORDED_AT);
 const noSleep = () => Promise.resolve();
+
+/** "now" for a route's recorded fixtures: the latest clock among them (a fixture kept from an earlier recording run keeps its own clock), else the overall clock. */
+// A robots.txt fixture is rules metadata, not a payload, so its clock never
+// counts: a robots refresh must not move the clock of a feed that was retained.
+// `clockOf` is injectable so the mixed-success case is testable.
+function clockFor(routes, clockOf = recordedAtOf) {
+    const clocks = routes.map(([, response]) => response)
+        .filter(r => typeof r === 'string' && r.startsWith('recorded/') && !/robots/i.test(r))
+        .map(r => Date.parse(clockOf(r)));
+    return clocks.length ? Math.max(...clocks) : NOW;
+}
 
 function run(slug, routeId, routes, { cursor = {}, env = TEST_ENV } = {}) {
     const source = getSource(slug);
     const route = source.routes.find(r => r.id === routeId);
     const transport = fixtureTransport(routes);
     const http = new HttpClient({ transport, env, sleep: noSleep });
-    const c = new ADAPTERS[route.adapter]({ source, route, env, http, cursor, httpCache: {}, now: () => NOW });
+    const now = clockFor(routes);
+    const c = new ADAPTERS[route.adapter]({ source, route, env, http, cursor, httpCache: {}, now: () => now });
     return c.collect().then(r => {
         // K1: every permalink a RECORDED live response yields must survive the
         // link-back rule for its own source (src/config/attribution.js): a
@@ -44,6 +56,28 @@ function expectNoIdentity(payloads) {
         if (p.url) expect(p.url).not.toMatch(/\/user\//);
     }
 }
+
+describe('recorded fixture clocks', () => {
+    test('a fixture absent from recordedAtByFile reads the overall clock, with or without the recorded/ prefix', () => {
+        expect(recordedAtOf('recorded/not-in-the-manifest.json')).toBe(RECORDED_AT);
+        expect(recordedAtOf('not-in-the-manifest.json')).toBe(RECORDED_AT);
+        expect(recordedAtOf('recorded/hf-forum-latest.json')).toBe(recordedAtOf('hf-forum-latest.json'));
+    });
+
+    test('clockFor is the fixture\'s own clock; the overall clock when no recorded payload is served', () => {
+        expect(clockFor([['https://x.test/a', 'recorded/hf-forum-latest.json']])).toBe(Date.parse(recordedAtOf('recorded/hf-forum-latest.json')));
+        expect(clockFor([['https://x.test/a', { body: 'inline' }]])).toBe(NOW);
+    });
+
+    test('a refreshed robots.txt never moves the clock of a retained feed (mixed success)', () => {
+        const OLD = '2026-09-29T02:59:38.173Z';
+        const NEW = '2026-10-01T10:00:00.000Z';
+        const routes = [['https://feeds.bbci.co.uk/robots.txt', 'recorded/bbc-robots.txt'], ['https://feeds.bbci.co.uk/news/technology/rss.xml', 'recorded/bbc-technology.xml']];
+        expect(clockFor(routes, f => (/robots/.test(f) ? NEW : OLD))).toBe(Date.parse(OLD));
+        // The feed refreshed instead: its clock is the one used.
+        expect(clockFor(routes, f => (/robots/.test(f) ? OLD : NEW))).toBe(Date.parse(NEW));
+    });
+});
 
 describe('RSS / Atom (publisher feeds, robots-gated)', () => {
     test('BBC Technology: robots checked, AI filter applied, publisher city London', async () => {
@@ -223,7 +257,11 @@ describe('JSON APIs (recorded)', () => {
     });
 
     test('Internet Archive advanced search (subject AI, date window)', async () => {
-        const r = await run('internet_archive', 'advanced-search', [['https://archive.org/advancedsearch.php?q=subject%3A%28%22artificial+intelligence%22%29+AND+publicdate%3A%5B2026-09-26+TO+2026-09-29%5D&rows=50&output=json&sort%5B%5D=publicdate+desc&fl%5B%5D=identifier&fl%5B%5D=title&fl%5B%5D=description&fl%5B%5D=publicdate', 'recorded/ia-search.json']]);
+        // The collector asks for the 3 days up to its clock; the matcher derives
+        // the same window from the fixture's own clock, so a refreshed recording is served.
+        const iaNow = Date.parse(recordedAtOf('recorded/ia-search.json'));
+        const day = (t) => new Date(t).toISOString().slice(0, 10);
+        const r = await run('internet_archive', 'advanced-search', [[`https://archive.org/advancedsearch.php?q=subject%3A%28%22artificial+intelligence%22%29+AND+publicdate%3A%5B${day(iaNow - 3 * 86400000)}+TO+${day(iaNow)}%5D&rows=50&output=json&sort%5B%5D=publicdate+desc&fl%5B%5D=identifier&fl%5B%5D=title&fl%5B%5D=description&fl%5B%5D=publicdate`, 'recorded/ia-search.json']]);
         expect(r.fetched).toBe(3);
         expect(decodeURIComponent(r.transport.calls[0].url)).toMatch(/publicdate:\[/);
         expect(r.payloads.every(p => p.location === '')).toBe(true);   // route overrides the SF home city
