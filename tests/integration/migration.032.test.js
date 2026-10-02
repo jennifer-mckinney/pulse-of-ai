@@ -13,8 +13,9 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const request = require('supertest');
+const { useServer } = require('../helpers/server');
 const app = require('../../src/server');
+const request = useServer(app);   // one listener per file (tests/helpers/server.js)
 const { dbAll, dbGet, dbRun, dbTransaction } = require('../../src/db/connection');
 const { seedMethodology } = require('../../scripts/seed');
 const { insertSource, insertJob, insertMethodologyVersions } = require('./helpers');
@@ -62,7 +63,7 @@ describe('migration 032_bias_sample_rules.sql', () => {
         const aParReal = await alert('platform_sentiment_parity', realParity, 'warning');
         const other = await alert('source_refused', tiny);
 
-        const before = await request(app).get('/api/health');
+        const before = await request().get('/api/health');
         expect(before.body.active_alerts).toHaveLength(5);
 
         await dbTransaction(c => c.query(SQL_032));
@@ -83,7 +84,7 @@ describe('migration 032_bias_sample_rules.sql', () => {
         expect(res.find(r => r.alert_id === aParSmall).basis).toMatchObject({ categories_with_min_posts: 0, min_per_category: 10 });
 
         // The health chip counts only unresolved alerts; history keeps all.
-        const after = await request(app).get('/api/health');
+        const after = await request().get('/api/health');
         expect(after.body.active_alerts.map(a => a.id).sort()).toEqual([aParReal, other].sort());
     });
 });

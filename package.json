@@ -38,7 +38,8 @@
     "gold:label": "node scripts/gold-label.js",
     "gold:agreement": "node scripts/gold-agreement.js",
     "gold:erase": "node scripts/gold-erase.js",
-    "relevance:eval": "node scripts/relevance-eval.js"
+    "relevance:eval": "node scripts/relevance-eval.js",
+    "test:diagrams": "bash scripts/test/render-hash.test.sh"
   },
   "keywords": [
     "ai",
@@ -51,7 +52,7 @@
     "gdpr"
   ],
   "author": "Jennifer McKinney",
-  "license": "MIT",
+  "license": "AGPL-3.0-or-later",
   "dependencies": {
     "axios": "^1.4.0",
     "bullmq": "^5.70.4",

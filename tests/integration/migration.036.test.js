@@ -11,6 +11,9 @@ const path = require('path');
 const { dbAll, dbGet, dbRun, dbTransaction } = require('../../src/db/connection');
 const { seedMethodology } = require('../../scripts/seed');
 const { insertSource, insertJob } = require('./helpers');
+const { useServer } = require('../helpers/server');
+
+const request = useServer(require('../../src/server'));   // one listener per file (tests/helpers/server.js)
 
 const sql = (f) => fs.readFileSync(path.join(__dirname, '../../src/db/migrations', f), 'utf8');
 const SQL_028 = sql('028_bias_min_sample.sql');
@@ -62,7 +65,7 @@ describe('migration 036', () => {
         expect(st[open].status).toBe('open');
 
         // The dashboard tells superseded closures apart from genuine fixes.
-        const h = await require('supertest')(require('../../src/server')).get('/api/health');
+        const h = await request().get('/api/health');
         expect(h.body.alerts_closed).toEqual({ resolved: 1, superseded: 2 });
     });
 

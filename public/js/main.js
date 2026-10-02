@@ -16,6 +16,9 @@
 //      jump to the explore beat, so the page is navigable before story.js.
 //   5. Initialize globe.js / story.js / ui.js when present — and tolerate
 //      their absence (they land in C2–C4).
+//   6. Render the Appropriate Legal Notices (AGPL-3.0-or-later plus the
+//      section 7(b) attribution, config/legal.config.js) into the header
+//      "about" panel, and wire the "about" chip that opens it.
 //
 // DOM discipline: createElement/textContent/classList ONLY — the repo Write
 // hook blocks innerHTML in client JS, and all strings here may echo API data.
@@ -26,6 +29,7 @@
     const designConfig = window.PulseDesignConfig;
     const apiConfig = window.PulseApiConfig;
     const storyConfig = window.PulseStoryConfig;
+    const legalConfig = window.PulseLegalConfig;
     const utils = window.PulseUtils;
 
     const loadedAt = Date.now();
@@ -143,6 +147,127 @@
         });
     }
 
+    // ── 6. Legal notices (AGPL-3.0-or-later, section 7(b) attribution) ────
+    // One list item per legalConfig.NOTICE entry, built with
+    // createElement/textContent; entries with an href become links. The
+    // panel starts hidden and the "about" chip toggles it (Escape closes).
+    // isValidNoticeConfig: the config replaces the static notices only when it
+    // is COMPLETE: a non-empty array whose every entry is an object with a
+    // non-empty string id and text (and a string href when present), that
+    // carries each REQUIRED id exactly once (a partial or duplicated list
+    // would silently drop or repeat the AGPL section 7(b) attribution), with
+    // a non-empty href on the notices that must link (attribution, licence,
+    // terms, source). Extra notices with other ids are allowed. Anything else
+    // takes the fallback path and leaves the static, interactive notices in
+    // place; nothing here throws, so initModules() always runs.
+    const REQUIRED_NOTICE_IDS = ['copyright', 'attribution', 'license', 'terms', 'source', 'warranty'];
+    const LINKED_NOTICE_IDS = ['attribution', 'license', 'terms', 'source'];
+    function isValidNoticeConfig(cfg) {
+        if (!cfg || !Array.isArray(cfg.NOTICE) || cfg.NOTICE.length === 0) return false;
+        const wellFormed = cfg.NOTICE.every((item) => !!item && typeof item === 'object'
+            && typeof item.id === 'string' && item.id !== ''
+            && typeof item.text === 'string' && item.text !== ''
+            && (item.href === undefined || typeof item.href === 'string'));
+        if (!wellFormed) return false;
+        const ids = cfg.NOTICE.map((item) => item.id);
+        if (new Set(ids).size !== ids.length) return false;   // duplicate id
+        if (!REQUIRED_NOTICE_IDS.every((id) => ids.indexOf(id) !== -1)) return false;
+        return cfg.NOTICE.every((item) => LINKED_NOTICE_IDS.indexOf(item.id) === -1
+            || (typeof item.href === 'string' && item.href !== ''));
+    }
+
+    function renderLegalNotice() {
+        const panel = document.getElementById('about-panel');
+        const chip = document.getElementById('about-chip');
+        if (!panel || !chip) return;
+        // The panel ships its notices as static markup in index.html, so the
+        // AGPL section 7(b) attribution stays reachable (chip + panel) even if
+        // legal.config.js fails to load (404, CSP, load order). When the
+        // config IS present its list replaces the static one; otherwise the
+        // static list stays and a warning is logged.
+        if (isValidNoticeConfig(legalConfig)) {
+            const list = document.createElement('ul');
+            list.className = 'about-list';
+            legalConfig.NOTICE.forEach((item) => {
+                const li = document.createElement('li');
+                li.className = 'about-item';
+                li.setAttribute('data-notice', item.id);
+                if (item.href) {
+                    const a = document.createElement('a');
+                    a.href = item.href;
+                    a.rel = 'noopener noreferrer';
+                    a.textContent = item.text;
+                    li.appendChild(a);
+                } else {
+                    li.textContent = item.text;
+                }
+                list.appendChild(li);
+            });
+            while (panel.firstChild) panel.removeChild(panel.firstChild);
+            panel.appendChild(list);
+        } else if (typeof console !== 'undefined' && console.warn) {
+            console.warn('legal notices: PulseLegalConfig missing or malformed; showing the static notices');
+        }
+
+        const setOpen = (open) => {
+            panel.hidden = !open;
+            chip.setAttribute('aria-expanded', open ? 'true' : 'false');
+        };
+        // close: hiding the panel would strand keyboard focus inside a hidden
+        // subtree when it sits on one of the panel's links, so focus returns
+        // to the controlling chip. Whether it is inside is read BEFORE the
+        // panel hides. Focus that is elsewhere on the page (another control
+        // the user moved to) is left where it is. Shared by Escape and the
+        // chip click: in Safari a click does not focus the button, so a
+        // focused notice link would otherwise stay focused when the chip
+        // closes the panel (Copilot r4158521470).
+        const close = () => {
+            const active = document.activeElement;
+            const returnFocus = !active || active === document.body
+                || active === chip || panel.contains(active);
+            setOpen(false);
+            if (returnFocus) chip.focus();
+        };
+        chip.addEventListener('click', () => {
+            if (panel.hidden) setOpen(true);
+            else close();
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Escape' || panel.hidden) return;
+            close();
+        });
+        // A drawer opening (receipt, health) sits above the panel (z-index 50
+        // vs 30): fold the panel away so it is not left expanded and focusable
+        // behind the drawer, whichever path opened it (PulseUI.openAudit is
+        // called directly as well as through the pulse:trace event). The
+        // drawers toggle an `open` class, so that is observed rather than one
+        // event. Focus is NOT moved: the drawer's own opener handling owns it.
+        // The one exception: when focus sits INSIDE the panel being folded (a
+        // notice link was focused and the drawer opened without moving
+        // focus, e.g. a Safari click that does not focus the button), focus
+        // would be stranded in a hidden subtree, so it moves to the opened
+        // drawer (a dialog; made programmatically focusable).
+        const foldAway = (drawer) => {
+            if (panel.hidden) return;
+            const strandsFocus = panel.contains(document.activeElement);
+            setOpen(false);
+            if (strandsFocus && drawer && typeof drawer.focus === 'function') {
+                drawer.setAttribute('tabindex', '-1');
+                drawer.focus();
+            }
+        };
+        if (typeof MutationObserver !== 'undefined') {
+            const observer = new MutationObserver((records) => {
+                const opened = records.find((r) => r.target.classList.contains('open'));
+                if (opened) foldAway(opened.target);
+            });
+            ['audit-drawer', 'health-drawer'].forEach((id) => {
+                const d = document.getElementById(id);
+                if (d) observer.observe(d, { attributes: true, attributeFilter: ['class'] });
+            });
+        }
+    }
+
     // Shared shell surface for later modules (freeze timer on first receipt,
     // programmatic jump to explore).
     window.PulseMain = { freezeInsightTimer, scrollToExplore };
@@ -159,6 +284,7 @@
             setInterval(pollHealth, apiConfig.REFRESH_MS);
         }
         wireSkips();
+        renderLegalNotice();
         initModules();
     });
 }());

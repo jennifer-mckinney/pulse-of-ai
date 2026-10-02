@@ -11,8 +11,9 @@
 
 const fs = require('fs');
 const path = require('path');
-const request = require('supertest');
+const { useServer } = require('../helpers/server');
 const app = require('../../src/server');
+const request = useServer(app);   // one listener per file (tests/helpers/server.js)
 const db = require('../../src/db/connection');
 const { storeRawPost } = require('../../src/pipeline/ingest');
 const { saveSentiment } = require('../../src/pipeline/sentiment');
@@ -91,7 +92,7 @@ describe('migration 066_content_hash_wording.sql', () => {
         })));
         expect(rows.map(r => r.version)).toEqual(OLD_INGEST);
 
-        const res = await request(app).get('/api/methodology');
+        const res = await request().get('/api/methodology');
         expect(res.status).toBe(200);
         for (const v of OLD_INGEST) {
             const served = res.body.find(r => r.component === 'ingest' && r.version === v);
@@ -121,8 +122,8 @@ describe('ingest@1.8.0 is wording only (no behaviour change)', () => {
         const { postId: oldId } = await storeRawPost({ id: 'old-1', text: 'AI text stored earlier' }, src, { ingestMvId: v17.id });
         const { postId: newId } = await storeRawPost({ id: 'new-1', text: 'AI text stored now' }, src, { ingestMvId: current.ingestMvId });
 
-        const oldReceipt = (await request(app).get(`/api/audit/${oldId}`)).body;
-        const newReceipt = (await request(app).get(`/api/audit/${newId}`)).body;
+        const oldReceipt = (await request().get(`/api/audit/${oldId}`)).body;
+        const newReceipt = (await request().get(`/api/audit/${newId}`)).body;
         expect(oldReceipt.ingest).toMatchObject({ methodology_version: '1.7.0', lineage: 'recorded' });
         expect(newReceipt.ingest).toMatchObject({ methodology_version: '1.8.0', lineage: 'recorded' });
         // The receipt is rendered by the current templates (read-time).

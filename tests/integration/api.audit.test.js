@@ -5,8 +5,9 @@
 'use strict';
 
 const crypto  = require('crypto');
-const request = require('supertest');
+const { useServer } = require('../helpers/server');
 const app     = require('../../src/server');
+const request = useServer(app);   // one listener per file (tests/helpers/server.js)
 const {
     insertSource, insertJob, insertMethodologyVersions,
     insertBiasMethodology, insertIngestMethodology, insertBiasAssessment,
@@ -15,13 +16,13 @@ const {
 
 describe('GET /api/audit/:post_id', () => {
     it('returns 400 for an invalid (non-UUID) post_id', async () => {
-        const res = await request(app).get('/api/audit/not-a-uuid');
+        const res = await request().get('/api/audit/not-a-uuid');
         expect(res.status).toBe(400);
         expect(res.body).toHaveProperty('error');
     });
 
     it('returns 404 when the post does not exist', async () => {
-        const res = await request(app).get('/api/audit/00000000-0000-0000-0000-000000000000');
+        const res = await request().get('/api/audit/00000000-0000-0000-0000-000000000000');
         expect(res.status).toBe(404);
         expect(res.body).toHaveProperty('error');
     });
@@ -32,7 +33,7 @@ describe('GET /api/audit/:post_id', () => {
         const mvIds = await insertMethodologyVersions();
         const postId = await insertPostWithFullPipeline(srcId, jobId, mvIds, { externalId: 'aud-1' });
 
-        const res = await request(app).get(`/api/audit/${postId}`);
+        const res = await request().get(`/api/audit/${postId}`);
 
         expect(res.status).toBe(200);
         expect(res.body).toMatchObject({
@@ -47,7 +48,7 @@ describe('GET /api/audit/:post_id', () => {
         const mvIds  = await insertMethodologyVersions();
         const postId = await insertPostWithFullPipeline(srcId, jobId, mvIds, { externalId: 'aud-2' });
 
-        const res = await request(app).get(`/api/audit/${postId}`);
+        const res = await request().get(`/api/audit/${postId}`);
 
         expect(res.body.post).toMatchObject({
             id:              postId,
@@ -64,7 +65,7 @@ describe('GET /api/audit/:post_id', () => {
         const mvIds  = await insertMethodologyVersions();
         const postId = await insertPostWithFullPipeline(srcId, jobId, mvIds, { externalId: 'aud-3' });
 
-        const res = await request(app).get(`/api/audit/${postId}`);
+        const res = await request().get(`/api/audit/${postId}`);
 
         const types = res.body.decisions.map(d => d.decision_type);
         expect(types).toContain('sentiment');
@@ -78,7 +79,7 @@ describe('GET /api/audit/:post_id', () => {
         const mvIds  = await insertMethodologyVersions();
         const postId = await insertPostWithFullPipeline(srcId, jobId, mvIds, { externalId: 'aud-4' });
 
-        const res     = await request(app).get(`/api/audit/${postId}`);
+        const res     = await request().get(`/api/audit/${postId}`);
         const sentDec = res.body.decisions.find(d => d.decision_type === 'sentiment');
 
         expect(sentDec).toMatchObject({
@@ -100,7 +101,7 @@ describe('GET /api/audit/:post_id', () => {
             const mvIds  = await insertMethodologyVersions();
             const postId = await insertPostWithFullPipeline(srcId, jobId, mvIds, { externalId: 'aud-v4-1' });
 
-            const res = await request(app).get(`/api/audit/${postId}`);
+            const res = await request().get(`/api/audit/${postId}`);
             expect(res.status).toBe(200);
             expect(res.body.decisions.length).toBeGreaterThan(0);
             for (const decision of res.body.decisions) {
@@ -125,7 +126,7 @@ describe('GET /api/audit/:post_id', () => {
                 externalId: 'aud-v4-2', indicator: 'positive', comparative: 0.5,
             });
 
-            const res = await request(app).get(`/api/audit/${postId}`);
+            const res = await request().get(`/api/audit/${postId}`);
             const sentDec = res.body.decisions.find(d => d.decision_type === 'sentiment');
             expect(sentDec.audiences.config).toMatchObject({
                 model:                'afinn-sentiment-v5@1.0.0',
@@ -144,7 +145,7 @@ describe('GET /api/audit/:post_id', () => {
             const mvIds  = await insertMethodologyVersions();
             const postId = await insertPostWithFullPipeline(srcId, jobId, mvIds, { externalId: 'aud-v4-3' });
 
-            const res = await request(app).get(`/api/audit/${postId}`);
+            const res = await request().get(`/api/audit/${postId}`);
             expect(res.body.narration).toEqual({
                 component: 'audit_narration',
                 version:   expect.stringMatching(/^\d+\.\d+\.\d+$/),
@@ -162,7 +163,7 @@ describe('GET /api/audit/:post_id', () => {
             await insertIngestMethodology();
             const postId = await insertPostWithFullPipeline(srcId, jobId, mvIds, { externalId: 'aud-ing-1' });
 
-            const res = await request(app).get(`/api/audit/${postId}`);
+            const res = await request().get(`/api/audit/${postId}`);
             expect(res.body.ingest).toMatchObject({
                 stage:               'ingestion',
                 model_name:          'pulse-ingest-v1',
@@ -181,7 +182,7 @@ describe('GET /api/audit/:post_id', () => {
             const mvIds  = await insertMethodologyVersions();
             const postId = await insertPostWithFullPipeline(srcId, jobId, mvIds, { externalId: 'aud-ing-2' });
 
-            const res = await request(app).get(`/api/audit/${postId}`);
+            const res = await request().get(`/api/audit/${postId}`);
             expect(res.body.ingest).toBeNull();
         });
     });
@@ -212,7 +213,7 @@ describe('GET /api/audit/:post_id', () => {
                 methodologyVersionId: biasMvId,
             });
 
-            const res = await request(app).get(`/api/audit/${postId}`);
+            const res = await request().get(`/api/audit/${postId}`);
             expect(res.body.bias.job_id).toBe(jobId);
             expect(res.body.bias.assessed_at).toEqual(expect.any(String));
             // Versioned bias-monitor identity for the drawer's model pill
@@ -263,7 +264,7 @@ describe('GET /api/audit/:post_id', () => {
             await insertBiasMethodology();
             const postId = await insertPostWithFullPipeline(srcId, jobId, mvIds, { externalId: 'aud-b-2' });
 
-            const res = await request(app).get(`/api/audit/${postId}`);
+            const res = await request().get(`/api/audit/${postId}`);
             const eo = res.body.bias.layers.find(l => l.assessment_type === 'equalized_odds');
             expect(eo).toMatchObject({
                 name:     'Equalized odds',
@@ -280,7 +281,7 @@ describe('GET /api/audit/:post_id', () => {
             const mvIds  = await insertMethodologyVersions();
             const postId = await insertPostWithFullPipeline(srcId, jobId, mvIds, { externalId: 'aud-b-3' });
 
-            const res = await request(app).get(`/api/audit/${postId}`);
+            const res = await request().get(`/api/audit/${postId}`);
             expect(res.body.bias).toEqual({
                 job_id:      jobId,
                 assessed_at: null,
@@ -334,7 +335,7 @@ describe('GET /api/audit/:post_id', () => {
                 .update(storedHash)
                 .digest('hex');
 
-            const res = await request(app).get(`/api/audit/${postId}`);
+            const res = await request().get(`/api/audit/${postId}`);
             expect(res.status).toBe(200);
 
             // Every decision carries the KEYED input fingerprint
@@ -376,7 +377,7 @@ describe('GET /api/audit/:post_id', () => {
             expect(storedRows.length).toBeGreaterThan(0);
             const storedHashes = new Set(storedRows.map(r => r.input_hash));
 
-            const res = await request(app).get(`/api/audit/${postId}`);
+            const res = await request().get(`/api/audit/${postId}`);
             expect(res.status).toBe(200);
             for (const decision of res.body.decisions) {
                 expect(decision.input_hash).toMatch(/^[0-9a-f]{64}$/);
@@ -392,7 +393,7 @@ describe('GET /api/audit/:post_id', () => {
             const mvIds  = await insertMethodologyVersions();
             const postId = await insertPostWithFullPipeline(srcId, jobId, mvIds, { externalId: 'aud-7' });
 
-            const res = await request(app).get(`/api/audit/${postId}`);
+            const res = await request().get(`/api/audit/${postId}`);
             expect(res.status).toBe(200);
             expect(res.body.decisions.length).toBeGreaterThan(0);
             for (const decision of res.body.decisions) {
