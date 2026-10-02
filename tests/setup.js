@@ -36,6 +36,7 @@ const TABLES = [
     'source_gate_events',
     'correlation_gate_events',
     'source_terms_snapshots',
+    'admission_rule_hits',
     'source_run_daily',
     'source_runs',
     'source_collection_state',

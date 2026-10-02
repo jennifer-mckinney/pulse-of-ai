@@ -128,7 +128,7 @@ describe('ingest@1.8.0 is wording only (no behaviour change)', () => {
         expect(newReceipt.ingest).toMatchObject({ methodology_version: '1.8.0', lineage: 'recorded' });
         // The receipt is rendered by the current templates (read-time).
         expect(newReceipt.narration).toEqual({ component: 'audit_narration', version: NARRATION_VERSION });
-        expect(NARRATION_VERSION).toBe('1.4.0');
+        expect(NARRATION_VERSION).toBe('1.5.0');
         for (const r of [oldReceipt, newReceipt]) {
             expect(r.ingest.audiences.researcher).toContain(INGEST_HASH_NOTE);
             expect(r.ingest.audiences.researcher).not.toMatch(/join key across/);

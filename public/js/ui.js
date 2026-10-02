@@ -1079,8 +1079,15 @@
                 version: '1.1.2', status: 'pass',
                 score: relevance, scoreKind: 'percent',
                 audiences: {
-                    public: 'It counts toward the map because it’s clearly talking about AI.',
-                    plain: 'Rated ' + Math.round(relevance * 100) + '% relevant to AI discourse via keyword and phrase matching.',
+                    // audit_narration@1.5.0 wording (src/config/audit-narration.js
+                    // RELEVANCE_PUBLIC.matched), stated conditionally for the demo
+                    // like the ingestion step: the live system counts a matching
+                    // post toward the AI-discourse totals, but this fictional post
+                    // was never stored, so it counts toward nothing.
+                    public: 'This fictional post matched the AI topic list. A live post that matches counts toward the AI-discourse totals; '
+                        + 'this demo post was never stored, so it counts toward nothing.',
+                    plain: 'Rated ' + Math.round(relevance * 100) + '% relevant to AI discourse via keyword and phrase matching. '
+                        + 'Fictional demo post: it was never stored, so it is in no totals.',
                     config: {
                         matched_terms: ['AI', 'model', 'automated'],
                         min_threshold: 0.6,

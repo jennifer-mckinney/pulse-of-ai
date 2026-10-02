@@ -57,6 +57,10 @@ x-app-env: &app-env
   # retention_overdue condition follows web's verdict through /api/health.
   # Not a secret.
   RETENTION_OVERDUE_GRACE_MINUTES: ${RETENTION_OVERDUE_GRACE_MINUTES:-}
+  # Days the per-rule admission counts (admission_rule_hits, migration 068)
+  # are kept (default 400, 35..3650). The worker removes older rows; web
+  # reports the window in /api/health, so both get the SAME value. Not a secret.
+  ADMISSION_RULE_HITS_DAYS: ${ADMISSION_RULE_HITS_DAYS:-}
   DEMO_FEED_INTERVAL_MS: ${DEMO_FEED_INTERVAL_MS:-150000}
   DEMO_FEED_BATCH: ${DEMO_FEED_BATCH:-}
 

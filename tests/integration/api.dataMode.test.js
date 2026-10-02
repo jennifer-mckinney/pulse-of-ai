@@ -140,7 +140,7 @@ describe('GET /api/audit/:post_id — demo ingestion wording (audit_narration 1.
 
         const demo = (await request().get(`/api/audit/${ids.demo[0]}`)).body;
         expect(demo.narration.version).toBe(NARRATION_VERSION);
-        expect(NARRATION_VERSION).toBe('1.4.0');
+        expect(NARRATION_VERSION).toBe('1.5.0');
         expect(demo.post.data_origin).toBe('demo');
         // D2: demo content has no provenance to verify, and says why.
         expect(demo.provenance.fingerprint).toBeNull();

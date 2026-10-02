@@ -35,6 +35,9 @@
 #         receives a value for the removed CORRELATION_MIN_CONFIDENCE, not
 #         even the worker when the operator's env file still carries it
 #         (the worker blanks its env-file copy)
+#   R1    (relevance-accuracy, migration 068) web and worker receive the same
+#         ADMISSION_RULE_HITS_DAYS: the worker removes older admission counts,
+#         web reports the window in /api/health
 #
 # CI runs it in the docker-images job (.github/workflows/ci.yml);
 # tests/integration/composeConfig.test.js runs it under jest.
@@ -257,11 +260,11 @@ trap 'rm -f "$probe_file" "$r4_file"' EXIT
 # operator .env still carries it, and the worker loads that file whole. It is
 # in the interpolation env as well (standup's .env is both), so a `KEY:` null
 # entry — which compose re-resolves from there — cannot pass for a blank.
-printf 'PG_POOL_MAX=99\nRETENTION_OVERDUE_GRACE_MINUTES=99\nCORRELATION_MIN_CONFIDENCE=0.85\n' > "$r4_file"
+printf 'PG_POOL_MAX=99\nRETENTION_OVERDUE_GRACE_MINUTES=99\nCORRELATION_MIN_CONFIDENCE=0.85\nADMISSION_RULE_HITS_DAYS=99\n' > "$r4_file"
 cfg_r4=$(env -i PATH="$PATH" HOME="$HOME" ${DOCKER_HOST:+DOCKER_HOST="$DOCKER_HOST"} \
     ${DOCKER_CONTEXT:+DOCKER_CONTEXT="$DOCKER_CONTEXT"} \
     POSTGRES_PASSWORD=compose-check REDIS_PASSWORD=compose-check PULSE_ENV_FILE="$r4_file" \
-    RETENTION_OVERDUE_GRACE_MINUTES=37 PG_POOL_MAX=17 CORRELATION_MIN_CONFIDENCE=0.85 \
+    RETENTION_OVERDUE_GRACE_MINUTES=37 PG_POOL_MAX=17 CORRELATION_MIN_CONFIDENCE=0.85 ADMISSION_RULE_HITS_DAYS=410 \
     docker compose --project-directory "$ROOT" -f "$ROOT/docker-compose.yml" \
         --env-file /dev/null -p compose-check --profile full --profile demo \
         config --format json)
@@ -286,6 +289,16 @@ r4_corr=$(jq -r '.services | to_entries[]
     | (.value.environment.CORRELATION_MIN_CONFIDENCE // "") as $v | select($v != "")
     | "\(.key) receives the unused CORRELATION_MIN_CONFIDENCE (\"\($v)\")"' <<< "$cfg_r4")
 check "no role receives the unused CORRELATION_MIN_CONFIDENCE, even from the env file" "$r4_corr"
+
+# ─── R1: web and worker agree on the admission-count retention window ────────
+r1_days=$(jq -r '.services as $s | ["web", "worker"][]
+    | . as $n | ($s[$n].environment.ADMISSION_RULE_HITS_DAYS // "") as $v
+    | select($v != "410") | "\($n) has ADMISSION_RULE_HITS_DAYS \"\($v)\", expected \"410\""' <<< "$cfg_r4")
+check "web and worker receive the same ADMISSION_RULE_HITS_DAYS (x-app-env)" "$r1_days"
+r1_unset=$(jq -r '.services as $s | ["web", "worker"][] | . as $n
+    | ($s[$n].environment.ADMISSION_RULE_HITS_DAYS // "") | select(. != "")
+    | "\($n) has the non-empty default \"\(.)\" (unset must mean the code default, 400)"' <<< "$cfg")
+check "unset ADMISSION_RULE_HITS_DAYS resolves empty (code default)" "$r1_unset"
 
 #@@CHECKS@@
 

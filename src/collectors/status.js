@@ -198,10 +198,13 @@ function registryFields(row, env, now, routeKills = []) {
 }
 
 /**
- * @param {{ includeInactive?: boolean, env?: object, now?: number }} [o]
+ * @param {{ includeInactive?: boolean, env?: object, now?: number, admission?: boolean }} [o]
+ *   admission: also attach each registry row's 7-day admission summary
+ *   (relevance-accuracy R1, src/collectors/admission-counters.js) — counts
+ *   only; null when the source has no counts in the window.
  * @returns {Promise<object[]>} data_sources rows (registry rows enriched), registry order first
  */
-async function sourceRows({ includeInactive = false, env = process.env, now = Date.now() } = {}) {
+async function sourceRows({ includeInactive = false, env = process.env, now = Date.now(), admission = false } = {}) {
     const routeKills = await allRouteKillSwitches();
     const rows = await dbAll(
         `SELECT ds.id, ds.name, ds.display_name, ds.source_type, ds.category, ds.active,
@@ -225,6 +228,12 @@ async function sourceRows({ includeInactive = false, env = process.env, now = Da
         const reg = registryFields(r, env, now, routeKills.get(r.id) || []);
         return reg ? { ...base, ...reg } : { ...base, registry: false };
     });
+    if (admission) {
+        // Optional metric: a failing lookup leaves `admission` null, it does not fail the listing.
+        let bySource = new Map();
+        try { bySource = await require('./admission-counters').admissionBySource(); } catch { /* admission stays null */ }
+        for (const r of out) if (r.registry) r.admission = bySource.get(r.id) || null;
+    }
     // Reddit's subreddit selection (rule, current list, latest snapshot).
     const reddit = out.find(r => r.registry && r.slug === 'reddit');
     if (reddit) reddit.selection = await selectionStatus();
