@@ -6,8 +6,7 @@
 'use strict';
 
 const {
-    HttpClient, HostLimiter, userAgent, defaultTransport, retryAfterMs,
-    MAX_IN_RUN_WAIT_MS, MAX_HOLD_MS, DEFAULT_RATE_LIMIT_HOLD_MS, holdKey,
+    HttpClient, HostLimiter, userAgent, defaultTransport, retryAfterMs, MAX_IN_RUN_WAIT_MS,
 } = require('../../../src/collectors/http');
 const { parseRobots, isAllowed, RobotsPolicy } = require('../../../src/collectors/robots');
 const { AccessDeniedError, RobotsDisallowedError, HttpError } = require('../../../src/collectors/errors');
@@ -43,7 +42,7 @@ describe('refusals and retries', () => {
     });
 
     test('a bot-challenge page is a refusal even on another 4xx status', async () => {
-        const { http, transport } = client([['https://a.example/x', { status: 429, body: '<script src="/_Incapsula_Resource">' }]]);
+        const { http, transport } = client([['https://a.example/x', { status: 429, body: '<html>Request unsuccessful. Incapsula incident ID: 1234-5678</html>' }]]);
         await expect(http.request('https://a.example/x')).rejects.toBeInstanceOf(AccessDeniedError);
         expect(transport.calls).toHaveLength(1);
     });
@@ -65,13 +64,24 @@ describe('refusals and retries', () => {
         expect(transport.calls).toHaveLength(3);
     });
 
-    // The in-run wait is capped at MAX_IN_RUN_WAIT_MS; a longer Retry-After
-    // is never slept through and retried early — it becomes a hold
-    // (see 'Retry-After holds' below).
-    test('the in-run wait honours a short Retry-After, capped; absent → exponential', () => {
+    // Diagnosis 2026-10-01: Retry-After is the source's MINIMUM wait. The old
+    // code capped it at 60 s and retried early; it is now returned whole and
+    // withRetries decides (a longer wait than the in-run maximum is not slept).
+    test('Retry-After is honoured whole (never shortened); absent → exponential', () => {
         expect(retryAfterMs({ 'retry-after': '5' }, 0)).toBe(5000);
-        expect(retryAfterMs({ 'retry-after': '99999' }, 0)).toBe(MAX_IN_RUN_WAIT_MS);
+        expect(retryAfterMs({ 'retry-after': '99999' }, 0)).toBe(99999000);
         expect(retryAfterMs({}, 2)).toBe(4000);
+    });
+
+    test('a 5xx whose Retry-After exceeds the in-run maximum is NOT retried early (one request, http_5xx)', async () => {
+        const sleeps = [];
+        const { http, transport } = client([['https://a.example/x', { status: 503, headers: { 'retry-after': '120' } }]],
+            { sleep: (ms) => { sleeps.push(ms); return Promise.resolve(); } });
+        const err = await http.request('https://a.example/x').catch(e => e);
+        expect(err).toBeInstanceOf(HttpError);
+        expect(require('../../../src/collectors/errors').classifyError(err)).toEqual({ error_kind: 'http_5xx', http_status: 503 });
+        expect(transport.calls).toHaveLength(1);
+        expect(sleeps).toEqual([]);
     });
 
     test('network errors are retried, then reported', async () => {
@@ -101,270 +111,147 @@ describe('refusals and retries', () => {
     });
 });
 
-// Diagnosis 2026-10-01 (TLDR deadline): tldr.tech answered HTTP 429 with a
-// Retry-After of a minute or more. The client capped it at 60 s, slept the
-// 60 s INSIDE the run and asked again; two of those overran the run's 120 s
-// deadline, so about half the runs were recorded as 'deadline' (hiding the
-// 429), and every run re-asked the source sooner than it had told us to.
-// Now a Retry-After longer than MAX_IN_RUN_WAIT_MS ends the request at once
-// (HTTP 429, http_4xx) and holds the URL until the source's time — in this
-// process (all hosts) AND in the route's persisted HTTP cache (so another
-// worker replica or a restart honours it too).
-describe('Retry-After holds (diagnosis 2026-10-01, TLDR deadline)', () => {
+// Diagnosis 2026-10-01 (TLDR deadline, PR #44 — unified with PR #45's
+// classifier in the merge): tldr.tech answered HTTP 429 with a Retry-After
+// of a minute or more. The client capped the wait at 60 s, slept it INSIDE
+// the run and asked again; two of those overran the run's 120 s deadline,
+// so about half the runs were recorded as 'deadline' (hiding the 429). Now
+// a wait longer than MAX_IN_RUN_WAIT_MS (10 s) is never slept: the 429 is
+// classified like any rate limit (RateLimitedError, 'rate_limited') and the
+// HOST is held in the client's ONE holds map — the map the runner persists
+// to source_collection_state.rate_limited_hosts (never the HTTP cache).
+describe('Retry-After holds through the one rate-limit path (PR #44 TLDR, unified)', () => {
+    const { RateLimitedError, classifyError } = require('../../../src/collectors/errors');
+    const { NO_TIME_429_HOLD_MS } = require('../../../src/collectors/rate-limit');
     const URL_ = 'https://feed.example/rss';
+    const FINAL = 'https://cdn.feed.example/rss';
     const T0 = Date.parse('2026-10-01T02:00:00Z');
-    const { classifyError } = require('../../../src/collectors/errors');
+    const iso = ms => new Date(ms).toISOString();
 
-    function holdClient(routes, { now = () => T0, holds = new Map(), sleeps = [], signal } = {}) {
+    function holdClient(routes, { now = () => T0, holds = {}, sleeps = [], signal } = {}) {
         const transport = fixtureTransport(routes);
         const http = new HttpClient({
-            transport, env: TEST_ENV, now, rateLimitHolds: holds, signal,
+            transport, env: TEST_ENV, now, holds, signal,
             sleep: (ms) => { sleeps.push(ms); return Promise.resolve(); },
         });
-        return { http, transport, holds, sleeps };
+        return { http, transport, sleeps };
     }
 
-    test('a 429 whose Retry-After is longer than the in-run wait is neither slept on nor retried in the run', async () => {
-        const { http, transport, sleeps } = holdClient([[URL_, { status: 429, headers: { 'retry-after': '120' } }]]);
-        const err = await http.request(URL_).catch(e => e);
-        expect(err).toBeInstanceOf(HttpError);
-        expect(err.status).toBe(429);
-        expect(classifyError(err)).toEqual({ error_kind: 'http_4xx', http_status: 429 });
-        expect(err.message).toMatch(/Retry-After/);
-        expect(err.message).toContain('2026-10-01T02:02:00.000Z');
-        expect(transport.calls).toHaveLength(1);
-        expect(sleeps).toEqual([]);
-    });
-
-    test('the TLDR case: a long Retry-After under a 120 s run deadline is reported as HTTP 429, not as the deadline', async () => {
+    test('the TLDR case: Retry-After 60 s under a 120 s run deadline is a RATE LIMIT at once — never slept, never the deadline', async () => {
         // A simulated clock: every sleep advances it, and the run's deadline
         // fires once 120 s have been slept (the worker's cycle deadline).
         const deadline = new AbortController();
         let slept = 0;
         const transport = fixtureTransport([[URL_, { status: 429, headers: { 'retry-after': '60' } }]]);
         const http = new HttpClient({
-            transport, env: TEST_ENV, now: () => T0 + slept, rateLimitHolds: new Map(), signal: deadline.signal,
+            transport, env: TEST_ENV, now: () => T0 + slept, signal: deadline.signal,
             sleep: (ms) => { slept += ms; if (slept >= 120000) deadline.abort(); return Promise.resolve(); },
         });
         const err = await http.request(URL_).catch(e => e);
-        expect(classifyError(err)).toEqual({ error_kind: 'http_4xx', http_status: 429 });
+        expect(err).toBeInstanceOf(RateLimitedError);
+        expect(classifyError(err)).toEqual({ error_kind: 'rate_limited', http_status: 429 });
+        expect(err).toMatchObject({ signal: 'http_429', host: 'feed.example', retryAt: T0 + 60000 });
         expect(slept).toBe(0);
         expect(deadline.signal.aborted).toBe(false);
         expect(transport.calls).toHaveLength(1);
+        // The hold is in the client's one map, and reported as a change for
+        // the runner to persist (state.saveHolds → rate_limited_hosts).
+        expect(http.holds['feed.example']).toMatchObject({ until: iso(T0 + 60000), http_status: 429, signal: 'http_429', count: 1 });
+        expect([...http.drainHoldChanges().keys()]).toEqual(['feed.example']);
     });
 
-    test('the hold is honoured by the next run in the same process: no request is sent before the Retry-After time', async () => {
-        const holds = new Map();
-        let t = T0;
-        const first = holdClient([[URL_, { status: 429, headers: { 'retry-after': '300' } }]], { now: () => t, holds });
-        await first.http.request(URL_).catch(() => {});
-        t = T0 + 150000;   // the next cadence tick, 2.5 min later
-        const next = holdClient([[URL_, { body: '<rss/>' }]], { now: () => t, holds });
-        const err = await next.http.request(URL_).catch(e => e);
-        expect(err).toBeInstanceOf(HttpError);
-        expect(classifyError(err)).toEqual({ error_kind: 'http_4xx', http_status: 429 });
-        expect(err.message).toMatch(/not requested/);
-        expect(next.transport.calls).toHaveLength(0);
-        expect(next.http.requests).toBe(0);
+    test('MAX_IN_RUN_WAIT_MS is 10 s: a Retry-After of exactly 10 s is waited out and retried; 11 s is a hold, never a sleep', async () => {
+        expect(MAX_IN_RUN_WAIT_MS).toBe(10000);
+        let n = 0;
+        const a = holdClient([[URL_, () => (++n === 1 ? { status: 429, headers: { 'retry-after': '10' } } : { body: 'ok' })]]);
+        expect((await a.http.request(URL_)).body).toBe('ok');
+        expect(a.sleeps).toEqual([10000]);
+        expect(a.http.holds).toEqual({});
+
+        const b = holdClient([[URL_, { status: 429, headers: { 'retry-after': '11' } }]]);
+        await expect(b.http.request(URL_)).rejects.toBeInstanceOf(RateLimitedError);
+        expect(b.sleeps).toEqual([]);
+        expect(b.transport.calls).toHaveLength(1);
     });
 
-    // The persisted hold is per HOST (holdKey), like the in-process one: a
-    // restart must not ask another URL of the same host during the hold.
-    test('the hold is persisted per host in the HTTP cache, so another process (or a restart) honours it for every URL', async () => {
-        const cache = {};
-        let t = T0;
-        const first = holdClient([[URL_, { status: 429, headers: { 'retry-after': '300' } }]], { now: () => t });
-        await first.http.request(URL_, { cache }).catch(() => {});
-        expect(holdKey('feed.example')).toBe('retry-after:feed.example');
-        expect(cache).toEqual({ ['retry-after:feed.example']: { until: '2026-10-01T02:05:00.000Z', status: 429 } });
-        t = T0 + 150000;
-        const other = holdClient([[/./, { body: '<rss/>' }]], { now: () => t });   // empty in-process holds
-        await expect(other.http.request(URL_, { cache })).rejects.toThrow(/not requested/);
-        await expect(other.http.request('https://feed.example/other.xml', { cache })).rejects.toThrow(/not requested/);
-        expect(other.transport.calls).toHaveLength(0);
-    });
-
-    test('after the hold the request is sent again, and a success clears the hold but keeps the validators', async () => {
-        const holds = new Map();
-        const cache = { [URL_]: { etag: '"v1"', last_modified: null }, ['retry-after:feed.example']: { until: '2026-10-01T02:05:00.000Z', status: 429 } };
-        holds.set('feed.example', { until: T0 + 300000, status: 429 });
-        const later = holdClient([[URL_, { body: '<rss/>', headers: { etag: '"v2"' } }]], { now: () => T0 + 300001, holds });
-        const res = await later.http.request(URL_, { cache });
-        expect(res.body).toBe('<rss/>');
-        expect(later.transport.calls).toHaveLength(1);
-        expect(cache).toEqual({ [URL_]: { etag: '"v2"', last_modified: null } });
-        expect(holds.has('feed.example')).toBe(false);
-    });
-
-    test('a success drops the expired persisted hold of its host', async () => {
-        const cache = { ['retry-after:feed.example']: { until: '2026-10-01T01:00:00.000Z', status: 429 } };
-        const { http } = holdClient([[URL_, { body: '<rss/>' }]]);
-        await http.request(URL_, { cache });
-        expect(cache).toEqual({});
-    });
-
-    test('the hold is the source\'s full Retry-After (not the old 60 s cap), as seconds or an HTTP date, at most MAX_HOLD_MS', async () => {
-        const cases = [
-            [{ 'retry-after': '3600' }, T0 + 3600000],
-            [{ 'retry-after': 'Wed, 01 Oct 2026 03:30:00 GMT' }, Date.parse('2026-10-01T03:30:00Z')],
-            [{ 'retry-after': String(10 * 24 * 3600) }, T0 + MAX_HOLD_MS],
-        ];
-        for (const [headers, until] of cases) {
-            const holds = new Map();
-            const { http } = holdClient([[URL_, { status: 429, headers }]], { holds });
-            await http.request(URL_).catch(() => {});
-            expect(holds.get('feed.example')).toEqual({ until, status: 429 });
-        }
-    });
-
-    test('a 429 without Retry-After is retried with backoff, then holds for DEFAULT_RATE_LIMIT_HOLD_MS', async () => {
-        const holds = new Map();
-        const { http, transport, sleeps } = holdClient([[URL_, { status: 429 }]], { holds });
+    test('a 429 that names no time is retried with backoff (1 s, 2 s), then held NO_TIME_429_HOLD_MS (5 min — PR #44\'s default)', async () => {
+        const { http, transport, sleeps } = holdClient([[URL_, { status: 429 }]]);
         const err = await http.request(URL_).catch(e => e);
-        expect(classifyError(err)).toEqual({ error_kind: 'http_4xx', http_status: 429 });
+        expect(classifyError(err)).toEqual({ error_kind: 'rate_limited', http_status: 429 });
         expect(transport.calls).toHaveLength(3);
         expect(sleeps).toEqual([1000, 2000]);
-        expect(holds.get('feed.example')).toEqual({ until: T0 + DEFAULT_RATE_LIMIT_HOLD_MS, status: 429 });
+        expect(NO_TIME_429_HOLD_MS).toBe(300000);
+        expect(http.holds['feed.example'].until).toBe(iso(T0 + NO_TIME_429_HOLD_MS));
     });
 
-    test('a 503 with a long Retry-After holds the same way; a 5xx without one does not hold', async () => {
-        const holds = new Map();
-        const a = holdClient([[URL_, { status: 503, headers: { 'retry-after': '600' } }]], { holds });
-        const err = await a.http.request(URL_).catch(e => e);
-        expect(classifyError(err)).toEqual({ error_kind: 'http_5xx', http_status: 503 });
-        expect(a.transport.calls).toHaveLength(1);
-        expect(holds.get('feed.example')).toEqual({ until: T0 + 600000, status: 503 });
-
-        const other = new Map();
-        const b = holdClient([[URL_, { status: 500 }]], { holds: other });
-        await b.http.request(URL_).catch(() => {});
-        expect(other.size).toBe(0);
-    });
-
-    // Copilot review #44: only the statuses that can hold (429, 503) skip the
-    // in-run retry; any other 5xx keeps the capped retry behaviour.
-    test.each([500, 502, 504])('a %i with a long Retry-After keeps the capped in-run retries and never holds', async (status) => {
-        const holds = new Map();
-        const { http, transport, sleeps } = holdClient([[URL_, { status, headers: { 'retry-after': '600' } }]], { holds });
-        const err = await http.request(URL_).catch(e => e);
-        expect(classifyError(err)).toEqual({ error_kind: 'http_5xx', http_status: status });
-        expect(transport.calls).toHaveLength(3);
-        expect(sleeps).toEqual([MAX_IN_RUN_WAIT_MS, MAX_IN_RUN_WAIT_MS]);
-        expect(holds.size).toBe(0);
-    });
-
-    // Copilot review #44: a hold set on a redirect target is also persisted
-    // under the URL the route asks for, so a fresh process sends NOTHING
-    // (not robots.txt, not the first hop) during the hold.
-    test('a hold behind a redirect is persisted for the requested URL\'s host too, so a fresh client sends nothing', async () => {
-        const FINAL = 'https://cdn.feed.example/rss';
-        const cache = {};
-        const first = holdClient([
-            [URL_, { status: 301, headers: { location: FINAL } }],
-            [FINAL, { status: 429, headers: { 'retry-after': '300' } }],
-        ]);
-        await first.http.request(URL_, { cache, robots: true }).catch(() => {});
-        const held = { until: '2026-10-01T02:05:00.000Z', status: 429 };
-        expect(cache).toEqual({ ['retry-after:feed.example']: held, ['retry-after:cdn.feed.example']: held });
-
-        const fresh = holdClient([[/./, { body: 'never' }]], { now: () => T0 + 150000 });
-        await expect(fresh.http.request(URL_, { cache, robots: true })).rejects.toThrow(/not requested/);
+    test('a fresh client loaded with the stored holds (a restart, another replica) sends nothing to the host — no URL of it', async () => {
+        const first = holdClient([[URL_, { status: 429, headers: { 'retry-after': '300' } }]]);
+        await first.http.request(URL_).catch(() => {});
+        const stored = JSON.parse(JSON.stringify(first.http.holds));   // as saved to and read from the database
+        const fresh = holdClient([[/./, { body: '<rss/>' }]], { now: () => T0 + 150000 });
+        fresh.http.loadHolds(stored);
+        await expect(fresh.http.request(URL_, { robots: true })).rejects.toMatchObject({ held: true, host: 'feed.example' });
+        await expect(fresh.http.request('https://feed.example/other.xml')).rejects.toMatchObject({ held: true });
         expect(fresh.transport.calls).toEqual([]);
     });
 
-    test('a success through the redirect clears the expired hold of both hosts (validators stay on the final URL)', async () => {
-        const FINAL = 'https://cdn.feed.example/rss';
-        const expired = { until: '2026-10-01T01:00:00.000Z', status: 429 };
-        const cache = { ['retry-after:feed.example']: { ...expired }, ['retry-after:cdn.feed.example']: { ...expired } };
+    // PR #44 (Copilot review): a hold learned behind a redirect also holds
+    // the host the route asks for, so a fresh client sends NOTHING (not
+    // robots.txt, not the first hop) during the hold.
+    test.each([
+        ['a 429', { status: 429, headers: { 'retry-after': '300' } }, 'http_429'],
+        ['a 503 with a long Retry-After', { status: 503, headers: { 'retry-after': '300' } }, 'retry_after_5xx'],
+    ])('%s behind a redirect holds the requested URL\'s host too; a fresh client sends nothing', async (_, final, signal) => {
+        const first = holdClient([[URL_, { status: 301, headers: { location: FINAL } }], [FINAL, final]]);
+        await first.http.request(URL_, { robots: true }).catch(() => {});
+        expect(first.http.holds['cdn.feed.example']).toMatchObject({ until: iso(T0 + 300000), signal });
+        expect(first.http.holds['feed.example']).toEqual(first.http.holds['cdn.feed.example']);
+        expect([...first.http.drainHoldChanges().keys()].sort()).toEqual(['cdn.feed.example', 'feed.example']);
+
+        const fresh = holdClient([[/./, { body: 'never' }]], { now: () => T0 + 150000 });
+        fresh.http.loadHolds(JSON.parse(JSON.stringify(first.http.holds)));
+        await expect(fresh.http.request(URL_, { robots: true })).rejects.toMatchObject({ held: true, host: 'feed.example' });
+        expect(fresh.transport.calls).toEqual([]);
+    });
+
+    test('a success through the redirect clears the EXPIRED holds of both hosts (validators stay on the final URL)', async () => {
+        const expired = { until: iso(T0 - 1000), http_status: 429, signal: 'http_429', count: 2, weak: 0, at: iso(T0 - 600000) };
+        const cache = {};
         const { http } = holdClient([
             [URL_, { status: 301, headers: { location: FINAL } }],
             [FINAL, { body: '<rss/>', headers: { etag: '"v3"' } }],
-        ]);
+        ], { holds: { 'feed.example': { ...expired }, 'cdn.feed.example': { ...expired } } });
         await http.request(URL_, { cache });
+        expect(http.holds).toEqual({});
         expect(cache).toEqual({ [FINAL]: { etag: '"v3"', last_modified: null } });
+        const changes = http.drainHoldChanges();
+        expect([...changes.keys()].sort()).toEqual(['cdn.feed.example', 'feed.example']);
+        expect([...changes.values()]).toEqual([null, null]);
     });
 
-    // Copilot re-review #44: a route that does not pass a validator cache
-    // (most API collectors) must still persist its hold. The runner hands
-    // the client the source's persisted HTTP cache as its hold store.
-    test('without a route cache the hold is persisted in the client\'s hold store, honoured by a fresh client', async () => {
-        const store = {};
-        const first = holdClient([[URL_, { status: 429, headers: { 'retry-after': '300' } }]]);
-        first.http.holdStore = store;
-        await first.http.request(URL_).catch(() => {});
-        expect(store).toEqual({ ['retry-after:feed.example']: { until: '2026-10-01T02:05:00.000Z', status: 429 } });
-
-        const fresh = holdClient([[/./, { body: 'never' }]], { now: () => T0 + 150000 });
-        fresh.http.holdStore = store;
-        await expect(fresh.http.request(URL_)).rejects.toThrow(/not requested/);
-        expect(fresh.transport.calls).toEqual([]);
-        // No validators are ever sent or written for an uncached route.
-        const later = holdClient([[URL_, { body: 'ok', headers: { etag: '"x"' } }]], { now: () => T0 + 300001 });
-        later.http.holdStore = store;
-        await later.http.request(URL_);
-        expect(later.transport.calls[0].headers['If-None-Match']).toBeUndefined();
-        expect(store).toEqual({});
-    });
-
-    // Copilot re-review #44: the runner rolls a route's cursor and validators
-    // back after a store failure; holds learned meanwhile must survive it.
-    test('withHolds(restored, current) keeps the holds learned since the snapshot', () => {
-        const { withHolds } = require('../../../src/collectors/http');
-        const hold = { until: '2026-10-01T03:00:00.000Z', status: 429 };
-        const expired = { until: '2026-10-01T01:00:00.000Z', status: 429 };
-        const restored = {
-            'https://a.example/1': { etag: '"old"', last_modified: null },
-            'retry-after:b.example': { ...hold },
-            'retry-after:c.example': { ...expired },                          // cleared during the route
-        };
-        const current = {
-            'https://a.example/1': { etag: '"new"', last_modified: null },   // validator: rolled back
-            'https://a.example/3': { etag: '"e"', last_modified: null },     // new validator: dropped
-            'retry-after:a.example': { ...hold },                             // hold learned: kept
-            'retry-after:b.example': { ...hold },                             // hold still active: kept
-        };
-        // Holds come from `current` only: the expired c.example hold that
-        // clearHold dropped is not brought back by the rollback.
-        expect(withHolds(restored, current)).toEqual({
-            'https://a.example/1': { etag: '"old"', last_modified: null },
-            'retry-after:a.example': { ...hold },
-            'retry-after:b.example': { ...hold },
-        });
-    });
-
-    test('a short Retry-After is still waited out inside the run and retried', async () => {
-        let n = 0;
-        const holds = new Map();
-        const { http, sleeps } = holdClient([[URL_, () => (++n === 1
-            ? { status: 429, headers: { 'retry-after': String(MAX_IN_RUN_WAIT_MS / 1000) } } : { body: 'ok' })]], { holds });
-        expect((await http.request(URL_)).body).toBe('ok');
-        expect(sleeps).toEqual([MAX_IN_RUN_WAIT_MS]);
-        expect(holds.size).toBe(0);
-    });
-
-    test('a success never clears a hold another source set on the same host while it was in flight', async () => {
-        const holds = new Map();
+    test('a success never clears a hold a concurrent request set on the same host while it was in flight', async () => {
+        const holds = {};
+        const concurrent = { until: iso(T0 + 300000), http_status: 429, signal: 'http_429', count: 1, weak: 0, at: iso(T0) };
         const { http } = holdClient([[URL_, () => {
-            holds.set('feed.example', { until: T0 + 300000, status: 429 });   // set by a concurrent run
+            holds['feed.example'] = concurrent;   // set meanwhile by another request of this client
             return { body: 'ok' };
         }]], { holds });
         expect((await http.request(URL_)).body).toBe('ok');
-        expect(holds.get('feed.example')).toEqual({ until: T0 + 300000, status: 429 });
+        expect(holds['feed.example']).toBe(concurrent);
+        expect(http.drainHoldChanges().size).toBe(0);
     });
 
-    test('a hold on one host never blocks another host', async () => {
-        const holds = new Map([['feed.example', { until: T0 + 300000, status: 429 }]]);
-        const { http, transport } = holdClient([['https://other.example/rss', { body: 'ok' }]], { holds });
-        expect((await http.request('https://other.example/rss')).body).toBe('ok');
+    // Merge decision: PR #44 kept in-run retries for a 500 / 502 / 504 with
+    // a long Retry-After (capped, i.e. BEFORE the source's time); PR #45
+    // (grumpy #7) honours any 5xx's Retry-After whole. The stronger rule is
+    // kept: never asked before the source's time.
+    test.each([500, 502, 504])('a %i with a long Retry-After is not retried early: one request, a retry_after_5xx hold', async (status) => {
+        const { http, transport, sleeps } = holdClient([[URL_, { status, headers: { 'retry-after': '600' } }]]);
+        const err = await http.request(URL_).catch(e => e);
+        expect(classifyError(err)).toEqual({ error_kind: 'http_5xx', http_status: status });
         expect(transport.calls).toHaveLength(1);
-    });
-
-    test('clients on the default (network) transport share one process-wide hold map', () => {
-        const a = new HttpClient({ env: TEST_ENV });
-        const b = new HttpClient({ env: TEST_ENV });
-        expect(a.holds).toBe(b.holds);
-        const c = new HttpClient({ env: TEST_ENV, transport: fixtureTransport([]) });
-        expect(c.holds).not.toBe(a.holds);
+        expect(sleeps).toEqual([]);
+        expect(http.holds['feed.example']).toMatchObject({ until: iso(T0 + 600000), signal: 'retry_after_5xx', count: 0 });
     });
 });
 
@@ -535,5 +422,563 @@ describe('politeness and the no-network guard', () => {
     test('too many redirects is an error', async () => {
         const { http } = client([[/loop/, { status: 302, headers: { location: '/loop' } }]]);
         await expect(http.request('https://a.example/loop')).rejects.toThrow(/too many redirects/);
+    });
+});
+
+// Diagnosis 2026-10-01: GitHub answered ONE search request with a 403
+// (JSON, server Varnish) and it was escalated as a refusal. A rate limit is
+// recognised on positive evidence only and becomes a RateLimitedError (never
+// an AccessDeniedError); every other 401 / 403 / 451 stays a refusal.
+describe('rate limits are not refusals (diagnosis 2026-10-01)', () => {
+    const { RateLimitedError, classifyError } = require('../../../src/collectors/errors');
+    const NOW = Date.parse('2026-10-01T02:47:54Z');
+    const RESET = Math.floor(NOW / 1000) + 600;
+    const URL_ = 'https://api.github.com/search/repositories?q=topic%3Aartificial-intelligence';
+    const GH_JSON = msg => JSON.stringify({ message: msg, documentation_url: 'https://docs.github.com/rest/overview/rate-limits-for-the-rest-api' });
+    const GH = { server: 'Varnish', 'content-type': 'application/json; charset=utf-8', date: 'Thu, 01 Oct 2026 02:47:54 GMT' };
+    const SECONDARY = GH_JSON('You have exceeded a secondary rate limit. Please wait a few minutes before you try again.');
+    const at = (routes, extra = {}) => client(routes, { now: () => NOW, ...extra });
+    const iso = ms => new Date(ms).toISOString();
+    const recordSleeps = () => {
+        const sleeps = [];
+        return { sleeps, sleep: (ms) => { sleeps.push(ms); return Promise.resolve(); } };
+    };
+
+    test('403 + x-ratelimit-remaining: 0 → RateLimitedError, backoff to x-ratelimit-reset, ONE request, host held on the client', async () => {
+        const { http, transport } = at([[/api\.github\.com/, {
+            status: 403, body: GH_JSON('API rate limit exceeded for 203.0.113.7.'),
+            headers: { ...GH, 'x-ratelimit-limit': '10', 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(RESET),
+                'x-ratelimit-used': '10', 'x-ratelimit-resource': 'search' },
+        }]]);
+        const err = await http.request(URL_).catch(e => e);
+        expect(err).toBeInstanceOf(RateLimitedError);
+        expect(err).toMatchObject({ status: 403, signal: 'ratelimit_remaining_zero', retryAt: RESET * 1000, host: 'api.github.com' });
+        expect(classifyError(err)).toEqual({ error_kind: 'rate_limited', http_status: 403 });
+        expect(transport.calls).toHaveLength(1);
+        expect(http.holds).toEqual({ 'api.github.com': { until: iso(RESET * 1000), http_status: 403, signal: 'ratelimit_remaining_zero', count: 1, weak: 0, strong403: 1, limit_at: iso(NOW), at: iso(NOW) } });
+        expect([...http.drainHoldChanges().keys()]).toEqual(['api.github.com']);
+        // The rate-limit headers are kept (allow-listed, scrubbed); the body never.
+        expect(err.headers).toMatchObject({ 'x-ratelimit-limit': '10', 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(RESET),
+            'x-ratelimit-used': '10', 'x-ratelimit-resource': 'search', server: 'Varnish' });
+        expect(JSON.stringify(err)).not.toContain('203.0.113.7');
+        expect(err.message).not.toMatch(/API rate limit exceeded/);
+        expect(err.message).toMatch(/api\.github\.com rate-limited us \(HTTP 403, ratelimit_remaining_zero\) — not a refusal.*backing off until 2026-10-01T02:57:54\.000Z/);
+    });
+
+    test('403 + a "secondary rate limit" body alone → weak RateLimitedError at the 60 s floor; the body never kept', async () => {
+        const { http, transport } = at([[/api\.github\.com/, { status: 403, headers: GH, body: SECONDARY }]]);
+        const err = await http.request(URL_).catch(e => e);
+        expect(err).toBeInstanceOf(RateLimitedError);
+        expect(err).toMatchObject({ signal: 'body_rate_limit', retryAt: NOW + 60000 });
+        expect(transport.calls).toHaveLength(1);
+        expect(JSON.stringify(err)).not.toContain('secondary rate limit');
+        expect(http.holds['api.github.com']).toMatchObject({ count: 1, weak: 1 });
+    });
+
+    test('N1: GitHub\'s secondary-limit body + Retry-After is STRONG — ten in a row never become a refusal; the holds double to the 24 h cap', async () => {
+        let t = NOW;
+        const { http } = client([[/api\.github\.com/, { status: 403, headers: { ...GH, 'retry-after': '60' }, body: SECONDARY }]], { now: () => t });
+        const lengths = [];
+        for (let i = 1; i <= 12; i++) {
+            const err = await http.request(URL_).catch(e => e);
+            expect([i, err.constructor.name, err.signal]).toEqual([i, 'RateLimitedError', 'body_rate_limit_retry_after']);
+            lengths.push(Date.parse(http.holds['api.github.com'].until) - t);
+            t = Date.parse(http.holds['api.github.com'].until);
+        }
+        expect(lengths.slice(0, 4)).toEqual([60000, 120000, 240000, 480000]);
+        expect(lengths[11]).toBe(86400000);
+        expect(http.holds['api.github.com']).toMatchObject({ count: 12, weak: 0 });
+    });
+
+    test('security review L3: five strong 403s (x-ratelimit-remaining: 0 + a reset) in a row on a host become a refusal that still HOLDS the host; a success or a 429 resets the run', async () => {
+        let t = NOW;
+        const resetAt = () => String(Math.floor(t / 1000) + 600);
+        const { http } = client([[/strong\.example/, () => ({ status: 403, headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': resetAt() }, body: '' })]], { now: () => t });
+        const U = 'https://strong.example/x';
+        for (let i = 1; i <= 4; i++) {
+            const err = await http.request(U).catch(e => e);
+            expect([i, err.constructor.name]).toEqual([i, 'RateLimitedError']);
+            expect(http.holds['strong.example']).toMatchObject({ count: i, weak: 0, strong403: i });
+            t = Date.parse(http.holds['strong.example'].until);
+        }
+        const fifth = await http.request(U).catch(e => e);
+        expect(fifth).toBeInstanceOf(AccessDeniedError);
+        expect(fifth).toMatchObject({ refusal: 'escalated', status: 403 });
+        expect(fifth.message).toMatch(/5 rate-limit 403s in a row/);
+        // Security review F9: the refusal does not free the host for other sources — the hold and the streak stay.
+        expect(http.holds['strong.example']).toMatchObject({ count: 5, strong403: 5 });
+        expect(Date.parse(http.holds['strong.example'].until)).toBeGreaterThan(t);
+        // A 429 in between ends the run of strong 403s.
+        const r = client([[/mix\.example/, () => ({ status: 403, headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': resetAt() }, body: '' })]], { now: () => t });
+        await r.http.request('https://mix.example/x').catch(e => e);
+        expect(r.http.holds['mix.example'].strong403).toBe(1);
+        const e429 = require('../../../src/collectors/rate-limit').nextHold(r.http.holds['mix.example'], { retryAt: null, status: 429, signal: 'http_429', weak: false }, t).entry;
+        expect(e429.strong403).toBeUndefined();
+    });
+
+    test('security review F1: a bare x-ratelimit-remaining: 0 (no reset, a past reset, one beyond 24 h) on a 403 is NOT a rate limit — a refusal, never held', async () => {
+        const bare = (extra = {}) => at([[/h\.example/, { status: 403, headers: { 'x-ratelimit-remaining': '0', ...extra }, body: '' }]]);
+        for (const extra of [{}, { 'x-ratelimit-reset': String(Math.floor(NOW / 1000) - 60) }, { 'x-ratelimit-reset': String(Math.floor(NOW / 1000) + 90000) }, { 'x-ratelimit-reset': '1e306' }]) {
+            const t = bare(extra);
+            await expect(t.http.request('https://h.example/x')).rejects.toBeInstanceOf(AccessDeniedError);
+            expect(t.http.holds).toEqual({});
+        }
+        // A 429 needs no such evidence.
+        const t = at([[/h\.example/, { status: 429, headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1e306' }, body: '' }]]);
+        await expect(t.http.request('https://h.example/x')).rejects.toBeInstanceOf(RateLimitedError);
+        expect(t.http.holds['h.example'].until).toBe(iso(NOW + 86400000));
+    });
+
+    test('security review F3: a host that answers 429 for ever is a refusal at the 14th consecutive rate limit (a success would have reset it)', async () => {
+        let t = NOW;
+        const { http } = client([[/forever\.example/, { status: 429, headers: {}, body: '' }]], { now: () => t });
+        const outcomes = [];
+        for (let i = 1; i <= 14; i++) {
+            const err = await http.request('https://forever.example/x').catch(e => e);
+            outcomes.push(err.constructor.name);
+            t = Date.parse(http.holds['forever.example'].until);
+        }
+        expect(outcomes.slice(0, 13).every(n => n === 'RateLimitedError')).toBe(true);
+        expect(outcomes[13]).toBe('AccessDeniedError');
+    });
+
+    test('Copilot (6th): a refusal (plain 403, undecodable 403) never names an env-configured host either', async () => {
+        const { http } = at([[/acme-123\.feeds\.example/, { status: 403, headers: {}, body: 'no' }]]);
+        const err = await http.request('https://acme-123.feeds.example/x').catch(e => e);
+        expect(err).toBeInstanceOf(AccessDeniedError);
+        expect(err.message).not.toMatch(/acme-123/);
+        expect(err.message).toMatch(/^configured host refused access/);
+        const gh = at([[/api\.github\.com/, { status: 403, headers: {}, body: 'no' }]]);
+        expect((await gh.http.request(URL_).catch(e => e)).message).toMatch(/^api\.github\.com refused access/);
+        const undecodable = () => { throw Object.assign(new Error('incorrect header check'), { decode: true, status: 403, headers: {} }); };
+        const u = at([[/acme-123\.feeds\.example/, undecodable]]);
+        const uerr = await u.http.request('https://acme-123.feeds.example/x').catch(e => e);
+        expect(uerr).toBeInstanceOf(AccessDeniedError);
+        expect(uerr.message).not.toMatch(/acme-123/);
+    });
+
+    test('security review L6: an error message names a registry host, never an env-configured one', async () => {
+        const reg = await at([[/api\.github\.com/, { status: 429, headers: { 'retry-after': '60' }, body: '' }]]).http.request(URL_).catch(e => e);
+        expect(reg.message).toMatch(/^api\.github\.com rate-limited us/);
+        const { http } = at([[/acme-123\.feeds\.example/, { status: 429, headers: { 'retry-after': '60' }, body: '' }]]);
+        const first = await http.request('https://acme-123.feeds.example/x').catch(e => e);
+        expect(first.message).not.toMatch(/acme-123/);
+        expect(first.message).toMatch(/^configured host rate-limited us/);
+        const held = await http.request('https://acme-123.feeds.example/x').catch(e => e);
+        expect(held.message).not.toMatch(/acme-123/);
+        expect(held.message).toMatch(/^not requested: configured host is rate-limiting us/);
+    });
+
+    test('N1: the same response from another host is a REFUSAL (GitHub\'s wording is evidence from api.github.com only)', async () => {
+        const { http } = at([[/gh\.example\.com/, { status: 403, headers: { ...GH, 'retry-after': '60' }, body: SECONDARY }]]);
+        await expect(http.request('https://gh.example.com/search')).rejects.toBeInstanceOf(AccessDeniedError);
+        expect(http.holds).toEqual({});
+    });
+
+    test('N1: the FINAL hostname decides (a redirect to api.github.com answering with the body + Retry-After)', async () => {
+        const { http } = at([
+            [/a\.example\/x/, { status: 302, headers: { location: 'https://api.github.com/search/repositories?q=x' } }],
+            [/api\.github\.com/, { status: 403, headers: { ...GH, 'retry-after': '60' }, body: SECONDARY }],
+        ]);
+        const err = await http.request('https://a.example/x').catch(e => e);
+        expect(err).toBeInstanceOf(RateLimitedError);
+        expect(err).toMatchObject({ host: 'api.github.com', signal: 'body_rate_limit_retry_after' });
+    });
+
+    test.each(['0', '-5', '0x10', 'Thu, 01 Jan 1970 00:00:00 GMT', '1 2', '60'])(
+        'security F2: a 403 whose only evidence is Retry-After %p stays a REFUSAL', async (ra) => {
+            const { http } = at([[/api\.github\.com/, { status: 403, headers: { ...GH, 'retry-after': ra }, body: GH_JSON('Forbidden') }]]);
+            await expect(http.request(URL_)).rejects.toBeInstanceOf(AccessDeniedError);
+            expect(http.holds).toEqual({});
+        });
+
+    test('security F2: a 403 message that merely mentions a rate limit stays a REFUSAL', async () => {
+        const { http } = at([[/api\.github\.com/, { status: 403, headers: GH, body: GH_JSON('This IP is permanently banned for rate limit abuse') }]]);
+        await expect(http.request(URL_)).rejects.toBeInstanceOf(AccessDeniedError);
+    });
+
+    test('regression: a plain 403 with no rate-limit signal (the incident\'s headers alone) stays a REFUSAL', async () => {
+        const { http, transport } = at([[/api\.github\.com/, { status: 403, headers: GH, body: GH_JSON('Forbidden') }]]);
+        const err = await http.request(URL_).catch(e => e);
+        expect(err).toBeInstanceOf(AccessDeniedError);
+        expect(classifyError(err).error_kind).toBe('access_denied');
+        expect(transport.calls).toHaveLength(1);
+    });
+
+    test.each([401, 451])('HTTP %i stays a refusal even with rate-limit headers and body', async (status) => {
+        const { http } = at([[/api\.github\.com/, {
+            status, headers: { 'x-ratelimit-remaining': '0', 'retry-after': '60' }, body: GH_JSON('API rate limit exceeded'),
+        }]]);
+        const err = await http.request(URL_).catch(e => e);
+        expect(err).toBeInstanceOf(AccessDeniedError);
+        expect(http.holds).toEqual({});
+    });
+
+    test('a bot-wall challenge wins over x-ratelimit-remaining: 0 (a refusal, never a rate limit)', async () => {
+        const { http } = at([[/a\.example/, {
+            status: 403, headers: { 'x-ratelimit-remaining': '0' }, body: '<div id="cf-chl-widget">',
+        }]]);
+        await expect(http.request('https://a.example/x')).rejects.toBeInstanceOf(AccessDeniedError);
+    });
+
+    test('security F6: cf-mitigated: challenge wins — a 403 with Retry-After / remaining 0, or a 429, is a REFUSAL, never retried', async () => {
+        const a = at([[/a\.example/, { status: 403, headers: { 'cf-mitigated': 'challenge', 'retry-after': '30', 'x-ratelimit-remaining': '0' }, body: '' }]]);
+        await expect(a.http.request('https://a.example/x')).rejects.toBeInstanceOf(AccessDeniedError);
+        const b = at([[/a\.example/, { status: 429, headers: { 'cf-mitigated': 'Challenge', 'retry-after': '1' }, body: '' }]]);
+        await expect(b.http.request('https://a.example/x')).rejects.toBeInstanceOf(AccessDeniedError);
+        expect(b.transport.calls).toHaveLength(1);
+        expect(b.http.holds).toEqual({});
+    });
+
+    test('security F6: an undecodable 403 stays a refusal unless remaining is 0 — and never with cf-mitigated: challenge', async () => {
+        const undecodable = (status, headers) => () => { throw Object.assign(new Error('incorrect header check'), { decode: true, status, headers }); };
+        const a = at([[/a\.example/, undecodable(403, { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(RESET) })]]);
+        const e1 = await a.http.request('https://a.example/x').catch(e => e);
+        expect(e1).toBeInstanceOf(RateLimitedError);
+        expect(e1.retryAt).toBe(RESET * 1000);
+        expect(a.transport.calls).toHaveLength(1);
+        const b = at([[/a\.example/, undecodable(429, {})]]);
+        await expect(b.http.request('https://a.example/x')).rejects.toBeInstanceOf(RateLimitedError);
+        expect(b.transport.calls).toHaveLength(1);
+        for (const headers of [{ server: 'x' }, { 'retry-after': '30' }, { 'cf-mitigated': 'challenge', 'x-ratelimit-remaining': '0' }]) {
+            const c = at([[/a\.example/, undecodable(403, headers)]]);
+            await expect(c.http.request('https://a.example/x')).rejects.toBeInstanceOf(AccessDeniedError);
+        }
+        const d = at([[/a\.example/, undecodable(429, { 'cf-mitigated': 'challenge' })]]);
+        await expect(d.http.request('https://a.example/x')).rejects.toBeInstanceOf(AccessDeniedError);
+    });
+
+    test('429 with a short Retry-After (5 s): waited out EXACTLY, then retried once; the success clears the host\'s streak', async () => {
+        const { sleeps, sleep } = recordSleeps();
+        let n = 0;
+        const { http, transport } = at([[/a\.example/, () => (++n === 1
+            ? { status: 429, headers: { 'retry-after': '5' } } : { body: 'ok' })]], { sleep });
+        http.holds['a.example'] = { until: iso(NOW - 1000), http_status: 429, signal: 'http_429', count: 3, weak: 0 };
+        expect((await http.request('https://a.example/x')).body).toBe('ok');
+        expect(transport.calls).toHaveLength(2);
+        expect(sleeps).toEqual([5000]);
+        expect(http.holds).toEqual({});
+        expect(http.drainHoldChanges().get('a.example')).toBeNull();
+    });
+
+    test('regression: 429 with Retry-After 600 s is NEVER retried early — one request, no sleep, backoff = 600 s', async () => {
+        const { sleeps, sleep } = recordSleeps();
+        const { http, transport } = at([[/a\.example/, { status: 429, headers: { 'retry-after': '600' } }]], { sleep });
+        const err = await http.request('https://a.example/x').catch(e => e);
+        expect(err).toBeInstanceOf(RateLimitedError);
+        expect(err).toMatchObject({ status: 429, signal: 'http_429', retryAt: NOW + 600000 });
+        expect(transport.calls).toHaveLength(1);
+        expect(sleeps).toEqual([]);
+        expect(http.holds['a.example'].until).toBe(iso(NOW + 600000));
+    });
+
+    test('security F4: a 429 with Retry-After 1e306 — exactly one request, no sleep, held for the 24 h cap', async () => {
+        const { sleeps, sleep } = recordSleeps();
+        const { http, transport } = at([[/a\.example/, { status: 429, headers: { 'retry-after': '1e306' } }]], { sleep });
+        const err = await http.request('https://a.example/x').catch(e => e);
+        expect(err).toBeInstanceOf(RateLimitedError);
+        expect(transport.calls).toHaveLength(1);
+        expect(sleeps).toEqual([]);
+        expect(http.holds['a.example'].until).toBe(iso(NOW + 86400000));
+    });
+
+    test('security F4: remaining 0 with x-ratelimit-reset 1e306 → held for the 24 h cap, not the 60 s floor', async () => {
+        const { http } = at([[/api\.github\.com/, { status: 403, headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1e306' }, body: '' }]]);
+        // A 403's reset beyond the 24 h cap is no evidence (security review F1: a refusal);
+        // a 429 with the same header is still held for the cap.
+        await expect(http.request(URL_)).rejects.toBeInstanceOf(AccessDeniedError);
+        const t = at([[/api\.github\.com/, { status: 429, headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1e306' }, body: '' }]]);
+        await expect(t.http.request(URL_)).rejects.toBeInstanceOf(RateLimitedError);
+        expect(t.http.holds['api.github.com'].until).toBe(iso(NOW + 86400000));
+    });
+
+    test('429 with x-ratelimit-remaining 0 and a reset 8 s away: waits until the reset, never the shorter exponential backoff', async () => {
+        const { sleeps, sleep } = recordSleeps();
+        let n = 0;
+        const { http } = at([[/a\.example/, () => (++n === 1
+            ? { status: 429, headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(Math.floor(NOW / 1000) + 8) } }
+            : { body: 'ok' })]], { sleep });
+        expect((await http.request('https://a.example/x')).body).toBe('ok');
+        expect(sleeps).toEqual([8000]);
+    });
+
+    // PR #44 merge: the in-run wait is at most 10 s (TLDR deadline), so a
+    // reset 30 s away is a hold — never slept, never retried before it.
+    test('429 with x-ratelimit-remaining 0 and a reset 30 s away: no sleep, one request, held (60 s floor)', async () => {
+        const { sleeps, sleep } = recordSleeps();
+        const { http, transport } = at([[/a\.example/, {
+            status: 429, headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(Math.floor(NOW / 1000) + 30) },
+        }]], { sleep });
+        await expect(http.request('https://a.example/x')).rejects.toBeInstanceOf(RateLimitedError);
+        expect(sleeps).toEqual([]);
+        expect(transport.calls).toHaveLength(1);
+        expect(http.holds['a.example'].until).toBe(iso(NOW + 60000));
+    });
+
+    test('a 429 still answered after the retries → RateLimitedError (rate_limited), never HttpError / http_4xx', async () => {
+        const { sleeps, sleep } = recordSleeps();
+        const { http, transport } = at([[/a\.example/, { status: 429, headers: { 'retry-after': '2' } }]], { sleep });
+        const err = await http.request('https://a.example/x').catch(e => e);
+        expect(err).toBeInstanceOf(RateLimitedError);
+        expect(classifyError(err)).toEqual({ error_kind: 'rate_limited', http_status: 429 });
+        expect(transport.calls).toHaveLength(3);
+        expect(sleeps).toEqual([2000, 2000]);
+        expect(err.retryAt).toBe(NOW + 60000);   // the 60 s floor
+    });
+
+    test('security F1: consecutive rate limits of a host grow its hold (60 → 120 → 240 s); the 5th weak one is a REFUSAL', async () => {
+        let t = NOW;
+        const { http } = client([[/api\.github\.com/, { status: 403, headers: GH, body: SECONDARY }]], { now: () => t });
+        const lengths = [];
+        for (let i = 1; i < 5; i++) {
+            const err = await http.request(URL_).catch(e => e);
+            expect([i, err.constructor.name]).toEqual([i, 'RateLimitedError']);
+            lengths.push(Date.parse(http.holds['api.github.com'].until) - t);
+            t = Date.parse(http.holds['api.github.com'].until);   // the hold passes
+        }
+        expect(lengths).toEqual([60000, 120000, 240000, 480000]);
+        const fifth = await http.request(URL_).catch(e => e);
+        expect(fifth).toBeInstanceOf(AccessDeniedError);
+        expect(fifth.message).toMatch(/5 rate limits in a row on body text alone — treated as a refusal \(fail closed\)/);
+        // The streak and the hold stay (security review F9): other sources of the host still honour it.
+        expect(http.holds['api.github.com']).toMatchObject({ count: 5, weak: 5 });
+    });
+
+    test('grumpy #7: a 5xx whose Retry-After is too long to wait in-run holds the host (signal retry_after_5xx), still http_5xx', async () => {
+        const { http, transport } = at([[/a\.example/, { status: 503, headers: { 'retry-after': '3600' } }]]);
+        const err = await http.request('https://a.example/x').catch(e => e);
+        expect(classifyError(err)).toEqual({ error_kind: 'http_5xx', http_status: 503 });
+        expect(transport.calls).toHaveLength(1);
+        expect(http.holds['a.example']).toMatchObject({ until: iso(NOW + 3600000), http_status: 503, signal: 'retry_after_5xx', count: 0, weak: 0 });
+        await expect(http.request('https://a.example/x')).rejects.toMatchObject({ held: true });
+        expect(transport.calls).toHaveLength(1);
+    });
+
+    test('a held host is never requested: RateLimitedError { held: true }, zero transport calls; other hosts proceed', async () => {
+        const { http, transport } = at([[/api\.github\.com/, { body: '{}' }], [/github\.blog/, { body: '<rss/>' }]]);
+        http.holds['api.github.com'] = { until: iso(NOW + 300000), http_status: 403, signal: 'body_rate_limit', count: 1, weak: 1 };
+        const err = await http.request(URL_).catch(e => e);
+        expect(err).toBeInstanceOf(RateLimitedError);
+        expect(err).toMatchObject({ held: true, host: 'api.github.com', retryAt: NOW + 300000 });
+        expect(classifyError(err).error_kind).toBe('rate_limited');
+        expect(err.message).toMatch(/not requested: api\.github\.com is rate-limiting us .*backing off until 2026-10-01T02:52:54\.000Z/);
+        expect(transport.calls).toHaveLength(0);
+        expect((await http.request('https://github.blog/ai-and-ml/feed/')).body).toBe('<rss/>');
+        // Once the hold has passed the host is asked again.
+        const later = client([[/api\.github\.com/, { body: '{}' }]], { now: () => NOW + 300000, holds: http.holds });
+        expect((await later.http.request(URL_)).body).toBe('{}');
+    });
+
+    test('security F5 / grumpy #2: holds are keyed by hostname — a port or letter case never escapes one', async () => {
+        const { http, transport } = at([[/a\.example/, { body: 'x' }]]);
+        http.holds['a.example'] = { until: iso(NOW + 60000), http_status: 429, signal: 'http_429', count: 1, weak: 0 };
+        await expect(http.request('https://A.Example:8443/x')).rejects.toMatchObject({ held: true });
+        expect(transport.calls).toHaveLength(0);
+    });
+
+    test('security F5: a redirect hop to a held host is never requested', async () => {
+        const { http, transport } = at([
+            [/a\.example/, { status: 302, headers: { location: 'https://b.example/y' } }],
+            [/b\.example/, { body: 'x' }],
+        ]);
+        http.holds['b.example'] = { until: iso(NOW + 60000), http_status: 429, signal: 'http_429', count: 1, weak: 0 };
+        await expect(http.request('https://a.example/x')).rejects.toMatchObject({ held: true, host: 'b.example' });
+        expect(transport.calls.filter(c => c.url.includes('b.example'))).toHaveLength(0);
+    });
+
+    test('security F5: a robots.txt redirect to a held host is never fetched (and nothing is cached)', async () => {
+        const { http, transport } = at([
+            ['https://a.example/robots.txt', { status: 301, headers: { location: 'https://b.example/robots.txt' } }],
+            [/b\.example/, { body: 'User-agent: *\nAllow: /' }],
+            [/a\.example\/page/, { body: 'ok' }],
+        ]);
+        http.holds['b.example'] = { until: iso(NOW + 60000), http_status: 429, signal: 'http_429', count: 1, weak: 0 };
+        await expect(http.request('https://a.example/page', { robots: true })).rejects.toMatchObject({ held: true, host: 'b.example' });
+        expect(transport.calls.filter(c => c.url.includes('b.example'))).toHaveLength(0);
+        expect(transport.calls.filter(c => c.url.includes('/page'))).toHaveLength(0);
+    });
+
+    test('Copilot: a rate limit on robots.txt itself (429 + Retry-After) holds the host — nothing cached, the page never fetched', async () => {
+        const robotsCache = new Map();
+        const { http, transport } = at([
+            ['https://a.example/robots.txt', { status: 429, headers: { 'retry-after': '600' }, body: '' }],
+            [/a\.example\/page/, { body: 'ok' }],
+        ], { robotsCache });
+        const err = await http.request('https://a.example/page', { robots: true }).catch(e => e);
+        expect(err).toBeInstanceOf(RateLimitedError);
+        expect(err).toMatchObject({ host: 'a.example', status: 429 });
+        expect(http.holds['a.example']).toMatchObject({ until: iso(NOW + 600000), signal: 'http_429' });
+        expect(robotsCache.size).toBe(0);
+        expect(transport.calls.filter(c => c.url.includes('/page'))).toHaveLength(0);
+        // A robots.txt 403 with remaining 0 is a rate limit too (not "allow all").
+        const b = at([['https://b.example/robots.txt', { status: 403, headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(Math.floor(NOW / 1000) + 600) }, body: '' }],
+            [/b\.example\/page/, { body: 'ok' }]], { robotsCache: new Map() });
+        await expect(b.http.request('https://b.example/page', { robots: true })).rejects.toBeInstanceOf(RateLimitedError);
+        expect(b.transport.calls.filter(c => c.url.includes('/page'))).toHaveLength(0);
+    });
+
+    test('Copilot (3rd): robots.txt goes through the same classification — a bot wall is a REFUSAL, never "allow all"', async () => {
+        const robotsCache = new Map();
+        const { http, transport } = at([
+            ['https://a.example/robots.txt', { status: 403, headers: {}, body: '<div id="cf-chl-widget">' }],
+            [/a\.example\/page/, { body: 'ok' }],
+        ], { robotsCache });
+        await expect(http.request('https://a.example/page', { robots: true })).rejects.toBeInstanceOf(AccessDeniedError);
+        expect(transport.calls.filter(c => c.url.includes('/page'))).toHaveLength(0);
+        expect(robotsCache.size).toBe(0);
+    });
+
+    test('Copilot (4th): a bot-wall page on robots.txt is a REFUSAL even with a 2xx status (never parsed as allow-all)', async () => {
+        const robotsCache = new Map();
+        const { http, transport } = at([
+            ['https://a.example/robots.txt', { status: 200, headers: {}, body: '<html><div id="cf-chl-widget"></div></html>' }],
+            [/a\.example\/page/, { body: 'ok' }],
+        ], { robotsCache });
+        await expect(http.request('https://a.example/page', { robots: true })).rejects.toBeInstanceOf(AccessDeniedError);
+        expect(transport.calls.filter(c => c.url.includes('/page'))).toHaveLength(0);
+        expect(robotsCache.size).toBe(0);
+        // Cloudflare's explicit marker is a refusal at any status on a page request too.
+        const b = at([[/b\.example\/page/, { status: 200, headers: { 'cf-mitigated': 'challenge' }, body: 'x' }]]);
+        await expect(b.http.request('https://b.example/page')).rejects.toBeInstanceOf(AccessDeniedError);
+        // ...but a 2xx article that merely mentions a bot-wall vendor is still content.
+        const c = at([[/c\.example\/page/, { status: 200, body: 'We compared datadome and captcha-delivery vendors.' }]]);
+        expect((await c.http.request('https://c.example/page')).body).toMatch(/datadome/);
+    });
+
+    test('Copilot (8th): a challenge is a refusal BEFORE a redirect is followed (cf-mitigated header or a challenge page on a 3xx)', async () => {
+        const { http, transport } = at([
+            [/a\.example\/start/, { status: 302, headers: { location: 'https://a.example/next', 'cf-mitigated': 'challenge' }, body: '' }],
+            [/a\.example\/next/, { body: 'ok' }],
+        ]);
+        await expect(http.request('https://a.example/start')).rejects.toBeInstanceOf(AccessDeniedError);
+        expect(transport.calls.filter(c => c.url.includes('/next'))).toHaveLength(0);
+        const b = at([
+            [/b\.example\/start/, { status: 301, headers: { location: 'https://b.example/next' }, body: '<div id="cf-chl-widget"></div>' }],
+            [/b\.example\/next/, { body: 'ok' }],
+        ]);
+        await expect(b.http.request('https://b.example/start')).rejects.toBeInstanceOf(AccessDeniedError);
+        expect(b.transport.calls.filter(c => c.url.includes('/next'))).toHaveLength(0);
+        // A plain redirect is still followed, and a 2xx page is content.
+        const c = at([
+            [/c\.example\/start/, { status: 301, headers: { location: 'https://c.example/next' }, body: '' }],
+            [/c\.example\/next/, { body: 'ok' }],
+        ]);
+        expect((await c.http.request('https://c.example/start')).body).toBe('ok');
+        // robots.txt: a challenge-marked redirect is a refusal, not a hop.
+        const r = at([
+            ['https://d.example/robots.txt', { status: 302, headers: { location: 'https://e.example/robots.txt', 'cf-mitigated': 'challenge' }, body: '' }],
+            ['https://e.example/robots.txt', { body: 'User-agent: *\nDisallow:\n' }],
+            [/d\.example\/page/, { body: 'ok' }],
+        ], { robotsCache: new Map() });
+        await expect(r.http.request('https://d.example/page', { robots: true })).rejects.toBeInstanceOf(AccessDeniedError);
+        expect(r.transport.calls.filter(c => c.url.includes('e.example'))).toHaveLength(0);
+    });
+
+    test('Copilot (7th): a persisted 5xx hold is a HELD server backoff on the next tick — http_5xx, never rate_limited — and nothing is sent', async () => {
+        const { classifyError } = require('../../../src/collectors/errors');
+        const t = at([[/a\.example\/page/, { status: 503, headers: { 'retry-after': '3600' }, body: '' }]]);
+        await t.http.request('https://a.example/page').catch(() => {});
+        const { http, transport } = at([[/a\.example\/page/, { body: 'ok' }]]);
+        Object.assign(http.holds, t.http.holds);
+        const err = await http.request('https://a.example/page').catch(e => e);
+        expect(err).not.toBeInstanceOf(RateLimitedError);
+        expect(err).toMatchObject({ held: true, host: 'a.example', status: 503 });
+        expect(classifyError(err)).toEqual({ error_kind: 'http_5xx', http_status: 503 });
+        expect(err.message).toMatch(/server error/);
+        expect(err.message).not.toMatch(/rate-limiting/);
+        expect(transport.calls).toHaveLength(0);
+        // A real rate limit hold is still a RateLimitedError.
+        const r = at([[/b\.example\/page/, { status: 429, headers: { 'retry-after': '600' }, body: '' }]]);
+        await r.http.request('https://b.example/page').catch(() => {});
+        expect(await r.http.request('https://b.example/page').catch(e => e)).toBeInstanceOf(RateLimitedError);
+    });
+
+    test('Copilot (5th): a 5xx robots.txt with a long Retry-After holds the host (retry_after_5xx, also via a redirect) and stays a robots failure, not a rate limit', async () => {
+        const { http } = at([
+            ['https://a.example/robots.txt', { status: 503, headers: { 'retry-after': '3600' }, body: '' }],
+            [/a\.example\/page/, { body: 'ok' }],
+        ], { robotsCache: new Map() });
+        const err = await http.request('https://a.example/page', { robots: true }).catch(e => e);
+        expect(err).toBeInstanceOf(RobotsDisallowedError);
+        expect(err.kind).toBe('robots_unreachable');
+        expect(http.holds['a.example']).toMatchObject({ until: iso(NOW + 3600000), http_status: 503, signal: 'retry_after_5xx', count: 0 });
+        // Behind a redirect, the original host is held too.
+        const r = at([
+            ['https://c.example/robots.txt', { status: 301, headers: { location: 'https://d.example/robots.txt' } }],
+            ['https://d.example/robots.txt', { status: 503, headers: { 'retry-after': '1800' }, body: '' }],
+            [/c\.example\/page/, { body: 'ok' }],
+        ], { robotsCache: new Map() });
+        await r.http.request('https://c.example/page', { robots: true }).catch(e => e);
+        expect(r.http.holds['d.example']).toMatchObject({ signal: 'retry_after_5xx' });
+        expect(r.http.holds['c.example']).toMatchObject({ signal: 'retry_after_5xx' });
+        // A short Retry-After is slept in-run, never held.
+        const short = at([['https://e.example/robots.txt', { status: 503, headers: { 'retry-after': '1' }, body: '' }]], { robotsCache: new Map() });
+        await short.http.request('https://e.example/page', { robots: true }).catch(e => e);
+        expect(short.http.holds['e.example']).toBeUndefined();
+    });
+
+    test('Copilot (4th): a rate limit on a robots.txt REDIRECT target also holds the host robots.txt was asked of', async () => {
+        const { http } = at([
+            ['https://a.example/robots.txt', { status: 301, headers: { location: 'https://b.example/robots.txt' } }],
+            ['https://b.example/robots.txt', { status: 429, headers: { 'retry-after': '600' }, body: '' }],
+            [/a\.example\/page/, { body: 'ok' }],
+        ], { robotsCache: new Map() });
+        const err = await http.request('https://a.example/page', { robots: true }).catch(e => e);
+        expect(err).toBeInstanceOf(RateLimitedError);
+        expect(http.holds['b.example']).toMatchObject({ until: iso(NOW + 600000) });
+        // The hold is also recorded for the original host, so it is saved and a
+        // restarted worker never asks the redirect again.
+        expect(http.holds['a.example']).toMatchObject({ until: iso(NOW + 600000) });
+        expect([...http.drainHoldChanges().keys()].sort()).toEqual(['a.example', 'b.example']);
+    });
+
+    test('Copilot (3rd): an undecodable robots.txt is classified too (rate-limit headers → hold; a challenge header → refusal)', async () => {
+        const undecodable = (status, headers) => () => { throw Object.assign(new Error('incorrect header check'), { decode: true, status, headers }); };
+        const a = at([['https://a.example/robots.txt', undecodable(429, { 'retry-after': '600' })], [/a\.example\/page/, { body: 'ok' }]], { robotsCache: new Map() });
+        await expect(a.http.request('https://a.example/page', { robots: true })).rejects.toBeInstanceOf(RateLimitedError);
+        expect(a.http.holds['a.example']).toMatchObject({ until: iso(NOW + 600000) });
+        expect(a.transport.calls.filter(c => c.url.includes('/page'))).toHaveLength(0);
+        const b = at([['https://b.example/robots.txt', undecodable(403, { 'cf-mitigated': 'challenge' })], [/b\.example\/page/, { body: 'ok' }]], { robotsCache: new Map() });
+        await expect(b.http.request('https://b.example/page', { robots: true })).rejects.toBeInstanceOf(AccessDeniedError);
+        expect(b.transport.calls.filter(c => c.url.includes('/page'))).toHaveLength(0);
+    });
+
+    test('Copilot (3rd): a successful robots.txt ends the host\'s expired streak (a success is a success)', async () => {
+        const { http } = at([['https://a.example/robots.txt', { body: 'User-agent: *\nDisallow: /private' }], [/a\.example\/page/, { body: 'ok' }]],
+            { robotsCache: new Map() });
+        http.holds['a.example'] = { until: iso(NOW - 1000), http_status: 403, signal: 'body_rate_limit', count: 4, weak: 4, at: iso(NOW - 600000) };
+        http.holds['b.example'] = { until: iso(NOW - 1000), http_status: 429, signal: 'http_429', count: 2, weak: 0, at: iso(NOW - 600000) };
+        await expect(http.request('https://a.example/private/x', { robots: true })).rejects.toBeInstanceOf(RobotsDisallowedError);
+        expect(http.holds).not.toHaveProperty(['a.example']);
+        expect(http.holds).toHaveProperty(['b.example']);
+    });
+
+    test('security F5: the governance terms fetch never requests a held host', async () => {
+        const { snapshotTerms } = require('../../../src/collectors/governance');
+        const { http, transport } = at([[/./, { body: 'terms' }]]);
+        http.holds['docs.github.com'] = { until: iso(NOW + 60000), http_status: 429, signal: 'http_429', count: 1, weak: 0 };
+        const [row] = await snapshotTerms({ http, slugs: ['github'], loadHolds: async () => ({}) });
+        expect(row).toMatchObject({ status: 'unreachable' });
+        expect(row.reason).toMatch(/rate-limiting us/);
+        expect(transport.calls).toHaveLength(0);
+    });
+
+    test('the header allow-list keeps x-ratelimit-limit/-remaining/-reset/-used/-resource, scrubbed, one-line and capped', () => {
+        const { refusalHeaders, REFUSAL_HEADER_ALLOWLIST } = require('../../../src/collectors/http');
+        for (const h of ['x-ratelimit-limit', 'x-ratelimit-remaining', 'x-ratelimit-reset', 'x-ratelimit-used', 'x-ratelimit-resource']) {
+            expect(REFUSAL_HEADER_ALLOWLIST).toContain(h);
+        }
+        const SECRET = 'ghp_ratelimitsecret123456';
+        const out = refusalHeaders({
+            'x-ratelimit-remaining': '0', 'x-ratelimit-resource': `search\r\nX-Evil: ${SECRET}`, 'x-ratelimit-used': '9'.repeat(400),
+            'x-github-request-id': 'ABCD:1234', 'set-cookie': 'a=b',
+        }, { ...TEST_ENV, GITHUB_TOKEN: SECRET });
+        expect(out['x-ratelimit-remaining']).toBe('0');
+        expect(out['x-ratelimit-resource']).not.toContain(SECRET);
+        expect(out['x-ratelimit-resource']).not.toMatch(/[\r\n]/);
+        expect(out['x-ratelimit-used'].length).toBe(200);
+        // Still dropped: the request id (security L3 class) and cookies.
+        expect(out).not.toHaveProperty('x-github-request-id');
+        expect(out).not.toHaveProperty('set-cookie');
     });
 });

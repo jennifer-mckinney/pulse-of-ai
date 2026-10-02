@@ -706,6 +706,9 @@
         // F10-5: the source refused access (401/403/451, bot wall, robots);
         // not requested again until its cooldown ends or it is reset.
         blocked_by_source: 'blocked by source: refused access',
+        // Diagnosis 2026-10-01: every route is backing off after a rate
+        // limit (until the source's reset time) — not a refusal.
+        rate_limited: 'rate limited: backing off',
     };
 
     function sourceStatusLabel(row) {

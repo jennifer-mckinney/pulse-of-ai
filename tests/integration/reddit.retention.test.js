@@ -356,6 +356,63 @@ describe('maintenance: retention always, API jobs only behind the open gate', ()
         expect(await maintenance.claimJob('recheck', 6)).toBe(false);   // done, not due
     });
 
+    // Diagnosis 2026-10-01 (grumpy #1 / N2): Reddit's rate limits and refusals
+    // met by a maintenance job are honoured and SAVED, like a collection run's.
+    describe('rate limits and refusals in maintenance (real client, fixtures)', () => {
+        const { fixtureTransport } = require('../helpers/fixtureTransport');
+        const { clearTokenCache, TOKEN_URL } = require('../../src/collectors/reddit/api');
+        const INFO = /oauth\.reddit\.com\/api\/info/;
+        const stateOf = () => db.dbGet('SELECT * FROM source_collection_state WHERE source_id = $1', [ids.reddit]);
+
+        it('a 429 (Retry-After 600) on /api/info: ONE request, the re-check stops, the hold is saved on Reddit\'s row', async () => {
+            clearTokenCache();
+            for (let i = 0; i < 150; i++) await redditPost(`t3_q${i}`, 2);   // two /api/info batches
+            const transport = fixtureTransport([[TOKEN_URL, 'reddit/token.json'], [INFO, { status: 429, headers: { 'retry-after': '600' }, body: '' }]]);
+            const r = await maintenance.runRedditMaintenance({ env: OPEN_ENV, transport });
+            expect(r.recheck).toEqual(expect.objectContaining({ complete: false }));
+            expect(transport.calls.filter(c => INFO.test(c.url))).toHaveLength(1);
+            const st = await stateOf();
+            expect(st.rate_limited_hosts['oauth.reddit.com']).toMatchObject({ http_status: 429, signal: 'http_429', count: 1 });
+            expect(st).toMatchObject({ refusal_count: 0, access_denied_at: null });
+            expect(Object.keys(st.rate_limited_routes)).toEqual(['data-api']);
+        });
+
+        it('a refusal (plain 403) met by the re-check records the refused state; discovery is not run that tick', async () => {
+            clearTokenCache();
+            await redditPost('t3_refused1', 2);
+            const transport = fixtureTransport([[TOKEN_URL, 'reddit/token.json'], [INFO, { status: 403, headers: { server: 'snooserv' }, body: '{"message":"Forbidden"}' }]]);
+            const r = await maintenance.runRedditMaintenance({ env: OPEN_ENV, transport });
+            expect(r.recheck).toEqual({ error: 'access_denied' });
+            expect(r.discovery).toBeUndefined();
+            expect(transport.calls.filter(c => /search|about/.test(c.url))).toHaveLength(0);
+            const st = await stateOf();
+            expect(st).toMatchObject({ refusal_count: 1, access_denied_status: 403, access_denied_kind: 'access_denied' });
+        });
+    });
+
+    it('Copilot: a maintenance step that REJECTS still saves the hold changes drained so far (the error continues)', async () => {
+        const { fixtureTransport } = require('../helpers/fixtureTransport');
+        const { clearTokenCache, TOKEN_URL } = require('../../src/collectors/reddit/api');
+        const state = require('../../src/collectors/state');
+        clearTokenCache();
+        await redditPost('t3_rejects1', 2);
+        const transport = fixtureTransport([[TOKEN_URL, 'reddit/token.json'],
+            [/oauth\.reddit\.com\/api\/info/, { status: 403, headers: { server: 'snooserv' }, body: '{"message":"Forbidden"}' }]]);
+        // The refused state's write fails after the 403 (a DB error mid-run).
+        const real = state.sourceIdsBySlug;
+        const failing = jest.spyOn(state, 'sourceIdsBySlug').mockImplementation((...args) => (
+            transport.calls.some(c => /api\/info/.test(c.url)) ? Promise.reject(new Error('db down')) : real(...args)));
+        const saved = jest.spyOn(state, 'saveHoldChanges');
+        try {
+            await expect(maintenance.runRedditMaintenance({ env: OPEN_ENV, transport })).rejects.toThrow('db down');
+            expect(saved).toHaveBeenCalledTimes(1);
+            expect(saved.mock.calls[0][2]).toEqual({ env: OPEN_ENV });
+        } finally {
+            failing.mockRestore();
+            saved.mockRestore();
+        }
+    });
+
     it('a snapshot that selects nothing is stored but keeps the previous selection', async () => {
         await selection.saveSnapshot({ windowStart: new Date(), windowEnd: new Date(), minPosts: 20, selected: [], ranking: [],
             exclusions: [{ subreddit: 'x', ai_posts_7d: 30, reason: 'no subscriber count returned' }], stats: {} });
