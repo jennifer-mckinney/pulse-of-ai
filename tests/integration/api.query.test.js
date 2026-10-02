@@ -4,13 +4,14 @@
 
 'use strict';
 
-const request = require('supertest');
+const { useServer } = require('../helpers/server');
 const app     = require('../../src/server');
+const request = useServer(app);   // one listener per file (tests/helpers/server.js)
 const { insertSource, insertJob, insertMethodologyVersions, insertPostWithFullPipeline } = require('./helpers');
 
 describe('POST /api/query', () => {
     it('returns 200 with correct top-level shape', async () => {
-        const res = await request(app)
+        const res = await request()
             .post('/api/query')
             .send({});
 
@@ -30,7 +31,7 @@ describe('POST /api/query', () => {
         await insertPostWithFullPipeline(srcId, jobId, mvIds, { externalId: 'q1-a' });
         await insertPostWithFullPipeline(srcId, jobId, mvIds, { externalId: 'q1-b' });
 
-        const res = await request(app).post('/api/query').send({});
+        const res = await request().post('/api/query').send({});
         expect(res.body.total).toBe(2);
     });
 
@@ -43,7 +44,7 @@ describe('POST /api/query', () => {
         await insertPostWithFullPipeline(social, jobId, mvIds, { externalId: 'qp-s1' });
         await insertPostWithFullPipeline(news,   jobId, mvIds, { externalId: 'qp-n1' });
 
-        const res = await request(app).post('/api/query').send({ platform: 'social' });
+        const res = await request().post('/api/query').send({ platform: 'social' });
 
         expect(res.body.total).toBe(1);
         expect(res.body.results[0]).toMatchObject({
@@ -60,7 +61,7 @@ describe('POST /api/query', () => {
             await insertPostWithFullPipeline(srcId, jobId, mvIds, { externalId: `ql-${i}` });
         }
 
-        const res = await request(app).post('/api/query').send({ limit: 2 });
+        const res = await request().post('/api/query').send({ limit: 2 });
         expect(res.body.results).toHaveLength(2);
         // total is the TRUE match count (COUNT(*) OVER()), not the page size.
         expect(res.body.total).toBe(5);
@@ -69,19 +70,19 @@ describe('POST /api/query', () => {
     });
 
     it('returns 400 when limit exceeds 100', async () => {
-        const res = await request(app).post('/api/query').send({ limit: 500 });
+        const res = await request().post('/api/query').send({ limit: 500 });
         expect(res.status).toBe(400);
         expect(res.body).toHaveProperty('error');
     });
 
     it('returns 400 for invalid from date', async () => {
-        const res = await request(app).post('/api/query').send({ from: 'not-a-date' });
+        const res = await request().post('/api/query').send({ from: 'not-a-date' });
         expect(res.status).toBe(400);
         expect(res.body).toHaveProperty('error');
     });
 
     it('returns 400 for invalid to date', async () => {
-        const res = await request(app).post('/api/query').send({ to: 'not-a-date' });
+        const res = await request().post('/api/query').send({ to: 'not-a-date' });
         expect(res.status).toBe(400);
         expect(res.body).toHaveProperty('error');
     });
@@ -95,7 +96,7 @@ describe('POST /api/query', () => {
             location: 'Mumbai', indicator: 'positive', externalId: 'qshape-1',
         });
 
-        const res = await request(app).post('/api/query').send({});
+        const res = await request().post('/api/query').send({});
 
         expect(res.body.results[0]).toMatchObject({
             id:           expect.any(String),
@@ -109,7 +110,7 @@ describe('POST /api/query', () => {
     });
 
     it('query object in response echoes back the applied filters', async () => {
-        const res = await request(app).post('/api/query').send({ platform: 'social', limit: 10 });
+        const res = await request().post('/api/query').send({ platform: 'social', limit: 10 });
 
         expect(res.body.query).toMatchObject({
             platform: 'social',
@@ -128,7 +129,7 @@ describe('POST /api/query', () => {
         await insertPostWithFullPipeline(srcId, jobId, mvIds, { location: 'Mumbai', externalId: 'qloc-m2' });
         await insertPostWithFullPipeline(srcId, jobId, mvIds, { location: 'London', externalId: 'qloc-l1' });
 
-        const res = await request(app).post('/api/query').send({ location: 'Mumbai' });
+        const res = await request().post('/api/query').send({ location: 'Mumbai' });
 
         expect(res.status).toBe(200);
         expect(res.body.total).toBe(2);
@@ -151,7 +152,7 @@ describe('POST /api/query', () => {
         await insertPostWithFullPipeline(news,   jobId, mvIds, { location: 'Mumbai', externalId: 'qlc-n1' });
         await insertPostWithFullPipeline(social, jobId, mvIds, { location: 'London', externalId: 'qlc-s4' });
 
-        const res = await request(app)
+        const res = await request()
             .post('/api/query')
             .send({ location: 'Mumbai', platform: 'social', limit: 2 });
 
@@ -172,7 +173,7 @@ describe('POST /api/query', () => {
         await insertPostWithFullPipeline(srcId, jobId, mvIds, { location: 'Mumbai', externalId: 'qla-1' });
         await insertPostWithFullPipeline(srcId, jobId, mvIds, { location: 'London', externalId: 'qla-2' });
 
-        const res = await request(app).post('/api/query').send({});
+        const res = await request().post('/api/query').send({});
 
         expect(res.status).toBe(200);
         expect(res.body.total).toBe(2);
@@ -180,7 +181,7 @@ describe('POST /api/query', () => {
     });
 
     it('returns 400 when location is not a string', async () => {
-        const res = await request(app).post('/api/query').send({ location: 123 });
+        const res = await request().post('/api/query').send({ location: 123 });
         expect(res.status).toBe(400);
         expect(res.body).toEqual({ error: 'location must be a string' });
     });
@@ -188,25 +189,25 @@ describe('POST /api/query', () => {
     it('returns 400 when location is an empty string', async () => {
         // '' is falsy, so without an explicit guard it silently skipped the
         // filter and returned ALL posts — a caller error must fail loudly.
-        const res = await request(app).post('/api/query').send({ location: '' });
+        const res = await request().post('/api/query').send({ location: '' });
         expect(res.status).toBe(400);
         expect(res.body).toEqual({ error: 'location must be a non-empty string' });
     });
 
     it('returns 400 when location is whitespace-only', async () => {
-        const res = await request(app).post('/api/query').send({ location: '   ' });
+        const res = await request().post('/api/query').send({ location: '   ' });
         expect(res.status).toBe(400);
         expect(res.body).toEqual({ error: 'location must be a non-empty string' });
     });
 
     it('returns 400 when limit is 0', async () => {
-        const res = await request(app).post('/api/query').send({ limit: 0 });
+        const res = await request().post('/api/query').send({ limit: 0 });
         expect(res.status).toBe(400);
         expect(res.body).toEqual({ error: 'limit must be a positive integer' });
     });
 
     it('returns 400 when limit is negative', async () => {
-        const res = await request(app).post('/api/query').send({ limit: -5 });
+        const res = await request().post('/api/query').send({ limit: -5 });
         expect(res.status).toBe(400);
         expect(res.body).toEqual({ error: 'limit must be a positive integer' });
     });
@@ -216,7 +217,7 @@ describe('POST /api/query', () => {
         // (src/config/categories): 'tech' is retired and free-text values
         // are caller errors, not empty result sets.
         for (const bad of ['tech', 'zines']) {
-            const res = await request(app).post('/api/query').send({ platform: bad });
+            const res = await request().post('/api/query').send({ platform: bad });
             expect(res.status).toBe(400);
             expect(res.body.error).toContain('canonical source category');
         }
@@ -225,14 +226,14 @@ describe('POST /api/query', () => {
     it('accepts every canonical platform value (forums included — 200, honest empty)', async () => {
         const { CATEGORY_SLUGS } = require('../../src/config/categories');
         for (const slug of CATEGORY_SLUGS) {
-            const res = await request(app).post('/api/query').send({ platform: slug });
+            const res = await request().post('/api/query').send({ platform: slug });
             expect(res.status).toBe(200);
             expect(Array.isArray(res.body.results)).toBe(true);
         }
     });
 
     it('returns 400 when limit is not numeric', async () => {
-        const res = await request(app).post('/api/query').send({ limit: 'not-a-number' });
+        const res = await request().post('/api/query').send({ limit: 'not-a-number' });
         expect(res.status).toBe(400);
         expect(res.body).toEqual({ error: 'limit must be a positive integer' });
     });
@@ -241,11 +242,11 @@ describe('POST /api/query', () => {
         // parseInt used to silently truncate 1.5 → 1 and coerce '20' → 20;
         // Number.isInteger runs BEFORE the range checks now, so both are
         // caller errors (same strict-integer pattern as the hours params).
-        const fractional = await request(app).post('/api/query').send({ limit: 1.5 });
+        const fractional = await request().post('/api/query').send({ limit: 1.5 });
         expect(fractional.status).toBe(400);
         expect(fractional.body).toEqual({ error: 'limit must be a positive integer' });
 
-        const stringy = await request(app).post('/api/query').send({ limit: '20' });
+        const stringy = await request().post('/api/query').send({ limit: '20' });
         expect(stringy.status).toBe(400);
         expect(stringy.body).toEqual({ error: 'limit must be a positive integer' });
     });
@@ -262,7 +263,7 @@ describe('POST /api/query', () => {
         const oneDayAgo = new Date(now.getTime() - 86400000); // 1 day ago
         const from = oneDayAgo.toISOString();
 
-        const res = await request(app).post('/api/query').send({ from });
+        const res = await request().post('/api/query').send({ from });
         
         expect(res.status).toBe(200);
         expect(res.body.query.from).toBe(from);
@@ -279,7 +280,7 @@ describe('POST /api/query', () => {
         const now = new Date();
         const to = now.toISOString();
 
-        const res = await request(app).post('/api/query').send({ to });
+        const res = await request().post('/api/query').send({ to });
         
         expect(res.status).toBe(200);
         expect(res.body.query.to).toBe(to);
@@ -298,7 +299,7 @@ describe('POST /api/query', () => {
         const from = oneDayAgo.toISOString();
         const to = now.toISOString();
 
-        const res = await request(app).post('/api/query').send({ from, to });
+        const res = await request().post('/api/query').send({ from, to });
 
         expect(res.status).toBe(200);
         expect(res.body.query.from).toBe(from);
@@ -317,7 +318,7 @@ describe('POST /api/query', () => {
                 externalId: 'qd-1', location: 'Berlin',
             });
 
-            const res = await request(app).post('/api/query').send({ location: 'Berlin' });
+            const res = await request().post('/api/query').send({ location: 'Berlin' });
 
             expect(res.body.total).toBe(1);
             expect(res.body.results[0]).toMatchObject({
@@ -358,7 +359,7 @@ describe('POST /api/query', () => {
                 [post.id, audit.id],
             );
 
-            const res = await request(app).post('/api/query').send({ location: 'Oslo' });
+            const res = await request().post('/api/query').send({ location: 'Oslo' });
             expect(res.body.total).toBe(1);
             expect(res.body.results[0].relevance).toBeNull();
         });
@@ -374,7 +375,7 @@ describe('POST /api/query', () => {
                 externalId: 'qc-lo', location: 'Clampville', comparative: -5,
             });
 
-            const res = await request(app).post('/api/query').send({ location: 'Clampville' });
+            const res = await request().post('/api/query').send({ location: 'Clampville' });
             const comparatives = res.body.results.map(r => r.comparative).sort((a, b) => a - b);
             expect(comparatives).toEqual([-1, 1]);
         });
@@ -387,7 +388,7 @@ describe('POST /api/query', () => {
                 externalId: 'qc-ok', location: 'Midville', comparative: 0.5,
             });
 
-            const res = await request(app).post('/api/query').send({ location: 'Midville' });
+            const res = await request().post('/api/query').send({ location: 'Midville' });
             expect(res.body.results[0].comparative).toBe(0.5);
         });
     });
@@ -399,7 +400,7 @@ describe('POST /api/query', () => {
         const mvIds = await insertMethodologyVersions();
         await insertPostWithFullPipeline(npr, jobId, mvIds, { externalId: 'attr-npr' });
         await insertPostWithFullPipeline(other, jobId, mvIds, { externalId: 'attr-plain' });
-        const res = await request(app).post('/api/query').send({ limit: 10 });
+        const res = await request().post('/api/query').send({ limit: 10 });
         const by = Object.fromEntries(res.body.results.map(r => [r.source_name, r.attribution]));
         expect(by).toEqual({ npr: 'NPR', 'query-plain': null });
     });

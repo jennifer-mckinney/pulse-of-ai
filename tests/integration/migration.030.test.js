@@ -8,8 +8,9 @@
 
 const fs = require('fs');
 const path = require('path');
-const request = require('supertest');
+const { useServer } = require('../helpers/server');
 const app = require('../../src/server');
+const request = useServer(app);   // one listener per file (tests/helpers/server.js)
 const { dbAll, dbGet, dbTransaction } = require('../../src/db/connection');
 const { METHODOLOGY_ERRATA } = require('../../src/config/methodology-registry');
 const { seedMethodology, seedErrata } = require('../../scripts/seed');
@@ -45,7 +46,7 @@ describe('migration 030_methodology_errata.sql (relevance@1.0.0 erratum)', () =>
     it('GET /api/methodology serves the erratum with relevance@1.0.0, and the bias and ingest ones with their versions only', async () => {
         await seedMethodology();
         await seedErrata();
-        const res = await request(app).get('/api/methodology');
+        const res = await request().get('/api/methodology');
         expect(res.status).toBe(200);
         const v100 = res.body.find(r => r.component === 'relevance' && r.version === '1.0.0');
         expect(v100.errata).toHaveLength(1);
@@ -69,7 +70,16 @@ describe('migration 030_methodology_errata.sql (relevance@1.0.0 erratum)', () =>
             expect(row.errata[0]).toMatchObject({ corrected_by: 'ingest@1.8.0' });
             expect(row.errata[0].erratum).toMatch(/describes the SHA-256 content hash as a join key/);
         }
-        corrected.push(...ingestCorrected);
+        // Migration 067 (relevance receipt wording): audit_narration 1.1.0 to
+        // 1.4.0 each carry an erratum corrected by audit_narration@1.5.0.
+        const narrationCorrected = ['1.1.0', '1.2.0', '1.3.0', '1.4.0'].map(v => ['audit_narration', v]);
+        for (const [component, version] of narrationCorrected) {
+            const row = res.body.find(r => r.component === component && r.version === version);
+            expect(row.errata).toHaveLength(1);
+            expect(row.errata[0]).toMatchObject({ corrected_by: 'audit_narration@1.5.0' });
+            expect(row.errata[0].erratum).toMatch(/does not count toward AI-discourse totals/);
+        }
+        corrected.push(...ingestCorrected, ...narrationCorrected);
         for (const r of res.body.filter(x => !corrected.some(([c, v]) => x.component === c && x.version === v))) {
             expect(r.errata).toEqual([]);
         }

@@ -22,7 +22,7 @@ sequenceDiagram
       API-->>UI: 404 Post not found
     end
     API->>DB: decision_audit_log JOIN methodology_versions for the post
-    API->>API: per decision: status, score, 4 audiences rendered from stored<br/>output + config (audit_narration@1.4.0), input_hash as<br/>HMAC-SHA256(AUDIT_HASH_KEY, stored hash), omitted without a key
+    API->>API: per decision: status, score, 4 audiences rendered from stored<br/>output + config (audit_narration@1.5.0), input_hash as<br/>HMAC-SHA256(AUDIT_HASH_KEY, stored hash), omitted without a key
     API->>DB: bias_assessments of the job that scored the post
     API->>DB: bias methodology versions
     API->>API: bias lineage: recorded (methodology_version_id),<br/>inferred (effective_from), or current, layers from that version's config

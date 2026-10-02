@@ -94,19 +94,28 @@ async function countUnchangedRun(sourceId) {
 /**
  * `responseHeaders`: the allow-listed, scrubbed headers of a refusal
  * (migration 062); null on every other run.
+ * `dropped`: the collector's dropped counters summed over the run's routes,
+ * { invalid, old, outOfScope, duplicate } (migration 068, relevance-accuracy
+ * R1); counts only. `dropped: null` (a run that evaluated no item: gate
+ * closed, skipped, refused, failed, or every route returned nothing) stores NULL,
+ * never a fake 0; so does every row from before the migration. Within an
+ * object, a missing key is 0.
  */
 async function recordRun({
     sourceId, jobId, gateStatus, outcome, itemsFetched = 0, postsNew = 0, requests = 0,
-    error = null, errorKind = null, httpStatus = null, startedAt, responseHeaders = null,
+    error = null, errorKind = null, httpStatus = null, startedAt, responseHeaders = null, dropped = null,
 }) {
     const headers = responseHeaders && Object.keys(responseHeaders).length ? JSON.stringify(responseHeaders) : null;
+    const d = (k) => (dropped == null ? null : (Number.isInteger(dropped[k]) && dropped[k] >= 0 ? dropped[k] : 0));
     await dbRun(
         `INSERT INTO source_runs
             (source_id, job_id, gate_status, outcome, items_fetched, posts_new, requests, error, error_kind, http_status,
-             started_at, finished_at, response_headers)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), $12::jsonb)`,
+             started_at, finished_at, response_headers,
+             dropped_invalid, dropped_old, dropped_out_of_scope, dropped_duplicate)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), $12::jsonb, $13, $14, $15, $16)`,
         [sourceId, jobId, gateStatus, outcome, itemsFetched, postsNew, requests, error,
-            error ? errorKind : null, error ? httpStatus : null, startedAt || new Date(), headers],
+            error ? errorKind : null, error ? httpStatus : null, startedAt || new Date(), headers,
+            d('invalid'), d('old'), d('outOfScope'), d('duplicate')],
     );
 }
 

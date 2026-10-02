@@ -4,20 +4,21 @@
 
 'use strict';
 
-const request = require('supertest');
+const { useServer } = require('../helpers/server');
 const app     = require('../../src/server');
+const request = useServer(app);   // one listener per file (tests/helpers/server.js)
 const { insertSource, insertJob, insertMethodologyVersions, insertPostWithFullPipeline } = require('./helpers');
 const { dbRun } = require('../../src/db/connection');
 
 describe('GET /api/posts/aggregated-by-location', () => {
     it('returns 200 with an array', async () => {
-        const res = await request(app).get('/api/posts/aggregated-by-location');
+        const res = await request().get('/api/posts/aggregated-by-location');
         expect(res.status).toBe(200);
         expect(Array.isArray(res.body)).toBe(true);
     });
 
     it('returns empty array when no posts exist', async () => {
-        const res = await request(app).get('/api/posts/aggregated-by-location');
+        const res = await request().get('/api/posts/aggregated-by-location');
         expect(res.body).toEqual([]);
     });
 
@@ -30,7 +31,7 @@ describe('GET /api/posts/aggregated-by-location', () => {
             location: 'London', indicator: 'positive', externalId: 'lp-1',
         });
 
-        const res = await request(app).get('/api/posts/aggregated-by-location');
+        const res = await request().get('/api/posts/aggregated-by-location');
 
         expect(res.body).toHaveLength(1);
         expect(res.body[0]).toMatchObject({
@@ -57,7 +58,7 @@ describe('GET /api/posts/aggregated-by-location', () => {
         await dbRun(`UPDATE raw_posts SET raw_payload = '{"location_basis":"content"}'::jsonb WHERE id = $1`,
             [typeof ids[2] === 'object' ? ids[2].postId || ids[2].id : ids[2]]);
 
-        const res = await request(app).get('/api/posts/aggregated-by-location');
+        const res = await request().get('/api/posts/aggregated-by-location');
         expect(res.body).toHaveLength(1);
         expect(res.body[0]).toMatchObject({ city: 'London', total: 3, publisher_posts: 2 });
     });
@@ -77,7 +78,7 @@ describe('GET /api/posts/aggregated-by-location', () => {
             location: 'London', indicator: 'negative', externalId: 'lp2-neg-1',
         });
 
-        const res = await request(app).get('/api/posts/aggregated-by-location');
+        const res = await request().get('/api/posts/aggregated-by-location');
         const london = res.body.find(c => c.city === 'London');
 
         expect(london).toBeDefined();
@@ -95,7 +96,7 @@ describe('GET /api/posts/aggregated-by-location', () => {
         await insertPostWithFullPipeline(srcId, jobId, mvIds, { location: 'Paris',  externalId: 'lp3-1' });
         await insertPostWithFullPipeline(srcId, jobId, mvIds, { location: 'Berlin', externalId: 'lp3-2' });
 
-        const res = await request(app).get('/api/posts/aggregated-by-location');
+        const res = await request().get('/api/posts/aggregated-by-location');
         const cities = res.body.map(c => c.city);
 
         expect(cities).toContain('Paris');
@@ -111,7 +112,7 @@ describe('GET /api/posts/aggregated-by-location', () => {
         await insertPostWithFullPipeline(socialSrc, jobId, mvIds, { location: 'Tokyo',  externalId: 'lf-s1' });
         await insertPostWithFullPipeline(newsSrc,   jobId, mvIds, { location: 'Sydney', externalId: 'lf-n1' });
 
-        const res = await request(app).get('/api/posts/aggregated-by-location?platform=social');
+        const res = await request().get('/api/posts/aggregated-by-location?platform=social');
         const cities = res.body.map(c => c.city);
 
         expect(cities).toContain('Tokyo');
@@ -123,7 +124,7 @@ describe('GET /api/posts/aggregated-by-location', () => {
         // (src/config/categories) — including the retired 'tech' slug
         // (residual data is remapped to developer by migration 007).
         for (const bad of ['tech', 'zines']) {
-            const res = await request(app)
+            const res = await request()
                 .get('/api/posts/aggregated-by-location?platform=' + bad);
             expect(res.status).toBe(400);
             expect(res.body.error).toContain('canonical source category');
@@ -133,7 +134,7 @@ describe('GET /api/posts/aggregated-by-location', () => {
     it('accepts every canonical platform value (forums included — 200, honest empty)', async () => {
         const { CATEGORY_SLUGS } = require('../../src/config/categories');
         for (const slug of CATEGORY_SLUGS) {
-            const res = await request(app)
+            const res = await request()
                 .get('/api/posts/aggregated-by-location?platform=' + slug);
             expect(res.status).toBe(200);
             expect(Array.isArray(res.body)).toBe(true);
@@ -150,18 +151,18 @@ describe('GET /api/posts/aggregated-by-location', () => {
             location: '', externalId: 'lp4-empty',
         });
 
-        const res = await request(app).get('/api/posts/aggregated-by-location');
+        const res = await request().get('/api/posts/aggregated-by-location');
         expect(res.body).toHaveLength(0);
     });
 
     it('returns 400 with invalid from date', async () => {
-        const res = await request(app).get('/api/posts/aggregated-by-location?from=not-a-date');
+        const res = await request().get('/api/posts/aggregated-by-location?from=not-a-date');
         expect(res.status).toBe(400);
         expect(res.body).toEqual({ error: 'Invalid from date' });
     });
 
     it('returns 400 with invalid to date', async () => {
-        const res = await request(app).get('/api/posts/aggregated-by-location?to=not-a-date');
+        const res = await request().get('/api/posts/aggregated-by-location?to=not-a-date');
         expect(res.status).toBe(400);
         expect(res.body).toEqual({ error: 'Invalid to date' });
     });
@@ -175,7 +176,7 @@ describe('GET /api/posts/aggregated-by-location', () => {
             location: 'San Francisco', externalId: 'lp-sf',
         });
 
-        const res = await request(app).get('/api/posts/aggregated-by-location');
+        const res = await request().get('/api/posts/aggregated-by-location');
         const sf = res.body.find(c => c.city === 'San Francisco');
 
         expect(sf).toBeDefined();
@@ -192,7 +193,7 @@ describe('GET /api/posts/aggregated-by-location', () => {
             location: 'Unknown City', externalId: 'lp-unknown',
         });
 
-        const res = await request(app).get('/api/posts/aggregated-by-location');
+        const res = await request().get('/api/posts/aggregated-by-location');
         const unknown = res.body.find(c => c.city === 'Unknown City');
 
         expect(unknown).toBeDefined();
@@ -209,7 +210,7 @@ describe('GET /api/posts/aggregated-by-location', () => {
             location: 'Tokyo', indicator: 'positive', externalId: 'lp-src-1',
         });
 
-        const res = await request(app).get('/api/posts/aggregated-by-location');
+        const res = await request().get('/api/posts/aggregated-by-location');
         const tokyo = res.body.find(c => c.city === 'Tokyo');
 
         expect(tokyo.sources).toHaveLength(1);
@@ -260,7 +261,7 @@ describe('GET /api/posts/aggregated-by-location', () => {
                 location: 'Brussels', externalId: 'lp-bru',
             });
 
-            const res = await request(app).get('/api/posts/aggregated-by-location');
+            const res = await request().get('/api/posts/aggregated-by-location');
             const bru = res.body.find(c => c.city === 'Brussels');
             expect(bru).toMatchObject({
                 lat:     50.8503,
@@ -282,7 +283,7 @@ describe('GET /api/posts/aggregated-by-location', () => {
 
             const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
             try {
-                const res = await request(app).get('/api/posts/aggregated-by-location');
+                const res = await request().get('/api/posts/aggregated-by-location');
                 const row = res.body.find(c => c.city === unknownCity);
                 expect(row).toMatchObject({ lat: null, lng: null, country: null });
 
@@ -293,7 +294,7 @@ describe('GET /api/posts/aggregated-by-location', () => {
 
                 // Second request: already warned — no repeat for the same city
                 warnSpy.mockClear();
-                await request(app).get('/api/posts/aggregated-by-location');
+                await request().get('/api/posts/aggregated-by-location');
                 const repeated = warnSpy.mock.calls.some(args =>
                     String(args[0]).includes(unknownCity));
                 expect(repeated).toBe(false);
@@ -320,13 +321,13 @@ describe('GET /api/posts/aggregated-by-location', () => {
         });
 
         // Unwindowed: both posts count
-        const all = await request(app).get('/api/posts/aggregated-by-location');
+        const all = await request().get('/api/posts/aggregated-by-location');
         expect(all.body.find(c => c.city === 'London').total).toBe(2);
 
         // Trailing hour: only the fresh post counts — this is what makes the
         // frontend's "posts/hr" and "vol/hr" labels honest
         const from = new Date(Date.now() - 3600 * 1000).toISOString();
-        const windowed = await request(app).get(
+        const windowed = await request().get(
             `/api/posts/aggregated-by-location?from=${encodeURIComponent(from)}`,
         );
         const london = windowed.body.find(c => c.city === 'London');
@@ -351,7 +352,7 @@ describe('GET /api/posts/aggregated-by-location', () => {
         const from = oneHourAgo.toISOString();
         const to = now.toISOString();
 
-        const res = await request(app).get(
+        const res = await request().get(
             `/api/posts/aggregated-by-location?platform=social&from=${from}&to=${to}`
         );
 

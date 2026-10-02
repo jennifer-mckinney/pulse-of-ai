@@ -25,12 +25,12 @@
 </head>
 <body>
 <h1>Data model 1 of 4 · sources, collection state, jobs, alerts, Reddit</h1>
-<p class="summary">The tables that describe the 52 registry sources, their collection state and runs, the processing jobs every score belongs to, alerts, and Reddit&#x27;s selection, budget and maintenance state.</p>
+<p class="summary">The tables that describe the 52 registry sources, their collection state, runs and admission counters, the processing jobs every score belongs to, alerts, and Reddit&#x27;s selection, budget and maintenance state.</p>
 <p class="source">Canonical source: <code>erd-1-sources-and-jobs.mmd</code> · index: <code>docs/diagrams/README.md</code></p>
 <pre class="mermaid">
 %% Title: Data model 1 of 4 · sources, collection state, jobs, alerts, Reddit
-%% Summary: The tables that describe the 52 registry sources, their collection state and runs, the processing jobs every score belongs to, alerts, and Reddit's selection, budget and maintenance state.
-%% Sources: src/db/migrations/001, 003, 013, 016, 018, 019, 020, 021, 023, 025, 033, 037, 038, 040, 050, 062. Alert writers: src/pipeline/bias.js (writeAlertEvent), src/collectors/source-alerts.js, source-health.js, retention-overdue.js, state.js, governance.js, src/watchdog/store.js and conditions.js. raw_posts is shown with its keys only (full columns in data model 2); alert resolutions, run rollups, gate events and the watchdog tables are in data model 4. Dotted lines are logical links without a foreign key. NOTE_alert_type_values is a legend box, not a table. Spec: TECHNICAL_SPEC.md section 6.
+%% Summary: The tables that describe the 52 registry sources, their collection state, runs and admission counters, the processing jobs every score belongs to, alerts, and Reddit's selection, budget and maintenance state.
+%% Sources: src/db/migrations/001, 003, 013, 016, 018, 019, 020, 021, 023, 025, 033, 037, 038, 040, 050, 062, 068. Alert writers: src/pipeline/bias.js (writeAlertEvent), src/collectors/source-alerts.js, source-health.js, retention-overdue.js, state.js, governance.js, src/watchdog/store.js and conditions.js. raw_posts is shown with its keys only (full columns in data model 2); alert resolutions, run rollups, gate events and the watchdog tables are in data model 4. Dotted lines are logical links without a foreign key. NOTE_alert_type_values is a legend box, not a table. Spec: TECHNICAL_SPEC.md section 6.
 erDiagram
 
   data_sources {
@@ -90,8 +90,23 @@ erDiagram
     text error_kind "016"
     int http_status "016"
     jsonb response_headers "062: refusal runs only"
+    int dropped_invalid "068: nullable, NULL = not recorded; CHECK &gt;= 0"
+    int dropped_old "068"
+    int dropped_out_of_scope "068"
+    int dropped_duplicate "068: in-batch duplicates"
     timestamptz started_at
     timestamptz finished_at
+  }
+
+  admission_rule_hits {
+    date day PK "068; PK (day, source_id, route, admission_mv_id, rule_id); UTC day"
+    uuid source_id PK, FK
+    text route PK "CHECK: route-id shape; an exact registered route (code)"
+    uuid admission_mv_id PK, FK "admission_filter version (methodology_versions.id, drawn in data model 2)"
+    text rule_id PK "CHECK: invalid | old | duplicate | no_pattern | any_pattern | pattern:NN"
+    bigint admitted_count "CHECK &gt;= 0"
+    bigint rejected_count "CHECK &gt;= 0"
+    timestamptz updated_at
   }
 
   processing_jobs {
@@ -171,6 +186,7 @@ erDiagram
 
   data_sources ||--o| source_collection_state : "has state"
   data_sources ||--o{ source_runs : "run log"
+  data_sources ||--o{ admission_rule_hits : "counts only, source_id"
   processing_jobs |o--o{ source_runs : "job_id, null when no job was open"
   data_sources ||--o{ raw_posts : "source_id"
   alert_events ||..|| NOTE_alert_type_values : "alert_type values"

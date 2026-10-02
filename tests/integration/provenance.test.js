@@ -6,8 +6,9 @@
 
 'use strict';
 
-const request = require('supertest');
+const { useServer } = require('../helpers/server');
 const app = require('../../src/server');
+const request = useServer(app);   // one listener per file (tests/helpers/server.js)
 const db = require('../../src/db/connection');
 const { storeRawPost } = require('../../src/pipeline/ingest');
 const { toPayload } = require('../../src/collectors/normalize');
@@ -76,7 +77,7 @@ describe('provenance fingerprint (D2, migration 017)', () => {
     it('the audit receipt shows source, published time, permalink, id, fingerprint and how to verify', async () => {
         await registerIngest13();
         const { postId, payload } = await collect({ id: '77', title: 'AI', text: 'machine learning', url: 'https://news.ycombinator.com/item?id=77', publishedAt: '2026-09-29T10:00:00Z' });
-        const res = await request(app).get(`/api/audit/${postId}`);
+        const res = await request().get(`/api/audit/${postId}`);
         expect(res.status).toBe(200);
         expect(res.body.provenance).toEqual({
             source: 'hacker_news',
@@ -100,7 +101,7 @@ describe('provenance fingerprint (D2, migration 017)', () => {
     it('a post with no fingerprint says so on the receipt', async () => {
         const sourceId = await insertSource();
         const { postId } = await storeRawPost({ id: 'old-1', text: 'AI before 1.3.0' }, sourceId);
-        const res = await request(app).get(`/api/audit/${postId}`);
+        const res = await request().get(`/api/audit/${postId}`);
         expect(res.body.provenance.fingerprint).toBeNull();
         expect(res.body.provenance.verifiable).toMatch(/no provenance fingerprint was recorded/);
     });

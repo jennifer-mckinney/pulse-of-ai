@@ -4,8 +4,9 @@
 
 'use strict';
 
-const request = require('supertest');
+const { useServer } = require('../helpers/server');
 const app     = require('../../src/server');
+const request = useServer(app);   // one listener per file (tests/helpers/server.js)
 const { dbRun } = require('../../src/db/connection');
 const { insertJob } = require('./helpers');
 
@@ -27,7 +28,7 @@ async function insertBiasAssessment(jobId, { isViolation = false, methodologyVer
 
 describe('GET /api/bias/latest', () => {
     it('returns 200 with correct top-level shape', async () => {
-        const res = await request(app).get('/api/bias/latest');
+        const res = await request().get('/api/bias/latest');
 
         expect(res.status).toBe(200);
         expect(res.body).toMatchObject({
@@ -40,7 +41,7 @@ describe('GET /api/bias/latest', () => {
     });
 
     it('returns empty arrays when no bias assessments exist', async () => {
-        const res = await request(app).get('/api/bias/latest');
+        const res = await request().get('/api/bias/latest');
         expect(res.body.violations).toHaveLength(0);
         expect(res.body.all_assessments).toHaveLength(0);
         expect(res.body.job_id).toBeNull();
@@ -50,7 +51,7 @@ describe('GET /api/bias/latest', () => {
         const jobId = await insertJob('completed');
         await insertBiasAssessment(jobId, { isViolation: true });
 
-        const res = await request(app).get('/api/bias/latest');
+        const res = await request().get('/api/bias/latest');
 
         expect(res.body.job_id).toBe(jobId);
         expect(res.body.violations).toHaveLength(1);
@@ -66,7 +67,7 @@ describe('GET /api/bias/latest', () => {
         const jobId = await insertJob('completed');
         await insertBiasAssessment(jobId, { isViolation: true, severity: 'warning' });
         await insertJob('completed', { postsProcessed: 0 });   // e.g. a refresh that found nothing new
-        const res = await request(app).get('/api/bias/latest');
+        const res = await request().get('/api/bias/latest');
         expect(res.body.job_id).toBe(jobId);
         expect(res.body.all_assessments).toHaveLength(1);
     });
@@ -76,7 +77,7 @@ describe('GET /api/bias/latest', () => {
         await insertBiasAssessment(jobId, { isViolation: false });
         await insertBiasAssessment(jobId, { isViolation: true });
 
-        const res = await request(app).get('/api/bias/latest');
+        const res = await request().get('/api/bias/latest');
 
         expect(res.body.all_assessments).toHaveLength(2);
         expect(res.body.violations).toHaveLength(1);
@@ -89,7 +90,7 @@ describe('GET /api/bias/latest', () => {
         const newJobId = await insertJob('completed');
         // No violations in new job
 
-        const res = await request(app).get('/api/bias/latest');
+        const res = await request().get('/api/bias/latest');
 
         expect(res.body.job_id).toBe(newJobId);
         expect(res.body.violations).toHaveLength(0);
@@ -119,7 +120,7 @@ describe('GET /api/bias/history', () => {
     });
 
     it('returns 200 with the window / alerts / pass_summary / truncation shape and defaults to 12 hours', async () => {
-        const res = await request(app).get('/api/bias/history');
+        const res = await request().get('/api/bias/history');
 
         expect(res.status).toBe(200);
         expect(res.body).toMatchObject({
@@ -139,19 +140,19 @@ describe('GET /api/bias/history', () => {
     });
 
     it('returns 400 when hours is not an integer', async () => {
-        const res = await request(app).get('/api/bias/history?hours=1.5');
+        const res = await request().get('/api/bias/history?hours=1.5');
         expect(res.status).toBe(400);
         expect(res.body).toHaveProperty('error');
     });
 
     it('clamps out-of-range positive hours instead of rejecting them', async () => {
-        const res = await request(app).get('/api/bias/history?hours=500');
+        const res = await request().get('/api/bias/history?hours=500');
         expect(res.status).toBe(200);
         expect(res.body.window_hours).toBe(48);
     });
 
     it('rejects negative hours as 400 (F5 — a negative window is malformed, not clampable)', async () => {
-        const res = await request(app).get('/api/bias/history?hours=-3');
+        const res = await request().get('/api/bias/history?hours=-3');
         expect(res.status).toBe(400);
         expect(res.body).toHaveProperty('error');
     });
@@ -181,7 +182,7 @@ describe('GET /api/bias/history', () => {
             isViolation: false,
         });
 
-        const res = await request(app).get('/api/bias/history');
+        const res = await request().get('/api/bias/history');
         expect(res.body.alerts).toHaveLength(2);
         expect(res.body.alerts.every(a => a.severity !== 'pass')).toBe(true);
         expect(res.body).toMatchObject({ total_count: 3, alert_count: 2, pass_count: 1, truncated: false });
@@ -233,7 +234,7 @@ describe('GET /api/bias/history', () => {
             createdAt: new Date(Date.now() - 2 * 3600 * 1000),
         });
 
-        const res = await request(app).get('/api/bias/history');
+        const res = await request().get('/api/bias/history');
         expect(res.body.alerts).toEqual([]);
         expect(res.body).toMatchObject({ total_count: 6, pass_count: 6, alert_count: 0 });
         expect(res.body.pass_summary).toHaveLength(2);
@@ -263,7 +264,7 @@ describe('GET /api/bias/history', () => {
             createdAt: new Date(Date.now() - 1 * 3600 * 1000),
         });
 
-        const res = await request(app).get('/api/bias/history');
+        const res = await request().get('/api/bias/history');
         expect(res.body.pass_summary).toHaveLength(1);
         expect(res.body.pass_summary[0]).toMatchObject({
             assessment_type: 'platform_sentiment_parity',
@@ -291,7 +292,7 @@ describe('GET /api/bias/history', () => {
             groupField: 'platform', groupValue: 'social vs news',
         });
 
-        const res = await request(app).get('/api/bias/history');
+        const res = await request().get('/api/bias/history');
         expect(res.body.alerts).toHaveLength(2);
         expect(res.body.total_count).toBe(2);
         // Newest first
@@ -299,7 +300,7 @@ describe('GET /api/bias/history', () => {
         expect(res.body.alerts[1].id).toBe(recentId);
 
         // Widening the window picks the old row back up
-        const wide = await request(app).get('/api/bias/history?hours=48');
+        const wide = await request().get('/api/bias/history?hours=48');
         expect(wide.body.alerts).toHaveLength(3);
     });
 
@@ -316,7 +317,7 @@ describe('GET /api/bias/history', () => {
             [jobId, HISTORY_ALERT_CAP + extra],
         );
 
-        const res = await request(app).get('/api/bias/history');
+        const res = await request().get('/api/bias/history');
         expect(res.body.alerts).toHaveLength(HISTORY_ALERT_CAP);
         expect(res.body).toMatchObject({
             truncated:   true,
@@ -338,7 +339,7 @@ describe('GET /api/bias/history', () => {
              FROM generate_series(1, $2::int) AS g`,
             [jobId, HISTORY_ALERT_CAP],
         );
-        const res = await request(app).get('/api/bias/history');
+        const res = await request().get('/api/bias/history');
         expect(res.body.alerts).toHaveLength(HISTORY_ALERT_CAP);
         expect(res.body.truncated).toBe(false);
     });
@@ -370,7 +371,7 @@ describe('GET /api/bias/history', () => {
         });
 
         const spy = jest.spyOn(clock, 'dbNow').mockResolvedValue(anchor);
-        const res = await request(app).get('/api/bias/history');
+        const res = await request().get('/api/bias/history');
 
         expect(spy).toHaveBeenCalledTimes(1);
         expect(res.body.generated_at).toBe(anchor.toISOString());
@@ -389,7 +390,7 @@ describe('GET /api/bias/history', () => {
             assessmentType: 'location_concentration', isViolation: true, severity: 'warning',
         });
 
-        const res = await request(app).get('/api/bias/history');
+        const res = await request().get('/api/bias/history');
         expect(res.body.alerts[0]).toMatchObject({
             layer:    'Location concentration',
             citation: null,

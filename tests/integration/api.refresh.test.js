@@ -6,8 +6,9 @@
 
 'use strict';
 
-const request = require('supertest');
+const { useServer } = require('../helpers/server');
 const app     = require('../../src/server');
+const request = useServer(app);   // one listener per file (tests/helpers/server.js)
 const { dbGet, dbRun } = require('../../src/db/connection');
 
 // Reset rate limiter between tests so tests don't bleed into each other
@@ -37,7 +38,7 @@ beforeEach(async () => {
 // request, and POST /api/refresh rejects anything not same-origin (see
 // api.refresh.csrf.test.js for the cross-site cases).
 function refresh() {
-    return request(app).post('/api/refresh').set('Sec-Fetch-Site', 'same-origin');
+    return request().post('/api/refresh').set('Sec-Fetch-Site', 'same-origin');
 }
 
 describe('POST /api/refresh', () => {

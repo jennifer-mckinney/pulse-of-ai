@@ -13,8 +13,9 @@
 
 'use strict';
 
-const request = require('supertest');
+const { useServer } = require('../helpers/server');
 const app     = require('../../src/server');
+const request = useServer(app);   // one listener per file (tests/helpers/server.js)
 const { dbRun, dbAll } = require('../../src/db/connection');
 const {
     insertSource, insertJob, insertMethodologyVersions,
@@ -76,7 +77,7 @@ describe('bias methodology lineage — GET /api/audit/:post_id bias block', () =
         });
 
         const before = await methodologySnapshot();
-        const res = await request(app).get(`/api/audit/${postId}`);
+        const res = await request().get(`/api/audit/${postId}`);
         expect(res.status).toBe(200);
         expect(res.body.bias).toMatchObject({
             model_name: 'bias-monitor-old',
@@ -106,7 +107,7 @@ describe('bias methodology lineage — GET /api/audit/:post_id bias block', () =
             createdAt: hoursAgo(1), methodologyVersionId: v2,
         });
 
-        const res = await request(app).get(`/api/audit/${postId}`);
+        const res = await request().get(`/api/audit/${postId}`);
         expect(res.body.bias).toMatchObject({ version: '2.0.0', lineage: 'recorded' });
         const loc = res.body.bias.layers.find(l => l.assessment_type === 'location_concentration');
         expect(loc).toMatchObject({
@@ -125,7 +126,7 @@ describe('bias methodology lineage — GET /api/audit/:post_id bias block', () =
             createdAt: hoursAgo(5), methodologyVersionId: null,
         });
 
-        const res = await request(app).get(`/api/audit/${postId}`);
+        const res = await request().get(`/api/audit/${postId}`);
         expect(res.body.bias).toMatchObject({
             model_name: 'bias-monitor-old', version: '0.9.0',
             lineage: 'inferred', lineage_fallback: false,
@@ -145,7 +146,7 @@ describe('bias methodology lineage — GET /api/audit/:post_id bias block', () =
             createdAt: hoursAgo(11), methodologyVersionId: null,
         });
 
-        const res = await request(app).get(`/api/audit/${postId}`);
+        const res = await request().get(`/api/audit/${postId}`);
         expect(res.body.bias).toMatchObject({
             version: '0.9.0', lineage: 'inferred', lineage_fallback: true,
         });
@@ -158,7 +159,7 @@ describe('bias methodology lineage — GET /api/audit/:post_id bias block', () =
         const mvIds  = await insertMethodologyVersions();
         const postId = await insertPostWithFullPipeline(srcId, jobId, mvIds, { externalId: 'lin-a-5' });
 
-        const res = await request(app).get(`/api/audit/${postId}`);
+        const res = await request().get(`/api/audit/${postId}`);
         expect(res.body.bias).toMatchObject({
             assessed_at: null, version: '2.0.0', lineage: 'current',
         });
@@ -188,7 +189,7 @@ describe('bias methodology lineage — GET /api/bias/history', () => {
             createdAt: hoursAgo(1.5), methodologyVersionId: null,
         });
 
-        const res = await request(app).get('/api/bias/history');
+        const res = await request().get('/api/bias/history');
         expect(res.status).toBe(200);
         const byId = Object.fromEntries(res.body.alerts.map(a => [a.id, a]));
 
@@ -223,7 +224,7 @@ describe('bias methodology lineage — GET /api/bias/history', () => {
             createdAt: hoursAgo(1), methodologyVersionId: null,
         });
 
-        const res = await request(app).get('/api/bias/history');
+        const res = await request().get('/api/bias/history');
         const nd = res.body.pass_summary.find(p => p.assessment_type === 'negative_dominance');
         expect(nd).toMatchObject({
             count: 2, latest_value: 0.3,
