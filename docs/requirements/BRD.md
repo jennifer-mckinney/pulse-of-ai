@@ -75,7 +75,7 @@ Objectives are taken directly from the specification's objectives table (spec §
 ### 6.1 In Scope (phased)
 
 **Phase 1 — Foundation (delivered):**
-- Ingestion, processing, and storage backbone: immutable raw post store, processing jobs, versioned methodology registry, immutable decision audit log (spec §6, §13 Phases A–C)
+- Ingestion, processing, and storage backbone: raw post store (kept as collected; only the text and payload are replaced on the retention schedule and fictional demo posts are purged, spec §2, §19), processing jobs, versioned methodology registry, immutable decision audit log (spec §6, §13 Phases A–C)
 - Sentiment v1 (lexicon-based, establishing the audit pattern), keyword relevance scoring, aggregate bias monitoring with alerting (spec §9)
 - Public read API: health, aggregated posts by location, latest sentiment, audit trail, bias results, methodology, sources, themes, on-demand refresh, structured query (spec §7)
 - Embedding pipeline and vector storage for semantic capabilities (spec §12, §13 Phase D)

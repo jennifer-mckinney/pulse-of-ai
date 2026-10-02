@@ -192,7 +192,7 @@ Status reflects `master` @ `a17020f` (PRs #8, #9, #10, #22, #24–#28, #31–#35
 | PRD requirement | Technical Specification section |
 |---|---|
 | FR-1 (52-source collection, 2–3 min refresh) | §13 Phase C, §17 |
-| FR-2 (PII stripping, immutable ingest, retention log) | §8 |
+| FR-2 (PII stripping, durable post identity, retention log) | §8 |
 | FR-3 (audited inference pipeline) | §10, §18 |
 | FR-4 (three-layer bias stack, alerts) | §9 |
 | FR-5 (layered retention, compaction) | §19 |

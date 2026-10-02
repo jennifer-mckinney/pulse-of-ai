@@ -107,7 +107,7 @@ Every inferred decision — sentiment score, relevance rating, topic classificat
 
 **Key architectural principles:**
 - Global coverage — the 52 registry sources across 8 categories, all geographies
-- Immutable raw data — collected posts are not edited, with one documented exception: text retention, which replaces a post's text with a removal notice when its source's window ends (Reddit 48 h under ADR 0001 ruling 9, YouTube and TikTok 30 days, every other source the detail window), when the 6-hourly Reddit re-check finds a post removed upstream, and at compaction (§19)
+- Raw data kept as collected — a stored post is not edited, with documented exceptions in `raw_posts.content`, `raw_payload` and `text_removed_*` only (the decision audit log, by contrast, is immutable): text retention, which replaces a post's text with a removal notice when its source's window ends (Reddit 48 h under ADR 0001 ruling 9, YouTube and TikTok 30 days, every other source the detail window), when the 6-hourly Reddit re-check finds a post removed upstream, and at compaction (§19); the daily demo purge also deletes fictional demo posts with their dependent rows after the detail window
 - Auditable inferences — every score is traceable to its methodology version
 - Versioned methodology — algorithms change over time; we track which version produced which decision
 - Privacy-first collection — identity fields are never stored and identities in text are redacted (§8); every post collected while `PROVENANCE_KEY` or `AUDIT_HASH_KEY` is set (standup generates it) carries a keyed provenance fingerprint instead of an identity; without a key, and for fictional demo posts, none is recorded and the receipt says why
