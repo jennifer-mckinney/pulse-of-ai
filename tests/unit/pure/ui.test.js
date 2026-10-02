@@ -896,6 +896,12 @@ describe('demoAuditModel — prototype buildAudit receipt', () => {
         expect(a.public).toMatch(/never stored, so it counts toward nothing/);
         expect(a.public).not.toMatch(/clearly talking about AI/);
         expect(a.plain).toMatch(/never stored, so it is in no totals/);
+        expect(a.researcher).toMatch(/only gates embedding/);
+        expect(a.researcher).toMatch(/never stored, so it counts toward nothing/);
+        expect(a.config.min_threshold).toBeUndefined();
+        // Drift guard: the public view carries the real 1.5.0 clause.
+        const { RELEVANCE_PUBLIC } = require('../../../src/config/audit-narration');
+        expect(a.public).toContain(RELEVANCE_PUBLIC.matched.split(', and ')[1].replace(/\.$/, '').replace('it counts', 'counts'));
     });
 
     test('sentiment/relevance pills mirror the post scores', () => {
