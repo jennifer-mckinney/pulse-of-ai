@@ -1,0 +1,89 @@
+%% Title: Deployment · npm run standup (compose profiles full + demo)
+%% Summary: The containers of the standup stack, their images, host port bindings (loopback by default), volumes, health checks, and which environment (and therefore which secrets) each role receives.
+%% Sources: docker-compose.yml (x-app-env, x-collector-settings, x-collector-presence, x-app, services incl. worker env_file and watchdog, volumes), Dockerfile, python/Dockerfile, src/server.js (listenHost), src/routes/refresh.js, src/workers/heartbeat.js, scripts/watchdog.js, src/watchdog/config.js, scripts/standup.sh, .env.example. Spec: TECHNICAL_SPEC.md sections 5 and 8 (secrets management). Updated 2026-09-30.
+flowchart LR
+
+  subgraph HOST["Host · PULSE_BIND_ADDR, default 127.0.0.1"]
+    direction TB
+    H1["web · 127.0.0.1:WEB_PORT (3000) → 3000"]:::done
+    H2["postgres · 127.0.0.1:POSTGRES_PORT → 5432<br/>(5434 in .env.example, 5432 if unset)"]:::done
+    H3["postgres_test · 127.0.0.1:POSTGRES_TEST_PORT (5433) → 5432"]:::done
+    H4["redis (Valkey) · 127.0.0.1:REDIS_PORT (6379) → 6379"]:::done
+    H5["embeddings, watchdog · not published"]:::done
+    H6["PULSE_BIND_ADDR=0.0.0.0 publishes all four<br/>to the network, databases included"]:::done
+    H7["npm run dev on the host binds 127.0.0.1<br/>unless HOST or PULSE_BIND_ADDR say otherwise"]:::done
+    H8["web container: HOST=0.0.0.0 inside, behind the<br/>loopback publish (PULSE_CONTAINER_PUBLISHED_ADDR)"]:::done
+  end
+
+  subgraph NET["Compose network · project pulse-of-ai"]
+    direction TB
+    WEB["web · pulse-of-ai/app (Node 22, user node)<br/>node src/server.js<br/>healthcheck: /api/health db_connected"]:::done
+    WORKER["worker · pulse-of-ai/app<br/>node src/workers/start.js<br/>healthcheck: heartbeat file under 60 s old<br/>stop_grace_period 180 s"]:::done
+    WD["watchdog · pulse-of-ai/app, profile full<br/>node scripts/watchdog.js, no healthcheck<br/>(reported in /api/health), stop_grace_period 20 s"]:::done
+    MIGRATE["migrate · pulse-of-ai/app, one-shot<br/>migrate.js + seed.js, restart no"]:::done
+    POP["populate · pulse-of-ai/app, profile demo<br/>populate.js --loop, stop_grace_period 30 s"]:::done
+    EMB["embeddings · pulse-of-ai/embeddings<br/>(Python 3.13, user app, CPU)<br/>uvicorn :8000, healthcheck model_loaded"]:::done
+    PG[("postgres · pgvector/pgvector:pg16 by digest<br/>healthcheck pg_isready")]:::done
+    PGT[("postgres_test · same image, no volume")]:::done
+    RD[("redis · valkey/valkey:8.1.10-alpine by digest<br/>requirepass from a config file, not argv<br/>AOF, authenticated ping healthcheck")]:::done
+  end
+
+  MAIL["operator SMTP server<br/>(optional: SMTP_HOST, SMTP_FROM, SMTP_TO)"]:::done
+
+  subgraph VOL["Volumes"]
+    direction TB
+    V1[("postgres_data")]:::done
+    V2[("valkey_data")]:::done
+    V3[("hf_cache · model cache")]:::done
+  end
+
+  subgraph ENV["Environment per role (docker-compose.yml anchors)"]
+    direction TB
+    E1["x-app-env, web, worker, migrate, populate: POSTGRES_#42;,<br/>REDIS_#42;, EMBEDDINGS_SERVICE_URL, EMBED_MODEL, EMBED_MODEL_REVISION,<br/>AUDIT_HASH_KEY, PROVENANCE_KEY, CORRELATION_#42; gate<br/>settings (no salt), RETENTION_DETAIL_DAYS, DEMO_FEED_#42;"]:::done
+    E2["x-collector-settings: COLLECTOR_CONTACT_URL,<br/>PERMISSION_GATED_FEEDS_ACCEPTED_BY, GATE_APPROVED_BY,<br/>kill switches, approval / licence refs (no secrets)"]:::done
+    E3["collector CREDENTIALS (API keys, tokens,<br/>client secrets, mailbox password): no anchor,<br/>only in the operator's env file"]:::done
+    E4["x-collector-presence: the literal set, or empty,<br/>per credential, so web can report gate status"]:::done
+    E5["web only: PULSE_BIND_ADDR, HOST, PULSE_IN_CONTAINER,<br/>PULSE_CONTAINER_PUBLISHED_ADDR, CORRELATION_SALT_SET<br/>(presence flag), REFRESH_TOKEN, REFRESH_STALE_MINUTES"]:::done
+    E6["other values come from .env by ${VAR} interpolation"]:::done
+    E7["worker env_file: PULSE_ENV_FILE (default .env),<br/>loaded whole, required: true;<br/>environment wins: SMTP_PASSWORD blanked<br/>and CORRELATION_MIN_CONFIDENCE blanked (removed<br/>setting, PR #37; a legacy value in the env file<br/>cannot reach the process)"]:::done
+    E8["worker only: CORRELATION_SALT"]:::done
+    E9["watchdog only (no x-app-env): POSTGRES_#42; incl. the<br/>DB password, WATCHDOG_#42;, SMTP_#42; incl. SMTP_PASSWORD<br/>(the only role with it); no Valkey password,<br/>no audit key, no collector credential"]:::done
+  end
+
+  subgraph LEGEND["Status legend"]
+    direction TB
+    L1["all done (every element is on master)"]:::done
+  end
+
+  H1 --- WEB
+  H2 --- PG
+  H3 --- PGT
+  H4 --- RD
+  H8 --- WEB
+  WEB -- "5432" --> PG
+  WEB -- "6379 auth" --> RD
+  WORKER -- "5432" --> PG
+  WORKER -- "6379 auth" --> RD
+  WORKER -- "embeddings:8000" --> EMB
+  WD -- "GET web:3000/api/health" --> WEB
+  WD -- "5432" --> PG
+  WD -. "SMTP e-mail on open and clear" .-> MAIL
+  MIGRATE --> PG
+  POP --> PG
+  POP -- "6379 auth" --> RD
+  POP -- "GET embeddings:8000/health" --> EMB
+  PG --- V1
+  RD --- V2
+  EMB --- V3
+  E1 --> WEB & WORKER & MIGRATE & POP
+  E2 --> WEB & WORKER & POP
+  E3 --> E7
+  E7 -- "worker only" --> WORKER
+  E8 --> WORKER
+  E4 --> WEB
+  E5 --> WEB
+  E9 --> WD
+  MIGRATE -. "exit 0 before web, worker, watchdog and populate start" .-> WEB
+
+  classDef done fill:#e8f5e9,stroke:#2e7d32,color:#1b3d1f
+  classDef planned fill:#f2f2f2,stroke:#8a8a8a,color:#4a4a4a,stroke-dasharray:2 3

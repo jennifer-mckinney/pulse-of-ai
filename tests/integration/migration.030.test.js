@@ -8,8 +8,9 @@
 
 const fs = require('fs');
 const path = require('path');
-const request = require('supertest');
+const { useServer } = require('../helpers/server');
 const app = require('../../src/server');
+const request = useServer(app);   // one listener per file (tests/helpers/server.js)
 const { dbAll, dbGet, dbTransaction } = require('../../src/db/connection');
 const { METHODOLOGY_ERRATA } = require('../../src/config/methodology-registry');
 const { seedMethodology, seedErrata } = require('../../scripts/seed');
@@ -45,7 +46,7 @@ describe('migration 030_methodology_errata.sql (relevance@1.0.0 erratum)', () =>
     it('GET /api/methodology serves the erratum with relevance@1.0.0, and the bias and ingest ones with their versions only', async () => {
         await seedMethodology();
         await seedErrata();
-        const res = await request(app).get('/api/methodology');
+        const res = await request().get('/api/methodology');
         expect(res.status).toBe(200);
         const v100 = res.body.find(r => r.component === 'relevance' && r.version === '1.0.0');
         expect(v100.errata).toHaveLength(1);

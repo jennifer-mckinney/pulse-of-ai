@@ -33,7 +33,7 @@ const { dbGet, dbAll, dbRun } = require('../db/connection');
 // below the version's location_min_sample (bias@1.3.0): no violation.
 const INSUFFICIENT_SAMPLE = 'insufficient sample';
 
-// ─── Scope: one processing job, or a rolling window (bias@1.5.0, G2) ─────────
+// ─── Scope: one processing job, or a rolling window (since bias@1.5.0, G2) ───
 //
 // Every check takes a TARGET: a processing_jobs id (the per-cycle checks —
 // the posts whose sentiment decision was recorded under that job) or a

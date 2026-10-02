@@ -131,3 +131,29 @@ describe('TLDR: HTTP 429 with a long Retry-After goes through the one rate-limit
         expect(again.calls).toEqual([]);
     });
 });
+
+// Copilot re-review #44: holds of routes WITHOUT a validator cache (most API
+// collectors — arXiv here) are persisted too — in the one hold store
+// (rate_limited_hosts), never the HTTP cache (PR #44 unified into #45).
+describe('a route that passes no validator cache (arXiv)', () => {
+    it('persists the 429 hold in the source state; the next run (a fresh client) sends nothing', async () => {
+        const throttled = fixtureTransport([[/export\.arxiv\.org\/api/, { status: 429, headers: { 'retry-after': '3600' } }]]);
+        const first = (await runCollection({
+            slugs: ['arxiv'], triggeredBy: 'test', env: TEST_ENV, transport: throttled, now: () => Date.parse(RECORDED_AT),
+            queues: { enqueueEmbeds: async () => {}, enqueueIngestRetry: async () => {} }, collectorCtx: { sleep: () => Promise.resolve() },
+        })).sources[0];
+        expect(first).toMatchObject({ outcome: 'error', errorKind: 'rate_limited', httpStatus: 429 });
+        const st = await dbGet(`SELECT s.rate_limited_hosts FROM source_collection_state s JOIN data_sources ds ON ds.id = s.source_id WHERE ds.name = 'arxiv'`);
+        expect(st.rate_limited_hosts['export.arxiv.org']).toMatchObject({ http_status: 429, signal: 'http_429' });
+
+        await dbRun(`UPDATE source_collection_state SET last_attempt_at = NOW() - interval '1 day'
+            WHERE source_id = (SELECT id FROM data_sources WHERE name = 'arxiv')`);
+        const open = fixtureTransport([[/./, { body: 'never' }]]);
+        const second = (await runCollection({
+            slugs: ['arxiv'], triggeredBy: 'test', env: TEST_ENV, transport: open, now: () => Date.parse(RECORDED_AT),
+            queues: { enqueueEmbeds: async () => {}, enqueueIngestRetry: async () => {} }, collectorCtx: { sleep: () => Promise.resolve() },
+        })).sources[0];
+        expect(open.calls).toEqual([]);
+        expect(second).toMatchObject({ outcome: 'skipped', status: 'rate_limited' });
+    });
+});

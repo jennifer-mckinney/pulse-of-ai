@@ -4,33 +4,34 @@
 
 'use strict';
 
-const request = require('supertest');
+const { useServer } = require('../helpers/server');
 const app     = require('../../src/server');
+const request = useServer(app);   // one listener per file (tests/helpers/server.js)
 const { insertMethodologyVersions } = require('./helpers');
 
 describe('GET /api/methodology', () => {
     it('returns 200 with an array', async () => {
-        const res = await request(app).get('/api/methodology');
+        const res = await request().get('/api/methodology');
         expect(res.status).toBe(200);
         expect(Array.isArray(res.body)).toBe(true);
     });
 
     it('returns empty array when no methodology versions exist', async () => {
-        const res = await request(app).get('/api/methodology');
+        const res = await request().get('/api/methodology');
         expect(res.body).toHaveLength(0);
     });
 
     it('returns all inserted methodology versions', async () => {
         await insertMethodologyVersions();
 
-        const res = await request(app).get('/api/methodology');
+        const res = await request().get('/api/methodology');
         expect(res.body.length).toBeGreaterThanOrEqual(3);
     });
 
     it('each version has required fields including justification', async () => {
         await insertMethodologyVersions();
 
-        const res = await request(app).get('/api/methodology');
+        const res = await request().get('/api/methodology');
         const sentiment = res.body.find(m => m.component === 'sentiment');
 
         expect(sentiment).toBeDefined();
@@ -47,7 +48,7 @@ describe('GET /api/methodology', () => {
     it('justification is a non-empty string (AI Act §13 explainability)', async () => {
         await insertMethodologyVersions();
 
-        const res = await request(app).get('/api/methodology');
+        const res = await request().get('/api/methodology');
         for (const mv of res.body) {
             expect(mv.justification.length).toBeGreaterThan(0);
         }
@@ -56,7 +57,7 @@ describe('GET /api/methodology', () => {
     it('config is an object (not a raw string)', async () => {
         await insertMethodologyVersions();
 
-        const res = await request(app).get('/api/methodology');
+        const res = await request().get('/api/methodology');
         for (const mv of res.body) {
             expect(typeof mv.config).toBe('object');
         }
@@ -74,7 +75,7 @@ describe('GET /api/methodology', () => {
             RETURNING id`
         );
 
-        const res = await request(app).get('/api/methodology');
+        const res = await request().get('/api/methodology');
         
         // Should not include the deprecated version
         expect(res.body).not.toContainEqual(
@@ -85,7 +86,7 @@ describe('GET /api/methodology', () => {
     it('returns versions ordered by component ASC, then effective_from DESC', async () => {
         await insertMethodologyVersions();
 
-        const res = await request(app).get('/api/methodology');
+        const res = await request().get('/api/methodology');
         
         // Check that all results are returned in groups by component
         let lastComponent = null;

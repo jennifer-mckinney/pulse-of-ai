@@ -5,8 +5,9 @@
 
 'use strict';
 
-const request = require('supertest');
+const { useServer } = require('../helpers/server');
 const app     = require('../../src/server');
+const request = useServer(app);   // one listener per file (tests/helpers/server.js)
 const {
     insertSource, insertJob, insertMethodologyVersions,
     insertPostWithFullPipeline, insertPostWithRelevanceOnly,
@@ -14,7 +15,7 @@ const {
 
 describe('GET /api/themes', () => {
     it('returns 200 with an empty array when no relevance results exist', async () => {
-        const res = await request(app).get('/api/themes');
+        const res = await request().get('/api/themes');
         expect(res.status).toBe(200);
         expect(res.body).toEqual([]);
     });
@@ -44,7 +45,7 @@ describe('GET /api/themes', () => {
         await insertPostWithFullPipeline(social, jobId, mvIds,
             { indicator: 'negative', externalId: 'th-j3', keywords: ['jobs', 'ethics'] });
 
-        const res = await request(app).get('/api/themes');
+        const res = await request().get('/api/themes');
         expect(res.status).toBe(200);
 
         // "ethics" appears on only 2 posts → excluded by the volume >= 3 noise guard.
@@ -85,7 +86,7 @@ describe('GET /api/themes', () => {
         await insertPostWithFullPipeline(news, jobId, mvIds,
             { indicator: 'neutral', externalId: 'th-s3', keywords: ['safety'] });
 
-        const res = await request(app).get('/api/themes');
+        const res = await request().get('/api/themes');
         expect(res.status).toBe(200);
         expect(res.body).toHaveLength(1);
         expect(res.body[0]).toMatchObject({
@@ -117,7 +118,7 @@ describe('GET /api/themes', () => {
                 { externalId: `th-du${i}`, keywords: ['divide'] });
         }
 
-        const res = await request(app).get('/api/themes');
+        const res = await request().get('/api/themes');
         expect(res.status).toBe(200);
         expect(res.body).toEqual([
             {
@@ -144,7 +145,7 @@ describe('GET /api/themes', () => {
                 { indicator: 'positive', externalId: `th-dd${i}`, keywords: ['dup', 'dup'] });
         }
 
-        const res = await request(app).get('/api/themes');
+        const res = await request().get('/api/themes');
         expect(res.status).toBe(200);
         expect(res.body).toEqual([
             {
@@ -169,7 +170,7 @@ describe('GET /api/themes', () => {
         await insertPostWithFullPipeline(social, jobId, mvIds,
             { externalId: 'th-n2', keywords: ['niche'] });
 
-        const res = await request(app).get('/api/themes');
+        const res = await request().get('/api/themes');
         expect(res.status).toBe(200);
         expect(res.body).toEqual([]);
     });
@@ -185,7 +186,7 @@ describe('GET /api/themes', () => {
                 { indicator: 'negative', externalId: `th-fut${i}`, keywords: ['future'] });
         }
 
-        const res = await request(app).get('/api/themes');
+        const res = await request().get('/api/themes');
         expect(res.status).toBe(200);
         expect(res.body).toHaveLength(1);
         expect(res.body[0]).toMatchObject({
@@ -211,7 +212,7 @@ describe('GET /api/themes', () => {
             }
         }
 
-        const res = await request(app).get('/api/themes');
+        const res = await request().get('/api/themes');
         expect(res.status).toBe(200);
         expect(res.body.length).toBeLessThanOrEqual(12);
     });
@@ -230,7 +231,7 @@ describe('GET /api/themes', () => {
                 { externalId: `th-sort-b${i}`, keywords: ['beta'] });
         }
 
-        const res = await request(app).get('/api/themes');
+        const res = await request().get('/api/themes');
         expect(res.status).toBe(200);
         expect(res.body.length).toBe(2);
         
@@ -263,7 +264,7 @@ describe('GET /api/themes', () => {
                 externalId: 'tw-c0', keywords: ['agents', 'misc'],
             });
 
-            const res = await request(app).get('/api/themes');
+            const res = await request().get('/api/themes');
             const agents = res.body.find(t => t.keyword === 'agents');
             expect(agents).toBeDefined();
             // keyword first, then co-matched keywords by count DESC
@@ -281,7 +282,7 @@ describe('GET /api/themes', () => {
                 });
             }
 
-            const res = await request(app).get('/api/themes');
+            const res = await request().get('/api/themes');
             expect(res.body[0].words).toEqual(['solo']);
         });
     });

@@ -12,8 +12,9 @@
 'use strict';
 
 const crypto = require('crypto');
-const request = require('supertest');
+const { useServer } = require('../helpers/server');
 const app = require('../../src/server');
+const request = useServer(app);   // one listener per file (tests/helpers/server.js)
 const { dbGet, dbAll, dbRun } = require('../../src/db/connection');
 const { METHODOLOGY_VERSIONS, CURRENT_VERSIONS } = require('../../src/config/methodology-registry');
 const { runBiasWindow, insufficientSampleReport, CHECKS } = require('../../src/pipeline/bias-window');
@@ -220,11 +221,11 @@ describe('insufficient-sample share (principal #11)', () => {
     it('GET /api/bias/latest and GET /api/health serve the report', async () => {
         await registerBias('1.6.0');
         await seedCycleRows();
-        const bias = await request(app).get('/api/bias/latest');
+        const bias = await request().get('/api/bias/latest');
         expect(bias.status).toBe(200);
         expect(bias.body.insufficient_sample.per_cycle.last_24h.location_concentration)
             .toEqual({ assessments: 3, insufficient: 2, share: 2 / 3 });
-        const health = await request(app).get('/api/health');
+        const health = await request().get('/api/health');
         expect(health.status).toBe(200);
         expect(health.body.bias_sample.per_cycle.last_24h.negative_dominance)
             .toEqual({ assessments: 1, insufficient: 1, share: 1 });
@@ -232,7 +233,7 @@ describe('insufficient-sample share (principal #11)', () => {
     });
 
     it('GET /api/bias/latest serves the report with no completed job too', async () => {
-        const res = await request(app).get('/api/bias/latest');
+        const res = await request().get('/api/bias/latest');
         expect(res.body.job_id).toBeNull();
         expect(res.body.insufficient_sample.per_cycle.last_7d.location_concentration.share).toBeNull();
     });
@@ -240,7 +241,7 @@ describe('insufficient-sample share (principal #11)', () => {
     it('GET /api/bias/history counts insufficient-sample rows apart from passes', async () => {
         await registerBias('1.6.0');
         await seedCycleRows();
-        const res = await request(app).get('/api/bias/history');
+        const res = await request().get('/api/bias/history');
         expect(res.body.insufficient_count).toBe(3);
         const loc = res.body.pass_summary.find(p => p.assessment_type === 'location_concentration');
         expect(loc).toMatchObject({ count: 3, insufficient: 2 });
@@ -267,7 +268,7 @@ describe('insufficient-sample share (principal #11)', () => {
         expect(stored.group_value).toBe('insufficient sample');
         expect(stored.metric_value).toBeCloseTo(1.3, 5);
 
-        const res = await request(app).get('/api/bias/history');
+        const res = await request().get('/api/bias/history');
         const parity = res.body.pass_summary.find(p => p.assessment_type === 'platform_sentiment_parity');
         expect(parity).toMatchObject({ severity: 'pass', count: 1, insufficient: 1, latest_insufficient: true });
         expect(parity.detail).toBe('0 passing checks and 1 with an insufficient sample in the window · '
@@ -280,7 +281,7 @@ describe('insufficient-sample share (principal #11)', () => {
         const PARITY = { assessmentType: 'platform_sentiment_parity', groupField: 'platform', metricName: 'max_comparative_diff', threshold: 0.3 };
         await insertBiasAssessment(job, { ...PARITY, groupValue: 'insufficient sample', metricValue: 1.3, createdAt: new Date(Date.now() - 2 * 3600 * 1000) });
         await insertBiasAssessment(job, { ...PARITY, groupValue: 'developer vs forums', metricValue: 0.12, createdAt: new Date(Date.now() - 3600 * 1000) });
-        const res = await request(app).get('/api/bias/history');
+        const res = await request().get('/api/bias/history');
         const parity = res.body.pass_summary.find(p => p.assessment_type === 'platform_sentiment_parity');
         expect(parity).toMatchObject({ count: 2, insufficient: 1, latest_insufficient: false });
         expect(parity.detail).toBe('1 passing check and 1 with an insufficient sample in the window · '

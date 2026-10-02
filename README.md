@@ -1,167 +1,123 @@
 # Pulse of AI
 
-**Global real-time AI discourse monitoring dashboard with ethical monitoring, audit trail, and bias detection.**
+**How the world talks about AI, city by city, with every score traceable to the model that made it.**
 
-Pulse of AI aggregates AI-related posts from the top 50 online sources across 7 categories, applies a multi-stage NLP pipeline, and surfaces findings through an interactive Mapbox globe. Every inference — sentiment score, relevance rating, discourse quality score — is written to an immutable audit log with full provenance so any decision is traceable and defensible.
+Pulse of AI collects public, AI-related posts from a registry of 52 global online sources in 8 categories (social, news, academic, policy, non-profit, developer, forums, blogs). It scores each post for sentiment, AI relevance and discourse quality, checks the results for bias, and shows the trailing hour on a scroll-driven dot globe: an eleven-part guided story, then a free-explore mode. Every score has an audit receipt ("why?") that names the model, its registered methodology version and settings, and explains the decision for four audiences.
 
 ---
 
-## Table of Contents
+## Contents
 
-- [Features](#features)
+- [Status and scope](#status-and-scope)
+- [Quick start](#quick-start)
+- [Turning on live collection](#turning-on-live-collection)
+- [Live and demo data](#live-and-demo-data)
+- [Alerting](#alerting)
 - [Architecture](#architecture)
-- [Tech Stack](#tech-stack)
-- [Stand it up](#stand-it-up)
-- [Quick Start](#quick-start)
-- [Environment Variables](#environment-variables)
-- [Database](#database)
-- [API Reference](#api-reference)
-- [Pipeline](#pipeline)
-- [Python Embeddings Service](#python-embeddings-service)
+- [API](#api)
+- [Development](#development)
 - [Testing](#testing)
-- [Project Structure](#project-structure)
+- [Security and privacy](#security-and-privacy)
+- [Responsible-AI audit trail](#responsible-ai-audit-trail)
+- [Project documents](#project-documents)
+- [Contributing](#contributing)
 - [License](#license)
 
 ---
 
-## Features
+## Status and scope
 
-| Capability | Detail |
-|---|---|
-| **Global coverage** | Top 50 sources across 7 categories (social, news, academic, policy, dev, blog, non-profit) |
-| **Near-real-time refresh** | 2–3 minute cron cycle; `POST /api/refresh` for on-demand |
-| **Sentiment analysis** | AFINN-based scoring, versioned methodology |
-| **AI relevance filtering** | Keyword + embedding hybrid scoring |
-| **Discourse quality** | Deliberative Quality Index (DQI) + semantic clustering |
-| **Bias monitoring** | 3-layer bias stack; demographic-parity and equalized-odds alerts |
-| **Immutable audit trail** | Every inference logged with model version, parameters, and plain-English justification |
-| **Cross-platform correlation** | Verb-noun pseudonymous IDs — no PII, no re-identification |
-| **Vector search** | pgvector semantic similarity via `POST /api/query` |
-| **Layered retention** | 3-month full detail → monthly compaction → permanent topic rollups |
-| **GDPR / AI Act ready** | Data minimisation, lifecycle logging, AI Act methodology documentation |
+What works today, stated plainly:
 
----
+- **The registry has 52 sources** (`src/config/source-registry.js`, which matches the workbook of record `docs/requirements/Top_50_Global_Online_Sources.xlsx` (Rev. 4, exported as `docs/requirements/Top_52_Global_Online_Sources.rev4.csv`), ADR 0001). Each resolves at runtime to a gate status: `collecting`, `awaiting_key`, `awaiting_approval`, `awaiting_licence`, `blocked` or `disabled`.
+- **Live collection is off on a fresh clone.** Without `COLLECTOR_CONTACT_URL` every source is `disabled` except the 4 `blocked` ones, which report `blocked` until they can collect, which takes an official permission, the contact URL and a named approval (`GATE_APPROVED_BY`). A kill switch reports them `disabled`, and so does a recorded permission without the contact URL. The page runs on clearly labelled demo data. See [Turning on live collection](#turning-on-live-collection).
+- **With the contact URL set, 23 sources collect with no keys.** With the contact URL, the operator acknowledgement for the 8 permission-gated news feeds and a named approval (`GATE_APPROVED_BY`, decision G5), **31 collect**. The other 21 wait for something only their operator can provide, and every one of them also needs the named approval to open:
 
-## Architecture
+  | Status | Count | Sources | What opens them |
+  |---|---|---|---|
+  | awaiting_key | 4 | YouTube, SpringerLink, Google Scholar (alert mailbox), Congress.gov | a free self-service key |
+  | awaiting_approval | 8 | WhatsApp, Instagram, Facebook (Meta Content Library), TikTok Research API, ScienceDirect, JSTOR, CFR, Reddit | a researcher-program or publisher approval |
+  | awaiting_licence | 5 | X, CNN, AP, Reuters, IEEE Xplore | a paid licence |
+  | blocked | 4 | WeChat, Telegram, ResearchGate, Cato | no compliant access today; each has a collector that refuses to run without an official permission |
 
-```
-┌──────────────────────────────────────────┐
-│     DATA SOURCES — TOP 50 GLOBAL         │
-│  Social · News · Academic · Policy       │
-│  Dev · Blog · Non-profit                 │
-└───────────────┬──────────────────────────┘
-                │
-                ▼
-┌──────────────────────────────────────────┐
-│  INGESTION  (src/pipeline/ingest.js)     │
-│  Strip PII → SHA-256 dedup → raw_posts   │
-└───────────────┬──────────────────────────┘
-                │  BullMQ queue
-                ▼
-┌──────────────────────────────────────────┐
-│  NLP PIPELINE                            │
-│  sentiment → relevance → discourse       │
-│  embeddings (Python/FastAPI) →           │
-│  correlation                             │
-└───────────────┬──────────────────────────┘
-                │
-                ▼
-┌──────────────────────────────────────────┐
-│  PostgreSQL 16 + pgvector                │
-│  raw_posts · sentiment_scores            │
-│  discourse_scores · audit_log            │
-│  bias_assessments · methodology_versions │
-└───────────────┬──────────────────────────┘
-                │
-                ▼
-┌──────────────────────────────────────────┐
-│  EXPRESS API  (src/server.js)            │
-│  REST endpoints + WebSocket updates      │
-└───────────────┬──────────────────────────┘
-                │
-                ▼
-┌──────────────────────────────────────────┐
-│  FRONTEND  (public/)                     │
-│  Mapbox GL JS globe + narrative panel    │
-└──────────────────────────────────────────┘
-```
-
-For a full diagram see [`docs/diagrams/architecture.png`](docs/diagrams/architecture.png).  
-For the complete technical specification see [`docs/TECHNICAL_SPEC.md`](docs/TECHNICAL_SPEC.md).
+- **Reddit (#52) is built but awaiting approval.** It uses only the approved Reddit Data API and stays closed until Reddit approves the app and all four `REDDIT_*` variables are set. Reddit post text is blanked 48 hours after collection, or sooner when the 6-hourly re-check finds the post deleted or removed upstream, while its scores and audit rows are kept (ADR 0001 rulings 8 and 9).
+- **Demo data is always labelled.** When the trailing hour has no live posts, fictional demo posts go through the real pipeline and the page says DEMO (details in [Live and demo data](#live-and-demo-data)).
+- **Maintenance runs on its own.** The worker removes post text past its source's window every 5 minutes (Reddit 48 h; every other source, the Guardian included, the 90-day detail window, except YouTube and TikTok at 30 days), and once a day compacts whole months past the detail window into rollups, rolls up run history and runs the bias checks over a rolling 24 h window. Processing-job records are kept permanently.
+- **Alerting runs outside the worker.** The `watchdog` service raises critical alerts on the dashboard, and by e-mail when SMTP is configured, when the web API, the database, Valkey, the worker or maintenance fail (see [Alerting](#alerting)).
 
 ---
 
-## Tech Stack
+## Quick start
 
-| Layer | Technology |
-|---|---|
-| Runtime | Node.js (Express) |
-| Database | PostgreSQL 16 + pgvector |
-| Job queue | BullMQ + Valkey 8 (Redis protocol, BSD-3-Clause) |
-| NLP | `natural`, `sentiment` (AFINN) |
-| Embeddings | Python 3 / FastAPI / sentence-transformers |
-| Frontend | Vanilla JS, Mapbox GL JS |
-| Tests | Jest 29, Supertest |
-| Containers | Docker Compose |
-
----
-
-## Stand it up
-
-One command builds and starts the whole solution (frontend, API, workers, embeddings service, databases), fills it with data and checks that it works:
+One command builds and starts the whole solution (frontend, API, worker, embeddings service, databases), fills it with data and checks that it works:
 
 ```bash
 git clone https://github.com/jennifer-mckinney/pulse-of-ai.git
 cd pulse-of-ai
-bash scripts/standup.sh  # needs Bash + Docker only
-# or: npm run standup    # the same script, launched by npm (also needs Node.js/npm)
+npm run standup          # or: bash scripts/standup.sh
 ```
 
 When it finishes, open **http://localhost:3000**: the globe, the eleven chapters with their numbers, and a "why?" receipt on any post that opens its real audit trail.
 
 ### Prerequisites
 
-- Docker Desktop (macOS / Windows) or Docker Engine with the Compose plugin (Linux), with the daemon running. **Docker Compose 2.39.0 or newer** (`docker compose version`): `docker-compose.yml` uses `build.provenance` / `build.sbom`, which Compose added in 2.39.0, and older versions reject the file. Standup checks the version and stops with upgrade instructions if it is too old. (The worker's `env_file` uses the long syntax with `required: true`, which needs Compose 2.24 or newer and is covered by that minimum: a missing `.env`, or a wrong `PULSE_ENV_FILE`, stops `docker compose --profile full up` with "env file … not found" instead of starting a worker whose keyed sources are all silently closed.)
-- **Bash 3.2 or newer.** macOS's `/bin/bash` (3.2) and any Linux bash work. On **Windows**, run it from **WSL 2** (recommended, with Docker Desktop's WSL integration turned on) or **Git Bash**. PowerShell and `cmd.exe` cannot run the script themselves: `npm run standup` from them works only when one of those `bash` executables is on `PATH`. Under Git Bash, NTFS does not enforce the `chmod 600` standup applies to `.env`, so restrict that file with Windows permissions yourself.
-- `curl` (used by the smoke check), plus the standard tools every macOS, Linux, WSL and Git Bash install has: `awk`, `sed`, `grep`, `find`, and `openssl` (or `/dev/urandom` with `od`) for the generated secrets.
+- **Docker Compose 2.39.0 or newer** (`docker compose version`) with Docker Desktop (macOS / Windows) or Docker Engine (Linux), and the daemon running. `docker-compose.yml` uses `build.provenance` / `build.sbom`, which Compose added in 2.39.0; standup checks the version and stops with upgrade instructions if it is older.
+- **Bash 3.2 or newer.** macOS `/bin/bash` and any Linux bash work. On **Windows**, run it from **WSL 2** (recommended, with Docker Desktop's WSL integration on) or **Git Bash**. PowerShell and `cmd.exe` cannot run the script: `npm run standup` from them works only when one of those `bash` executables is on `PATH`. Under Git Bash, NTFS does not enforce the `chmod 600` standup applies to `.env`, so restrict that file with Windows permissions yourself.
+- **Node.js and npm, for the `npm run` wrapper only.** `npm run standup` just launches `bash scripts/standup.sh`; no `npm install` is needed, and `bash scripts/standup.sh` works without Node at all. Node and Python run only inside the containers.
+- `curl`, plus `awk`, `sed`, `grep`, `find` and `openssl` (or `/dev/urandom` with `od`), which every macOS, Linux, WSL and Git Bash install has.
 
-Two ways to start it, same script:
+### What standup does
 
-| Command | Needs on the host |
-|---|---|
-| `bash scripts/standup.sh` | Bash, Docker (Compose 2.39.0+), `curl` |
-| `npm run standup` | all of the above, plus Node.js and npm (npm only launches `bash scripts/standup.sh`; no `npm install` needed) |
+1. Creates `.env` from `.env.example` if you don't have one, generating strong random `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `AUDIT_HASH_KEY` and `CORRELATION_SALT` values. It never prints them. An existing `.env` keeps its values: only missing keys are added (standup refuses to add secrets to a group- or world-writable file), and the file is set to mode 600. If a secret is empty or still has its `.env.example` placeholder, standup stops and names it. Run on a terminal, it offers to set the two collection settings described below.
+2. Builds two images: `pulse-of-ai/app` (Node 22; one image for web, worker, watchdog, migrate and populate) and `pulse-of-ai/embeddings` (Python 3.13, FastAPI and sentence-transformers, CPU only). Both run as non-root users.
+3. Starts the compose `full` profile. A one-shot `migrate` job applies the 50 migrations (001–066; the numbering has gaps) and the seed; web, the worker and the watchdog (and populate, in the demo profile) start only after it exits successfully.
+4. Waits for health, with timeouts, and prints a failing service's logs.
+5. Populates data: one real collection run, then demo data only if the trailing hour has no live posts, and starts the `populate` demo-fallback service.
+6. Runs a smoke check: the API, the page and the page's own data calls, population counts, the worker heartbeat, one receipt with its four audience views and bias lineage, and `npm run replay` on that post, which must PASS. It ends with a population summary that labels the trailing hour LIVE, MIXED, DEMO or NONE (NO DATA when nothing is stored at all).
 
-Neither runs Node.js or Python on the host: those run only inside the containers. The same goes for teardown (`bash scripts/teardown.sh` or `npm run teardown`). The hints the scripts print use whichever form you started them with.
+Re-running is safe: images come from the build cache, running containers are kept, and a second demo batch is skipped while the trailing hour is full. Flags: `npm run standup -- --help`. `--yes` never prompts, `--no-build` skips the image build, `--demo` adds a fresh demo batch. Timeouts: `STANDUP_TIMEOUT` (core services, default 300 s) and `STANDUP_EMBEDDINGS_TIMEOUT` (first model download, default 900 s).
 
-The script checks Docker, the Compose version, the daemon and `curl` first, and prints how to fix anything that is missing.
-
-### What it does
-
-1. Creates `.env` from `.env.example` if you don't have one, generating strong random `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `AUDIT_HASH_KEY` and `CORRELATION_SALT` values. It never prints them. An existing `.env` keeps its values: only keys that are missing get added (standup refuses to add secrets to a group- or world-writable file), and the file is set to mode 600. If a secret is empty or still has its `.env.example` placeholder, standup stops and names it.
-2. Builds two images: `pulse-of-ai/app` (Node 22; one image for web, worker, migrate and populate) and `pulse-of-ai/embeddings` (Python 3.13, FastAPI and sentence-transformers, CPU only). Both run as non-root users.
-3. Starts the compose `full` profile. A one-shot `migrate` job applies migrations 001–015 and the seed, and web and the worker start only after it exits successfully.
-4. Waits for health, with timeouts. If a service fails, its logs are printed.
-5. Populates data (see below) and starts the `populate` feed.
-6. Runs a smoke check. It looks at the API, the page, and the page's own data calls (globe, themes, bias, ribbon, drill-down). It counts posts, audit decisions, bias assessments and embeddings, opens one receipt and checks its four audience views and bias lineage, and runs `npm run replay` on that post, which must PASS. It ends with a population summary.
-
-`GET /api/health` also reports `redis.reachable` and `worker.alive` / `worker.last_heartbeat`, and every container's logs rotate (json-file, 5 × 10 MB). The `watchdog` service polls it and alerts when something is wrong (see [Alerting](#alerting-watchdog-dashboard-e-mail)).
-
-Re-running is safe. The images come from the build cache, running containers are kept, and a second population batch is skipped while the trailing hour is still full. If an earlier run had no embeddings (the model could not be downloaded), a re-run with the embeddings service healthy queues embed jobs for every trailing-hour demo post that has none and waits for them (up to 180 s) before the smoke check.
+The first start downloads the ~90 MB `all-MiniLM-L6-v2` model into the `hf_cache` volume. If that fails (offline, proxy), standup says so and carries on: posts are still scored and audited, but they get no embeddings. Fix the network and run standup again: the re-run backfills embeddings for the trailing hour's demo posts; live posts collected while the service was down stay without one.
 
 ### What runs where
 
 | Service | Host port (override) | Role |
 |---|---|---|
 | `web` | `3000` (`WEB_PORT`) | Express API and the static frontend (`public/`) |
-| `worker` | none | Collection scheduler + `collect.{rss,api,bulk}` consumers (live data from the 52-source registry), ingest retries, embed, correlate (`src/workers/start.js`). The only role holding collector credentials: it loads the env file (`PULSE_ENV_FILE`, default `.env`) whole through Compose `env_file`, while web gets only a "set" marker per credential. Healthy while its Redis heartbeat is fresh; `docker stop` gives it 180 s to finish in-flight jobs |
-| `embeddings` | none (compose network only: `embeddings:8000`) | `/embeddings` and `/health`, unauthenticated, so never published; standup checks it with `compose exec`. The model downloads once into the `hf_cache` volume |
-| `watchdog` | none | External alerting (see [Alerting](#alerting-watchdog-dashboard-e-mail)). Polls `/api/health` every 2 minutes from its own container, so it still alerts when the worker is dead; writes critical alerts to the database and e-mails them. Holds only the database password and the SMTP settings; the only role that gets `SMTP_PASSWORD` |
-| `populate` | none | Demo fallback. Adds fictional posts every 150 s only while the trailing hour has no live posts (profile `demo`) |
-| `migrate` | none | One-shot job: migrations and seed |
-| `postgres` | `5434` in `.env` (`POSTGRES_PORT`) | PostgreSQL 16 + pgvector (`postgres_data` volume) |
-| `postgres_test` | `5433` (`POSTGRES_TEST_PORT`) | Test database (not used by the running app) |
-| `redis` | `6379` (`REDIS_PORT`) | Valkey 8, the BullMQ queue backend (`valkey_data` volume). It speaks the Redis protocol, so the service name and the `REDIS_*` variables keep that name. Password required (`REDIS_PASSWORD`) |
+| `worker` | none | Collection scheduler and `collect.{rss,api,bulk}` consumers, refresh collections, scoring (the `ingest` queue), cycle close and bias checks, embed jobs, the `maintenance` schedules (retention, compaction, run rollups, the rolling bias window, terms snapshots) and Reddit maintenance (`src/workers/start.js`). The only role holding collector credentials: it loads the env file (`PULSE_ENV_FILE`, default `.env`) whole through Compose `env_file`, while web gets only a "set" marker per credential. Healthy while its heartbeat is fresh; `docker stop` gives it 180 s to finish in-flight jobs |
+| `embeddings` | none (compose network only, `embeddings:8000`) | `POST /embeddings` and `GET /health`, unauthenticated, so never published |
+| `watchdog` | none | External alerting (see [Alerting](#alerting)). Polls `/api/health` every 2 minutes from its own container, so it still alerts when the worker is dead; writes critical alerts to the database and e-mails them. Holds only the database password and the SMTP settings; the only role that gets `SMTP_PASSWORD` |
+| `populate` | none | Demo feed (profile `demo`): stores and scores a fictional batch every 150 s, only while the trailing hour has no live posts (not the page's bundled fallback) |
+| `migrate` | none | One-shot: migrations and seed |
+| `postgres` | `POSTGRES_PORT` (`5434` in `.env.example`; `5432` if unset) | PostgreSQL 16 + pgvector (`postgres_data` volume) |
+| `postgres_test` | `5433` (`POSTGRES_TEST_PORT`) | Test database, not used by the running app |
+| `redis` | `6379` (`REDIS_PORT`) | Valkey 8, the BullMQ queue backend and the worker heartbeat (`valkey_data` volume). It speaks the Redis protocol, so the service name and the `REDIS_*` variables keep that name. Password required (`REDIS_PASSWORD`) |
+
+Every published port binds to `127.0.0.1` by default (`PULSE_BIND_ADDR`). Setting `PULSE_BIND_ADDR=0.0.0.0` exposes all of them to your network, databases included. `GET /api/health` reports `redis.reachable` and `worker.alive`, the `watchdog` service polls it and alerts when something is wrong, and every container's logs rotate (json-file, 5 × 10 MB). The worker's `env_file` uses the long syntax with `required: true` (Compose 2.24 or newer, covered by the 2.39.0 minimum): a missing `.env`, or a wrong `PULSE_ENV_FILE`, stops `docker compose --profile full up` with "env file … not found" instead of starting a worker whose keyed sources are all silently closed.
+
+To run a second stack beside this one, give it its own project name and ports:
+
+```bash
+COMPOSE_PROJECT_NAME=pulse-demo WEB_PORT=3200 \
+POSTGRES_PORT=5534 POSTGRES_TEST_PORT=5533 REDIS_PORT=6479 npm run standup
+```
+
+### Tear it down
+
+```bash
+npm run teardown                    # stop and remove containers, keep the data volumes
+npm run teardown -- --purge         # also delete the volumes (database, Valkey, model cache); asks first
+npm run teardown -- --purge --yes   # non-interactive purge
+bash scripts/teardown.sh --purge    # the same without Node.js/npm on the host
+```
+
+Teardown acts on one compose project: `COMPOSE_PROJECT_NAME` if set, otherwise the one in `.env`, otherwise `pulse-of-ai`, and says which. If the name comes from your shell and differs from `.env`, it asks you to type it before stopping anything. Orphan containers are left alone. Tearing down `pulse-of-ai` also stops `postgres_test` (port 5433), which the jest suite uses, and teardown warns first.
+
+### Upgrading an existing database
+
+**Take a `pg_dump` before the first worker start after upgrading.** The worker's maintenance job runs as soon as it starts: it permanently removes post text past each source's window (a platform's terms where they set one, such as Reddit's 48 h; otherwise the 90-day detail window, `RETENTION_DETAIL_DAYS`) and compacts every whole month older than that into rollups. On a database that has not run it before, that is all old data at once, and it cannot be undone. Back up first, before `npm run standup` (or before starting the worker by hand): `docker compose up -d postgres`, then `docker compose exec postgres pg_dump -U pulse_user pulse_of_ai > backup-before-upgrade.sql`.
+
+Standup applies pending migrations and the idempotent seed on every run. For host-side development, run `npm run migrate && npm run seed` after pulling. Migrations are forward-only; take a backup first if you may need to go back: `docker compose exec postgres pg_dump -U pulse_user pulse_of_ai > backup.sql`. Postgres reads `POSTGRES_PASSWORD` only when it first creates the database, so to change it on an existing volume run `\password pulse_user` in `docker compose exec postgres psql -U pulse_user -d pulse_of_ai` and put the same value in `.env` (or start over with `npm run teardown -- --purge`, which deletes the data).
 
 **Upgrading a stack that ran Redis 7.** The queue store is now Valkey 8 on a new `valkey_data` volume. Redis 7.4 writes RDB format 12, which Valkey 8 will not load, so the old `redis_data` volume is left unused rather than reused. Schedules need no migrating: the worker re-registers every schedule when it starts. Jobs still queued at the switch are dropped, though, and a later collection does not fetch their items again (stored posts are deduplicated):
 
@@ -169,42 +125,49 @@ Re-running is safe. The images come from the build cache, running containers are
 2. **Upgrade within 24 hours of the last collection.** Dropped scoring jobs are recovered only by the unscored-post sweep, which looks back 24 hours; their collection cycles close at the 15-minute hard cap. Dropped embed jobs are not recovered at all.
 3. Stop the stack cleanly (`docker stop` gives the worker 180 s to finish in-flight jobs), bring it back up, and once it is healthy remove the old volume with `docker volume rm <project>_redis_data`.
 
-Every published port (web and the databases and redis) binds to `127.0.0.1` by default (`PULSE_BIND_ADDR`). Setting `PULSE_BIND_ADDR=0.0.0.0` exposes all of them to your network, databases included. To run a second stack beside this one, give it its own project name and ports:
+---
+
+## Turning on live collection
+
+Collection goes out under the operator's identity, so each operator makes these choices themselves (ADR 0001, decision D1 "Off for others, on for you"). Both values go in your `.env`, never in `.env.example` or the compose file:
 
 ```bash
-COMPOSE_PROJECT_NAME=pulse-demo WEB_PORT=3200 \
-POSTGRES_PORT=5534 POSTGRES_TEST_PORT=5533 REDIS_PORT=6479 npm run standup
+# A page where publishers can reach YOU (your repository or a contact page).
+# It goes into every request's User-Agent. Without it every source is disabled.
+COLLECTOR_CONTACT_URL=https://github.com/<you>/pulse-of-ai
+
+# Optional. Opens the 8 permission-gated news feeds (BBC, NYT, Guardian,
+# Al Jazeera, WSJ, NBC News, Washington Post, Ars Technica). Their RSS is
+# public, but their terms require permission for automated analysis; setting
+# this records that YOU accept that legal risk.
+PERMISSION_GATED_FEEDS_ACCEPTED_BY="<your name> <YYYY-MM-DD>"
+
+# Needed to open ANY gated source: one that needs a key, an approval
+# reference, a licence or the acknowledgement above (decision G5).
+GATE_APPROVED_BY="<name> <YYYY-MM-DD>"
 ```
 
-`npm run docker:up` hasn't changed. It still starts only `postgres`, `postgres_test` and `redis`, for host-side development.
+Run interactively, `npm run standup` asks for the first two; `--yes` never asks. Standup never asks for `GATE_APPROVED_BY` or fills it in: set it by hand in `.env`.
 
-### Live vs demo data
+**Every gated source needs a named approval** (ADR 0001, decision G5). A source that needs a key, an approval reference, a licence or the acknowledgement above opens only when `GATE_APPROVED_BY` names the person who approved opening it (a name, then a real date). Until then it stays closed with the status reason "awaiting named approval"; keyless sources are unaffected. The value is recorded as the approver of every gate opening in the append-only `source_gate_events` table, and `npm run source:disable | enable | reset` refuse to run without it (it is their recorded actor, not your shell's `$USER`).
 
-**Standup collects live data first.** The source registry of record is the workbook's 52 sources (`src/config/source-registry.js`, ADR 0001 in `docs/adr/`; Rev. 4 added Reddit as #52 in Forums). The population step runs one real collection job; the worker then collects every *collecting* source on its 2–3 minute schedule (stretched where a documented rate limit needs it), and `POST /api/refresh` enqueues a real collection job to the worker (409 while one is running; `REFRESH_TOKEN` required when the site is bound beyond loopback or sits behind a reverse proxy). Per-source status (collecting, awaiting key / approval / licence, blocked, disabled) is in the health drawer, in `GET /api/sources` and in the smoke check. `.env.example` lists every key, where to get it, and the per-source kill switches (`SOURCE_<SLUG>_ENABLED=false`).
+With the contact URL set, 23 sources collect, whether or not the acknowledgement is set. With the contact URL, the acknowledgement and `GATE_APPROVED_BY`, 31 collect. A key, approval reference or licence you add later opens its source only while `GATE_APPROVED_BY` is set. `.env.example` lists every source key and where to get it, and documents the per-source kill switch `SOURCE_<SLUG>_ENABLED=false` (slugs are in `src/config/source-registry.js`).
 
-**Live collection is off on a fresh clone** (ADR 0001, decision D1 "Off for others, on for you"). `COLLECTOR_CONTACT_URL` ships empty: without it every source is disabled and standup populates demo data only, and says so. Collection goes out under the operator's identity, so each operator sets their own contact URL — a page where publishers can reach them. The 8 permission-gated news feeds (BBC, NYT, Guardian, Al Jazeera, WSJ, NBC News, Washington Post, Ars Technica) additionally need `PERMISSION_GATED_FEEDS_ACCEPTED_BY="<your name> <YYYY-MM-DD>"`, which records that you accept the legal risk of reading them (their terms require permission for automated analysis). Run on a terminal, `npm run standup` asks for both; `npm run standup -- --yes` never asks. With the contact URL alone, 23 of the 51 sources collect with no keys; with both and a named approval (below), 31.
-
-**Every gated source needs a named approval** (ADR 0001, decision G5). A source that needs a key, an approval reference, a licence or the acknowledgement above opens only when `GATE_APPROVED_BY="<name> <YYYY-MM-DD>"` names the person who approved opening it. Until then it stays closed with the status reason "awaiting named approval"; keyless sources are unaffected. Set it by hand in `.env`; standup never asks for it or fills it in. It is recorded as the approver of every gate opening, and `npm run source:disable | enable | reset` refuse to run without it (it is their recorded actor, not your shell's `$USER`).
-
-**Jennifer's deployment** sets both values in her own `.env` (never in `.env.example` or the compose file):
+After changing `.env`, recreate the containers (`docker compose up -d worker web`; `docker restart` does not re-read `.env`). To stop a source at once without touching env:
 
 ```bash
-COLLECTOR_CONTACT_URL=https://github.com/jennifer-mckinney/pulse-of-ai
-PERMISSION_GATED_FEEDS_ACCEPTED_BY="Jennifer McKinney 2026-09-29"
+npm run source:disable -- <slug> --reason "<why>"   # database kill switch, every process, before the next run
+npm run source:enable  -- <slug>
+npm run source:reset   -- <slug> --note "<why>"     # clear the refused state and its 24 h probation after a 401/403/451 or robots refusal
 ```
 
-Demo data is only the **fallback**: when collection yields nothing in the trailing hour (offline, or every source switched off), fictional posts fill it, and the `populate` loop stays idle while live posts exist. The smoke-check summary labels the hour LIVE, MIXED or DEMO, per category. `npm run collect` runs one collection job by hand; `npm run collect:smoke` live-fetches every keyless route once without writing anything.
+All three need `GATE_APPROVED_BY` set, and record it as the actor.
 
-When demo data is used, it is honest about what it is:
+Env kill switches also exist: `SOURCE_<SLUG>_ENABLED=false`, `COLLECTORS_DISABLED=slug1,slug2`, and the global `COLLECTORS_ENABLED=false`.
 
-- **Real pipeline, fictional input.** The posts are invented text with no people, handles or personal data. They go through the real ingest normaliser, the real sentiment, relevance and discourse scorers, the real job-level bias checks, and the real embed worker, which calls the embeddings container. No score is made up: every one has a genuine audit trail, and `npm run replay -- --post <id>` reports PASS.
-- **Labelled in the data.** Posts belong to inactive `demo_<category>` sources named "Demo feed — <Category> (fictional)", and that name shows up in the source ribbon. Every text starts with `[Demo]`, and the processing jobs are recorded as `triggered_by = 'demo'`.
-- **Real timestamps, kept current.** The page shows the trailing hour. Every demo post is stamped with the time it was actually ingested, and nothing is backdated or re-stamped. The `populate` service ingests 16 more every 150 s (two per category) (`DEMO_FEED_BATCH`, `DEMO_FEED_INTERVAL_MS`), which keeps the hour full. If you stop that service, the demo posts age out of the window on their own.
-- **Shown as DEMO on the page.** The API reports the data origin (`data_mode` on `GET /api/health`, `demo_posts` / `data_mode` on every aggregated row, `data_origin` on each receipt), classified by source. `data_mode` on `/api/health` classifies exactly what the globe shows for the trailing hour (scored posts at a city in the registry), and `data_window` reports those counts next to all posts stored in that hour (`stored_posts`, `stored_demo_posts`). With demo data the intro kicker reads **DEMO**, the intro numbers are computed from the data the globe renders, chapter titles carry the same "— Demo data" marker as the bundled fallback, receipts say the post is fictional demo content generated for this installation (audit narration 1.2.0), and the health drawer counts demo feeds separately from the registry's sources.
+Collection runs in the worker: each collecting source on its own schedule, every 150 s by default (`COLLECT_WINDOW_MS`), stretched where a documented rate limit needs it (and to 180 s for TLDR, which answered 150 s polls with HTTP 429). `POST /api/refresh` asks the worker for one collection over every source (see [API](#api)). `npm run collect` runs one collection job by hand; `npm run collect:smoke` fetches every enabled keyless route once and writes nothing.
 
-
-
-### Adding a keyed source (supervised first run)
+### Adding a keyed source (a supervised first run)
 
 A source whose key, licence or approval arrives later is not scheduled blind (PR #10 review P10-17):
 
@@ -223,14 +186,26 @@ A source whose key, licence or approval arrives later is not scheduled blind (PR
      node --env-file="$HOME/guardian-trial.env" scripts/collect.js --supervised --only guardian
      rm ~/guardian-trial.env
      ```
+   The dry run opens the source only if it would collect under that environment, so `COLLECTOR_CONTACT_URL` and `GATE_APPROVED_BY` must already be set in `.env`; otherwise it stops and prints the source's status.
 2. It fetches every open route through the real collectors (robots, allowed hosts, quotas and redaction all apply), prints what each route returned and a sample of up to 5 payloads exactly as they would be stored, and stores nothing: no posts, scores, cursors, collection state or job. Its only database access is one read of the source's kill switch and refusal state: a source disabled with `npm run source:disable` or still in its refusal cooldown is refused before any request, exactly as the worker would refuse it.
 3. Sign off if the sample is on topic and carries no personal data beyond the ingest claim. Then add the credential to `.env` and recreate the containers (`docker compose up -d worker web`); the worker schedules the source on its next reschedule.
 
-### Embeddings
+---
 
-The first start downloads the ~90 MB `all-MiniLM-L6-v2` model into the `hf_cache` volume. Later starts and rebuilds reuse it. If the download fails (you're offline, behind a proxy, or Hugging Face is unreachable), standup says so clearly and carries on without embeddings: posts are still scored and audited, but vector search stays empty. Fix the network and run `npm run standup` again.
+## Live and demo data
 
-### Alerting (watchdog, dashboard, e-mail)
+Demo data is only the fallback, used when collection yields nothing in the trailing hour (offline, collection off, or every source failing). It is honest about what it is:
+
+- **Real pipeline, fictional input.** The posts are invented text with no people, handles or personal data. They go through the real ingest normaliser, the real sentiment, relevance and discourse scorers, the real bias checks and, when the embeddings service is ready, the real embed worker (a run that finds it not ready skips embedding, and a later standup re-run backfills the trailing hour's demo embeddings). Every score has a genuine audit trail, and `npm run replay -- --post <id>` reports PASS.
+- **Labelled in the data.** Demo posts belong to inactive `demo_<category>` sources named "Demo feed — <Category> (fictional)", their text starts with `[Demo]`, and their jobs are recorded as `triggered_by = 'demo'`.
+- **Real timestamps.** Each demo post carries the time it was actually ingested; nothing is backdated. The `populate` service adds `DEMO_FEED_BATCH` posts (default 16, two per category) every `DEMO_FEED_INTERVAL_MS` (default 150 s) while the hour has no live posts; stop it and demo posts age out.
+- **Shown as DEMO on the page.** `GET /api/health` reports `data_mode` (`live`, `demo`, `mixed` or `none`) for exactly what the globe shows, every row of `GET /api/posts/aggregated-by-location` (the globe's city aggregation) carries `demo_posts` / `data_mode`, and every receipt carries `data_origin`. With demo data the intro kicker reads DEMO, chapter titles carry a "— Demo data" marker, and receipts say the post is fictional demo content.
+
+The health drawer counts demo feeds separately from the 52 registry sources.
+
+---
+
+## Alerting
 
 Every other alert (freshness, retention, bias) is evaluated inside the worker, so a dead worker would stop them all. The `watchdog` service (`scripts/watchdog.js`, `src/watchdog/`) runs in its own container in the `full` profile. Every `WATCHDOG_POLL_INTERVAL_S` (default 120 s, first poll 60 s after start) it reads `GET /api/health`, probes PostgreSQL itself, and raises a **critical** alert for each of these conditions:
 
@@ -268,272 +243,182 @@ WATCHDOG_DASHBOARD_URL=http://localhost:3000   # optional link in the e-mails
 
 E-mail is on when `SMTP_HOST`, `SMTP_FROM` and `SMTP_TO` are all set. Without them the watchdog alerts on the dashboard only, and `/api/health` (`watchdog.email.status`) and the health drawer say **"email alerting not configured"**. Incomplete or invalid settings are named there too. The SMTP password reaches the `watchdog` container only: web never gets it, and the worker, which loads `.env` whole, has it blanked (`scripts/test/check-compose.sh` enforces both). Test your settings by stopping the worker for a few minutes (`docker compose --profile full stop worker`, then `start worker`): you should get a CRITICAL and then a CLEARED e-mail. The thresholds are in `.env.example`; `docker compose --profile full logs watchdog` shows every poll.
 
-### Tear it down
+---
 
-```bash
-npm run teardown                    # stop and remove containers, keep the data volumes
-npm run teardown -- --purge         # also delete the volumes (database, redis, model cache); asks first
-npm run teardown -- --purge --yes   # non-interactive purge
-bash scripts/teardown.sh --purge    # the same without Node.js/npm on the host
-```
+## Architecture
 
-Both act on one compose project only: `COMPOSE_PROJECT_NAME` if it's set, otherwise the one in `.env`, otherwise `pulse-of-ai`. The first line of output says which one it used and where the name came from (shell env, env file or default).
+![Pulse of AI container architecture](docs/diagrams/architecture.png)
 
-- If `COMPOSE_PROJECT_NAME` comes from your shell and differs from the project in `.env` (for example, it's still exported for another app), teardown asks you to type the project name before it stops anything, even without `--purge`. `--yes` confirms non-interactively.
-- Containers that carry the project's name but aren't defined in this compose file (orphans) are left alone. They may belong to another app.
-- `pulse-of-ai` is the shared dev project that `npm run docker:up` and `npm run dev` use. Tearing it down also stops `postgres_test` on port 5433, the test database every jest run uses, so teardown warns before it does.
+- **Browser** (`public/`, no build step, all assets self-hosted): UMD modules loaded in a fixed order. `globe.js` draws a Canvas-2D dot globe, `story.js` runs the eleven-part scroll story, `ui.js` provides explore mode, the source ribbon and the audit and health drawers, and `main.js` is the page shell.
+- **web** (`src/server.js`): Express serves the page and the API.
+- **worker** (`src/workers/start.js`): collection, scoring (the `ingest` queue), cycle close and bias checks, source-health alerts, embeddings, the maintenance schedules (text retention, compaction, the rolling bias window, terms snapshots) and Reddit maintenance, over BullMQ queues in Valkey 8.
+- **watchdog** (`scripts/watchdog.js`, `src/watchdog/`): external alerting from its own container (see [Alerting](#alerting)).
+- **Collectors** (`src/collectors/`): one base class per access type (RSS/Atom, JSON API, bulk file) and an adapter per source route. Every HTTP request goes through one guarded HTTP client; bulk-file routes read operator-supplied files and Google Scholar reads its alert mailbox over IMAP.
+- **Pipeline** (`src/pipeline/`): sentiment (AFINN), relevance (a 21-term lexicon matched as whole words), discourse quality (a DQI heuristic) and job-level bias checks, each versioned in `methodology_versions`.
+- **embeddings** (`python/embeddings_service.py`): FastAPI + sentence-transformers, `all-MiniLM-L6-v2` at a pinned revision, 384-dimension vectors stored with pgvector.
+- **PostgreSQL 16 + pgvector**: 50 migrations in `src/db/migrations/` (001–066, with gaps), 34 tables.
 
-### Upgrading an existing dev database
-
-- **Take a `pg_dump` before the first worker start after upgrading.** The worker's maintenance job runs as soon as it starts: it permanently removes post text past each source's window (a platform's terms where they set one, such as Reddit's 48 h; otherwise the 90-day detail window, `RETENTION_DETAIL_DAYS`) and compacts every whole month older than that into rollups. On a database that has not run it before, that is all old data at once, and it cannot be undone. Back up first, before `npm run standup` (or before starting the worker by hand): `docker compose up -d postgres`, then `docker compose exec postgres pg_dump -U pulse_user pulse_of_ai > backup-before-upgrade.sql`.
-- **Standup applies migrations for you.** The `migrate` job runs every pending migration and the idempotent seed before web and the worker start, on every `npm run standup`.
-- **Host-side development (`npm run dev`)**: after pulling, run `npm run migrate && npm run seed` against your dev database.
-- **Migrations are forward-only.** There are no down migrations, and older code isn't guaranteed to run against a newer schema. Take a backup first if you may need to go back: `docker compose exec postgres pg_dump -U pulse_user pulse_of_ai > backup.sql`.
-- **New secrets.** Standup adds keys that are missing from an existing `.env` (such as `REDIS_PASSWORD`) and stops if a secret is empty or still has its `.env.example` placeholder. If you only use `npm run docker:up`, add `REDIS_PASSWORD=$(openssl rand -hex 32)` to `.env` yourself: the redis service now requires a password.
-- **A placeholder `POSTGRES_PASSWORD` on an existing volume.** Postgres reads `POSTGRES_PASSWORD` only when it first creates the database, so editing `.env` alone breaks the connection. Change it inside Postgres as well, without putting it on a command line: run `docker compose exec postgres psql -U pulse_user -d pulse_of_ai`, then `\password pulse_user`, and put the same value in `.env`. Or start over with `npm run teardown -- --purge`, which deletes the data.
-
-Flags: `bash scripts/standup.sh --help` (or `npm run standup -- --help`). `--no-build` skips the image build, and `--demo` adds a fresh demo batch even when the hour is already full. Timeouts: `STANDUP_TIMEOUT` (core services, default 300 s) and `STANDUP_EMBEDDINGS_TIMEOUT` (first model download, default 900 s).
+The full diagram set (twenty-one diagrams: deployment, trust boundaries, the collection cycle in three parts, data flows, four ERDs, class diagrams, sequences and state diagrams) is indexed in **[docs/diagrams/README.md](docs/diagrams/README.md)**, with each diagram's source files and the notes where the spec and the code differ.
 
 ---
 
-## Quick Start
+## API
 
-For host-side development: Node and Python run on your machine, and only the databases and redis run in Docker. For the all-in-Docker path, see [Stand it up](#stand-it-up).
+All endpoints are under `/api`. The read-only endpoints send CORS headers; `POST /api/refresh` does not.
 
-### Prerequisites
+| Method | Path | Returns |
+|---|---|---|
+| `GET` | `/api/health` | Status, DB connection, last job, unresolved alerts, `data_mode` and `data_window` for the trailing hour, source counts by status, Valkey reachability, the worker heartbeat and queue counts, maintenance, watchdog, bias-sample and correlation-gate status (cached 5 s) |
+| `GET` | `/api/posts/aggregated-by-location` | Sentiment counts per city with coordinates and data origin (`?platform=`, `?from=`, `?to=`) |
+| `GET` | `/api/sentiment/latest` | Sentiment summary and recent posts (`?limit=` up to 100, `?platform=`) |
+| `GET` | `/api/themes` | Up to 12 keyword themes with their sentiment split and top category |
+| `POST` | `/api/query` | Filtered scored posts with source attribution: the newest `limit` matches (up to 100) and the `total` match count; no offset (body: `platform`, `location`, `from`, `to`, `limit`) |
+| `GET` | `/api/audit/:post_id` | The receipt: provenance, post, every decision with four audience views, the ingestion step and the bias layers |
+| `GET` | `/api/bias/latest` | The latest job's bias assessments and violations, and the share of "insufficient sample" assessments per check |
+| `GET` | `/api/bias/history` | Bias alert history for a window (`?hours=`, default 12, 1–48) with methodology lineage |
+| `GET` | `/api/methodology` | Every registered methodology version with its config and justification |
+| `GET` | `/api/sources` | The 52 registry sources with runtime status, terms, attribution and last-run classification (`?include_inactive=true` adds demo feeds and retired rows) |
+| `GET` | `/api/sources/timeseries` | Hourly sentiment volume per category (`?hours=`, default 12, 1–48) |
+| `POST` | `/api/refresh` | Asks the worker for one collection over every source: 202 with a `job_id`; 403 cross-site, without a valid `X-Refresh-Token` once `REFRESH_TOKEN` is set, or with no `REFRESH_TOKEN` when the site is bound beyond loopback or reached through a proxy; 409 while one runs; 429 within 60 s of the last; 503 if the queue is down; 500 on an unexpected error |
 
-- Docker & Docker Compose
-- Node.js ≥ 18
-- Python ≥ 3.10 (for the embeddings service)
+`/api/themes`, `/api/posts/aggregated-by-location` and `/api/sources/timeseries` are cached in-process for 10 seconds. Route errors return `{ "error": "..." }` with no stack traces, and so does a malformed JSON request body (`400 { "error": "invalid JSON body" }`) in every environment.
 
-### 1 — Clone and install
+---
+
+## Development
+
+For host-side development, Node runs on your machine and only the databases and Valkey (compose service `redis`) run in Docker:
 
 ```bash
-git clone https://github.com/jennifer-mckinney/pulse-of-ai.git
-cd pulse-of-ai
 npm install
+cp .env.example .env        # then set POSTGRES_PASSWORD, REDIS_PASSWORD, AUDIT_HASH_KEY and CORRELATION_SALT (each: openssl rand -hex 32)
+npm run docker:up           # postgres (POSTGRES_PORT, 5434) + postgres_test (5433) + redis (Valkey, 6379)
+npm run migrate             # apply pending migrations
+npm run seed                # 52 registry sources + methodology versions (idempotent)
+npm run dev                 # Express on http://localhost:3000
+node --env-file=.env src/workers/start.js   # in a second terminal: the worker (collection, scoring, maintenance)
 ```
 
-### 2 — Configure environment
+`npm run dev` serves the page and the API only. Collection, scoring, the bias checks and the maintenance schedules all run in the worker, so start it too. There is no npm script for it, and it must get `.env` from Node: the worker builds its queue connection from `REDIS_HOST`, `REDIS_PORT` and `REDIS_PASSWORD` before any module loads `.env`, so a plain `node src/workers/start.js` connects without the password. `--env-file=.env` (Node 22) loads the file first. Without `COLLECTOR_CONTACT_URL` it registers the maintenance schedules but schedules no source (the first time it sees a source closed it logs `[scheduler] <slug>: gate_closed (<status>)`; a database that already recorded them closed, for example after `npm run standup`, logs nothing more); see [Turning on live collection](#turning-on-live-collection). `GET /api/health` shows `worker.alive: true` once its heartbeat is up. Stop it with Ctrl-C; it finishes in-flight jobs first.
+
+Optional embeddings service on the host (Python 3.11 or newer; CI tests 3.11 and the image runs 3.13):
 
 ```bash
-cp .env.example .env
-# Edit .env — see Environment Variables section below
+python3 -m venv python/.venv
+python/.venv/bin/pip install -r python/requirements.txt   # reads the PyTorch CPU index: CPU-only torch, not ~2 GB of CUDA libraries
+bash python/start.sh        # uvicorn on 127.0.0.1:8000 (EMBEDDINGS_SERVICE_URL); EMBEDDINGS_HOST=0.0.0.0 serves other machines (the API is unauthenticated)
 ```
 
-### 3 — Start infrastructure
+If `python3 --version` is older than 3.11, name a newer interpreter instead (for example `python3.11 -m venv python/.venv`). `python/requirements.txt` pins the library stack `embedding@1.1.0` registers (sentence-transformers 6.1.0, transformers 5.18.0, huggingface_hub 1.33.0, tokenizers 0.23.2) and torch per platform: `2.12.1+cpu` on Linux and Windows, plain `2.12.1` on macOS, which has no `+cpu` wheel (the same release, not the registered build). The worker stamps a vector `embedding@1.1.0` only when the service's `GET /health` reports the registered model, revision and library. On a mismatch the vector is stored with no methodology version; a `/health` that cannot be read fails the job, which is retried. `python/start.sh` listens on 127.0.0.1 only. `EMBEDDINGS_HOST` opts in to another address (for example `0.0.0.0`), and it prints a warning when it does: the API is unauthenticated, so anyone who can reach that address can use it. An empty `EMBEDDINGS_HOST` counts as unset.
 
-```bash
-npm run docker:up   # PostgreSQL (5434) + test DB (5433) + Valkey (6379)
-```
+`npm run dev` listens on 127.0.0.1 unless `HOST` or `PULSE_BIND_ADDR` names another address. Bound beyond loopback, or reached through a reverse proxy, `POST /api/refresh` is refused until you set `REFRESH_TOKEN`; once it is set, every refresh must send it in `X-Refresh-Token` (see [Security and privacy](#security-and-privacy)).
 
-### 4 — Migrate and seed
+### Commands
 
-```bash
-npm run migrate     # Run pending SQL migrations
-npm run seed        # Load 50 data sources + methodology versions
-```
-
-### 5 — Start the server
-
-```bash
-npm run dev         # Express on http://localhost:3000
-```
-
-### 6 — (Optional) Start the embeddings service
-
-```bash
-cd python
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-bash start.sh       # FastAPI on http://localhost:8000
-```
-
-Open `http://localhost:3000` to see the dashboard.
-
----
-
-## Environment Variables
-
-Copy `.env.example` to `.env` and fill in the values below.
-
-| Variable | Required | Description |
-|---|---|---|
-| `POSTGRES_HOST` | Yes | Database host (default `localhost`) |
-| `POSTGRES_PORT` | Yes | Dev DB port (default `5434`) |
-| `POSTGRES_DB` | Yes | Dev DB name |
-| `POSTGRES_USER` | Yes | DB user |
-| `POSTGRES_PASSWORD` | Yes | DB password |
-| `POSTGRES_TEST_PORT` | Dev | Test DB port (default `5433`) |
-| `PORT` | No | Express port (default `3000`) |
-| `EMBEDDINGS_SERVICE_URL` | No | Python FastAPI URL (default `http://localhost:8000`) |
-| `MAPBOX_ACCESS_TOKEN` | Yes | Public Mapbox token — served via `GET /api/config` |
-| `REDDIT_USER_AGENT` | No | Reddit API user-agent string |
-| `TWITTER_BEARER_TOKEN` | No | Twitter/X Basic API bearer token |
-| `GITHUB_TOKEN` | No | GitHub PAT for Discussions scraping |
-| `SEMANTIC_SCHOLAR_API_KEY` | No | Semantic Scholar API key |
-| `AUDIT_HASH_KEY` | No | 64-hex-char key for HMAC-SHA256 audit hashes |
-| `CORRELATION_SALT` | Yes | 64-hex-char salt for verb-noun pseudonymous IDs — generate once, never change |
-| `RETENTION_DETAIL_DAYS` | No | Days before compaction (default `90`) |
-| `REDIS_PORT` | No | Valkey host port (default `6379`; the `REDIS_*` names refer to the Redis protocol Valkey speaks) |
-| `WEB_PORT` | No | Standup: host port of the web service (default `3000`) |
-| `PULSE_BIND_ADDR` | No | Interface every published port binds to: web, postgres, postgres_test, redis (default `127.0.0.1`) |
-| `REDIS_PASSWORD` | Yes (Docker) | Valkey `requirepass`; BullMQ, the worker and `/api/health` authenticate with it. Standup generates it |
-| `DEMO_FEED_INTERVAL_MS` | No | Standup demo feed: ms between fictional batches (default `150000`) |
-| `DEMO_FEED_BATCH` | No | Standup demo feed: posts per batch (default: two per category, `16`) |
-| `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_REQUIRE_TLS`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_TO` | No | Watchdog e-mail alerts (see [Alerting](#alerting-watchdog-dashboard-e-mail)); empty = dashboard only, "email alerting not configured". `SMTP_PASSWORD` reaches the watchdog container only |
-| `WATCHDOG_*` | No | Watchdog poll interval and thresholds (`.env.example`, "Alerting") |
-
-Generate secrets:
-
-```bash
-# AUDIT_HASH_KEY
-openssl rand -hex 32
-
-# CORRELATION_SALT
-node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-```
-
----
-
-## Database
-
-Migrations live in `src/db/migrations/` and are applied in filename order.
-
-```bash
-npm run migrate          # Apply pending migrations
-npm run db:reset         # Drop + re-migrate + seed (dev only)
-npm run seed             # Seed sources and methodology versions only
-```
-
-The schema includes the following core tables:
-
-| Table | Purpose |
+| Command | What it does |
 |---|---|
-| `raw_posts` | Immutable ingested posts (PII-stripped) |
-| `sentiment_scores` | Per-post sentiment results with methodology reference |
-| `discourse_scores` | DQI scores per post |
-| `audit_log` | Immutable inference provenance records |
-| `bias_assessments` | Bias evaluations and violation flags |
-| `bias_window_runs` / `bias_window_assessments` | The rolling 24 h bias checks (bias@1.5.0): one run per day or on demand, and its assessments |
-| `methodology_versions` | Versioned algorithm configs with justification |
-| `data_sources` | Registry of the 50 monitored sources |
-| `cross_platform_users` | Pseudonymous verb-noun correlation IDs |
-| `alert_events` | Triggered bias / health alerts |
-
----
-
-## API Reference
-
-All endpoints are prefixed `/api`.
-
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/api/health` | System health, active alerts (watchdog alerts flagged `system`), data freshness, the watchdog's status (`watchdog`, including e-mail), the bias insufficient-sample share (`bias_sample`); cached for 5 s (it fans out to Redis and Postgres) |
-| `GET` | `/api/config` | Public config (Mapbox token) for the frontend |
-| `GET` | `/api/posts` | Paginated post list with sentiment |
-| `GET` | `/api/sentiment` | Aggregated sentiment by geography / source |
-| `POST` | `/api/refresh` | Trigger an on-demand pipeline run |
-| `GET` | `/api/audit/:post_id` | Full decision trail for a single post |
-| `GET` | `/api/bias` | Bias assessment summary and current alerts |
-| `GET` | `/api/methodology` | Current and historical methodology versions |
-| `GET` | `/api/sources` | All 50 monitored data sources |
-| `GET` | `/api/themes` | Trending topics / discourse themes |
-| `POST` | `/api/query` | Semantic vector search over ingested posts |
-
----
-
-## Pipeline
-
-Each stage is a module in `src/pipeline/` and a corresponding BullMQ worker in `src/workers/`.
-
-```
-ingest → sentiment → relevance → discourse → embeddings → correlation
-```
-
-| Module | Description |
-|---|---|
-| `ingest.js` | Fetches sources, strips PII, deduplicates, writes `raw_posts` |
-| `sentiment.js` | AFINN scoring; logs to `sentiment_scores` + `audit_log` |
-| `relevance.js` | Keyword + embedding hybrid AI-relevance filter |
-| `discourse.js` | DQI scoring across posts |
-| `embeddings.js` | Calls Python service; stores vectors in pgvector |
-| `bias.js` | Demographic-parity / equalized-odds checks; fires alerts |
-| `bias-window.js` | The same checks over a rolling 24 h window, daily and on demand (`npm run bias:window`); the insufficient-sample share per check in `/api/bias/latest` and `/api/health` |
-| `correlation.js` | Cross-platform user clustering by writing style + timing |
-
----
-
-## Python Embeddings Service
-
-A lightweight FastAPI service (`python/embeddings_service.py`) wraps `sentence-transformers` to produce 384-dimension embeddings stored in PostgreSQL via pgvector.
-
-```bash
-cd python
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-bash start.sh          # Starts on port 8000
-```
-
-The Node pipeline calls `EMBEDDINGS_SERVICE_URL/embed` (configurable via `.env`). The service can be omitted for local development without vector search.
+| `npm run standup` / `npm run teardown` | Start or stop the whole stack in Docker |
+| `npm run docker:up` / `npm run docker:down` | Start or stop only postgres, postgres_test and redis |
+| `npm run migrate` · `npm run seed` · `npm run db:reset` | Apply migrations · seed sources and methodology · drop, re-migrate and seed (dev only) |
+| `npm run collect [-- --only slug1,slug2]` | One real collection job through the pipeline |
+| `npm run collect:smoke [-- --only ...] [--json]` | Live-fetch every enabled keyless route once; writes nothing |
+| `npm run source:disable -- <slug> --reason "<why>"` · `source:enable` · `source:reset` | Database kill switch; clear the refused state |
+| `npm run replay -- --post <id>` | Re-run a post's stored decisions and print PASS / DIVERGENCE / NOT RE-RUNNABLE per stage |
+| `npm run verify-provenance -- --post <id> --url <original URL> [--id <original id>]` | Prove a stored post came from a given upstream item (exit 0 MATCH, 1 NO MATCH, 2 usage error, unknown post or database failure, 3 no fingerprint or no key) |
+| `npm run compact` | Delete demo posts past the retention window and compact old months into rollups now (the worker also does this daily) |
+| `npm run bias:window` | Run the bias checks over the rolling 24 h window now (the worker also does this daily) |
+| `npm run terms:snapshot [-- --only slug1,slug2] [--json]` | Snapshot every source's terms page now, politely (the worker also does this weekly; needs COLLECTOR_CONTACT_URL) |
+| `npm run seed:e2e` | Load the deterministic fixture dataset the Playwright suite uses. Refuses any database that is not `pulse_of_ai_e2e[_<suffix>]` unless `FIXTURE_DB_ALLOW` names it (`scripts/lib/fixture-db-guard.js`), so run bare against the dev database it exits 1; `npm run test:e2e` runs it for you |
 
 ---
 
 ## Testing
 
 ```bash
-npm run docker:up          # Infrastructure must be running for integration tests
-
-npm run test:unit          # Unit tests only — no DB required
-npm run test:int           # Integration tests — requires Docker
-npm run test:cov           # Coverage report (target ≥ 80% lines)
-npm run test:pure          # Pure unit tests (jest.pure.config.js)
-npm run verify             # Full test suite via scripts/test/run-all.sh
+npm run verify             # the full gate: jest with coverage (≥ 80% lines), plus pytest and black when python/.venv exists
+npm run test:unit          # unit tests (needs the test database: npm run docker:up; test:pure needs none)
+npm run test:pure          # pure tests (collectors on recorded fixtures, frontend logic, config)
+npm run test:quick         # unit tests plus a warn-only black check (scripts/test/run-unit.sh)
+npm run test:diagrams      # the diagram PNG hash guard (scripts/test/render-hash.test.sh)
+npm run test:int           # integration tests against the test database (needs npm run docker:up)
+npm run test:cov           # coverage report
+npm run test:e2e           # Playwright, on its own database (pulse_of_ai_e2e) and port 3100
+npm run coverage:frontend  # non-gating coverage of globe / story / ui / main
 ```
 
-Tests run serially (`maxWorkers: 1`) to avoid TRUNCATE race conditions on the shared test database.  
-`NODE_ENV=test` targets port `5433` (the isolated test DB container).
+- Tests run serially (`maxWorkers: 1`) because they share the test database. `NODE_ENV=test` points at port 5433.
+- Collectors are tested on recorded fixtures; under `NODE_ENV=test` the HTTP client refuses the network.
+- The e2e suite provisions its own database on the dev Postgres, migrates, seeds and loads the fixture dataset before each run (`tests/e2e/global-setup.js`).
+- CI (`.github/workflows/ci.yml`) runs the unit, integration and coverage jobs on Node 22, pytest and black, the Python image dependencies, the Docker image build, a production dependency audit and the Playwright suite.
 
 ---
 
-## Project Structure
+## Security and privacy
 
-```
-pulse-of-ai/
-├── docs/
-│   ├── TECHNICAL_SPEC.md       Full technical specification
-│   └── diagrams/               Architecture diagrams (PNG, Mermaid)
-├── public/                     Frontend (Mapbox globe, narrative panel)
-│   ├── index.html
-│   ├── js/
-│   └── styles/
-├── python/                     FastAPI embeddings service
-│   ├── embeddings_service.py
-│   └── requirements.txt
-├── scripts/                    DB migration, seeding, compaction helpers
-├── src/
-│   ├── db/
-│   │   ├── connection.js
-│   │   └── migrations/         SQL migration files (applied in order)
-│   ├── pipeline/               NLP pipeline modules
-│   ├── queues/                 BullMQ queue definitions
-│   ├── routes/                 Express route handlers
-│   ├── workers/                BullMQ worker processes
-│   └── server.js               Express entry point
-├── tests/
-│   ├── unit/                   Unit tests (no DB)
-│   └── integration/            API integration tests
-├── .env.example                Environment variable template
-├── docker-compose.yml          PostgreSQL + test DB + Valkey; profile "full" adds web, worker, embeddings, migrate
-├── Dockerfile                  Node 22 app image (web / worker / migrate / populate)
-├── jest.config.js
-└── package.json
-```
+What the code does, stated precisely:
+
+- **Browser surface.** Every response carries a strict Content-Security-Policy (`default-src 'self'; script-src 'self'; style-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'`), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY` and `Referrer-Policy: no-referrer`. The frontend uses no CDN and builds the page with `textContent`, never `innerHTML`.
+- **Refresh is guarded against cross-site requests.** CORS is enabled only on the read-only endpoints. `POST /api/refresh` accepts only same-origin requests (by `Sec-Fetch-Site`, or else `Origin` / `Referer` matching the host), answers CORS preflights with 403, and, once `REFRESH_TOKEN` is set, requires it in `X-Refresh-Token` on every request. With no `REFRESH_TOKEN`, refresh is refused (403) when the site is bound beyond loopback or the request came through a reverse proxy (a `Forwarded`, `X-Forwarded-For`, `X-Forwarded-Host` or `X-Real-IP` header).
+- **Collectors cannot be pointed at internal hosts.** Every request and redirect hop must be https to a public address on the route's allowed hosts; DNS answers are checked and pinned; redirects are followed one hop at a time (at most 4); a request carrying credentials is never sent across origins; responses are size-capped.
+- **Secrets stay out of storage, logs and the API.** Every error the collectors and the worker store or log is scrubbed of credential-shaped URL parameters and of every secret env value, and so is every API route and database pool error line. The public API serves only an error kind and HTTP status. Collector credentials reach only the worker container; the web container gets "set / empty" markers. Valkey requires a password, and published ports bind to 127.0.0.1 by default.
+- **Personal data.** The precise claim (`ingest@1.8.0`): identity fields are never stored; e-mail addresses, handles (including Reddit u/ names), phone numbers, sign-offs and profile links in text are redacted; **free text may still contain names mentioned in the content**. Collectors store an allowlist of content fields, location is kept at city level (from the content, or the publisher's home city for editorial sources), and an upstream id that could identify someone is stored only as a fingerprint: keyed (HMAC-SHA256 with `PROVENANCE_KEY`, else `AUDIT_HASH_KEY`) when a key is set, an unkeyed SHA-256 when neither is (standup generates `AUDIT_HASH_KEY`), and `provenance_fingerprint` is then NULL.
+- **Politeness and terms.** Every request carries a User-Agent with the operator's contact URL; publisher feeds are checked against `robots.txt`; requests to a host are spaced; a 429 or 503 is retried at most twice, waiting out a `Retry-After` of up to 10 s, and a longer `Retry-After` (or a 429 still answered after the retries: 5 minutes) is honoured as a hold of up to 24 hours in which nothing is sent to that host; a 401, 403 or 451, a bot challenge or a robots refusal is never retried or worked around, and puts the source in a cooldown of 1 hour doubling up to 24 hours. After the cooldown one probe run is allowed. A clean probe resumes collection but keeps the refusal count for a 24-hour probation, so a refusal during probation continues the escalation; 24 hours without a refusal resets the count (ADR 0001, dated note of 2026-09-30; migration 062). `npm run source:reset -- <slug>`, or `SOURCE_<SLUG>_RESET=<date>` dated at or after the last refusal and not in the future together with `GATE_APPROVED_BY`, clears the count and the probation too (a date-only value means 00:00 UTC; a future date is ignored until it passes). Pulse of AI uses its sources on a non-commercial research basis and shows the attribution their terms require (ADR 0001 ruling 6).
+
+Accepted risks are recorded in ADR 0001: the 8 permission-gated feeds (opened only by each operator's acknowledgement and a named approval), and Reddit's display of redacted text and its retention of scores and audit rows after the text is blanked.
+
+---
+
+## Responsible-AI audit trail
+
+- **Every inference is logged.** Sentiment, relevance and discourse each write a `decision_audit_log` row with the model name, the methodology version, a hash of the input, the full output and the processing job.
+- **Methodology is versioned, never edited.** Each configuration (thresholds, keywords, weights, legal basis) is a row in `methodology_versions` with a plain-English justification, served by `GET /api/methodology`. A change ships as a new version and a new migration.
+- **The receipt.** `GET /api/audit/:post_id` returns the post's provenance, every decision and the ingestion step in four audience views (Public, Journalist, Regulator, Researcher), and the bias layers of the job that scored it, with methodology lineage marked recorded, inferred or current. The input hash is exposed only as an HMAC keyed with `AUDIT_HASH_KEY`.
+- **Reproducible.** `npm run replay -- --post <id>` re-runs every stored decision against the methodology version it references. `npm run verify-provenance` proves a post's origin from its original URL through a keyed provenance fingerprint (`PROVENANCE_KEY`, else `AUDIT_HASH_KEY`; it needs one of them, and a post stored without a key carries no fingerprint to check).
+- **Bias checks.** Once per collection cycle (and per refresh or standup job), and daily over a rolling 24 h window, three aggregate checks run over the scored posts: location concentration (content-located posts only; publisher-located posts are a separate globe layer), platform sentiment parity and negative dominance. Each needs a minimum sample; below it the check records "insufficient sample" and raises no alert, and the share of such checks is reported. Violations raise alerts that turn the header health chip yellow or red and appear in the health drawer's alert history. No check infers traits of individual users.
+- **Retention is logged.** Every post stored through the ingest step (`src/pipeline/ingest.js`) writes a `collected` row (the fictional demo batch of `scripts/populate.js` writes none), and every text removal, compaction, run rollup and demo purge writes a `data_retention_log` row with its legal basis. The manual legacy-seed re-attribution (`scripts/correct-legacy-seed-attribution.js --apply`, action `source_reattributed`) also writes one row per post, but it stores a NULL legal basis: the row records the diagnosis, the evidence and the named approver instead.
+
+---
+
+## Project documents
+
+| Document | What it is |
+|---|---|
+| [docs/TECHNICAL_SPEC.md](docs/TECHNICAL_SPEC.md) | Technical specification, the requirements source of truth (where it differs from the code, see the spec drift notes in [docs/diagrams/README.md](docs/diagrams/README.md)) |
+| [docs/requirements/PRD.md](docs/requirements/PRD.md) | Product requirements (§4.3: the storytelling frontend follows the FuN.zip design-handoff prototype, 11 beats and a Canvas-2D globe; the globe.gl design is superseded) |
+| [docs/requirements/BRD.md](docs/requirements/BRD.md) | Business requirements |
+| [docs/adr/0001-source-registry-and-collection.md](docs/adr/0001-source-registry-and-collection.md) | ADR 0001: the source registry, collection, rulings 1–9, decisions D1–D4 and the PR #22 decisions G1–G6 |
+| [docs/requirements/Top_52_Global_Online_Sources.rev4.csv](docs/requirements/Top_52_Global_Online_Sources.rev4.csv) | The source workbook of record, exported |
+| [docs/research/](docs/research/) | Source-access and Reddit-access research, and the city-layer research |
+| [docs/diagrams/README.md](docs/diagrams/README.md) | The diagram index |
+| [public/vendor/README.md](public/vendor/README.md) | Vendored frontend assets and their licenses |
+
+`docs/plans/2026-07-05-globe-storytelling-design.md` (the globe.gl / Mapbox-era plan) is kept for history and marked superseded.
+
+---
+
+## Contributing
+
+Issues and pull requests are welcome.
+
+- Work on a branch; `master` takes changes by pull request only.
+- Add tests with every change: unit or pure tests for logic, integration tests for routes and database behaviour, and a Playwright spec for anything visible on the page.
+- Run `npm run verify` (and `npm run test:e2e` for frontend changes) before opening the pull request, and describe the evidence in it.
+- Frontend code builds the DOM with `createElement` and `textContent` only, and adds no inline scripts or `style=` attributes (the CSP forbids them).
+- A change to how a score is computed is a new methodology version and a new migration, never an edit to a released one. That includes a bump of `sentence-transformers` or of a library it registers (transformers, huggingface_hub, tokenizers, torch): their pins in `python/requirements.txt` and `python/requirements-service.in` must equal the current embedding methodology row (`embedding@1.1.0`: sentence-transformers 6.1.0, transformers 5.18.0, huggingface_hub 1.33.0, tokenizers 0.23.2, torch 2.12.1+cpu; `tests/unit/pure/embeddingLibraryPins.test.js` fails on drift).
+- Dependabot proposes updates for `python/requirements.txt`, the images and the GitHub Actions, but not for the hash-locked embeddings-image lock (`python/requirements-service.in` / `.txt`, CPU-only torch). Refresh that lock by hand with the `pip-compile` command in the header of `requirements-service.in`, and commit the `.in` and `.txt` together. A Dependabot bump of the `fastapi` / `uvicorn` floors in `python/requirements.txt` fails `embeddingLibraryPins.test.js` until the lock is refreshed to match, so the two land together.
+- When you change a diagram, edit its `.mmd` and run `bash docs/diagrams/render.sh`.
+- Never commit `.env` or any credential.
 
 ---
 
 ## License
 
-MIT — see [LICENSE](LICENSE) for details.
+Copyright © 2026 Jennifer McKinney.
 
-Author: Jennifer McKinney
+Pulse of AI is open source under the [GNU Affero General Public License v3.0 or later](LICENSE) (SPDX `AGPL-3.0-or-later`), with one additional term under AGPL section 7(b), set out in [ADDITIONAL-TERMS.md](ADDITIONAL-TERMS.md): the author attribution "Built on Pulse of AI by Jennifer McKinney", with a link to https://github.com/jennifer-mckinney/pulse-of-ai, must be preserved in the Appropriate Legal Notices of any covered work or modified version, including any user interface people use over a network.
+
+In plain English: you may use, study, modify and share Pulse of AI, including commercially. If you distribute a version, or run a modified version as a network service, you must release it under the AGPL and offer its complete source code to its users (section 13 for network use), and you must keep and show the "Built on Pulse of AI by Jennifer McKinney" credit. There is no warranty. (The non-commercial basis on which the data sources are collected, ADR 0001 ruling 6, is a separate matter: it describes how this project uses those sources, not what the software license allows.)
+
+**If you deploy a modified version:** the page shows its legal notices in the header "about" panel (`public/js/config/legal.config.js`, and the `<noscript>` block of `public/index.html`). Point `SOURCE_URL` there, and BOTH static "Source code" links in `public/index.html` (the one in the `<noscript>` block and the one in the About-panel markup that remains if the config fails to load), at the source of the version you run, and keep the attribution line.
+
+**Third-party components** keep their own licenses. The vendored frontend assets are the Space Grotesk and IBM Plex Mono fonts (SIL Open Font License 1.1) and the world-atlas land geometry (ISC); see [public/vendor/README.md](public/vendor/README.md). The npm, Python and container dependencies are under their own licenses.
