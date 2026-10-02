@@ -5,7 +5,7 @@
 // terms, a "Source code" link (AGPL section 13) and the no-warranty line.
 // Escape closes it. Zero console errors (the strict CSP stays clean).
 import { test, expect } from '@playwright/test';
-import { consoleErrors, expectNoConsoleErrors, gotoAndWaitForData, evidence } from './helpers';
+import { consoleErrors, expectNoConsoleErrors, gotoAndWaitForData, evidence, enterExplore } from './helpers';
 
 const UPSTREAM = 'https://github.com/jennifer-mckinney/pulse-of-ai';
 
@@ -178,7 +178,7 @@ test('legal notice: a drawer opened from a focused notice link returns focus to 
     await expect(page.locator('#about-chip')).toBeFocused();
 });
 
-for (const width of [320, 540, 600, 700]) {
+for (const width of [320, 540, 600, 641, 660, 680, 700, 760, 900]) {
     test(`legal notice: at ${width}px the panel opens below the header and inside the viewport`, async ({ page }) => {
         await page.setViewportSize({ width, height: 800 });
         await gotoAndWaitForData(page);
@@ -191,6 +191,20 @@ for (const width of [320, 540, 600, 700]) {
         }
         expect(panel!.x).toBeGreaterThanOrEqual(0);
         expect(panel!.x + panel!.width).toBeLessThanOrEqual(width);
+        // every header chip is on screen (body overflow-x is hidden) and the
+        // header ends above the explore filters
+        for (const sel of ['#about-chip', '#health-chip', '#credits-link', '#insight-chip']) {
+            const b = await page.locator(sel).boundingBox();
+            expect(b!.x, sel + ' starts on screen').toBeGreaterThanOrEqual(0);
+            expect(b!.x + b!.width, sel + ' ends on screen').toBeLessThanOrEqual(width);
+        }
+        await page.locator('#about-chip').click();
+        await expect(page.locator('#about-panel')).toBeHidden();
+        await enterExplore(page);
+        const lowest = Math.max(...await Promise.all(['#about-chip', '#health-chip', '#credits-link', '#insight-chip']
+            .map(async (sel) => { const b = await page.locator(sel).boundingBox(); return b!.y + b!.height; })));
+        const filters = await page.locator('#exp-filters').boundingBox();
+        expect(lowest, 'header ends above the explore filters').toBeLessThanOrEqual(filters!.y);
     });
 }
 

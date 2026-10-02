@@ -145,6 +145,8 @@ body {
    tooltip (40) and the drawers (50). */
 .hdr-about { cursor: pointer; font-family: inherit; color: var(--ink); transition: border-color 0.15s; }
 .hdr-about:hover, .hdr-about[aria-expanded="true"] { border-color: rgba(59,220,178,0.45); }
+/* inert while a drawer is open (main.js sets aria-disabled) */
+.hdr-about[aria-disabled="true"] { opacity: 0.5; cursor: default; }
 .about-panel {
   position: absolute; top: 64px; right: 28px; z-index: 30;
   max-width: min(360px, calc(100% - 56px));
@@ -526,9 +528,11 @@ body {
 /* K1: the header gained a "credits" chip; on a phone the chips must still all
    fit (the health chip opens the health drawer and must never be clipped by
    body overflow-x: hidden). At 375px the header wraps to three rows (brand,
-   then the time-to-insight and credits chips, then the health chip), about
-   96px tall, so the explore filter column starts below it (e2e asserts the
-   gap). */
+   then the time-to-insight and credits chips, then the health and about
+   chips), about 100px tall; from about 480 to 640px it is two rows, about
+   78px. Above 640px it is one row. The explore filter column (116px) and the
+   About panel (112px) start below the tallest case (e2e asserts the gap at
+   every width, legal-notice.spec.ts). */
 @media (max-width: 640px) {
   /* the brand takes the first row; the chips wrap beneath it */
   .hdr { padding: 12px 14px; flex-wrap: wrap; row-gap: 8px; }
@@ -537,7 +541,7 @@ body {
   .hdr-right { gap: 6px; flex-wrap: wrap; }
   .hdr-chip { padding: 5px 9px; gap: 6px; }
   .exp-filters { margin-top: 116px; }
-  /* the wrapped header is about 100px tall: the About panel opens below it
+  /* the wrapped header is at most about 100px tall: the About panel opens below it
      (not over its own chip) and spans the viewport width less the gutters */
   .about-panel { top: 112px; left: 14px; right: 14px; max-width: none; max-height: calc(100% - 128px); }
 }
@@ -575,6 +579,7 @@ body {
   letter-spacing: -0.02em;
 }
 .noscript-legal { font-size: 13px; color: #93A0B4; }
+.noscript-legal a { color: #C9D3E3; }
 
 /* health drawer — per-source registry status (ADR 0001) */
 .src-list { margin-top: 12px; border: 1px solid var(--line); border-radius: 4px; padding: 4px 0; }
