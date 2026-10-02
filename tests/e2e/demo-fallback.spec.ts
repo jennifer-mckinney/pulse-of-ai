@@ -83,8 +83,10 @@ test('demo fallback: /api/** blocked → 30-city demo, DEMO badges, local receip
     expect(await drawer.locator('.steps .step').count()).toBeGreaterThanOrEqual(4);
     await expect(drawer.locator('.drawer-foot')).toContainText('fictional demo data');
     // audit_narration@1.5.0: the local demo receipt carries the corrected
-    // relevance sentence, never the superseded "because it's clearly talking about AI".
-    await expect(drawer.locator('.steps')).toContainText('it counts toward the AI-discourse totals');
+    // relevance sentence (stated conditionally, like the ingestion step: the
+    // demo post is never stored), never the superseded "because it's clearly
+    // talking about AI".
+    await expect(drawer.locator('.steps')).toContainText('this demo post was never stored, so it counts toward nothing');
     await expect(drawer.locator('.steps')).not.toContainText('clearly talking about AI');
     await evidence(page, '09-demo-fallback-receipt');
 
