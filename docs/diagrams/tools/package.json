@@ -1,0 +1,11 @@
+{
+  "name": "pulse-diagram-renderer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Pinned toolchain for docs/diagrams/render.sh (exact versions; the lockfile pins every transitive package with its integrity hash).",
+  "license": "AGPL-3.0-or-later",
+  "dependencies": {
+    "@mermaid-js/mermaid-cli": "11.12.0",
+    "mermaid": "11.12.1"
+  }
+}

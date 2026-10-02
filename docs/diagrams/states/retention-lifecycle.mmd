@@ -1,0 +1,44 @@
+%% Title: State · retention lifecycle of a stored post
+%% Summary: What becomes of a post over time: its text blanked when its source's window ends (platform terms or the detail window) or when Reddit reports it deleted, demo posts purged at the retention boundary, and real posts compacted into monthly rollups, with what is kept at each step.
+%% Sources: src/collectors/retention.js, src/config/source-registry.js (retentionHours), src/workers/maintenance.worker.js, src/collectors/reddit/{maintenance,recheck}.js, scripts/compact.js (purgeDemoPosts, compactMonth), scripts/populate.js (demo embed jobs), src/collectors/runner.js and src/workers/ingest.worker.js (embed gate), src/pipeline/relevance.js (EMBED_GATE_MIN_SCORE); migrations 001 (content NOT NULL), 005, 025, 031. Spec: TECHNICAL_SPEC.md section 19 (three-tier model); ADR 0001 ruling 9; PR #22 decisions G3, G4.
+stateDiagram-v2
+  direction LR
+
+  [*] --> detail : stored (raw_posts, scores, audit rows), embed job for a live post with relevance ≥ 1/21 (none from a populate run without a ready service) and for a demo post when its populate run has embeddings on and the service ready (a later populate --once backfills the hour's demo posts)
+
+  state "Tier 1 · full detail<br/>shown on the page for its trailing hour,<br/>receipt available" as detail
+  state "text blanked, platform terms<br/>content = the source's removal notice,<br/>text_removed_at set, embedding deleted<br/>in the same transaction (G3);<br/>scores, audit rows, hash, fingerprint kept" as blanked
+  state "text removed, detail window<br/>content = the detail-window notice,<br/>text_removed_at set; embedding kept<br/>until compaction; scores, audit rows kept" as removed
+  state "demo post purged<br/>post and every dependent row deleted<br/>(scores, audit, embedding, sightings)" as purged
+  state "Tier 2 · compacted month<br/>monthly_topic_rollups + monthly_source_rollups,<br/>any remaining text blanked (never nulled),<br/>embeddings deleted; row, scores and audit rows kept" as compacted
+
+  detail --> blanked : Reddit 48 h, YouTube and TikTok 30 days after collection (maintenance job, every 5 min)
+  detail --> blanked : Reddit only, the re-check finds it deleted or removed (every 6 h, gate open)
+  detail --> removed : any other real source, RETENTION_DETAIL_DAYS (90) after collection (same job)
+  detail --> purged : demo feed only, older than RETENTION_DETAIL_DAYS (daily job or npm run compact)
+  blanked --> compacted : its month ended before the cutoff (daily job or npm run compact)
+  removed --> compacted : its month ended before the cutoff
+  detail --> compacted : text still stored in a due month, blanked by compaction in the month's transaction
+  purged --> [*]
+
+  note right of blanked
+    one data_retention_log row per batch,
+    action blanked_platform_terms
+    (owner decision: blank text, keep audit rows)
+  end note
+  note right of removed
+    one data_retention_log row per batch,
+    action text_removed_detail_window
+  end note
+  note right of purged
+    data_retention_log action purged_demo,
+    demo posts never enter a rollup
+  end note
+  note right of compacted
+    one data_retention_log row compacted and one
+    compaction_log row per month.
+    Legend: all done (every element is on master)
+  end note
+
+  classDef done fill:#e8f5e9,stroke:#2e7d32,color:#1b3d1f
+  class detail, blanked, removed, purged, compacted done

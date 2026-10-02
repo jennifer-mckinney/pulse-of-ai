@@ -276,8 +276,8 @@
     }
 
     // fmtHashPrefix: long HMAC hex → first 16 chars + ellipsis (the
-    // prototype showed a truncated fingerprint). Demo hashes arrive already
-    // truncated with a trailing '…' and pass through unchanged.
+    // prototype showed a truncated fingerprint). A value that is already
+    // truncated (trailing '…') passes through unchanged.
     function fmtHashPrefix(hash) {
         const s = String(hash === null || hash === undefined ? '' : hash);
         if (s === '') return null;
@@ -1021,15 +1021,32 @@
                 stage: 'Ingestion', model: 'pulse-ingest', version: '2.4.1',
                 status: 'pass', score: null, scoreKind: null,
                 audiences: {
-                    public: 'This post came from a public source. Before we saved it, we removed anything that could identify who wrote it. We only keep the city it came from.',
-                    plain: 'Collected via the source’s public API. 2 identifying fields (handle, user ID) were stripped before anything was stored. Location was kept at city level only.',
+                    // Every audience view describes the SAME thing: a fictional
+                    // post bundled with the page. Nothing was collected or
+                    // stored, so no view claims a collection route, stripped
+                    // fields or a legal basis.
+                    public: 'This is a fictional example post bundled with the page, shown because live data could not be loaded. Nothing was collected from anyone, and nothing about it was stored.',
+                    plain: 'Fictional demo post generated in your browser. It was not collected from any source, no identifying fields existed to strip, and nothing was stored.',
                     config: {
-                        pii_fields_removed: 2,
-                        location_granularity: 'city',
-                        dedupe: 'simhash-64',
-                        legal_basis: 'legitimate_interest § 6(1)(f)',
+                        demo_data: true,
+                        collected: false,
+                        stored: false,
+                        // The live system's rule, stated as such (real rule,
+                        // 001_core_schema.sql; no simhash exists); this demo
+                        // post is not subject to it.
+                        dedup_strategy: 'live system: unique source + upstream id: UNIQUE(source_id, external_id)',
+                        legal_basis: 'not applicable: fictional demo data, nothing collected',
                     },
-                    researcher: 'Raw content hashed at ingest; hash is the immutable join key across the audit log.',
+                    // audit_narration@1.4.0 INGEST_HASH_NOTE wording (src/config/
+                    // audit-narration.js), stated conditionally for the demo:
+                    // the live system hashes and serves the digest keyed, but
+                    // a bundled demo post is never stored, so this receipt has
+                    // no hash and no replay. The hash is an integrity check,
+                    // not a join key.
+                    researcher: 'In the live system the stored text is SHA-256 hashed at ingest; each scoring step records the same digest of the '
+                        + 'text it scored as input_hash, which npm run replay re-checks against the stored text, and the live receipt serves it '
+                        + 'only keyed (HMAC-SHA256 with AUDIT_HASH_KEY). It is an integrity check, not a join key. '
+                        + 'This fictional demo post was never stored, so this receipt has no hash and nothing to replay.',
                 },
                 layers: null,
             },
@@ -1046,9 +1063,11 @@
                         intensifier_cap: 1.6,
                         benchmark_accuracy: '87.4% (labeled set n=4,120)',
                     },
+                    // Live receipts give a runnable replay command; this
+                    // fictional demo post was never stored, so it has none.
                     researcher: 'Cue weights: ' + cueLines.join(' · ')
-                        + '. Reproduce: npm run replay -- --post ' + post.id
-                        + ' (fictional demo post — nothing stored to replay)',
+                        + '. For a live post, npm run replay -- --post <post id> re-runs this step; '
+                        + 'this fictional demo post was never stored, so there is nothing to replay.',
                 },
                 layers: null,
             },
@@ -1091,7 +1110,9 @@
 
         return {
             postId: post.id,
-            inputHash: 'sha256:' + pseudoHash(String(post.id)) + '…',
+            // A demo post is never stored or hashed: no input fingerprint is
+            // shown (the post block omits it), matching the Researcher text.
+            inputHash: null,
             isDemo: true,
             post: {
                 content_snippet: post.content_snippet || '',
@@ -1520,7 +1541,7 @@
             }
             const why = el('button', 'btn-why mono', 'why?');
             why.type = 'button';
-            why.addEventListener('click', () => openAudit(p));
+            why.addEventListener('click', () => openAudit(p, why));
             row.appendChild(why);
             post.appendChild(row);
             wrap.appendChild(post);
@@ -1744,17 +1765,77 @@
 
     // ── Audit drawer ────────────────────────────────────────────────────────
 
-    function setDrawerOpen(drawer, open) {
-        if (!drawer) return;
-        drawer.classList.toggle('open', open);
-        drawer.setAttribute('aria-hidden', open ? 'false' : 'true');
+    // The control that opened each drawer, so closing can hand focus back
+    // to it instead of leaving it on the × in a now-hidden (aria-hidden)
+    // drawer.
+    const drawerOpeners = new WeakMap();
+
+    // isElementOutside(node, drawer): a real element that is not <body> and
+    // not inside the drawer — the only kind of opener worth refocusing.
+    function isElementOutside(node, drawer) {
+        return !!node && typeof node.focus === 'function'
+            && node !== document.body && !drawer.contains(node);
     }
 
-    // openAudit(post): the receipt. `post` is a raw /api/query result row
-    // (live) or a demo row from demoPostsForCity. Called by the detail
-    // panel's "why?" buttons and DIRECTLY by story.js's featured-post
-    // button (C3 contract). Freezes the header timer on the FIRST receipt.
-    function openAudit(post) {
+    // setDrawerOpen(drawer, open, control): show/hide a drawer.
+    // Opening: `control` is the element that opened the drawer, passed
+    // explicitly by every click handler — Safari does not focus a button on
+    // a mouse click, so document.activeElement cannot be trusted to name
+    // the opener (Copilot review on PR #40). Only when no control is passed
+    // (a programmatic open) is the focused element remembered instead.
+    // Closing: `control` is the fallback (the drawer's controlling element)
+    // used when the opener is unknown or gone. Focus returns to the opener
+    // (or fallback) whenever it sits inside the drawer or was lost to
+    // <body>; focus the user moved elsewhere stays where it is.
+    function setDrawerOpen(drawer, open, control) {
+        if (!drawer) return;
+        const wasOpen = drawer.classList.contains('open');
+        const active = typeof document !== 'undefined' ? document.activeElement : null;
+        if (open && isElementOutside(control, drawer)) {
+            // An explicit opener always wins, also when a second "why?"
+            // re-targets an already open drawer.
+            drawerOpeners.set(drawer, control);
+        } else if (open && !wasOpen) {
+            if (isElementOutside(active, drawer)) drawerOpeners.set(drawer, active);
+            else drawerOpeners.delete(drawer);
+        }
+        drawer.classList.toggle('open', open);
+        drawer.setAttribute('aria-hidden', open ? 'false' : 'true');
+        if (open && !wasOpen) {
+            // Move focus INTO the drawer on every open. Safari does not focus
+            // a button on a mouse click, so another control (or a notice link)
+            // can still be document.activeElement and a later click on the
+            // drawer's close button would not change it: closing would then
+            // read "focus is elsewhere" and skip the stored opener. With focus
+            // inside the drawer, every close path sees it there and returns it
+            // to the explicitly stored opener (or the fallback control).
+            drawer.setAttribute('tabindex', '-1');
+            if (typeof drawer.focus === 'function') drawer.focus({ preventScroll: true });
+        }
+        if (open || !wasOpen) return;
+
+        const opener = drawerOpeners.get(drawer);
+        drawerOpeners.delete(drawer);
+        const focusLost = !active || active === document.body || drawer.contains(active);
+        if (!focusLost) return;
+        const target = opener && opener.isConnected ? opener
+            : (control && control.isConnected ? control : null);
+        if (target && typeof target.focus === 'function') {
+            target.focus();
+        } else if (active && drawer.contains(active) && typeof active.blur === 'function') {
+            // No control to return to: at least never keep focus hidden.
+            active.blur();
+        }
+    }
+
+    // openAudit(post, opener): the receipt. `post` is a raw /api/query
+    // result row (live) or a demo row from demoPostsForCity. Called by the
+    // detail panel's "why?" buttons and DIRECTLY by story.js's featured-post
+    // button (C3 contract); each passes its own button as `opener` so focus
+    // returns to it when the drawer closes (optional: a caller without one
+    // falls back to the focused element). Freezes the header timer on the
+    // FIRST receipt.
+    function openAudit(post, opener) {
         if (!post || typeof post !== 'object') return;
         if (window.PulseMain
             && typeof window.PulseMain.freezeInsightTimer === 'function') {
@@ -1762,7 +1843,7 @@
         }
         state.auditModel = null;
         renderAuditLoading(post);
-        setDrawerOpen(els.auditDrawer, true);
+        setDrawerOpen(els.auditDrawer, true, opener);
 
         if (state.isDemo || isDemoPostId(post.id) || typeof fetch !== 'function') {
             state.auditModel = demoAuditModel(post);
@@ -1783,6 +1864,10 @@
     }
 
     function closeAudit() {
+        // No fallback control: the opener ("why?") is remembered by
+        // setDrawerOpen. If the explore detail re-rendered while the drawer
+        // was open the opener is gone and focus falls to <body> (never left
+        // in the hidden drawer); the user resumes from the top of the page.
         setDrawerOpen(els.auditDrawer, false);
         // Closing restores the prior view by construction: the drawer is an
         // overlay and no explore/story state was touched to open it.
@@ -1955,8 +2040,10 @@
 
     // ── Health drawer ───────────────────────────────────────────────────────
 
-    function openHealth() {
-        setDrawerOpen(els.healthDrawer, true);
+    // openHealth(opener): `opener` is the control that opened the drawer
+    // (the header chip's click handler passes the chip).
+    function openHealth(opener) {
+        setDrawerOpen(els.healthDrawer, true, opener);
         if (els.healthChip) els.healthChip.setAttribute('aria-expanded', 'true');
         renderHealthLoading();
         if (typeof fetch !== 'function') {
@@ -1976,7 +2063,9 @@
     }
 
     function closeHealth() {
-        setDrawerOpen(els.healthDrawer, false);
+        // The header chip is the drawer's controlling element: the focus
+        // fallback when the opener is unknown.
+        setDrawerOpen(els.healthDrawer, false, els.healthChip);
         if (els.healthChip) els.healthChip.setAttribute('aria-expanded', 'false');
     }
 
@@ -2291,7 +2380,7 @@
             // enterExplore via consumePendingCity().
         });
         document.addEventListener('pulse:trace', (e) => {
-            if (e.detail && e.detail.post) openAudit(e.detail.post);
+            if (e.detail && e.detail.post) openAudit(e.detail.post, e.detail.opener);
         });
         document.addEventListener('pulse:data', (e) => {
             if (e.detail) onCitiesData(e.detail.cities, e.detail.isDemo, e.detail.dataMode);
@@ -2304,7 +2393,7 @@
                     && els.healthDrawer.classList.contains('open')) {
                     closeHealth();
                 } else {
-                    openHealth();
+                    openHealth(els.healthChip);
                 }
             });
         }

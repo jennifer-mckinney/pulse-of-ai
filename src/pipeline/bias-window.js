@@ -1,5 +1,6 @@
 // src/pipeline/bias-window.js
-// The rolling-window fairness checks (bias@1.5.0, PR #22 decision G2,
+// The rolling-window fairness checks (introduced by bias@1.5.0, run under
+// CURRENT_VERSIONS.bias; PR #22 decision G2,
 // approved by Jennifer McKinney on 2026-09-29; ADR 0001) and the
 // insufficient-sample report (PR #22 principal #11).
 //

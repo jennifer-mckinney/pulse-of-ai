@@ -1,0 +1,58 @@
+%% Title: Sequence · POST /api/refresh
+%% Summary: How an on-demand collection is requested: the same-origin guard, the shared-secret check, the in-flight and debounce guards, the 202 hand-off to the worker, and the worker completing the job row.
+%% Sources: src/routes/refresh.js (refreshTokenCheck, boundBeyondLoopback, viaProxy), src/middleware/same-origin.js, src/server.js (mount order, no CORS, listenHost), src/queues/index.js (collect.refresh, ingest), src/workers/collect.worker.js (processRefreshJob, refreshDeadlineMs), src/collectors/runner.js (scoreVia queue), src/workers/ingest.worker.js, src/collectors/cycle.js (reserveRetry, releaseRetry, closeCycles, jobPostsProcessed), src/pipeline/bias.js (runBiasChecks), src/collectors/stale-jobs.js, src/db/migrations/019_refresh_inflight.sql, 040_job_progress.sql. Updated 2026-09-30. Spec: TECHNICAL_SPEC.md section 7 (POST /api/refresh) and section 8 (rate limiting). The page itself never calls this endpoint.
+sequenceDiagram
+  autonumber
+  actor Caller as Caller (browser tab or script)
+  participant Web as web · refresh router (no CORS)
+  participant DB as PostgreSQL
+  participant Q as Valkey · collect.refresh
+  participant W as worker · processRefreshJob
+  participant I as worker · ingest queue
+  participant Src as registry sources
+
+  opt CORS preflight
+    Caller->>Web: OPTIONS /api/refresh
+    Web-->>Caller: 403, no Access-Control-Allow-* headers
+  end
+  Caller->>Web: POST /api/refresh
+  Web->>Web: requireSameOrigin: Sec-Fetch-Site same-origin or none,<br/>without it, Origin (else Referer) host = Host header
+  alt cross-site or unprovable
+    Web-->>Caller: 403 Cross-site request rejected
+  end
+  Web->>Web: REFRESH_TOKEN set → X-Refresh-Token must match (timing-safe),<br/>unset → refused when bound beyond loopback (HOST / PULSE_BIND_ADDR,<br/>a wildcard bind outside the compose container, a non-loopback<br/>published address) or the request came through a proxy<br/>(Forwarded, X-Forwarded-For / -Host, X-Real-IP)
+  alt token missing or wrong
+    Web-->>Caller: 403
+  end
+  Web->>DB: mark 'api' jobs with no progress (last_progress_at, else started_at)<br/>for REFRESH_STALE_MINUTES (30) failed as stale
+  Web->>DB: SELECT a running 'api' job
+  alt one is running
+    Web-->>Caller: 409 with its job_id
+  end
+  alt another refresh accepted in the last 60 s (global, in-process)
+    Web-->>Caller: 429 with Retry-After
+  end
+  Web->>DB: INSERT processing_jobs (triggered_by api, status running)
+  alt unique index uq_processing_jobs_api_running (migration 019) rejects it
+    Web-->>Caller: 409 with the other job_id
+  end
+  Web->>Q: add collect-all { jobId }
+  alt queue unavailable
+    Web->>DB: job failed, debounce budget not spent
+    Web-->>Caller: 503 Collection queue unavailable
+  end
+  Web-->>Caller: 202 { job_id, status: queued, triggered_by: api }
+
+  Q->>W: collect-all job (concurrency 1)
+  W->>DB: job still running? else skip
+  W->>Src: runCollection over every registry source, deadline 80 % of<br/>REFRESH_STALE_MINUTES (same gates, claim and guards as a scheduled run)
+  W->>DB: raw_posts, source_runs, last_progress_at after every source
+  W->>I: one ingest job per new post, each holding a slot on the job (reserveRetry)
+  I->>DB: scores + audit rows under the job, slot released,<br/>embed job when the relevance gate passes
+  alt slots still held when the run ends
+    W->>DB: job awaiting_retries
+    Note over DB: cycle closer (every 30 s) finalizes it once every slot is released<br/>(or its age passes the hard cap max(15 min, 4 × window)):<br/>counts from decision_audit_log, bias checks once, completed
+  else no slot held
+    W->>DB: completed: posts_processed counted from decision_audit_log,<br/>bias checks once when > 0 (cycle.jobPostsProcessed)
+  end
+  Note over DB: maintenance stale-job sweep (every 5 min) fails an 'api' job<br/>with no progress for REFRESH_STALE_MINUTES
