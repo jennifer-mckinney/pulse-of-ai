@@ -185,7 +185,7 @@ describe('scripts/gold-label.js', () => {
         expect(() => store.hashKey({})).toThrow(/GOLD_HASH_KEY/);
         expect(() => store.hashKey({ GOLD_HASH_KEY: 'short' })).toThrow(/GOLD_HASH_KEY/);
         const audit = 'audit-key-0123456789-abcdefghijklmnop';
-        expect(store.hashKey({ AUDIT_HASH_KEY: audit })).toBe(audit);
+        expect(store.hashKey({ AUDIT_HASH_KEY: audit }, jest.fn())).toBe(audit);
         // The .env.example template values are public, so never a key.
         expect(() => store.hashKey({ GOLD_HASH_KEY: '', AUDIT_HASH_KEY: 'replace_with_random_64_hex_chars' })).toThrow(/template value/);
     });
@@ -194,7 +194,7 @@ describe('scripts/gold-label.js', () => {
         const audit = 'audit-key-0123456789-abcdefghijklmnop';
         expect(() => store.hashKey({ GOLD_HASH_KEY: 'x'.repeat(31), AUDIT_HASH_KEY: audit })).toThrow(/GOLD_HASH_KEY is set but invalid/);
         expect(() => store.hashKey({ GOLD_HASH_KEY: 'a'.repeat(40) })).toThrow(/GOLD_HASH_KEY/);   // one repeated character is not a key
-        expect(store.hashKey({ GOLD_HASH_KEY: '', AUDIT_HASH_KEY: audit })).toBe(audit);   // unset or empty: the audit key
+        expect(store.hashKey({ GOLD_HASH_KEY: '', AUDIT_HASH_KEY: audit }, jest.fn())).toBe(audit);   // unset or empty: the audit key
     });
 
     it('a low-variety key is refused however long it is; a random 64-hex key is accepted', () => {
@@ -235,6 +235,41 @@ describe('scripts/gold-label.js', () => {
         });
     });
 
+    describe('GOLD_HASH_KEY equality and whitespace (every environment)', () => {
+        const crypto = require('crypto');
+        const k = () => crypto.randomBytes(32).toString('hex');
+
+        it('refuses an explicit GOLD_HASH_KEY equal to another secret in dev/test too', () => {
+            const v = k();
+            for (const other of ['AUDIT_HASH_KEY', 'PROVENANCE_KEY', 'CORRELATION_SALT']) {
+                expect(() => store.hashKey({ NODE_ENV: 'test', GOLD_HASH_KEY: v, [other]: v }, jest.fn())).toThrow(/separate secret/);
+                expect(() => store.hashKey({ GOLD_HASH_KEY: v, [other]: v }, jest.fn())).toThrow(/separate secret/);
+            }
+        });
+
+        it('whitespace variants do not bypass the equality check (other secret carries the whitespace)', () => {
+            const v = k();
+            for (const env of [{ NODE_ENV: 'production' }, { NODE_ENV: 'test' }]) {
+                expect(() => store.hashKey({ ...env, GOLD_HASH_KEY: v, AUDIT_HASH_KEY: `${v} ` }, jest.fn())).toThrow(/equals AUDIT_HASH_KEY/);
+                expect(() => store.hashKey({ ...env, GOLD_HASH_KEY: v, AUDIT_HASH_KEY: `${v}\n` }, jest.fn())).toThrow(/equals AUDIT_HASH_KEY/);
+                expect(() => store.hashKey({ ...env, GOLD_HASH_KEY: v, PROVENANCE_KEY: ` ${v}\n` }, jest.fn())).toThrow(/equals PROVENANCE_KEY/);
+            }
+        });
+
+        it('a GOLD_HASH_KEY with leading or trailing whitespace is refused (GOLD carries the whitespace)', () => {
+            const v = k();
+            for (const g of [`${v} `, `${v}\n`, ` ${v}`, '   ']) {
+                expect(() => store.hashKey({ NODE_ENV: 'test', GOLD_HASH_KEY: g, AUDIT_HASH_KEY: v }, jest.fn())).toThrow(/whitespace/);
+                expect(() => store.hashKey({ NODE_ENV: 'production', GOLD_HASH_KEY: g, AUDIT_HASH_KEY: v }, jest.fn())).toThrow(/whitespace/);
+            }
+        });
+
+        it('the CLI path under NODE_ENV=production fails at assertLocalOnly, before any key is read', async () => {
+            await expect(goldSample.main(['--total', '2', '--seed', 's'], { env: { NODE_ENV: 'production', POSTGRES_HOST: 'localhost', GOLD_HASH_KEY: k() }, out: quiet }))
+                .rejects.toThrow(/local-only.*NODE_ENV=production/);
+        });
+    });
+
     describe('GOLD_HASH_KEY outside production', () => {
         it('falls back to AUDIT_HASH_KEY with a one-line notice', () => {
             const a = require('crypto').randomBytes(32).toString('hex');
@@ -245,6 +280,22 @@ describe('scripts/gold-label.js', () => {
             expect(msg).toMatch(/GOLD_HASH_KEY is not set/);
             expect(msg).not.toMatch(/\n./);
             expect(msg).not.toContain(a);   // never echo the key
+        });
+
+        it('the default notice path writes to stderr exactly once per process, whatever the call count', () => {
+            const a = require('crypto').randomBytes(32).toString('hex');
+            store.resetNoticeForTests();
+            const spy = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
+            try {
+                store.hashKey({ AUDIT_HASH_KEY: a });
+                store.hashKey({ AUDIT_HASH_KEY: a });
+                expect(spy).toHaveBeenCalledTimes(1);
+                expect(String(spy.mock.calls[0][0])).not.toContain(a);
+                expect(String(spy.mock.calls[0][0])).toMatch(/orphan|read as changed/);
+            } finally {
+                spy.mockRestore();
+                store.resetNoticeForTests();
+            }
         });
 
         it('prints no notice when GOLD_HASH_KEY is set', () => {

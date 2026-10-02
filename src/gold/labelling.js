@@ -35,6 +35,7 @@
 'use strict';
 
 const { LABELS, FLAGS, METHODS, CODEBOOK_VERSION } = require('./codebook');
+const { isProductionEnv } = require('../config/key-strength');
 
 const LABEL_KEYS = Object.freeze({ c: 'AI_CENTRAL', i: 'AI_INCIDENTAL', n: 'NOT_AI' });
 const FLAG_KEYS = Object.freeze({ s: 'SPAM', b: 'BOT_GENERATED', l: 'LANG' });
@@ -148,7 +149,7 @@ function parseAnswer(input) {
  * @param {NodeJS.ProcessEnv} env
  */
 function assertLocalOnly(env = process.env) {
-    if (String(env.NODE_ENV || '').trim().toLowerCase() === 'production') {
+    if (isProductionEnv(env)) {
         throw new Error('gold tools are local-only: refusing to run with NODE_ENV=production');
     }
     const host = String(env.POSTGRES_HOST || '').trim().toLowerCase();

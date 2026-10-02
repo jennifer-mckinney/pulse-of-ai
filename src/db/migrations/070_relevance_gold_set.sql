@@ -9,7 +9,7 @@
 --    and sample size, the stratum weight used for allocation and the DESIGN
 --    WEIGHT N_h / n_h, the deterministic draw rank sha256(seed:post id), the
 --    sampler version and seed, and input_hash, the KEYED fingerprint
---    HMAC-SHA256(GOLD_HASH_KEY or AUDIT_HASH_KEY, text) of the post text the
+--    HMAC-SHA256(GOLD_HASH_KEY, text) of the post text the
 --    sampler saw. It is keyed so it cannot be used to confirm that a person
 --    wrote a guessed text.
 --    NO post text is copied: the labelling tool reads raw_posts at labelling

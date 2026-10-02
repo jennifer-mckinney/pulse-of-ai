@@ -6,9 +6,8 @@
 //
 // Offline only: nothing in the production pipeline requires src/gold.
 //
-// input_hash is KEYED: HMAC-SHA256(GOLD_HASH_KEY; AUDIT_HASH_KEY only as a dev/test fallback,
-// never in production: GOLD_HASH_KEY is a separate production secret,
-// "gold-input:v1\0" + text). An unkeyed sha256 of a post's text would let
+// input_hash is KEYED: HMAC-SHA256(GOLD_HASH_KEY, "gold-input:v1\0" + text); AUDIT_HASH_KEY is only a dev/test
+// fallback when GOLD_HASH_KEY is unset (see hashKey). An unkeyed sha256 of a post's text would let
 // anyone with database access confirm that a person wrote a guessed text, and
 // the gold rows are immutable. There is no fallback to an unkeyed hash. The
 // key must stay the same between sampling and labelling: rotating it makes
@@ -24,7 +23,8 @@ const { scriptOf, scopeOf, decisionOf, SAMPLER_VERSION } = require('./sampler');
 
 const { MIN_KEY_LENGTH, isStrongKey, isProductionEnv } = require('../config/key-strength');
 
-// Other deployment secrets GOLD_HASH_KEY must never equal in production (owner decision 2026-10-02).
+// Other deployment secrets GOLD_HASH_KEY must never equal (owner decision 2026-10-02). Compared trimmed, because
+// src/provenance.js trims its keys, so "key\n" and "key" are the same secret.
 const OTHER_SECRETS = ['AUDIT_HASH_KEY', 'PROVENANCE_KEY', 'CORRELATION_SALT'];
 
 let noticePrinted = false;
@@ -35,10 +35,19 @@ function defaultWarn(msg) {
     process.stderr.write(`${msg}\n`);
 }
 
+/** Test-only: re-arm the once-per-process notice latch. */
+function resetNoticeForTests() {
+    noticePrinted = false;
+}
+
 /**
- * The hash key. Production: GOLD_HASH_KEY is REQUIRED and must be a separate secret (it may not be unset, nor equal
- * AUDIT_HASH_KEY / PROVENANCE_KEY / CORRELATION_SALT). Outside production (dev/test) an unset GOLD_HASH_KEY falls
- * back to AUDIT_HASH_KEY with a one-line notice. Throws when no usable key exists.
+ * The hash key. GOLD_HASH_KEY is a separate secret (owner decision 2026-10-02):
+ *  - An explicit GOLD_HASH_KEY must have no leading/trailing whitespace, be strong, and (in every environment) must
+ *    not equal AUDIT_HASH_KEY / PROVENANCE_KEY / CORRELATION_SALT, compared trimmed. The check only sees secrets
+ *    present in the invoking environment.
+ *  - Unset or empty: in production this is an error; in dev/test it falls back to AUDIT_HASH_KEY with a one-line notice.
+ * The shipped gold CLIs are local-only (assertLocalOnly refuses NODE_ENV=production before any key is read), so the
+ * production rules are defence in depth for non-CLI callers of this module. Throws when no usable key exists.
  */
 function hashKey(env = process.env, warn = defaultWarn) {
     const production = isProductionEnv(env);
@@ -46,12 +55,15 @@ function hashKey(env = process.env, warn = defaultWarn) {
     // fingerprint a sample under the audit key (fixing the typo later would orphan every item).
     const gold = env.GOLD_HASH_KEY;
     if (typeof gold === 'string' && gold !== '') {
+        if (gold !== gold.trim()) {
+            throw new Error('GOLD_HASH_KEY is set but invalid: it has leading or trailing whitespace (a newline pasted with the value?)');
+        }
         if (!isStrongKey(gold)) {
             throw new Error(`GOLD_HASH_KEY is set but invalid: it needs at least ${MIN_KEY_LENGTH} characters, enough character variety (generate one with openssl rand -hex 32) and not a template value${production ? '' : ' (unset it to use AUDIT_HASH_KEY outside production)'}`);
         }
-        if (production) {
-            for (const name of OTHER_SECRETS) {
-                if (env[name] === gold) throw new Error(`GOLD_HASH_KEY must be a separate secret in production: it equals ${name}; generate its own with openssl rand -hex 32`);
+        for (const name of OTHER_SECRETS) {
+            if (typeof env[name] === 'string' && env[name].trim() === gold) {
+                throw new Error(`GOLD_HASH_KEY must be a separate secret: it equals ${name} (ignoring whitespace); generate its own with openssl rand -hex 32`);
             }
         }
         return gold;
@@ -60,7 +72,7 @@ function hashKey(env = process.env, warn = defaultWarn) {
         throw new Error('GOLD_HASH_KEY is required in production and must be a separate secret from AUDIT_HASH_KEY (generate one with openssl rand -hex 32)');
     }
     if (isStrongKey(env.AUDIT_HASH_KEY)) {
-        warn('notice: GOLD_HASH_KEY is not set; using AUDIT_HASH_KEY (dev/test only; production requires a separate GOLD_HASH_KEY)');
+        warn('notice: GOLD_HASH_KEY is not set; using AUDIT_HASH_KEY (dev/test only). Setting a separate GOLD_HASH_KEY later changes every fingerprint, so existing dev gold items would read as changed');
         return env.AUDIT_HASH_KEY;
     }
     throw new Error(`gold tools need GOLD_HASH_KEY (or, outside production, AUDIT_HASH_KEY), at least ${MIN_KEY_LENGTH} characters, enough character variety (generate one with openssl rand -hex 32) and not a template value, to fingerprint post text`);
@@ -387,7 +399,7 @@ async function eraseRemoved() {
 }
 
 module.exports = {
-    readOnly, streamEvalRows, hashKey, inputHash,
+    readOnly, streamEvalRows, hashKey, inputHash, resetNoticeForTests,
     streamCandidates, sampleExists, insertItems, labelRows, pendingItems, getItem, itemText, labelsFor,
     recordLabel, recordLabels, liveItemCount, erasePost, eraseRemoved, postTextGone,
 };
