@@ -144,7 +144,8 @@ test('legal notice: a class change on an already-open drawer keeps the panel ope
         document.getElementById('about-chip').setAttribute('aria-expanded', 'true');
         document.getElementById('health-drawer').classList.add('unrelated-state');
     });
-    await page.waitForTimeout(100);
+    // two animation frames: the observer's microtask has long run by then
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(null)))));
     await expect(page.locator('#about-panel')).toBeVisible();
     await expect(page.locator('#about-chip')).toHaveAttribute('aria-expanded', 'true');
 });
@@ -177,7 +178,7 @@ test('legal notice: a drawer opened from a focused notice link returns focus to 
     await expect(page.locator('#about-chip')).toBeFocused();
 });
 
-for (const width of [320, 600]) {
+for (const width of [320, 540, 600]) {
     test(`legal notice: at ${width}px the panel opens below the header and inside the viewport`, async ({ page }) => {
         await page.setViewportSize({ width, height: 800 });
         await gotoAndWaitForData(page);

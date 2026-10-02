@@ -150,7 +150,7 @@ body {
   max-width: min(360px, calc(100% - 56px));
   /* .stage is fixed and clips overflow: at a narrow or zoomed viewport the
      wrapped notices would run below it, so the panel is bounded to the
-     space under its top (64px, clear of the 60px-tall header chips) less a 16px margin and scrolls (Copilot
+     space under its top (64px, clear of the one-row header chips, which end near 50px; the 520px block below handles the wrapped header) less a 16px margin and scrolls (Copilot
      r4158623080). Percentages resolve against the full-viewport .stage. */
   max-height: calc(100% - 80px); overflow-y: auto; overscroll-behavior: contain;
   border: 1px solid var(--line); border-radius: 4px; padding: 10px 14px;

@@ -280,6 +280,7 @@
                 const d = document.getElementById(id);
                 if (d) observer.observe(d, { attributes: true, attributeFilter: ['class'], attributeOldValue: true });
             });
+            syncChip();
         }
     }
 
