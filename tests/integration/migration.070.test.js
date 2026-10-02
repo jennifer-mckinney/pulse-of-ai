@@ -141,6 +141,14 @@ describe('migration 070: relevance gold set', () => {
         expect(BigInt(rows[1].seq) > BigInt(rows[0].seq)).toBe(true);
     });
 
+    it('seq is GENERATED ALWAYS: an explicit seq is rejected', async () => {
+        const item = await insertItem();
+        await expect(dbRun(
+            `INSERT INTO relevance_gold_labels (item_id, label, labeller, method, codebook_version, input_hash, seq)
+             VALUES ($1, 'NOT_AI', 'ann', 'human', '1.0.0', $2, 5)`, [item, H('a')],
+        )).rejects.toThrow(/generated always|cannot insert/i);
+    });
+
     it.each([['relevance_gold_items'], ['relevance_gold_labels']])('%s refuses TRUNCATE unless the transaction opts in', async (table) => {
         const item = await insertItem();
         await insertLabel(item);

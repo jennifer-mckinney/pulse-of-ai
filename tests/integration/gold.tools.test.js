@@ -408,6 +408,11 @@ describe('scripts/gold-erase.js (the erasure path)', () => {
 
     it('--post erases one post\'s gold rows and nothing else', async () => {
         const out = [];
+        // A post that still has text is refused (its gold rows are not stale yet).
+        await expect(goldErase.main(['--post', ids.llm], { env: LOCAL, out: quiet })).rejects.toThrow(/still has text/);
+        expect((await dbGet('SELECT COUNT(*)::int AS n FROM relevance_gold_items WHERE erased_at IS NOT NULL')).n).toBe(0);
+        // Once retention has removed the text, the erase proceeds.
+        await dbRun(`UPDATE raw_posts SET content = '', text_removed_at = NOW() WHERE id = $1`, [ids.llm]);
         const r = await goldErase.main(['--post', ids.llm], { env: LOCAL, out: l => out.push(l) });
         expect(r.erased).toBe(1);
         const gone = await dbGet(`SELECT raw_post_id, input_hash, erased_at FROM relevance_gold_items WHERE erased_at IS NOT NULL`);
@@ -454,6 +459,20 @@ describe('scripts/gold-sample.js two passes', () => {
         } finally {
             spy.mockRestore();
         }
+        expect((await dbGet('SELECT COUNT(*)::int AS n FROM relevance_gold_items')).n).toBe(0);
+    });
+});
+
+describe('store.insertItems revalidates the post under a row lock', () => {
+    it('refuses a post whose text was removed after the draw, writing nothing', async () => {
+        const { ids } = await seedPopulation();
+        const drawn = [];
+        for await (const c of store.streamCandidates({})) if (c.rawPostId === ids.llm) drawn.push(c);
+        expect(drawn).toHaveLength(1);
+        const item = { ...drawn[0], stratum: 's', stratumPopulation: 1, stratumSampleSize: 1, stratumWeight: 1, designWeight: 1, drawRank: 'a'.repeat(64) };
+        // Retention removes the text between the draw and the insert.
+        await dbRun(`UPDATE raw_posts SET content = '', text_removed_at = NOW() WHERE id = $1`, [ids.llm]);
+        await expect(store.insertItems([item], { sampleId: 'gold-lost', seed: 's' })).rejects.toThrow(/lost or changed its text/);
         expect((await dbGet('SELECT COUNT(*)::int AS n FROM relevance_gold_items')).n).toBe(0);
     });
 });
