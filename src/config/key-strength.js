@@ -29,4 +29,9 @@ function isStrongKey(v) {
         && entropyBits(v) >= MIN_KEY_ENTROPY_BITS;
 }
 
-module.exports = { MIN_KEY_LENGTH, MIN_KEY_ENTROPY_BITS, entropyBits, isStrongKey };
+/** True when the environment is production (same case/space-insensitive test as the gold tools' local-only guard). */
+function isProductionEnv(env = process.env) {
+    return String(env.NODE_ENV || '').trim().toLowerCase() === 'production';
+}
+
+module.exports = { MIN_KEY_LENGTH, MIN_KEY_ENTROPY_BITS, entropyBits, isStrongKey, isProductionEnv };

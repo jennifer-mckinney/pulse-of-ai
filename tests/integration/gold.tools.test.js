@@ -203,6 +203,57 @@ describe('scripts/gold-label.js', () => {
         expect(store.hashKey({ GOLD_HASH_KEY: strong })).toBe(strong);
     });
 
+    // Owner decision 2026-10-02: GOLD_HASH_KEY is a separate production secret, never AUDIT_HASH_KEY.
+    describe('GOLD_HASH_KEY in production', () => {
+        const crypto = require('crypto');
+        const audit = () => crypto.randomBytes(32).toString('hex');
+        const prod = { NODE_ENV: 'production' };
+
+        it('refuses to run when GOLD_HASH_KEY is unset or empty, even with a strong AUDIT_HASH_KEY', () => {
+            const a = audit();
+            expect(() => store.hashKey({ ...prod, AUDIT_HASH_KEY: a })).toThrow(/GOLD_HASH_KEY is required in production/);
+            expect(() => store.hashKey({ ...prod, GOLD_HASH_KEY: '', AUDIT_HASH_KEY: a })).toThrow(/GOLD_HASH_KEY is required in production/);
+            expect(() => store.hashKey({ NODE_ENV: ' Production ', AUDIT_HASH_KEY: a })).toThrow(/required in production/);   // case/space-insensitive like the local-only guard
+        });
+
+        it('refuses a GOLD_HASH_KEY equal to AUDIT_HASH_KEY, PROVENANCE_KEY or CORRELATION_SALT', () => {
+            const k = audit();
+            for (const other of ['AUDIT_HASH_KEY', 'PROVENANCE_KEY', 'CORRELATION_SALT']) {
+                expect(() => store.hashKey({ ...prod, GOLD_HASH_KEY: k, [other]: k })).toThrow(new RegExp(`separate secret.*${other}`));
+            }
+        });
+
+        it('works with a distinct strong key and prints no notice', () => {
+            const g = audit();
+            const warn = jest.fn();
+            expect(store.hashKey({ ...prod, GOLD_HASH_KEY: g, AUDIT_HASH_KEY: audit(), PROVENANCE_KEY: audit() }, warn)).toBe(g);
+            expect(warn).not.toHaveBeenCalled();
+        });
+
+        it('still refuses a weak GOLD_HASH_KEY in production', () => {
+            expect(() => store.hashKey({ ...prod, GOLD_HASH_KEY: 'short' })).toThrow(/set but invalid/);
+        });
+    });
+
+    describe('GOLD_HASH_KEY outside production', () => {
+        it('falls back to AUDIT_HASH_KEY with a one-line notice', () => {
+            const a = require('crypto').randomBytes(32).toString('hex');
+            const warn = jest.fn();
+            expect(store.hashKey({ NODE_ENV: 'test', AUDIT_HASH_KEY: a }, warn)).toBe(a);
+            expect(warn).toHaveBeenCalledTimes(1);
+            const msg = warn.mock.calls[0][0];
+            expect(msg).toMatch(/GOLD_HASH_KEY is not set/);
+            expect(msg).not.toMatch(/\n./);
+            expect(msg).not.toContain(a);   // never echo the key
+        });
+
+        it('prints no notice when GOLD_HASH_KEY is set', () => {
+            const warn = jest.fn();
+            store.hashKey({ GOLD_HASH_KEY: require('crypto').randomBytes(32).toString('hex') }, warn);
+            expect(warn).not.toHaveBeenCalled();
+        });
+    });
+
     it('prints post text with terminal escapes neutralised', async () => {
         await dbRun(`UPDATE raw_posts SET content = $2 WHERE id = $1`, [ids.vacuum, 'robot vacuum \u001b]52;c;QQ==\u0007 on sale']);
         await goldSample.main(['--total', '6', '--seed', 'seed-esc', '--min-per-stratum', '1', '--sample-id', 'gold-esc', '--write'], { out: quiet });

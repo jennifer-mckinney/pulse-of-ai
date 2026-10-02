@@ -2,7 +2,7 @@
 'use strict';
 
 const crypto = require('crypto');
-const { isStrongKey, entropyBits, MIN_KEY_ENTROPY_BITS } = require('../../../src/config/key-strength');
+const { isStrongKey, isProductionEnv, entropyBits, MIN_KEY_ENTROPY_BITS } = require('../../../src/config/key-strength');
 
 describe('isStrongKey', () => {
     it('accepts a random 64-hex key and a long mixed passphrase', () => {
@@ -24,5 +24,14 @@ describe('isStrongKey', () => {
         expect(entropyBits('abab')).toBeCloseTo(4, 5);
         expect(entropyBits('abcdefgh'.repeat(4))).toBeCloseTo(96, 5);
         expect(MIN_KEY_ENTROPY_BITS).toBe(128);
+    });
+});
+
+describe('isProductionEnv', () => {
+    it('matches NODE_ENV=production ignoring case and surrounding space, nothing else', () => {
+        expect(isProductionEnv({ NODE_ENV: 'production' })).toBe(true);
+        expect(isProductionEnv({ NODE_ENV: ' PRODUCTION ' })).toBe(true);
+        expect(isProductionEnv({ NODE_ENV: 'test' })).toBe(false);
+        expect(isProductionEnv({})).toBe(false);
     });
 });

@@ -6,7 +6,8 @@
 //
 // Offline only: nothing in the production pipeline requires src/gold.
 //
-// input_hash is KEYED: HMAC-SHA256(GOLD_HASH_KEY, else AUDIT_HASH_KEY,
+// input_hash is KEYED: HMAC-SHA256(GOLD_HASH_KEY; AUDIT_HASH_KEY only as a dev/test fallback,
+// never in production: GOLD_HASH_KEY is a separate production secret,
 // "gold-input:v1\0" + text). An unkeyed sha256 of a post's text would let
 // anyone with database access confirm that a person wrote a guessed text, and
 // the gold rows are immutable. There is no fallback to an unkeyed hash. The
@@ -21,19 +22,48 @@ const { DEMO_SOURCE_TYPE } = require('../config/data-mode');
 const { latestPerLabeller } = require('./agreement');
 const { scriptOf, scopeOf, decisionOf, SAMPLER_VERSION } = require('./sampler');
 
-const { MIN_KEY_LENGTH, isStrongKey } = require('../config/key-strength');
+const { MIN_KEY_LENGTH, isStrongKey, isProductionEnv } = require('../config/key-strength');
 
-/** The hash key (GOLD_HASH_KEY, else AUDIT_HASH_KEY); throws when neither is set or it is too weak. */
-function hashKey(env = process.env) {
+// Other deployment secrets GOLD_HASH_KEY must never equal in production (owner decision 2026-10-02).
+const OTHER_SECRETS = ['AUDIT_HASH_KEY', 'PROVENANCE_KEY', 'CORRELATION_SALT'];
+
+let noticePrinted = false;
+/** One-line dev/test notice on stderr, once per process (inputHash runs per post); never includes a key. */
+function defaultWarn(msg) {
+    if (noticePrinted) return;
+    noticePrinted = true;
+    process.stderr.write(`${msg}\n`);
+}
+
+/**
+ * The hash key. Production: GOLD_HASH_KEY is REQUIRED and must be a separate secret (it may not be unset, nor equal
+ * AUDIT_HASH_KEY / PROVENANCE_KEY / CORRELATION_SALT). Outside production (dev/test) an unset GOLD_HASH_KEY falls
+ * back to AUDIT_HASH_KEY with a one-line notice. Throws when no usable key exists.
+ */
+function hashKey(env = process.env, warn = defaultWarn) {
+    const production = isProductionEnv(env);
     // An explicitly configured GOLD_HASH_KEY is never silently replaced: a typo must fail, not
     // fingerprint a sample under the audit key (fixing the typo later would orphan every item).
     const gold = env.GOLD_HASH_KEY;
     if (typeof gold === 'string' && gold !== '') {
-        if (isStrongKey(gold)) return gold;
-        throw new Error(`GOLD_HASH_KEY is set but invalid: it needs at least ${MIN_KEY_LENGTH} characters, enough character variety (generate one with openssl rand -hex 32) and not a template value (unset it to use AUDIT_HASH_KEY)`);
+        if (!isStrongKey(gold)) {
+            throw new Error(`GOLD_HASH_KEY is set but invalid: it needs at least ${MIN_KEY_LENGTH} characters, enough character variety (generate one with openssl rand -hex 32) and not a template value${production ? '' : ' (unset it to use AUDIT_HASH_KEY outside production)'}`);
+        }
+        if (production) {
+            for (const name of OTHER_SECRETS) {
+                if (env[name] === gold) throw new Error(`GOLD_HASH_KEY must be a separate secret in production: it equals ${name}; generate its own with openssl rand -hex 32`);
+            }
+        }
+        return gold;
     }
-    if (isStrongKey(env.AUDIT_HASH_KEY)) return env.AUDIT_HASH_KEY;
-    throw new Error(`gold tools need GOLD_HASH_KEY (or AUDIT_HASH_KEY), at least ${MIN_KEY_LENGTH} characters, enough character variety (generate one with openssl rand -hex 32) and not a template value, to fingerprint post text`);
+    if (production) {
+        throw new Error('GOLD_HASH_KEY is required in production and must be a separate secret from AUDIT_HASH_KEY (generate one with openssl rand -hex 32)');
+    }
+    if (isStrongKey(env.AUDIT_HASH_KEY)) {
+        warn('notice: GOLD_HASH_KEY is not set; using AUDIT_HASH_KEY (dev/test only; production requires a separate GOLD_HASH_KEY)');
+        return env.AUDIT_HASH_KEY;
+    }
+    throw new Error(`gold tools need GOLD_HASH_KEY (or, outside production, AUDIT_HASH_KEY), at least ${MIN_KEY_LENGTH} characters, enough character variety (generate one with openssl rand -hex 32) and not a template value, to fingerprint post text`);
 }
 
 /** Keyed fingerprint of a post's text (relevance_gold_*.input_hash). */
