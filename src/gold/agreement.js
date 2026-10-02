@@ -61,7 +61,23 @@ function cohenKappa(pairs) {
     }
     if (pe >= 1) return { n, po, pe, kappa: null, se: null, ci95: null, categories, confusion };
     const kappa = (po - pe) / (1 - pe);
-    const se = Math.sqrt((po * (1 - po)) / (n * (1 - pe) ** 2));
+    // Large-sample variance of kappa with the chance agreement ESTIMATED, not fixed
+    // (Fleiss, Cohen & Everitt 1969). When it is not positive (perfect or no agreement on a tiny
+    // sample) the normal approximation is not valid, so no interval is reported.
+    const p = (a, b) => confusion[a][b] / n;
+    const rowM = new Map(categories.map(c => [c, categories.reduce((s, b) => s + p(c, b), 0)]));
+    const colM = new Map(categories.map(c => [c, categories.reduce((s, a) => s + p(a, c), 0)]));
+    let t1 = 0;
+    let t2 = 0;
+    for (const a of categories) {
+        t1 += p(a, a) * ((1 - pe) - (rowM.get(a) + colM.get(a)) * (1 - po)) ** 2;
+        for (const b of categories) if (a !== b) t2 += p(a, b) * (colM.get(a) + rowM.get(b)) ** 2;
+    }
+    const variance = (t1 + (1 - po) ** 2 * t2 - (po * pe - 2 * pe + po) ** 2) / (n * (1 - pe) ** 4);
+    if (po === 1 || !(variance > 1e-12) || !Number.isFinite(variance)) {
+        return { n, po, pe, kappa, se: null, ci95: null, categories, confusion };
+    }
+    const se = Math.sqrt(variance);
     const clamp = (x) => Math.max(-1, Math.min(1, x));
     return { n, po, pe, kappa, se, ci95: [clamp(kappa - 1.96 * se), clamp(kappa + 1.96 * se)], categories, confusion };
 }

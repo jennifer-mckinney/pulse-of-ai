@@ -149,6 +149,8 @@ describe('review fixes: import namespace, terminal safety, notes, local-only por
     it('labeller names: the llm: namespace is reserved, control characters and long names refused', () => {
         expect(() => l.validateLabeller('LLM:x')).toThrow(/reserved/);
         expect(() => l.validateLabeller('a\u001bb')).toThrow(/control/);
+        expect(() => l.validateLabeller('ann\nlabelled 5 item(s)')).toThrow(/control/);
+        expect(() => l.validateLabeller('a\tb')).toThrow(/control/);
         expect(() => l.validateLabeller('x'.repeat(101))).toThrow(/100/);
         expect(l.validateLabeller('  ann ')).toBe('ann');
     });
@@ -186,6 +188,21 @@ describe('review fixes: import namespace, terminal safety, notes, local-only por
         expect(out.join('\n')).not.toMatch(/bob/);
         expect(rec).toHaveLength(1);
         await expect(l.runSession({ store, io: {}, labeller: 'ann', sampleId: 's', itemId: 'nope' })).rejects.toThrow(/UUID/);
+    });
+});
+
+describe('review fixes round 5: single-line identifiers', () => {
+    it('oneLine turns the newline and tab sanitize() keeps into spaces', () => {
+        expect(l.oneLine('a\nb\tc\u001b')).toBe('a b c\uFFFD');
+        expect(l.hasControl('a\nb')).toBe(true);
+        expect(l.hasControl('plain-name_1')).toBe(false);
+    });
+
+    it('a sample id with a newline cannot start a fake output line', async () => {
+        const out = [];
+        const store = { pendingItems: async () => [] };
+        await l.runSession({ store, io: { print: (m) => out.push(m), ask: async () => null }, labeller: 'ann', sampleId: 's\nFAKE: done' });
+        expect(out.join('\n')).not.toMatch(/\nFAKE/);
     });
 });
 

@@ -170,7 +170,7 @@ Each case below is labelled **by the label definitions in section 3 until it is 
   - the confusion matrix;
   - an ordinal (linearly weighted) κ, which counts central vs incidental as a smaller disagreement than central vs not-AI;
   - a design-weighted κ (each item counts N_h / n_h times).
-- **κ is sample-conditional.** The sample over-samples rare strata on purpose, and κ depends on prevalence, so the κ over the sample is not the population κ. Read the design-weighted κ as the closer estimate of the population value; the sample κ and its interval describe the labelling exercise. The interval is a large-sample approximation and is only indicative at small n.
+- **κ is sample-conditional.** The sample over-samples rare strata on purpose, and κ depends on prevalence, so the κ over the sample is not the population κ. Read the design-weighted κ as the closer estimate of the population value; the sample κ and its interval describe the labelling exercise. The interval is the large-sample (Fleiss, Cohen and Everitt) approximation with chance agreement estimated from the data; it is only indicative at small n, and none is reported when agreement is perfect or the variance is zero, because the approximation is not valid there.
 - **Below 300 shared items every reading is indicative only**; the report says so.
 - **Thresholds:**
 
@@ -201,7 +201,7 @@ Each case below is labelled **by the label definitions in section 3 until it is 
 ## 8. Data handling
 
 - **The gold tables never copy post text.**
-  - An item stores the post id, a **keyed** fingerprint of the text the sampler saw (`input_hash` = HMAC-SHA256 with `GOLD_HASH_KEY`, else `AUDIT_HASH_KEY`), and the stratum and design weight. The key is what stops anyone with database access from confirming that a person wrote a guessed text. Keep the key unchanged between sampling and labelling: rotating it makes every item read as changed.
+  - An item stores the post id, a **keyed** fingerprint of the text the sampler saw (`input_hash` = HMAC-SHA256 with `GOLD_HASH_KEY`, else `AUDIT_HASH_KEY`), and the stratum and design weight. The key is what stops anyone with database access from confirming that a person wrote a guessed text. A `GOLD_HASH_KEY` that is set but invalid (too short, or a template value) is an error and never falls back to `AUDIT_HASH_KEY`; leave it unset to use the audit key. Keep the key unchanged between sampling and labelling: rotating it makes every item read as changed.
   - The labelling tool reads the text from `raw_posts` at labelling time and checks the hash.
   - When retention has removed the text, or the text changed, the item is skipped and not labelled.
   - So text retention, including Jennifer's decision to "remove text of non-AI posts early" when it is wired in a later release, applies to the gold set without exception.

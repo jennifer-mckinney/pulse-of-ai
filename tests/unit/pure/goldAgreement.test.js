@@ -24,7 +24,23 @@ describe('cohenKappa', () => {
     it('perfect agreement over two or more categories is kappa 1', () => {
         const r = a.cohenKappa(pairsFrom({ 'A/A': 3, 'B/B': 4, 'C/C': 5 }));
         expect(r.kappa).toBe(1);
-        expect(r.ci95[1]).toBe(1);
+        // Perfect agreement has no valid normal-approximation interval: none is reported.
+        expect(r.ci95).toBeNull();
+    });
+
+    it('never reports a certain-looking interval from a tiny sample (two agreeing items)', () => {
+        const r = a.cohenKappa(pairsFrom({ 'A/A': 1, 'B/B': 1 }));
+        expect(r.kappa).toBe(1);
+        expect(r.ci95).toBeNull();
+    });
+
+    it('the interval uses the estimated-chance-agreement variance (Fleiss, Cohen & Everitt 1969)', () => {
+        const r = a.cohenKappa(pairsFrom({ 'Y/Y': 20, 'Y/N': 5, 'N/Y': 10, 'N/N': 15 }));
+        // Worked by hand from the published formula (po .7, pe .5, n 50): the numerator terms are
+        // .02743 + .09 * .283 - .05^2 = .0504, over 50 * .5^4, so variance .016128 and se .1270.
+        expect(r.se).toBeCloseTo(0.1270, 4);
+        expect(r.ci95[0]).toBeCloseTo(0.4 - 1.96 * r.se, 12);
+        expect(r.ci95[1]).toBeCloseTo(0.4 + 1.96 * r.se, 12);
     });
 
     it('agreement exactly at chance is kappa 0', () => {

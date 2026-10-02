@@ -27,10 +27,15 @@ const PLACEHOLDER_KEY_RE = /^(?:replace|changeme|change[-_]me|example|your[-_]|x
 
 /** The hash key (GOLD_HASH_KEY, else AUDIT_HASH_KEY); throws when neither is set or it is too short. */
 function hashKey(env = process.env) {
-    for (const name of ['GOLD_HASH_KEY', 'AUDIT_HASH_KEY']) {
-        const v = env[name];
-        if (typeof v === 'string' && v.length >= MIN_KEY_LENGTH && !PLACEHOLDER_KEY_RE.test(v)) return v;
+    const valid = (v) => typeof v === 'string' && v.length >= MIN_KEY_LENGTH && !PLACEHOLDER_KEY_RE.test(v);
+    // An explicitly configured GOLD_HASH_KEY is never silently replaced: a typo must fail, not
+    // fingerprint a sample under the audit key (fixing the typo later would orphan every item).
+    const gold = env.GOLD_HASH_KEY;
+    if (typeof gold === 'string' && gold !== '') {
+        if (valid(gold)) return gold;
+        throw new Error(`GOLD_HASH_KEY is set but invalid: it needs at least ${MIN_KEY_LENGTH} characters and not a template value (unset it to use AUDIT_HASH_KEY)`);
     }
+    if (valid(env.AUDIT_HASH_KEY)) return env.AUDIT_HASH_KEY;
     throw new Error(`gold tools need GOLD_HASH_KEY (or AUDIT_HASH_KEY), at least ${MIN_KEY_LENGTH} characters and not a template value, to fingerprint post text`);
 }
 
@@ -231,12 +236,21 @@ async function itemText(item) {
     return { status: 'ok', content: row.content, inputHash: hash };
 }
 
-async function labelsFor(itemId) {
-    return dbAll(
-        `SELECT labeller, method, label, flags, note, created_at FROM relevance_gold_labels
-         WHERE item_id = $1 ORDER BY seq`,
-        [itemId],
+/**
+ * The labels that currently count for an item: this codebook version only, and
+ * each labeller's latest row (the table is append-only, so corrections are new
+ * rows and the older ones are superseded). Ordered by seq.
+ */
+async function labelsFor(itemId, codebookVersion) {
+    const rows = await dbAll(
+        `SELECT id, seq, item_id, labeller, method, label, flags, note, created_at FROM relevance_gold_labels
+         WHERE item_id = $1 AND codebook_version = $2 ORDER BY seq`,
+        [itemId, codebookVersion],
     );
+    const latest = latestPerLabeller(rows);
+    const keep = new Set();
+    for (const m of latest.values()) for (const r of m.values()) keep.add(r.id);
+    return rows.filter(r => keep.has(r.id));
 }
 
 const INSERT_LABEL = `INSERT INTO relevance_gold_labels

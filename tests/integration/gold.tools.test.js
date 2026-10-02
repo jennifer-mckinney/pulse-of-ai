@@ -190,6 +190,12 @@ describe('scripts/gold-label.js', () => {
         expect(() => store.hashKey({ GOLD_HASH_KEY: '', AUDIT_HASH_KEY: 'replace_with_random_64_hex_chars' })).toThrow(/template value/);
     });
 
+    it('an explicitly set but invalid GOLD_HASH_KEY never falls back to the audit key', () => {
+        const audit = 'audit-key-0123456789-abcdefghijklmnop';
+        expect(() => store.hashKey({ GOLD_HASH_KEY: 'x'.repeat(31), AUDIT_HASH_KEY: audit })).toThrow(/GOLD_HASH_KEY is set but invalid/);
+        expect(store.hashKey({ GOLD_HASH_KEY: '', AUDIT_HASH_KEY: audit })).toBe(audit);   // unset or empty: the audit key
+    });
+
     it('prints post text with terminal escapes neutralised', async () => {
         await dbRun(`UPDATE raw_posts SET content = $2 WHERE id = $1`, [ids.vacuum, 'robot vacuum \u001b]52;c;QQ==\u0007 on sale']);
         await goldSample.main(['--total', '6', '--seed', 'seed-esc', '--min-per-stratum', '1', '--sample-id', 'gold-esc', '--write'], { out: quiet });
@@ -474,6 +480,21 @@ describe('store.insertItems revalidates the post under a row lock', () => {
         await dbRun(`UPDATE raw_posts SET content = '', text_removed_at = NOW() WHERE id = $1`, [ids.llm]);
         await expect(store.insertItems([item], { sampleId: 'gold-lost', seed: 's' })).rejects.toThrow(/lost or changed its text/);
         expect((await dbGet('SELECT COUNT(*)::int AS n FROM relevance_gold_items')).n).toBe(0);
+    });
+});
+
+describe('adjudication shows only the labels that count', () => {
+    it('labelsFor returns this codebook version, each labeller\'s latest row only', async () => {
+        const { ids } = await seedPopulation();
+        await goldSample.main(['--total', '3', '--seed', 'adj', '--min-per-stratum', '0', '--sample-id', 'gold-adj', '--write'], { out: quiet });
+        const item = await dbGet('SELECT id, input_hash FROM relevance_gold_items WHERE sample_id = $1 ORDER BY draw_rank LIMIT 1', ['gold-adj']);
+        const add = (label, who, cv) => store.recordLabel({ itemId: item.id, label, flags: [], labeller: who, method: 'human', codebookVersion: cv, inputHash: item.input_hash });
+        await add('NOT_AI', 'ann', '1.0.0');
+        await add('AI_CENTRAL', 'ann', '1.0.0');     // ann corrects herself
+        await add('AI_INCIDENTAL', 'bob', '0.9.0');   // older codebook
+        const rows = await store.labelsFor(item.id, '1.0.0');
+        expect(rows.map(r => [r.labeller, r.label])).toEqual([['ann', 'AI_CENTRAL']]);
+        expect(ids.llm).toBeTruthy();
     });
 });
 

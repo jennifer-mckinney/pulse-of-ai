@@ -84,6 +84,20 @@ function sanitize(text) {
     return String(text === null || text === undefined ? '' : text).replace(CONTROL_RE, '�').replace(FORMAT_RE, '');
 }
 
+/**
+ * Single-line form for identifiers (labeller, sample id, category, note): the
+ * newline and tab that sanitize() keeps for post bodies become spaces, so a
+ * crafted value cannot start a fake output line.
+ * @param {unknown} text
+ * @returns {string}
+ */
+function oneLine(text) {
+    return sanitize(text).replace(/[\n\t]/g, ' ');
+}
+
+/** True when an identifier holds any control, line-separator or format character (newline and tab included). */
+const hasControl = (text) => /[\u0000-\u001F\u007F-\u009F\u2028\u2029]|\p{Cf}/u.test(String(text));
+
 const squash = (t) => String(t).normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
 // One entry: the same post text is checked against every note typed for it.
 let squashed = { text: null, value: '' };
@@ -178,7 +192,7 @@ function validateLabeller(labeller) {
     const name = String(labeller === null || labeller === undefined ? '' : labeller).trim();
     if (!name) throw new Error('a labeller name is required');
     if (name.length > 100) throw new Error('a labeller name is at most 100 characters');
-    if (sanitize(name) !== name) throw new Error('a labeller name may not contain control characters');
+    if (hasControl(name)) throw new Error('a labeller name may not contain control characters');
     if (name.toLowerCase().startsWith(LLM_PREFIX)) {
         throw new Error(`the "${LLM_PREFIX}" labeller namespace is reserved for llm_proposed labels (use --import)`);
     }
@@ -207,7 +221,7 @@ async function runSession({ store, io, labeller, sampleId, method = 'human', lim
         items = await store.pendingItems({ sampleId, labeller: who, method, codebookVersion });
     }
     const summary = { labelled: 0, skipped: 0, unavailable: 0, quit: false };
-    io.print(`${items.length} item(s) to label in sample ${sanitize(sampleId)} as ${sanitize(who)} (${method}, codebook ${codebookVersion}). "?" for help.`);
+    io.print(`${items.length} item(s) to label in sample ${oneLine(sampleId)} as ${oneLine(who)} (${method}, codebook ${codebookVersion}). "?" for help.`);
     for (const item of items) {
         if (summary.labelled >= limit) break;
         const text = await store.itemText(item);
@@ -217,11 +231,11 @@ async function runSession({ store, io, labeller, sampleId, method = 'human', lim
             continue;
         }
         io.print('');
-        io.print(`== item ${item.id}  [category: ${sanitize(item.category)}]`);
+        io.print(`== item ${item.id}  [category: ${oneLine(item.category)}]`);
         if (method === 'adjudicated' || itemId) {
-            for (const l of await store.labelsFor(item.id)) {
+            for (const l of await store.labelsFor(item.id, codebookVersion)) {
                 if (itemId && method !== 'adjudicated' && l.labeller !== who) continue;
-                io.print(`   ${sanitize(l.labeller)} (${l.method}): ${l.label}${l.flags.length ? ` +${l.flags.join(' +')}` : ''}${l.note ? `  # ${sanitize(l.note)}` : ''}`);
+                io.print(`   ${oneLine(l.labeller)} (${l.method}): ${l.label}${l.flags.length ? ` +${l.flags.join(' +')}` : ''}${l.note ? `  # ${oneLine(l.note)}` : ''}`);
             }
         }
         // Every line is marked, so a post cannot fake the tool's own output lines.
@@ -263,7 +277,7 @@ async function importProposals({ store, text, modelId, codebookVersion = CODEBOO
     const model = String(modelId === null || modelId === undefined ? '' : modelId).trim();
     if (!model) throw new Error('--model is required for llm_proposed labels');
     const labeller = `${LLM_PREFIX}${model}`;
-    if (labeller.length > 100 || sanitize(labeller) !== labeller) throw new Error('--model must be a printable id of at most 96 characters');
+    if (labeller.length > 100 || hasControl(labeller)) throw new Error('--model must be a printable id of at most 96 characters');
     const lines = String(text).split(/\r?\n/);
     if (lines.length > IMPORT_MAX_LINES) throw new Error(`an import file is at most ${IMPORT_MAX_LINES} lines`);
     const rows = [];
@@ -287,6 +301,6 @@ async function importProposals({ store, text, modelId, codebookVersion = CODEBOO
 
 module.exports = {
     LABEL_KEYS, FLAG_KEYS, HELP, NOTE_MAX, QUOTE_WINDOW, IMPORT_MAX_LINES, IMPORT_MAX_BYTES, LLM_PREFIX, METHODS,
-    parseAnswer, assertLocalOnly, validateProposal, validateLabeller, sanitize, noteQuotesPost,
+    parseAnswer, assertLocalOnly, validateProposal, validateLabeller, sanitize, oneLine, hasControl, noteQuotesPost,
     runSession, importProposals, canonicalFlags,
 };
