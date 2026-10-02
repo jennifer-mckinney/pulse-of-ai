@@ -67,6 +67,23 @@ function throttledHosts(row, src, now, { env = null, routeKills = [] } = {}) {
 }
 
 /**
+ * Why an open alert of `type` is being resolved (the audited resolution text).
+ * Copilot review: a source_rate_limited alert whose throttled route simply
+ * CLOSED (disabled, unconfigured) was not cleared by a host answering — say so.
+ */
+function resolutionWhy(type, collecting, row, src, now = Date.now()) {
+    if (!collecting) return 'the source is no longer collecting (closed or switched off)';
+    if (type === 'source_stale') return 'a new post was stored';
+    if (type === 'source_failing') return 'a run succeeded';
+    if (type === 'source_rate_limited') {
+        return throttledHosts(row, src, now).hosts.length
+            ? 'the throttled host\'s route is no longer open (disabled or unconfigured); no host answered — the streak is unchanged'
+            : 'the rate-limited host answered successfully';
+    }
+    return 'the refusal cleared';
+}
+
+/**
  * Pure: which conditions hold for one source row.
  * @param {{ env?: object, routeKills?: object[] }} [live]  the env and database route kills
  *   (the open routes decide which throttled hosts count)
@@ -139,9 +156,7 @@ async function evaluateSourceHealth({ env = process.env, now = Date.now() } = {}
                 // makes a concurrent second insert a no-op.
                 if (await openSourceAlert(type, severity, row.id, { slug: src.slug, ...details })) opened.push({ slug: src.slug, type });
             } else if (!cond[type] && existing) {
-                const why = !collecting ? 'the source is no longer collecting (closed or switched off)'
-                    : type === 'source_stale' ? 'a new post was stored' : type === 'source_failing' ? 'a run succeeded'
-                        : type === 'source_rate_limited' ? 'the rate-limited host answered successfully' : 'the refusal cleared';
+                const why = resolutionWhy(type, collecting, row, src, now);
                 // P1-6: the resolution is an audited alert_resolutions record.
                 await resolveSourceAlert(type, row.id, {
                     resolvedBy: 'source-health evaluator (src/collectors/source-health.js)',
@@ -156,4 +171,4 @@ async function evaluateSourceHealth({ env = process.env, now = Date.now() } = {}
     return { opened, resolved };
 }
 
-module.exports = { evaluateSourceHealth, conditionsFor, FAILING_AFTER, RATE_LIMITED_WARN_AFTER, TYPES };
+module.exports = { evaluateSourceHealth, conditionsFor, resolutionWhy, FAILING_AFTER, RATE_LIMITED_WARN_AFTER, TYPES };

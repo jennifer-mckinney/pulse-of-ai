@@ -51,7 +51,10 @@ async function recheckDeletions({ api, slug = 'reddit', log = () => {} }) {
             // here (retried next tick), never fire the next batch at it.
             if (err instanceof RateLimitedError || (err && err.held === true)) {
                 out.complete = false;
-                out.rateLimited = true;
+                // Copilot review: only a genuine rate limit is reported as one — a held
+                // server backoff (a 5xx's Retry-After) pauses the re-check too.
+                if (err instanceof RateLimitedError) out.rateLimited = true;
+                else out.serverBackoff = true;
                 log(`[reddit] deletion re-check paused: ${err.message}`);
                 break;
             }

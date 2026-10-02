@@ -66,7 +66,9 @@ live AS (
     SELECT DISTINCT ON (source_id, host) source_id, host, until, status
     FROM legacy
     WHERE until IS NOT NULL AND until > NOW() AND host ~ '^[a-z0-9.-]{1,253}$'
-    ORDER BY source_id, host, until DESC
+    -- Deterministic: the later until, then a 429 over a 503 (two keys that normalize to
+    -- one host with the same expiry).
+    ORDER BY source_id, host, until DESC, (status = 503), status
 ),
 entries AS (
     SELECT l.source_id,

@@ -527,6 +527,13 @@ class HttpClient {
                 if (validators.last_modified) headers['If-Modified-Since'] = validators.last_modified;
             }
             const res = await this.withRetries(current, { method, headers, body, maxBytes: o.maxBytes }, o.minIntervalMs);
+            // Copilot review: a bot wall is a refusal at any status — checked BEFORE a
+            // redirect is followed (a 301/302 carrying cf-mitigated: challenge, or a
+            // challenge page, is the source saying no, never a hop to follow).
+            if (res.status !== 304 && (challengeHeader(res.headers) || (res.status >= 300 && isChallenge(res)))) {
+                throw new AccessDeniedError(`${rateLimit.publicHostName(new URL(current).hostname)} refused access (HTTP ${res.status}, bot wall) — not retried, not worked around`,
+                    { status: res.status, url: redactUrl(current), headers: refusalHeaders(res.headers, this.env) });
+            }
             if (REDIRECTS.includes(res.status) && res.headers.location) {
                 current = new URL(res.headers.location, current).toString();
                 if (res.status === 303 || ((res.status === 301 || res.status === 302) && method === 'POST')) {

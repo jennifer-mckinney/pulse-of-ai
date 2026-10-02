@@ -692,6 +692,16 @@ describe('security review L3-L6', () => {
         expect(rl.storedRouteMap(g)).toEqual({ [`${rl.SERVER_ROUTE_PREFIX}algolia-search`]: g.serverRoutes['algolia-search'] });
     });
 
+    test('Copilot: an alert resolved because the throttled route CLOSED does not claim a host answered', () => {
+        const { resolutionWhy, RATE_LIMITED_WARN_AFTER } = require('../../../src/collectors/source-health');
+        const src = getSource('github');
+        const streak = { until: iso(NOW + 600000), http_status: 429, signal: 'http_429', count: RATE_LIMITED_WARN_AFTER, weak: 0, at: iso(NOW) };
+        expect(resolutionWhy('source_rate_limited', true, { rate_limited_hosts: { 'api.github.com': streak } }, src, NOW)).toMatch(/no longer open.*no host answered/);
+        expect(resolutionWhy('source_rate_limited', true, { rate_limited_hosts: {} }, src, NOW)).toBe('the rate-limited host answered successfully');
+        expect(resolutionWhy('source_rate_limited', false, {}, src, NOW)).toMatch(/no longer collecting/);
+        expect(resolutionWhy('source_stale', true, {}, src, NOW)).toBe('a new post was stored');
+    });
+
     test('L6: publicHostName names registry hosts only', () => {
         expect(rl.publicHostName('api.github.com')).toBe('api.github.com');
         expect(rl.publicHostName('API.GITHUB.COM')).toBe('API.GITHUB.COM');

@@ -93,6 +93,21 @@ describe('migration 077_rate_limit_hold_store_unify.sql', () => {
         expect((await stateOf('github')).rate_limited_hosts['api.github.com']).toMatchObject({ signal: 'http_429', http_status: 429, count: 4, until: iso(now + 20 * 3600 * 1000) });
     });
 
+    it('Copilot: two legacy keys that normalize to one host with the same expiry resolve deterministically to the 429 (either key order)', async () => {
+        const now = Date.now();
+        const same = iso(now + 1800 * 1000);
+        for (const [slug, keys] of [
+            ['tldr', { 'retry-after:tie.example': { until: same, status: 503 }, 'retry-after:tie.example:443': { until: same, status: 429 } }],
+            ['github', { 'retry-after:tie.example:443': { until: same, status: 429 }, 'retry-after:tie.example': { until: same, status: 503 } }],
+        ]) {
+            await dbRun(`INSERT INTO source_collection_state (source_id, http_cache) VALUES ($1, $2::jsonb)`, [await idOf(slug), JSON.stringify(keys)]);
+        }
+        await dbTransaction(c => c.query(SQL_077));
+        for (const slug of ['tldr', 'github']) {
+            expect((await stateOf(slug)).rate_limited_hosts['tie.example']).toMatchObject({ http_status: 429, signal: 'http_429', count: 1 });
+        }
+    });
+
     it('security review L1/L2: an impossible timestamp never aborts the migration; a key with a path still names its host', async () => {
         const now = Date.now();
         const tldr = await idOf('tldr');

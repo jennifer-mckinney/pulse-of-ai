@@ -812,6 +812,35 @@ describe('rate limits are not refusals (diagnosis 2026-10-01)', () => {
         expect((await c.http.request('https://c.example/page')).body).toMatch(/datadome/);
     });
 
+    test('Copilot (8th): a challenge is a refusal BEFORE a redirect is followed (cf-mitigated header or a challenge page on a 3xx)', async () => {
+        const { http, transport } = at([
+            [/a\.example\/start/, { status: 302, headers: { location: 'https://a.example/next', 'cf-mitigated': 'challenge' }, body: '' }],
+            [/a\.example\/next/, { body: 'ok' }],
+        ]);
+        await expect(http.request('https://a.example/start')).rejects.toBeInstanceOf(AccessDeniedError);
+        expect(transport.calls.filter(c => c.url.includes('/next'))).toHaveLength(0);
+        const b = at([
+            [/b\.example\/start/, { status: 301, headers: { location: 'https://b.example/next' }, body: '<div id="cf-chl-widget"></div>' }],
+            [/b\.example\/next/, { body: 'ok' }],
+        ]);
+        await expect(b.http.request('https://b.example/start')).rejects.toBeInstanceOf(AccessDeniedError);
+        expect(b.transport.calls.filter(c => c.url.includes('/next'))).toHaveLength(0);
+        // A plain redirect is still followed, and a 2xx page is content.
+        const c = at([
+            [/c\.example\/start/, { status: 301, headers: { location: 'https://c.example/next' }, body: '' }],
+            [/c\.example\/next/, { body: 'ok' }],
+        ]);
+        expect((await c.http.request('https://c.example/start')).body).toBe('ok');
+        // robots.txt: a challenge-marked redirect is a refusal, not a hop.
+        const r = at([
+            ['https://d.example/robots.txt', { status: 302, headers: { location: 'https://e.example/robots.txt', 'cf-mitigated': 'challenge' }, body: '' }],
+            ['https://e.example/robots.txt', { body: 'User-agent: *\nDisallow:\n' }],
+            [/d\.example\/page/, { body: 'ok' }],
+        ], { robotsCache: new Map() });
+        await expect(r.http.request('https://d.example/page', { robots: true })).rejects.toBeInstanceOf(AccessDeniedError);
+        expect(r.transport.calls.filter(c => c.url.includes('e.example'))).toHaveLength(0);
+    });
+
     test('Copilot (7th): a persisted 5xx hold is a HELD server backoff on the next tick — http_5xx, never rate_limited — and nothing is sent', async () => {
         const { classifyError } = require('../../../src/collectors/errors');
         const t = at([[/a\.example\/page/, { status: 503, headers: { 'retry-after': '3600' }, body: '' }]]);

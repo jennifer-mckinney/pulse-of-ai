@@ -447,7 +447,7 @@ async function runCollection(o = {}) {
                 hosts: myHosts, changes: http.drainHoldChanges(), view: runHolds, routes: after.routes,
                 limited: !!limitedErr, headers: rateLimitHeaders, src, env, routeKills,
             });
-            if (heldRoutes.length) log(`[collect] ${slug}: not requested (rate-limit backoff, honoured): ${[...new Set(heldRoutes)].join(', ')}`);
+            if (heldRoutes.length) log(`[collect] ${slug}: not requested (host backoff after a rate limit or a server error's Retry-After, honoured): ${[...new Set(heldRoutes)].join(', ')}`);
             if (okRoutes === 0 && routeErrors.length === 0 && heldRoutes.length > 0) {
                 // Every route that would have run was held (e.g. a hold
                 // learned after the pre-claim gate): nothing was requested,
