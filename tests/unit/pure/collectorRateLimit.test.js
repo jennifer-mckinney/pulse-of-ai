@@ -173,7 +173,9 @@ describe('parse helpers (security F2 / F4, grumpy #4)', () => {
     test('security F4: an overflowing x-ratelimit-reset is Infinity (→ the 24 h cap)', () => {
         expect(rl.parseReset('1e306', NOW)).toBe(Infinity);
         const res = { status: 403, headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1e306' }, body: '' };
-        expect(rl.rateLimitSignal(res, NOW).retryAt).toBe(Infinity);
+        // A 403's reset beyond the cap is no evidence (security review F1); a 429's is the cap.
+        expect(rl.rateLimitSignal(res, NOW)).toBeNull();
+        expect(rl.rateLimitSignal({ ...res, status: 429 }, NOW).retryAt).toBe(Infinity);
     });
 });
 
@@ -285,8 +287,9 @@ describe('stored holds', () => {
     test('Copilot: mergeHolds takes the NEWEST record\'s streaks — a later strong limit\'s reset weak streak is never resurrected', () => {
         const old = { until: iso(NOW + 600000), http_status: 403, signal: 'body_rate_limit', count: 4, weak: 4, at: iso(NOW - 120000) };
         const newer = { until: iso(NOW + 60000), http_status: 429, signal: 'http_429', count: 5, weak: 0, at: iso(NOW - 1000) };
-        // Streaks from the newest record; the hold from the latest until (N6).
-        const merged = { ...newer, until: old.until };
+        // Streaks from the record whose rate limit wrote them last; the hold AND its
+        // cause from the record with the latest until (N6, order-independent).
+        const merged = { ...old, count: 5, weak: 0, limit_at: newer.at, at: newer.at };
         const a = { 'api.github.com': { ...old } };
         rl.mergeHolds(a, { 'api.github.com': newer, 'github.blog': { ...newer, until: iso(NOW + 30000) } }, NOW);
         expect(a['api.github.com']).toEqual(merged);
@@ -302,10 +305,10 @@ describe('stored holds', () => {
     test('security N6: a merge never SHORTENS a hold in force — the newest record\'s streaks, the latest until among the copies', () => {
         const a = { 'api.github.com': { until: iso(NOW + HOUR), http_status: 403, signal: 'ratelimit_remaining_zero', count: 4, weak: 4, at: iso(NOW - 1000) } };
         rl.mergeHolds(a, { 'api.github.com': { until: iso(NOW + 60000), http_status: 429, signal: 'http_429', count: 5, weak: 0, at: iso(NOW) } }, NOW);
-        expect(a['api.github.com']).toEqual({ until: iso(NOW + HOUR), http_status: 429, signal: 'http_429', count: 5, weak: 0, at: iso(NOW) });
+        expect(a['api.github.com']).toEqual({ until: iso(NOW + HOUR), http_status: 403, signal: 'ratelimit_remaining_zero', count: 5, weak: 0, limit_at: iso(NOW), at: iso(NOW) });
         const b = { 'api.github.com': { until: iso(NOW + 60000), http_status: 429, signal: 'http_429', count: 5, weak: 0, at: iso(NOW) } };
         rl.mergeHolds(b, { 'api.github.com': { until: iso(NOW + HOUR), http_status: 403, signal: 'ratelimit_remaining_zero', count: 4, weak: 4, at: iso(NOW - 1000) } }, NOW);
-        expect(b['api.github.com']).toMatchObject({ until: iso(NOW + HOUR), count: 5, weak: 0, signal: 'http_429' });
+        expect(b['api.github.com']).toEqual(a['api.github.com']);
     });
 
     test('grumpy N4 / Copilot: a 5xx\'s Retry-After hold leaves the streaks alone — three never reach the rate-limit warning', () => {
@@ -403,7 +406,7 @@ describe('security F3: what /api/sources may publish about a hold', () => {
         const env = { ...TEST_ENV, CNN_FEED_URL: 'https://acme-123.feeds.example/x' };
         const holds = { 'acme-123.feeds.example': { until: iso(NOW + 60000), http_status: 429, signal: 'http_429', count: 2, weak: 0 } };
         const pub = rl.publicHosts(cnn, holds, NOW);
-        expect(pub).toEqual([{ host: 'configured host', until: iso(NOW + 60000), http_status: 429, signal: 'http_429', count: 2 }]);
+        expect(pub).toEqual([{ host: 'configured host', until: iso(NOW + 60000), http_status: 429, signal: 'http_429' }]);
         expect(JSON.stringify(rl.holdGate(cnn, env, holds, NOW))).not.toMatch(/acme-123/);
         const gh = rl.publicHosts(getSource('github'),
             { 'api.github.com': { until: iso(NOW + 60000), http_status: 403, signal: 'body_rate_limit', count: 1, weak: 1 } }, NOW);
@@ -435,7 +438,7 @@ describe('classification and status: a rate limit is never a refusal', () => {
         const row = registryFields({ ...base, rate_limited_hosts: hnHold, rate_limited_routes: { 'algolia-search': at(300) } }, TEST_ENV, NOW);
         expect(row).toMatchObject({
             status: 'rate_limited', online: false, rate_limited_until: at(300), rate_limited_routes: ['algolia-search'],
-            rate_limited_hosts: [{ host: 'hn.algolia.com', until: at(300), http_status: 429, signal: 'http_429', count: 1 }],
+            rate_limited_hosts: [{ host: 'hn.algolia.com', until: at(300), http_status: 429, signal: 'http_429' }],
             refusal_count: 0, access_denied_at: null,
         });
         expect(row.status_reason).toMatch(/routes held: algolia-search .*not a refusal/);
@@ -562,7 +565,7 @@ describe('legacyHolds: PR #44 HTTP-cache hold keys → the one hold store', () =
         const { holds, cache: rest } = rl.legacyHolds(cache, NOW);
         expect(rest).toEqual({ 'https://tldr.tech/api/rss/ai': { etag: '"v1"', last_modified: null } });
         expect(holds).toEqual({
-            'tldr.tech': { until: iso(NOW + 600000), http_status: 429, signal: 'http_429', count: 1, weak: 0, at: iso(NOW) },
+            'tldr.tech': { until: iso(NOW + 600000), http_status: 429, signal: 'http_429', count: 1, weak: 0, limit_at: iso(0), at: iso(NOW) },
             'srv.example': { until: iso(NOW + 120000), http_status: 503, signal: 'retry_after_5xx', count: 0, weak: 0, at: iso(NOW) },
         });
         expect(cache['retry-after:tldr.tech']).toBeDefined();   // pure: the input is not mutated
@@ -635,7 +638,7 @@ describe('security review L3-L6', () => {
         expect(Object.keys(rl.holdGate(src, TEST_ENV, hold, NOW, { routeKills: [kill] }).routes)).toEqual(['repo-search']);
     });
 
-    test('Copilot: a 5xx Retry-After hold is enforced but never reads as a rate limit (kind server, no limitedRoutes, not in publicHosts)', () => {
+    test('Copilot: a 5xx Retry-After hold is enforced but never reads as a rate limit (kind server, no limitedRoutes, listed as server_backoff_hosts, not rate_limited_hosts)', () => {
         const src = getSource('hacker_news');
         const five = { 'hn.algolia.com': { until: iso(NOW + 600000), http_status: 503, signal: 'retry_after_5xx', count: 0, weak: 0, at: iso(NOW) } };
         const g = rl.holdGate(src, TEST_ENV, five, NOW);
@@ -644,7 +647,8 @@ describe('security review L3-L6', () => {
         expect(g.reason).toMatch(/server error/);
         expect(g.reason).not.toMatch(/backing off after a rate limit/);
         // Served: the host with its distinct signal, and its own time — never as a rate limit.
-        expect(rl.publicHosts(src, five, NOW)).toEqual([expect.objectContaining({ host: 'hn.algolia.com', signal: 'retry_after_5xx', count: 0 })]);
+        expect(rl.publicHosts(src, five, NOW)).toEqual([]);
+        expect(rl.publicHosts(src, five, NOW, {}, { kind: 'server' })).toEqual([expect.objectContaining({ host: 'hn.algolia.com', signal: 'retry_after_5xx' })]);
         expect(rl.serverBackoffUntil(src, five, NOW)).toBe(iso(NOW + 600000));
         expect(rl.serverBackoffUntil(src, {}, NOW)).toBeNull();
         const limit = { 'hn.algolia.com': { ...five['hn.algolia.com'], http_status: 429, signal: 'http_429', count: 1 } };
