@@ -134,3 +134,57 @@ describe('agreementReport — every labeller pair with shared items', () => {
         expect(a.agreementReport(rows, { pair: ['cat', 'ann'] }).pairs.map(p => `${p.a}~${p.b}`)).toEqual(['cat~ann']);
     });
 });
+
+describe('review fixes: design-weighted, ordinal and seq-ordered agreement', () => {
+    it('weightedKappa with equal weights equals Cohen kappa; heavier weights shift it', () => {
+        const pairs = pairsFrom({ 'Y/Y': 20, 'Y/N': 5, 'N/Y': 10, 'N/N': 15 });
+        const plain = a.cohenKappa(pairs).kappa;
+        expect(a.weightedKappa(pairs, pairs.map(() => 1)).kappa).toBeCloseTo(plain, 12);
+        // Count the N/N pairs ten times: prevalence of N rises, kappa moves.
+        const w = pairs.map(([x, y]) => (x === 'N' && y === 'N' ? 10 : 1));
+        const k = a.weightedKappa(pairs, w);
+        expect(k.kappa).not.toBeCloseTo(plain, 3);
+        expect(k.po).toBeCloseTo((20 + 150) / (20 + 5 + 10 + 150), 12);
+    });
+
+    it('weightedKappa: needs one weight per pair; empty and pe=1 are undefined', () => {
+        expect(() => a.weightedKappa([['A', 'A']], [])).toThrow(/weight/);
+        expect(a.weightedKappa([], []).kappa).toBeNull();
+        expect(a.weightedKappa([['A', 'A']], [3]).kappa).toBeNull();
+    });
+
+    it('ordinalKappa: a near miss costs less than a far miss', () => {
+        const near = a.ordinalKappa(pairsFrom({ 'AI_CENTRAL/AI_CENTRAL': 10, 'AI_CENTRAL/AI_INCIDENTAL': 5, 'NOT_AI/NOT_AI': 10 }));
+        const far = a.ordinalKappa(pairsFrom({ 'AI_CENTRAL/AI_CENTRAL': 10, 'AI_CENTRAL/NOT_AI': 5, 'NOT_AI/NOT_AI': 10 }));
+        expect(near.kappa).toBeGreaterThan(far.kappa);
+        expect(a.ordinalKappa(pairsFrom({ 'AI_CENTRAL/AI_CENTRAL': 4, 'NOT_AI/NOT_AI': 4 })).kappa).toBe(1);
+        expect(a.ordinalKappa([]).kappa).toBeNull();
+        expect(() => a.ordinalKappa([['X', 'NOT_AI']])).toThrow(/outside/);
+    });
+
+    it('2/3 is tentative (the codebook 0.667 is Krippendorff 2/3)', () => {
+        expect(a.interpretKappa(2 / 3)).toBe('tentative');
+    });
+
+    it('latestPerLabeller orders by seq (a bigint string), not by created_at or id', () => {
+        const rows = [
+            { item_id: 'i', labeller: 'ann', label: 'NOT_AI', flags: [], seq: '10', created_at: 't', id: 'z' },
+            { item_id: 'i', labeller: 'ann', label: 'AI_CENTRAL', flags: [], seq: '9', created_at: 't', id: 'a' },
+            { item_id: 'j', labeller: 'ann', label: 'NOT_AI', flags: [], seq: '2', created_at: 't', id: 'b' },
+            { item_id: 'j', labeller: 'ann', label: 'AI_CENTRAL', flags: [], seq: '11', created_at: 't', id: 'a' },
+        ];
+        const m = a.latestPerLabeller(rows).get('ann');
+        expect(m.get('i').label).toBe('NOT_AI');
+        expect(m.get('j').label).toBe('AI_CENTRAL');
+    });
+
+    it('pairReport carries a design-weighted kappa and flags a small n as not enough items', () => {
+        const lab = (e) => new Map(e.map(([id, label, w]) => [id, { label, flags: [], design_weight: w }]));
+        const A = lab([['1', 'AI_CENTRAL', 5], ['2', 'NOT_AI', 1], ['3', 'NOT_AI', 1]]);
+        const B = lab([['1', 'AI_CENTRAL', 5], ['2', 'AI_CENTRAL', 1], ['3', 'NOT_AI', 1]]);
+        const r = a.pairReport(A, B);
+        expect(r.enoughItems).toBe(false);
+        expect(r.weighted.binary.po).toBeCloseTo((5 + 1) / 7, 12);
+        expect(r.ordinal.kappa).not.toBeNull();
+    });
+});

@@ -33,10 +33,13 @@ function emptyBucket(category) {
     return {
         category, n: 0,
         stored_relevant: 0, stored_unscored: 0,
-        current_relevant: 0, admission_ai: 0, tiered_ai: 0,
+        current_relevant: 0, admission_ai: 0, tiered_ai: 0, tiered_ai_nonspam: 0,
         both: 0, current_only: 0, tiered_only: 0, spam: 0,
         delta: 0, delta_rate: 0,
         edge_cases: Object.fromEntries(EDGE_CASES.map(e => [e.id, 0])),
+        // tiered_ai among the posts carrying each OPEN edge-case tag, so the
+        // effect of each provisional co-term default can be read per question.
+        edge_cases_tiered_ai: Object.fromEntries(EDGE_CASES.map(e => [e.id, 0])),
     };
 }
 
@@ -47,11 +50,15 @@ function add(b, row, ev) {
     if (ev.current) b.current_relevant += 1;
     if (ev.admission) b.admission_ai += 1;
     if (ev.tiered.ai) b.tiered_ai += 1;
+    if (ev.tiered.ai && !ev.tiered.spam.length) b.tiered_ai_nonspam += 1;
     if (ev.current && ev.tiered.ai) b.both += 1;
     if (ev.current && !ev.tiered.ai) b.current_only += 1;
     if (!ev.current && ev.tiered.ai) b.tiered_only += 1;
     if (ev.tiered.spam.length) b.spam += 1;
-    for (const id of ev.tiered.edgeCases) b.edge_cases[id] += 1;
+    for (const id of ev.tiered.edgeCases) {
+        b.edge_cases[id] += 1;
+        if (ev.tiered.ai) b.edge_cases_tiered_ai[id] += 1;
+    }
 }
 
 function finish(b) {
@@ -75,8 +82,8 @@ function createAccumulator() {
             add(total, row, ev);
         },
         report() {
-            const categories = [...buckets.keys()].sort().map(k => finish({ ...buckets.get(k), edge_cases: { ...buckets.get(k).edge_cases } }));
-            return { categories, total: finish({ ...total, edge_cases: { ...total.edge_cases } }) };
+            const categories = [...buckets.keys()].sort().map(k => finish({ ...buckets.get(k), edge_cases: { ...buckets.get(k).edge_cases }, edge_cases_tiered_ai: { ...buckets.get(k).edge_cases_tiered_ai } }));
+            return { categories, total: finish({ ...total, edge_cases: { ...total.edge_cases }, edge_cases_tiered_ai: { ...total.edge_cases_tiered_ai } }) };
         },
     };
 }
@@ -99,7 +106,7 @@ const pct = (x) => `${(x * 100).toFixed(1)}%`;
  * @returns {string[]}
  */
 function formatReport(report, { versions = VERSIONS } = {}) {
-    const cols = ['n', 'stored_relevant', 'current_relevant', 'admission_ai', 'tiered_ai', 'both', 'current_only', 'tiered_only', 'spam', 'delta'];
+    const cols = ['n', 'stored_relevant', 'current_relevant', 'admission_ai', 'tiered_ai', 'tiered_ai_nonspam', 'both', 'current_only', 'tiered_only', 'spam', 'delta'];
     const head = ['category'.padEnd(12), ...cols.map(c => c.padStart(16)), 'delta_rate'.padStart(11)].join(' ');
     const line = (b) => [String(b.category).padEnd(12), ...cols.map(c => String(b[c]).padStart(16)), pct(b.delta_rate).padStart(11)].join(' ');
     const out = [
@@ -110,7 +117,9 @@ function formatReport(report, { versions = VERSIONS } = {}) {
         line(report.total),
     ];
     const edges = Object.entries(report.total.edge_cases).filter(([, n]) => n > 0);
-    if (edges.length) out.push(`codebook OPEN edge cases tagged: ${edges.map(([k, n]) => `${k}=${n}`).join(', ')}`);
+    if (edges.length) {
+        out.push(`codebook OPEN edge cases tagged (all, of which tiered_ai): ${edges.map(([k, n]) => `${k}=${n} (${report.total.edge_cases_tiered_ai[k]})`).join(', ')}`);
+    }
     return out;
 }
 

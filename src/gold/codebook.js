@@ -31,6 +31,9 @@ const BINARY = Object.freeze({ AI_CENTRAL: 'AI', AI_INCIDENTAL: 'AI', NOT_AI: 'N
 
 /** Agreement thresholds (codebook section 6): reliable / tentative / unreliable. */
 const KAPPA_RELIABLE = 0.80;
-const KAPPA_TENTATIVE = 0.667;
+// Krippendorff's tentative bound is 2/3 (the codebook writes it 0.667): a kappa of exactly 2/3 is tentative.
+const KAPPA_TENTATIVE = 2 / 3;
+/** Shared items below which an agreement figure is indicative only (codebook section 6, the double-coding floor). */
+const KAPPA_MIN_ITEMS = 300;
 
-module.exports = { CODEBOOK_VERSION, LABELS, FLAGS, METHODS, BINARY, KAPPA_RELIABLE, KAPPA_TENTATIVE };
+module.exports = { CODEBOOK_VERSION, LABELS, FLAGS, METHODS, BINARY, KAPPA_RELIABLE, KAPPA_TENTATIVE, KAPPA_MIN_ITEMS };

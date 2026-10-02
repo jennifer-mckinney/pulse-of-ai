@@ -42,7 +42,7 @@ describe('gold-label parseArgs', () => {
     });
 
     it('import mode is llm_proposed and needs --model', () => {
-        expect(label.parseArgs(['--import', 'f.jsonl', '--labeller', 'llm-1', '--model', 'm']))
+        expect(label.parseArgs(['--import', 'f.jsonl', '--model', 'm']))
             .toMatchObject({ importFile: 'f.jsonl', method: 'llm_proposed', model: 'm' });
     });
 
@@ -53,8 +53,11 @@ describe('gold-label parseArgs', () => {
         [['--sample', 'g', '--labeller', 'ann', '--method', 'guess'], /--method/],
         [['--sample', 'g', '--labeller', 'ann', '--limit', '0'], /--limit/],
         [['--sample', 'g', '--labeller', 'ann', '--model', 'm'], /--model applies to --import/],
-        [['--import', 'f', '--labeller', 'x'], /--model/],
-        [['--import', 'f', '--labeller', 'x', '--model', 'm', '--method', 'human'], /llm_proposed/],
+        [['--import', 'f'], /--model/],
+        [['--import', 'f', '--labeller', 'x', '--model', 'm'], /--labeller does not apply to --import/],
+        [['--import', 'f', '--model', 'm', '--method', 'human'], /llm_proposed/],
+        [['--import', 'f', '--model', 'm', '--sample', 'g'], /file and --model only/],
+        [['--sample', 'g', '--labeller', 'ann', '--relabel', 'i', '--limit', '3'], /--relabel and --limit/],
         [['--x'], /unknown argument/],
     ])('rejects %j', (argv, err) => {
         expect(() => label.parseArgs(argv)).toThrow(err);
@@ -117,10 +120,9 @@ describe('labelling session guards (pure, fake store)', () => {
 
     it('import refuses missing labeller, model, empty input and bad lines (with the line number)', async () => {
         const st = { recordLabels: async () => 0 };
-        await expect(labelling.importProposals({ store: st, text: '', labeller: '', modelId: 'm' })).rejects.toThrow(/labeller/);
-        await expect(labelling.importProposals({ store: st, text: '', labeller: 'x', modelId: '' })).rejects.toThrow(/--model/);
-        await expect(labelling.importProposals({ store: st, text: '\n\n', labeller: 'x', modelId: 'm' })).rejects.toThrow(/no proposals/);
-        await expect(labelling.importProposals({ store: st, text: '{bad', labeller: 'x', modelId: 'm' })).rejects.toThrow(/line 1: not valid JSON/);
-        await expect(labelling.importProposals({ store: st, text: '\n{"item_id":"x"}', labeller: 'x', modelId: 'm' })).rejects.toThrow(/line 2: item_id/);
+        await expect(labelling.importProposals({ store: st, text: '', modelId: '' })).rejects.toThrow(/--model/);
+        await expect(labelling.importProposals({ store: st, text: '\n\n', modelId: 'm' })).rejects.toThrow(/no proposals/);
+        await expect(labelling.importProposals({ store: st, text: '{bad', modelId: 'm' })).rejects.toThrow(/line 1: not valid JSON/);
+        await expect(labelling.importProposals({ store: st, text: '\n{"item_id":"x"}', modelId: 'm' })).rejects.toThrow(/line 2: item_id/);
     });
 });

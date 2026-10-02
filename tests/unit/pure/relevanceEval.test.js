@@ -38,10 +38,10 @@ describe('aggregate', () => {
             both: 1, current_only: 1, tiered_only: 1, spam: 0, delta: 0,
         });
         const forums = r.categories.find(c => c.category === 'forums');
-        expect(forums).toMatchObject({ n: 2, current_relevant: 1, tiered_ai: 0, spam: 1, delta: -1, current_only: 1 });
-        expect(forums.delta_rate).toBeCloseTo(-0.5, 12);
+        expect(forums).toMatchObject({ n: 2, current_relevant: 1, tiered_ai: 1, tiered_ai_nonspam: 0, spam: 1, delta: 0, current_only: 0 });
+        expect(forums.delta_rate).toBeCloseTo(0, 12);
         expect(forums.edge_cases.robotics_without_learning).toBe(1);
-        expect(r.total).toMatchObject({ n: 5, current_relevant: 3, tiered_ai: 2, delta: -1 });
+        expect(r.total).toMatchObject({ n: 5, current_relevant: 3, tiered_ai: 3, tiered_ai_nonspam: 2, delta: 0 });
     });
 
     it('lists categories in sorted order and is deterministic', () => {
@@ -66,5 +66,17 @@ describe('formatReport', () => {
         expect(out).toMatch(/^news\s/m);
         expect(out).toMatch(/^TOTAL\s/m);
         expect(out).not.toMatch(/secret text/);
+    });
+});
+
+describe('review fixes: tiered_ai_nonspam and per-edge-case tiered_ai', () => {
+    it('counts AI-by-topic posts without a spam hit, and tiered_ai among each edge-case tag', () => {
+        const r = e.aggregate([
+            { category: 'forums', storedRelevant: true, text: 'Delta Airlines reservations number: change my flight with AI' },
+            { category: 'forums', storedRelevant: true, text: 'a game AI opponent that uses machine learning' },
+        ]);
+        expect(r.total).toMatchObject({ tiered_ai: 2, tiered_ai_nonspam: 1, spam: 1 });
+        expect(r.total.edge_cases_tiered_ai.game_ai).toBe(1);
+        expect(e.formatReport(r).join('\n')).toMatch(/tiered_ai_nonspam/);
     });
 });

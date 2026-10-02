@@ -167,7 +167,11 @@ Each case below is labelled **by the label definitions in section 3 until it is 
   - the binary κ;
   - one κ per flag;
   - the observed agreement;
-  - the confusion matrix.
+  - the confusion matrix;
+  - an ordinal (linearly weighted) κ, which counts central vs incidental as a smaller disagreement than central vs not-AI;
+  - a design-weighted κ (each item counts N_h / n_h times).
+- **κ is sample-conditional.** The sample over-samples rare strata on purpose, and κ depends on prevalence, so the κ over the sample is not the population κ. Read the design-weighted κ as the closer estimate of the population value; the sample κ and its interval describe the labelling exercise. The interval is a large-sample approximation and is only indicative at small n.
+- **Below 300 shared items every reading is indicative only**; the report says so.
 - **Thresholds:**
 
   | κ | Meaning |
@@ -184,7 +188,7 @@ Each case below is labelled **by the label definitions in section 3 until it is 
 | Method | Who | Rules |
 |---|---|---|
 | `human` | A named person, through `npm run gold:label` | Blind: no other label is visible. |
-| `llm_proposed` | An LLM, imported with `npm run gold:label -- --import` | The model id is recorded. The input hash must equal the item's hash. These rows are proposals: they are never gold on their own, and they are measured against `human` labels before use. |
+| `llm_proposed` | An LLM, imported with `npm run gold:label -- --import` | The model id is recorded. The input hash must equal the item's hash. The labeller is always `llm:<model id>`, so a model's labels never share a name with a person; notes in the file are ignored. These rows are proposals: they are never gold on their own, and they are measured against `human` labels before use. |
 | `adjudicated` | A named person resolving a disagreement | The other labels are shown. Used for items where human labels disagree. Adjudicated rows are excluded from agreement statistics, because they are not independent. |
 
 **Final gold label for an item:**
@@ -192,20 +196,24 @@ Each case below is labelled **by the label definitions in section 3 until it is 
 - otherwise the human label all human labellers agree on;
 - otherwise the item is not gold yet.
 
-**Corrections:** labels are **append-only**. A correction is a new row; the latest row per labeller and item counts. Database triggers forbid UPDATE and DELETE (migration 070, as in migration 036).
+**Corrections:** labels are **append-only**. A correction is a new row (`npm run gold:label -- --sample ID --labeller NAME --relabel ITEM_ID`); the row with the highest `seq` per labeller and item counts. A later human correction re-opens an item that was already adjudicated. Database triggers forbid DELETE and every UPDATE except the erasure path in section 8 (migration 070).
 
 ## 8. Data handling
 
 - **The gold tables never copy post text.**
-  - An item stores the post id, the sha256 of the text the sampler saw (`input_hash`), and the stratum and design weight.
+  - An item stores the post id, a **keyed** fingerprint of the text the sampler saw (`input_hash` = HMAC-SHA256 with `GOLD_HASH_KEY`, else `AUDIT_HASH_KEY`), and the stratum and design weight. The key is what stops anyone with database access from confirming that a person wrote a guessed text. Keep the key unchanged between sampling and labelling: rotating it makes every item read as changed.
   - The labelling tool reads the text from `raw_posts` at labelling time and checks the hash.
   - When retention has removed the text, or the text changed, the item is skipped and not labelled.
   - So text retention, including Jennifer's decision to "remove text of non-AI posts early" when it is wired in a later release, applies to the gold set without exception.
 - **The labelling tool is local-only.** `scripts/gold-label.js`:
-  - refuses `NODE_ENV=production` and any non-loopback database host;
+  - refuses `NODE_ENV=production`, any non-loopback database host, and any database port other than 5433/5434 unless `GOLD_ALLOW_DB_PORT=<port>` acknowledges a local throwaway database (every gold tool, not only the labelling one, applies the same check);
+  - prints post text with control characters (terminal escape sequences) replaced;
   - is never served by the API: no route requires the gold modules, and a test enforces this.
 - **Exporting text to an LLM for `llm_proposed` labels is not provided by these tools.** Sending post text to a third-party API is a privacy decision that needs its own ruling (research note, decision D2/D3). The import path only records proposals made under such a ruling.
-- **Labeller names are stored.** Use a name or a stable pseudonym.
+- **Labeller names are stored.** Use a name or a stable pseudonym. Names starting `llm:` are reserved for `llm_proposed` labels.
+- **Notes** are at most 200 characters and may not quote the post (25 or more consecutive characters); the tool refuses such a note. Rows are immutable, so a quoted post would outlive its text.
+- **Erasure.** Because the rows are append-only and keep the post id and the fingerprint, an erasure request or retention removal needs its own path: `npm run gold:erase -- --post POST_ID` (one post) or `-- --removed` (every item whose post text is gone). It blanks the post id and fingerprint on the item and the fingerprint and note on its labels and stamps `erased_at`; labels, flags, strata and weights stay, and an erased item can no longer be labelled. Run `--removed` after the retention job and before reporting any gold statistic.
+- **Guard rails, not a boundary.** The append-only and no-TRUNCATE triggers stop accidents and misuse by the tools. The table owner can still alter the tables, so the gold tools must not be given the owning role of a shared database; they are local-only for that reason.
 
 ## 9. Sampling design (`npm run gold:sample`)
 
@@ -251,7 +259,9 @@ npm run gold:sample -- --total 2000 --seed 2026-10-gold-1 --min-per-stratum 5 \
 npm run gold:sample -- ... --sample-id gold-2026-10-a --write          # records the items
 npm run gold:label -- --sample gold-2026-10-a --labeller jennifer      # interactive, blind
 npm run gold:label -- --sample gold-2026-10-a --labeller jennifer --method adjudicated
-npm run gold:label -- --import proposals.jsonl --labeller llm-batch-1 --model <model id>
+npm run gold:label -- --sample gold-2026-10-a --labeller jennifer --relabel <item id>   # a correction
+npm run gold:label -- --import proposals.jsonl --model <model id>     # labeller becomes llm:<model id>
+npm run gold:erase -- --removed                                         # erase gold rows whose post text is gone
 npm run gold:agreement -- --sample gold-2026-10-a                       # Cohen's kappa per pair
 npm run relevance:eval                                                  # released scorers vs tiered library, per category (read-only)
 ```

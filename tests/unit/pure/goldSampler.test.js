@@ -197,3 +197,44 @@ describe('planSample — the whole pure pipeline from candidates to items', () =
         }
     });
 });
+
+describe('review fixes: mixed-script posts and the streaming two-pass sampler', () => {
+    it('URLs, mentions and hashtags do not make a Chinese post Latin', () => {
+        expect(s.scriptOf('人工智能 https://example.com/a/very/long/path/to/some/page #aitrends @someone')).toBe('cjk');
+        expect(s.scriptOf('new model from OpenAI and 人工智能')).toBe('latin');
+        expect(s.scriptOf('今日はAIについて話します and some english words')).toBe('cjk');
+        expect(s.scriptOf('#AI @openai https://x.example/abc')).toBe('other');
+        expect(s.scriptOf('Привет мир')).toBe('cyrillic');
+    });
+
+    const cands = (n) => Array.from({ length: n }, (_, i) => ({
+        rawPostId: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+        category: i % 3 ? 'news' : 'forums', scope: i % 2 ? 'ai' : 'filter',
+        decision: i % 5 ? 'relevant' : 'not_relevant', script: i % 7 ? 'latin' : 'cjk',
+        inputHash: 'h'.repeat(64), relevanceMvId: null,
+    }));
+
+    it('planStrata + createSelector give exactly the planSample result', () => {
+        const rows = cands(300);
+        const opts = { total: 40, seed: 'seed-1', minPerStratum: 2, weights: s.parseWeightSpecs(['script:cjk=4']) };
+        const whole = s.planSample(rows, opts);
+        const pops = new Map();
+        for (const r of rows) pops.set(s.stratumKey(r), (pops.get(s.stratumKey(r)) || 0) + 1);
+        const { plan, weightOf, strata } = s.planStrata(pops, opts);
+        const sel = s.createSelector(plan, 'seed-1');
+        for (const r of rows) sel.push(r);
+        const items = sel.items(weightOf);
+        const shape = (i) => [i.rawPostId, i.stratum, i.drawRank, i.stratumPopulation, i.stratumSampleSize, i.designWeight, i.stratumWeight];
+        expect(strata).toEqual(whole.strata);
+        expect(items.map(shape)).toEqual(whole.items.map(shape));
+        expect(sel.populations()).toEqual(pops);
+    });
+
+    it('the selector never holds more than n_h rows per stratum and needs a seed', () => {
+        const plan = new Map([['news|ai|relevant|latin', 2]]);
+        const sel = s.createSelector(plan, 'x');
+        for (const r of cands(500).map(c => ({ ...c, category: 'news', scope: 'ai', decision: 'relevant', script: 'latin' }))) sel.push(r);
+        expect(sel.items(new Map([['news|ai|relevant|latin', 1]]))).toHaveLength(2);
+        expect(() => s.createSelector(plan, ' ')).toThrow(/seed/);
+    });
+});

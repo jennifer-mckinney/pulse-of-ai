@@ -226,7 +226,7 @@ describe('negative tier: disambiguators suppress one term, never other evidence'
     });
 });
 
-describe('spam signatures (propose the SPAM flag, force NOT_AI)', () => {
+describe('spam signatures (propose the SPAM flag; the topic decision is unchanged)', () => {
     it.each([
         ['spam_phone_support', 'Coinbase customer care number +1-855-555-0199 call now for AI wallet help'],
         ['spam_phone_support', 'QuickBooks helpline 1 (800) 555 0123 toll-free AI support'],
@@ -236,9 +236,18 @@ describe('spam signatures (propose the SPAM flag, force NOT_AI)', () => {
         const r = classifyTiered(text);
         expect(r.spam).toContain(id);
         expect(r.proposedFlags).toContain('SPAM');
-        expect(r.ai).toBe(false);
-        expect(r.label).toBe('NOT_AI');
-        expect(r.score).toBe(0);
+        // AI-themed spam is labelled by topic and flagged (codebook v1): spam never flips `ai`.
+        expect(r.ai).toBe(r.strong.length + r.context.length + r.multilingual.length > 0);
+    });
+
+    it('AI-themed spam stays AI by topic and carries the SPAM flag', () => {
+        const r = classifyTiered('Klarna AI customer service handles chats; call us at 1-800-555-0199');
+        expect(r.ai).toBe(true);
+        expect(r.proposedFlags).toContain('SPAM');
+    });
+
+    it('an ISO timestamp is not a phone number', () => {
+        expect(classifyTiered('2024-10-01 12:30:45 customer support ticket closed').spam).toEqual([]);
     });
 
     it('a phone number alone (no support phrasing) is not spam', () => {
@@ -398,5 +407,37 @@ describe('isolation from production (released methodology untouched)', () => {
         // library would not count it. The released rules are not changed.
         expect(computeRelevance('a transformer toy').matchedKeywords).toEqual(['transformer']);
         expect(isAiRelated('robot vacuum on sale')).toBe(true);
+    });
+});
+
+describe('review fixes: masks never hide real AI text', () => {
+    it.each([
+        ['Our AI vector search ranks documents', true, 'ai_file_format'],
+        ['We use transformer models to forecast electricity demand on the grid', true, 'transformer_power'],
+        ['Leo said Google Gemini is a multimodal model', true, 'gemini_astrology'],
+        ['Adjusted gross income (AGI) deadline', false, 'agi_tax'],
+        ['AGI timeline and OpenAI safety', true, null],
+        ['The transformer exploded at the substation, 138 kV', false, 'transformer_power'],
+    ])('%s', (text, ai, suppressed) => {
+        const r = classifyTiered(text);
+        expect(r.ai).toBe(ai);
+        if (suppressed) expect(r.suppressed.includes(suppressed)).toBe(!ai);
+    });
+
+    it.each([
+        'La IA está cambiando el trabajo', 'Sin IA no hay futuro', 'IA generativa hoy', 'Die KI ändert alles',
+        'Ohne KI geht nichts', 'KI ist überall', 'A IA vai mudar tudo', "L'IA est partout",
+    ])('capitalised function words and sentence starts: %s', (text) => {
+        expect(classifyTiered(text).ai).toBe(true);
+    });
+
+    it('"ia" the Portuguese verb form stays a non-hit', () => {
+        expect(classifyTiered('Ela ia ao mercado').ai).toBe(false);
+    });
+
+    it('Arabic terms match across a double space or a newline, and normalisation keeps digits', () => {
+        expect(classifyTiered('الذكاء  الاصطناعي').ai).toBe(true);
+        expect(classifyTiered('الذكاء\nالاصطناعي').ai).toBe(true);
+        expect(require('../../../src/config/ai-lexicon-tiers').normalizeText('\u0661\u0662\u0663')).toBe('\u0661\u0662\u0663');
     });
 });

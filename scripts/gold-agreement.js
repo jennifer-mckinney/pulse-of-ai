@@ -7,6 +7,9 @@
 // llm_proposed labels are included under their own labeller name, so
 // Claude-vs-human agreement is measured the same way.
 // Read-only. Thresholds: docs/governance/relevance-codebook.md, section 6.
+// The kappa over the sample is sample-conditional (the sample over-samples
+// rare strata), so each pair also prints a design-weighted kappa and an ordinal
+// kappa; below 300 shared items every reading is indicative only.
 
 'use strict';
 
@@ -41,8 +44,9 @@ function parseArgs(argv) {
 
 const fmt = (x, d = 3) => (x === null || x === undefined ? 'n/a' : Number(x).toFixed(d));
 
-async function main(argv, { out = l => process.stdout.write(l + '\n') } = {}) {
+async function main(argv, { env = process.env, out = l => process.stdout.write(l + '\n') } = {}) {
     const opts = parseArgs(argv);
+    require('../src/gold/labelling').assertLocalOnly(env);
     const { agreementReport, interpretKappa } = require('../src/gold/agreement');
     const { labelRows } = require('../src/gold/store');
     const rows = await labelRows({ sampleId: opts.sample, codebookVersion: opts.codebook, methods: ['human', 'llm_proposed'] });
@@ -52,9 +56,14 @@ async function main(argv, { out = l => process.stdout.write(l + '\n') } = {}) {
         codebook_version: opts.codebook,
         labellers: report.labellers,
         pairs: report.pairs.map(p => ({
-            a: p.a, b: p.b, n: p.n,
+            a: p.a, b: p.b, n: p.n, enough_items: p.enoughItems,
             three_class: { kappa: p.threeClass.kappa, ci95: p.threeClass.ci95, po: p.threeClass.po, reading: interpretKappa(p.threeClass.kappa), confusion: p.threeClass.confusion },
             binary: { kappa: p.binary.kappa, ci95: p.binary.ci95, po: p.binary.po, reading: interpretKappa(p.binary.kappa) },
+            ordinal: { kappa: p.ordinal.kappa, reading: interpretKappa(p.ordinal.kappa) },
+            design_weighted: {
+                three_class: { kappa: p.weighted.threeClass.kappa, po: p.weighted.threeClass.po },
+                binary: { kappa: p.weighted.binary.kappa, po: p.weighted.binary.po },
+            },
             flags: Object.fromEntries(Object.entries(p.flags).map(([f, k]) => [f, { kappa: k.kappa, po: k.po, reading: interpretKappa(k.kappa) }])),
         })),
     };
@@ -66,10 +75,12 @@ async function main(argv, { out = l => process.stdout.write(l + '\n') } = {}) {
         + `${report.labellers.length} labeller(s), ${result.pairs.length} pair(s) with shared items`);
     for (const p of result.pairs) {
         out('');
-        out(`${p.a} vs ${p.b}: ${p.n} shared item(s)`);
+        out(`${p.a} vs ${p.b}: ${p.n} shared item(s)${p.enough_items ? '' : ' (below 300: every reading is indicative only)'}`);
         const ci = (c) => (c ? ` [${fmt(c[0])}, ${fmt(c[1])}]` : '');
         out(`  three-class  kappa ${fmt(p.three_class.kappa)}${ci(p.three_class.ci95)}  agreement ${fmt(p.three_class.po)}  ${p.three_class.reading}`);
         out(`  binary       kappa ${fmt(p.binary.kappa)}${ci(p.binary.ci95)}  agreement ${fmt(p.binary.po)}  ${p.binary.reading}`);
+        out(`  ordinal      kappa ${fmt(p.ordinal.kappa)}  (linearly weighted: central / incidental / not-AI in order)`);
+        out(`  design-weighted (population estimate)  binary kappa ${fmt(p.design_weighted.binary.kappa)}  three-class kappa ${fmt(p.design_weighted.three_class.kappa)}`);
         for (const [f, k] of Object.entries(p.flags)) out(`  flag ${f.padEnd(14)} kappa ${fmt(k.kappa)}  agreement ${fmt(k.po)}  ${k.reading}`);
         const cats = Object.keys(p.three_class.confusion);
         if (cats.length) {

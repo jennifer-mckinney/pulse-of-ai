@@ -5,6 +5,13 @@
 // append-only (migration 070): this module only SELECTs and INSERTs.
 //
 // Offline only: nothing in the production pipeline requires src/gold.
+//
+// input_hash is KEYED: HMAC-SHA256(GOLD_HASH_KEY, else AUDIT_HASH_KEY,
+// "gold-input:v1\0" + text). An unkeyed sha256 of a post's text would let
+// anyone with database access confirm that a person wrote a guessed text, and
+// the gold rows are immutable. There is no fallback to an unkeyed hash. The
+// key must stay the same between sampling and labelling: rotating it makes
+// every item read as "changed" and unlabellable.
 
 'use strict';
 
@@ -14,7 +21,21 @@ const { DEMO_SOURCE_TYPE } = require('../config/data-mode');
 const { latestPerLabeller } = require('./agreement');
 const { scriptOf, scopeOf, decisionOf, SAMPLER_VERSION } = require('./sampler');
 
-const sha256 = (text) => crypto.createHash('sha256').update(text).digest('hex');
+const MIN_KEY_LENGTH = 16;
+
+/** The hash key (GOLD_HASH_KEY, else AUDIT_HASH_KEY); throws when neither is set or it is too short. */
+function hashKey(env = process.env) {
+    for (const name of ['GOLD_HASH_KEY', 'AUDIT_HASH_KEY']) {
+        const v = env[name];
+        if (typeof v === 'string' && v.length >= MIN_KEY_LENGTH) return v;
+    }
+    throw new Error(`gold tools need GOLD_HASH_KEY (or AUDIT_HASH_KEY), at least ${MIN_KEY_LENGTH} characters, to fingerprint post text`);
+}
+
+/** Keyed fingerprint of a post's text (relevance_gold_*.input_hash). */
+function inputHash(text, env = process.env) {
+    return crypto.createHmac('sha256', hashKey(env)).update(`gold-input:v1\0${text}`).digest('hex');
+}
 
 const DEFAULT_BATCH = 2000;
 
@@ -24,10 +45,11 @@ const DEFAULT_BATCH = 2000;
  * read to compute the script and hash, and is NOT returned.
  * Keyset pagination by post id, so memory stays bounded.
  *
- * @param {{ since?: string|null, batchSize?: number }} [opts]
+ * `until` is the snapshot bound both passes of the two-pass sampler use.
+ * @param {{ since?: string|null, until?: string|null, batchSize?: number }} [opts]
  * @returns {AsyncGenerator<{rawPostId, category, scope, decision, script, inputHash, relevanceMvId}>}
  */
-async function* streamCandidates({ since = null, batchSize = DEFAULT_BATCH } = {}) {
+async function* streamCandidates({ since = null, until = null, batchSize = DEFAULT_BATCH } = {}) {
     let after = '00000000-0000-0000-0000-000000000000';
     for (;;) {
         const rows = await dbAll(
@@ -41,10 +63,11 @@ async function* streamCandidates({ since = null, batchSize = DEFAULT_BATCH } = {
                AND rp.text_removed_at IS NULL
                AND rp.content <> ''
                AND ($2::timestamptz IS NULL OR rp.collected_at >= $2::timestamptz)
+               AND ($5::timestamptz IS NULL OR rp.collected_at <= $5::timestamptz)
                AND rp.id > $3::uuid
              ORDER BY rp.id
              LIMIT $4`,
-            [DEMO_SOURCE_TYPE, since, after, batchSize],
+            [DEMO_SOURCE_TYPE, since, after, batchSize, until],
         );
         if (!rows.length) return;
         for (const r of rows) {
@@ -54,7 +77,7 @@ async function* streamCandidates({ since = null, batchSize = DEFAULT_BATCH } = {
                 scope: scopeOf(r.slug, r.route),
                 decision: decisionOf(r.is_relevant),
                 script: scriptOf(r.content),
-                inputHash: sha256(r.content),
+                inputHash: inputHash(r.content),
                 relevanceMvId: r.relevance_mv_id || null,
             };
         }
@@ -95,16 +118,24 @@ async function insertItems(items, { sampleId, seed }) {
 
 const ITEM_COLS = 'i.id, i.raw_post_id, i.input_hash, i.category, i.draw_rank';
 
+/** One live (not erased) item of a sample, or null. */
+async function getItem(sampleId, itemId) {
+    return (await dbGet(
+        `SELECT ${ITEM_COLS} FROM relevance_gold_items i WHERE i.sample_id = $1 AND i.id = $2 AND i.erased_at IS NULL`,
+        [sampleId, itemId],
+    )) || null;
+}
+
 /** All label rows of a sample (or every sample), optionally one codebook version. */
 async function labelRows({ sampleId = null, codebookVersion = null, methods = null } = {}) {
     const rows = await dbAll(
-        `SELECT l.id, l.item_id, l.label, l.flags, l.labeller, l.method, l.note, l.created_at
+        `SELECT l.id, l.seq, l.item_id, l.label, l.flags, l.labeller, l.method, l.note, l.created_at, i.design_weight
          FROM relevance_gold_labels l
          JOIN relevance_gold_items i ON i.id = l.item_id
          WHERE ($1::text IS NULL OR i.sample_id = $1)
            AND ($2::text IS NULL OR l.codebook_version = $2)
            AND ($3::text[] IS NULL OR l.method = ANY($3::text[]))
-         ORDER BY l.created_at, l.id`,
+         ORDER BY l.seq`,
         [sampleId, codebookVersion, methods],
     );
     return rows;
@@ -115,31 +146,41 @@ async function labelRows({ sampleId = null, codebookVersion = null, methods = nu
  *   human:       items this labeller has not labelled yet (any method).
  *   adjudicated: items where the latest human labels of two or more
  *                labellers disagree (label or flags) and no adjudicated
- *                label exists yet.
+ *                label is newer than the newest of those human labels (a
+ *                later human correction re-opens an adjudicated item).
  */
 async function pendingItems({ sampleId, labeller, method = 'human', codebookVersion = null }) {
     if (method === 'human') {
         return dbAll(
             `SELECT ${ITEM_COLS} FROM relevance_gold_items i
              WHERE i.sample_id = $1
+               AND i.erased_at IS NULL
                AND NOT EXISTS (SELECT 1 FROM relevance_gold_labels l WHERE l.item_id = i.id AND l.labeller = $2)
              ORDER BY i.draw_rank`,
             [sampleId, labeller],
         );
     }
     const human = await labelRows({ sampleId, codebookVersion, methods: ['human'] });
-    const adjudicated = new Set((await labelRows({ sampleId, codebookVersion, methods: ['adjudicated'] })).map(r => r.item_id));
+    const adjudicatedSeq = new Map();
+    for (const r of await labelRows({ sampleId, codebookVersion, methods: ['adjudicated'] })) {
+        const s = BigInt(String(r.seq));
+        if (!adjudicatedSeq.has(r.item_id) || adjudicatedSeq.get(r.item_id) < s) adjudicatedSeq.set(r.item_id, s);
+    }
     const perItem = new Map();
+    const newestHuman = new Map();
     for (const [, m] of latestPerLabeller(human)) {
         for (const [itemId, r] of m) {
             if (!perItem.has(itemId)) perItem.set(itemId, new Set());
             perItem.get(itemId).add(`${r.label}+${[...r.flags].sort().join('+')}`);
+            const s = BigInt(String(r.seq));
+            if (!newestHuman.has(itemId) || newestHuman.get(itemId) < s) newestHuman.set(itemId, s);
         }
     }
-    const disputed = [...perItem].filter(([id, set]) => set.size > 1 && !adjudicated.has(id)).map(([id]) => id);
+    const open = (id) => !adjudicatedSeq.has(id) || adjudicatedSeq.get(id) < newestHuman.get(id);
+    const disputed = [...perItem].filter(([id, set]) => set.size > 1 && open(id)).map(([id]) => id);
     if (!disputed.length) return [];
     return dbAll(
-        `SELECT ${ITEM_COLS} FROM relevance_gold_items i WHERE i.id = ANY($1::uuid[]) ORDER BY i.draw_rank`,
+        `SELECT ${ITEM_COLS} FROM relevance_gold_items i WHERE i.id = ANY($1::uuid[]) AND i.erased_at IS NULL ORDER BY i.draw_rank`,
         [disputed],
     );
 }
@@ -149,17 +190,18 @@ async function pendingItems({ sampleId, labeller, method = 'human', codebookVers
  * @returns {Promise<{status: 'ok', content: string, inputHash: string} | {status: 'removed'|'changed'}>}
  */
 async function itemText(item) {
+    if (!item.raw_post_id || !item.input_hash) return { status: 'removed' };
     const row = await dbGet('SELECT content, text_removed_at FROM raw_posts WHERE id = $1', [item.raw_post_id]);
     if (!row || row.text_removed_at || !row.content) return { status: 'removed' };
-    const inputHash = sha256(row.content);
-    if (inputHash !== item.input_hash) return { status: 'changed' };
-    return { status: 'ok', content: row.content, inputHash };
+    const hash = inputHash(row.content);
+    if (hash !== item.input_hash) return { status: 'changed' };
+    return { status: 'ok', content: row.content, inputHash: hash };
 }
 
 async function labelsFor(itemId) {
     return dbAll(
         `SELECT labeller, method, label, flags, note, created_at FROM relevance_gold_labels
-         WHERE item_id = $1 ORDER BY created_at, id`,
+         WHERE item_id = $1 ORDER BY seq`,
         [itemId],
     );
 }
@@ -227,7 +269,30 @@ async function* streamEvalRows(client, { since = null, category = null, limit = 
     }
 }
 
+/** Erase one post's gold rows (migration 070's gold_erase_post); returns the number of items erased. */
+async function erasePost(rawPostId) {
+    return (await dbGet('SELECT gold_erase_post($1::uuid) AS n', [rawPostId])).n;
+}
+
+/**
+ * Erase every live gold item whose post text is gone (post deleted, text
+ * removed by retention, or emptied). Returns the number of items erased.
+ */
+async function eraseRemoved() {
+    const rows = await dbAll(
+        `SELECT DISTINCT i.raw_post_id
+         FROM relevance_gold_items i
+         LEFT JOIN raw_posts rp ON rp.id = i.raw_post_id
+         WHERE i.erased_at IS NULL
+           AND (rp.id IS NULL OR rp.text_removed_at IS NOT NULL OR rp.content = '')`,
+    );
+    let erased = 0;
+    for (const r of rows) erased += await erasePost(r.raw_post_id);
+    return erased;
+}
+
 module.exports = {
-    readOnly, streamEvalRows,
-    streamCandidates, sampleExists, insertItems, labelRows, pendingItems, itemText, labelsFor, recordLabel, recordLabels, sha256,
+    readOnly, streamEvalRows, hashKey, inputHash,
+    streamCandidates, sampleExists, insertItems, labelRows, pendingItems, getItem, itemText, labelsFor,
+    recordLabel, recordLabels, erasePost, eraseRemoved,
 };

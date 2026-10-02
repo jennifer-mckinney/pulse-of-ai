@@ -46,13 +46,16 @@ describe('migration 070: relevance gold set', () => {
         await dbTransaction(c => c.query(SQL_070));
         const t = await dbAll(`SELECT tgname FROM pg_trigger WHERE tgname LIKE 'relevance_gold_%' AND NOT tgisinternal ORDER BY 1`);
         expect(t.map(r => r.tgname)).toEqual([
-            'relevance_gold_items_append_only', 'relevance_gold_labels_append_only', 'relevance_gold_labels_check',
+            'relevance_gold_items_append_only', 'relevance_gold_items_no_truncate',
+            'relevance_gold_labels_append_only', 'relevance_gold_labels_check', 'relevance_gold_labels_no_truncate',
         ]);
     });
 
     it('creates no methodology version and changes no registered row', () => {
         expect(SQL_070).not.toMatch(/INSERT\s+INTO\s+methodology_versions/i);
-        expect(SQL_070).not.toMatch(/\bUPDATE\s+\w+\s+SET\b/i);
+        // The only UPDATEs are the two inside gold_erase_post (the erasure path).
+        const outsideErase = SQL_070.replace(/CREATE OR REPLACE FUNCTION gold_erase_post[\s\S]*$/, '');
+        expect(outsideErase).not.toMatch(/\bUPDATE\s+\w+\s+SET\b/i);
     });
 
     it('has no foreign key to raw_posts (the demo purge deletes posts; gold rows are append-only)', async () => {
@@ -65,9 +68,9 @@ describe('migration 070: relevance gold set', () => {
     it('stores an item and a label with the codebook values', async () => {
         const item = await insertItem();
         await insertLabel(item, { label: 'NOT_AI', flags: ['SPAM', 'LANG'] });
-        await insertLabel(item, { label: 'AI_INCIDENTAL', labeller: 'llm-1', method: 'llm_proposed', model_id: 'model-x' });
+        await insertLabel(item, { label: 'AI_INCIDENTAL', labeller: 'llm:model-x', method: 'llm_proposed', model_id: 'model-x' });
         await insertLabel(item, { label: 'AI_CENTRAL', labeller: 'jen', method: 'adjudicated', note: 'ruled' });
-        const rows = await dbAll('SELECT label, flags, method FROM relevance_gold_labels ORDER BY created_at, id');
+        const rows = await dbAll('SELECT label, flags, method FROM relevance_gold_labels ORDER BY seq');
         expect(rows).toHaveLength(3);
         expect(rows.find(r => r.method === 'human').flags).toEqual(['SPAM', 'LANG']);
     });
@@ -102,6 +105,9 @@ describe('migration 070: relevance gold set', () => {
         ['human label with a model id', { model_id: 'model-x' }, /check constraint/],
         ['duplicate flags', { flags: ['SPAM', 'SPAM'] }, /duplicate flags/],
         ['hash of different text', { input_hash: H('c') }, /input_hash does not match/],
+        ['llm label under a human-style name', { method: 'llm_proposed', model_id: 'm', labeller: 'ann' }, /check constraint/],
+        ['human label in the llm: namespace', { labeller: 'llm:ann' }, /check constraint/],
+        ['note over 200 characters', { note: 'x'.repeat(201) }, /check constraint/],
     ])('labels reject a bad %s', async (_, over, err) => {
         const item = await insertItem();
         await expect(insertLabel(item, over)).rejects.toThrow(err);
@@ -118,5 +124,76 @@ describe('migration 070: relevance gold set', () => {
         await expect(dbRun(`UPDATE ${table} SET created_at = NOW() WHERE id = $1`, [id])).rejects.toThrow(/append-only/);
         await expect(dbRun(`DELETE FROM ${table} WHERE id = $1`, [id])).rejects.toThrow(/append-only/);
         expect((await dbGet(`SELECT COUNT(*)::int AS n FROM ${table}`)).n).toBe(1);
+    });
+
+    it('seq is a strict order: the later row has the higher seq even in one transaction', async () => {
+        const item = await insertItem();
+        await dbTransaction(async (c) => {
+            for (const label of ['NOT_AI', 'AI_CENTRAL']) {
+                await c.query(`INSERT INTO relevance_gold_labels (item_id, label, labeller, method, codebook_version, input_hash)
+                               VALUES ($1, $2, 'ann', 'human', '1.0.0', $3)`, [item, label, H('a')]);
+            }
+        });
+        const rows = await dbAll('SELECT label, seq FROM relevance_gold_labels ORDER BY seq');
+        expect(rows.map(r => r.label)).toEqual(['NOT_AI', 'AI_CENTRAL']);
+        expect(BigInt(rows[1].seq) > BigInt(rows[0].seq)).toBe(true);
+    });
+
+    it.each([['relevance_gold_items'], ['relevance_gold_labels']])('%s refuses TRUNCATE unless the transaction opts in', async (table) => {
+        const item = await insertItem();
+        await insertLabel(item);
+        await expect(dbRun(`TRUNCATE ${table} CASCADE`)).rejects.toThrow(/TRUNCATE is not allowed/);
+        expect((await dbGet('SELECT COUNT(*)::int AS n FROM relevance_gold_items')).n).toBe(1);
+    });
+
+    describe('gold_erase_post (the erasure path)', () => {
+        it('blanks the post id, the hash and the notes, stamps erased_at, and keeps labels, flags and strata', async () => {
+            const item = await insertItem();
+            const other = await insertItem({ raw_post_id: '33333333-3333-4333-8333-333333333333', input_hash: H('d') });
+            await insertLabel(item, { label: 'NOT_AI', flags: ['SPAM'], note: 'a short note' });
+            await insertLabel(other, { input_hash: H('d') });
+            expect((await dbGet('SELECT gold_erase_post($1::uuid) AS n', [POST])).n).toBe(1);
+            const i = await dbGet('SELECT raw_post_id, input_hash, erased_at, stratum, design_weight::float AS dw FROM relevance_gold_items WHERE id = $1', [item]);
+            expect(i).toMatchObject({ raw_post_id: null, input_hash: null, stratum: 'news|filter|relevant|latin', dw: 5 });
+            expect(i.erased_at).toBeTruthy();
+            const l = await dbGet('SELECT label, flags, input_hash, note, erased_at FROM relevance_gold_labels WHERE item_id = $1', [item]);
+            expect(l).toMatchObject({ label: 'NOT_AI', flags: ['SPAM'], input_hash: null, note: null });
+            expect(l.erased_at).toBeTruthy();
+            // The other post is untouched, and a second erase is a no-op.
+            expect((await dbGet('SELECT input_hash FROM relevance_gold_items WHERE id = $1', [other])).input_hash).toBe(H('d'));
+            expect((await dbGet('SELECT gold_erase_post($1::uuid) AS n', [POST])).n).toBe(0);
+        });
+
+        it('an erased item can no longer be labelled, and the erasure leaves the append-only guard in force', async () => {
+            const item = await insertItem();
+            await dbGet('SELECT gold_erase_post($1::uuid) AS n', [POST]);
+            await expect(insertLabel(item)).rejects.toThrow(/erased/);
+            await expect(dbRun('UPDATE relevance_gold_items SET raw_post_id = $2 WHERE id = $1', [item, POST])).rejects.toThrow(/append-only/);
+            await expect(dbRun('DELETE FROM relevance_gold_items WHERE id = $1', [item])).rejects.toThrow(/append-only/);
+        });
+
+        it('setting the erasure flag by hand cannot be used to rewrite anything but the erasable columns', async () => {
+            const item = await insertItem();
+            await expect(dbTransaction(async (c) => {
+                await c.query("SET LOCAL pulse.gold_erasure = 'on'");
+                await c.query("UPDATE relevance_gold_items SET category = 'forums', raw_post_id = NULL, input_hash = NULL, erased_at = NOW() WHERE id = $1", [item]);
+            })).rejects.toThrow(/only erasure may change a row/);
+            await expect(dbTransaction(async (c) => {
+                await c.query("SET LOCAL pulse.gold_erasure = 'on'");
+                await c.query('UPDATE relevance_gold_items SET created_at = NOW() WHERE id = $1', [item]);
+            })).rejects.toThrow(/only erasure may change a row/);
+            await expect(dbTransaction(async (c) => {
+                await c.query("SET LOCAL pulse.gold_erasure = 'on'");
+                await c.query('DELETE FROM relevance_gold_items WHERE id = $1', [item]);
+            })).rejects.toThrow(/DELETE is not allowed/);
+        });
+
+        it('items are either live or fully erased (never half)', async () => {
+            const item = await insertItem();
+            await expect(dbTransaction(async (c) => {
+                await c.query("SET LOCAL pulse.gold_erasure = 'on'");
+                await c.query('UPDATE relevance_gold_items SET raw_post_id = NULL, erased_at = NOW() WHERE id = $1', [item]);
+            })).rejects.toThrow(/erasure|only erasure/);
+        });
     });
 });

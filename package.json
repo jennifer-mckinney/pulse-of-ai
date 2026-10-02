@@ -37,6 +37,7 @@
     "gold:sample": "node scripts/gold-sample.js",
     "gold:label": "node scripts/gold-label.js",
     "gold:agreement": "node scripts/gold-agreement.js",
+    "gold:erase": "node scripts/gold-erase.js",
     "relevance:eval": "node scripts/relevance-eval.js"
   },
   "keywords": [

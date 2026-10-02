@@ -8,11 +8,14 @@
 // Read-only by construction: every query runs in a READ ONLY transaction,
 // so a write anywhere in it fails. It writes no score, audit row or
 // methodology version, and changes no production behaviour. Output is
-// counts only — no post text.
+// counts only — no post text. Local-only (assertLocalOnly): it reads every post's text.
 
 'use strict';
 
 require('dotenv').config();
+
+// A calendar date, optionally with a time (what Postgres and Date.parse agree on).
+const DATE_RE = /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
 
 const USAGE = 'usage: npm run relevance:eval -- [--since YYYY-MM-DD] [--category SLUG] [--limit N] [--json]';
 
@@ -34,7 +37,7 @@ function parseArgs(argv) {
             default: throw new Error(`unknown argument ${a}\n${USAGE}`);
         }
     }
-    if (out.since !== null && Number.isNaN(Date.parse(out.since))) throw new Error(`--since must be a date (got "${out.since}")`);
+    if (out.since !== null && !(DATE_RE.test(out.since) && !Number.isNaN(Date.parse(out.since)))) throw new Error(`--since must be a date, YYYY-MM-DD (got "${out.since}")`);
     if (out.limit !== null && (!Number.isInteger(out.limit) || out.limit <= 0)) throw new Error('--limit must be a positive integer');
     if (out.category !== null && !require('../src/config/categories').isCanonicalCategory(out.category)) {
         throw new Error(`--category must be a canonical category slug (got "${out.category}")`);
@@ -42,8 +45,9 @@ function parseArgs(argv) {
     return out;
 }
 
-async function main(argv, { out = l => process.stdout.write(l + '\n') } = {}) {
+async function main(argv, { env = process.env, out = l => process.stdout.write(l + '\n') } = {}) {
     const opts = parseArgs(argv);
+    require('../src/gold/labelling').assertLocalOnly(env);
     const { createAccumulator, formatReport, VERSIONS } = require('../src/gold/eval');
     const { readOnly, streamEvalRows } = require('../src/gold/store');
     const report = await readOnly(async (client) => {

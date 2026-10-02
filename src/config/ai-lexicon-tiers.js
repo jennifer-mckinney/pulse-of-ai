@@ -25,7 +25,10 @@
 //                   insemination"). Masking removes that term's hit only;
 //                   any other evidence in the text still counts.
 //   SPAM_SIGNATURES phone-scam support numbers and airline-support SEO spam;
-//                   a hit forces NOT_AI and proposes the SPAM flag.
+//                   a hit proposes the SPAM flag. It does NOT change `ai`: the
+//                   codebook labels AI-themed spam by topic and flags it, and
+//                   whether spam counts is Stage 1's decision (the eval reports
+//                   tiered_ai_nonspam beside tiered_ai so the effect is visible).
 //   MULTILINGUAL    strong terms in zh, ja, ko, es, pt, fr, de, ru, ar.
 //                   CJK terms match as SUBSTRINGS of the text with all
 //                   whitespace removed (no word boundaries in CJK; Korean
@@ -36,7 +39,11 @@
 //                   without learning, autonomous vehicles, algorithmic
 //                   trading, crypto "AI tokens", bot-generated text, SDK
 //                   dependency bumps). Tags never change the decision: the
-//                   ruling is Jennifer's (codebook v1, section 5).
+//                   ruling is Jennifer's (codebook v1, section 5). The CONTEXT
+//                   co-term defaults for robot, algorithm and autonomous
+//                   vehicles are PROVISIONAL, not rulings: each is a library
+//                   default that the eval can compare, and the codebook's OPEN
+//                   questions stay open until she rules.
 //
 // Pure and deterministic: no I/O, no clock, no randomness. Text is
 // normalised with NFKC (full-width "ＡＩ" → "AI"), Arabic diacritics and
@@ -135,23 +142,36 @@ const CONTEXT = freezeAll([
 
 // ─── NEGATIVE (disambiguators: mask one term's spans when the condition holds) ─
 // `mask` lists the spans to blank; `when` (optional) must match the ORIGINAL
-// normalised text for the mask to apply. Masked spans become spaces, so the
+// normalised text for the mask to apply, and `unless` (optional) vetoes it when
+// it matches (an AI cue that overrides a non-AI sense). Masked spans become spaces, so the
 // term no longer matches; every other term still does.
 const AVIATION = /\b(?:flights?|Air India|airports?|airlines?|aircraft|planes?|Boeing|Airbus|Dreamliner|passengers?|crash(?:ed|es)?|pilots?|cockpit|runway|take-?off|landing|departure|diverted|DGCA|Heathrow)\b/i;
 const NEGATIVE = freezeAll([
     { id: 'ai_flight_number', target: 'ai_acronym', mask: [/\bAI[\s-]?\d{2,4}\b/], when: AVIATION },
     { id: 'ai_file_format', target: 'ai_acronym',
-        mask: [/\.ai\s+(?:files?|formats?|extension)\b/i, /\bAI\s+(?:files?|formats?|vectors?)\b/,
+        // A `when` clause must never be satisfiable by the masked span itself:
+        // "AI vector search" is AI discourse, so `vector(s)` is in neither list.
+        mask: [/\.ai\s+(?:files?|formats?|extension)\b/i, /\bAI\s+(?:files?|formats?)\b/,
             /\b(?:EPS|SVG|PDF|PSD|CDR|DXF|PNG|JPE?G)\s*(?:,|\/|and|or|&)\s*AI\b/, /\bAI\s*(?:,|\/|and|or|&)\s*(?:EPS|SVG|PDF|PSD|CDR|DXF)\b/],
-        when: /\b(?:Adobe|Illustrator|vectors?|EPS|SVG|PSD|CorelDRAW|Inkscape|download|templates?|clip ?art|logos?|printable)\b/i },
+        when: /\b(?:Adobe|Illustrator|EPS|SVG|PSD|CorelDRAW|Inkscape|download|templates?|clip ?art|logos?|printable)\b/i },
     { id: 'artificial_insemination', target: 'ai_acronym',
         mask: [/\bartificial[\s-]+insemination\b/i, AI_ACRONYM_RE], when: /\bartificial[\s-]+insemination\b/i },
+    // Hardware cues only: "transformer models to forecast electricity demand on
+    // the grid" is ML for power systems, so grid / electricity / utilities are
+    // NOT cues, and `unless` lets any ML cue veto the mask.
     { id: 'transformer_power', target: 'transformer', mask: [/\btransformers?\b/i],
-        when: /\b(?:voltage|kV|kilovolts?|substations?|power grid|grid|electrical|electricity|utilit(?:y|ies)|megawatts?|MVA|kVA|outages?|blackouts?|transmission lines?|step-(?:down|up)|windings?|exploded|explosion)\b/i },
+        when: /\b(?:voltage|kV|kilovolts?|substations?|megawatts?|MVA|kVA|transmission lines?|step-(?:down|up)|windings?|exploded|explosion)\b/i,
+        unless: /\b(?:attention|neural|LLMs?|BERT|GPT|machine learning|deep learning|training|fine-?tun\w*|pre-?trained|tokens?|forecast\w*|transformer[\s-]+(?:models?|architectures?|networks?|based))\b/i },
     { id: 'transformer_franchise', target: 'transformer', mask: [/\btransformers?\b/i],
         when: /\b(?:Optimus Prime|Bumblebee|Autobots?|Decepticons?|Hasbro|Michael Bay|box office)\b/i },
     { id: 'gemini_astrology', target: 'gemini', mask: [/\bGemini\b/],
-        when: /\b(?:horoscopes?|zodiac|astrolog\w*|star signs?|Aries|Taurus|Leo|Virgo|Libra|Scorpio|Sagittarius|Capricorn|Aquarius|Pisces|moon sign|rising sign)\b/i },
+        // Astrology cue words only: sign names are ordinary names and brands
+        // ("Leo said Google Gemini ...", Libra), so they are not cues.
+        when: /\b(?:horoscopes?|zodiac|astrolog\w*|star signs?|moon sign|rising sign)\b/i },
+    // "AGI" is also adjusted gross income; an AI cue vetoes the mask.
+    { id: 'agi_tax', target: 'agi', mask: [/\bAGI\b/],
+        when: /\b(?:adjusted gross income|taxes|tax|IRS|deductions?|1040|tax return|filing status)\b/i,
+        unless: /\b(?:AI|artificial general|superintelligence|OpenAI|Anthropic|DeepMind|alignment)\b/ },
     { id: 'claude_person', target: 'claude', mask: [/\bJean-Claude\b/, /\bClaude\b/],
         when: /\b(?:Monet|Van Damme|Debussy|L[ée]vi-Strauss|Jean-Claude|Makel[ée]l[ée]|Chabrol|Lelouch|Shannon|Rains)\b/ },
     { id: 'llama_animal', target: 'llama', mask: [/\bllamas?\b/i],
@@ -165,7 +185,10 @@ const NEGATIVE = freezeAll([
 
 // ─── SPAM SIGNATURES (force NOT_AI, propose SPAM) ────────────────────────────
 const PHONE_CANDIDATE = /\+?\d[\d\s().-]{8,}\d/g;
-function hasPhoneNumber(t) {
+// ISO dates and clock times are digit runs too ("2024-10-01 12:30:45"); blank them first.
+const DATE_OR_TIME = /\b\d{4}-\d{2}-\d{2}(?:[T\s]\d{1,2}:\d{2}(?::\d{2})?)?\b|\b\d{1,2}:\d{2}(?::\d{2})?\b/g;
+function hasPhoneNumber(text) {
+    const t = text.replace(DATE_OR_TIME, ' ');
     for (const m of t.matchAll(PHONE_CANDIDATE)) {
         const digits = m[0].replace(/\D/g, '').length;
         if (digits >= 10 && digits <= 15) return true;
@@ -182,13 +205,20 @@ const SPAM_SIGNATURES = freezeAll([
 
 // ─── MULTILINGUAL STRONG ─────────────────────────────────────────────────────
 // kind 'cjk'   : substring of the whitespace-stripped text (zh, ja, ko)
-// kind 'sub'   : substring of the text (ar)
-// kind 're'    : Unicode-aware regex (es, pt, fr, de, ru)
+// kind 're'    : Unicode-aware regex (es, pt, fr, de, ru); the Arabic terms are
+//                compiled to one too, with any whitespace run between words
 const L = '(?<![\\p{L}\\p{N}])';   // left boundary (Unicode)
 const R = '(?![\\p{L}\\p{N}])';    // right boundary (Unicode)
 const u = (src, flags = 'iu') => new RegExp(src, flags);
+// "IA" / "KI" must stay case-sensitive ("ia" is a Portuguese verb form), so the
+// function words around them are made case-insensitive one letter at a time:
+// caps('la|el') -> '[Ll]a|[Ee]l' (JS has no inline (?i:) groups).
+const caps = (words) => words.split('|').map(w => `[${w[0].toUpperCase()}${w[0].toLowerCase()}]${w.slice(1)}`).join('|');
+// A sentence start (start of text, or after . ! ? and Spanish inverted marks).
+const SENT = '(?:^|[.!?\\u00A1\\u00BF]\\s*)';
 const cjk = (lang, terms) => terms.map(term => ({ id: `${lang}:${term}`, lang, kind: 'cjk', term: term.replace(/\s+/g, '') }));
-const sub = (lang, terms) => terms.map(term => ({ id: `${lang}:${term}`, lang, kind: 'sub', term }));
+// Substring terms (Arabic): spaces match any whitespace run, so a double space or a newline between the words still hits.
+const sub = (lang, terms) => terms.map(term => ({ id: `${lang}:${term}`, lang, kind: 're', re: new RegExp(term.replace(/ /g, '\\s+'), 'u') }));
 const rx = (lang, rows) => rows.map(([name, re]) => ({ id: `${lang}:${name}`, lang, kind: 're', re }));
 
 const MULTILINGUAL = freezeAll([
@@ -204,7 +234,7 @@ const MULTILINGUAL = freezeAll([
         ['aprendizaje profundo', u(`${L}aprendizaje\\s+profundo${R}`)],
         ['red neuronal', u(`${L}redes?\\s+neuronal(?:es)?${R}`)],
         ['modelo de lenguaje', u(`${L}modelos?\\s+(?:grandes?\\s+)?de\\s+lenguaje${R}`)],
-        ['IA', u(`${L}(?:(?:la|el|una|de|del|con|por|para|sobre|en|y)\\s+)IA${R}|${L}IA\\s+generativa${R}`, 'u')],
+        ['IA', u(`${L}(?:(?:${caps('la|el|una|un|las|los|de|del|con|por|para|sobre|sin|en|y|que|al')})\\s+)IA${R}|${SENT}IA\\s+(?:es|est[aá]n?|ha|han|puede|pueden|va|vamos|seguir[aá]|cambia|y)${R}|${L}IA\\s+generativa${R}`, 'mu')],
         ['procesamiento del lenguaje natural', u(`${L}procesamiento\\s+del\\s+lenguaje\\s+natural${R}`)],
     ]),
     ...rx('pt', [
@@ -213,7 +243,7 @@ const MULTILINGUAL = freezeAll([
         ['aprendizado profundo', u(`${L}(?:aprendizado\\s+profundo|aprendizagem\\s+profunda)${R}`)],
         ['rede neural', u(`${L}redes?\\s+neura(?:l|is)${R}`)],
         ['modelo de linguagem', u(`${L}modelos?\\s+(?:grandes?\\s+)?de\\s+linguagem${R}`)],
-        ['IA', u(`${L}(?:(?:a|da|na|pela|com|sem|sobre|e)\\s+)IA${R}`, 'u')],
+        ['IA', u(`${L}(?:(?:${caps('a|da|na|pela|com|sem|sobre|e|uma|das|nas|que')})\\s+)IA${R}|${SENT}IA\\s+(?:[eé]|est[aá]|vai|pode|j[aá]|n[aã]o|generativa)${R}`, 'mu')],
         ['processamento de linguagem natural', u(`${L}processamento\\s+de\\s+linguagem\\s+natural${R}`)],
     ]),
     ...rx('fr', [
@@ -221,7 +251,7 @@ const MULTILINGUAL = freezeAll([
         ['apprentissage automatique', u(`${L}apprentissage\\s+(?:automatique|profond)${R}`)],
         ['réseau de neurones', u(`${L}r[ée]seaux?\\s+(?:de\\s+neurones|neuronaux|neuronal)${R}`)],
         ['modèle de langage', u(`${L}(?:grands?\\s+)?mod[èe]les?\\s+de\\s+langage${R}`)],
-        ['IA', u(`(?:${L}(?:une|des|du|sur|par|avec|dans|et)\\s+|${L}[ld]['’])IA${R}|${L}IA\\s+g[ée]n[ée]rative${R}`, 'u')],
+        ['IA', u(`(?:${L}(?:${caps('une|des|du|sur|par|avec|dans|et|sans|pour')})\\s+|${L}[ldLD]['’])IA${R}|${SENT}IA\\s+(?:est|va|peut|a|ont|et|en)${R}|${L}IA\\s+g[ée]n[ée]rative${R}`, 'mu')],
         ['traitement du langage naturel', u(`${L}traitement\\s+(?:automatique\\s+)?du\\s+langage(?:\\s+naturel)?${R}`)],
     ]),
     ...rx('de', [
@@ -229,7 +259,7 @@ const MULTILINGUAL = freezeAll([
         ['maschinelles Lernen', u(`${L}maschinell\\p{L}*\\s+Lern\\p{L}*`)],
         ['neuronales Netz', u(`${L}neuronal\\p{L}*\\s+Netz\\p{L}*`)],
         ['Sprachmodell', u(`Sprachmodell\\p{L}*`)],
-        ['KI', u(`${L}(?:die|der|den|dem|des|eine[mnrs]?|mit|durch|f[üu]r|[üu]ber|und|von|zur|zum|per|ohne|gegen)\\s+KI${R}|${L}KI-\\p{L}|${L}generativ\\p{L}*\\s+KI${R}`, 'u')],
+        ['KI', u(`${L}(?:${caps('die|der|den|dem|des|mit|durch|für|über|und|von|zur|zum|per|ohne|gegen')}|[Ee]ine[mnrs]?)\\s+KI${R}|${SENT}KI\\s+(?:ist|kann|wird|hat|macht|und|ver[äa]ndert)${R}|${L}KI-\\p{L}|${L}generativ\\p{L}*\\s+KI${R}`, 'mu')],
     ]),
     ...rx('ru', [
         ['искусственный интеллект', u(`${L}искусственн\\p{L}*\\s+интеллект\\p{L}*`)],
@@ -261,7 +291,9 @@ const EDGE_CASES = freezeAll([
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const ARABIC_MARKS = /[ً-ٰٟـ]/g;
+// Harakat U+064B-U+065F, superscript alef U+0670 and tatweel U+0640 only: not
+// the Arabic-Indic digits (U+0660-U+0669) or letters in between.
+const ARABIC_MARKS = /[\u064B-\u065F\u0670\u0640]/g;
 
 /**
  * Normalise text for matching: NFKC, Arabic diacritics and tatweel removed.
@@ -299,7 +331,7 @@ function emptyResult() {
  *             suppressed: string[], multilingual: string[], spam: string[],
  *             proposedFlags: string[], edgeCases: string[] }}
  *   ai          true when there is strong, multilingual or satisfied-context
- *               evidence and no spam signature;
+ *               evidence (spam does not change it: it only proposes SPAM);
  *   score       min(1, (strong + multilingual + 0.5 × context) / 2) —
  *               bounded evidence strength, NOT a probability;
  *   unresolved  context terms present without a co-term;
@@ -315,6 +347,7 @@ function classifyTiered(text) {
     let masked = t;
     for (const n of NEGATIVE) {
         if (n.when && !n.when.test(t)) continue;
+        if (n.unless && n.unless.test(t)) continue;
         let fired = false;
         for (const re of n.mask) {
             if (re.test(masked)) { fired = true; masked = blank(masked, re); }
@@ -336,9 +369,7 @@ function classifyTiered(text) {
     // 4. Multilingual strong.
     const squeezed = masked.replace(/\s+/g, '');
     for (const m of MULTILINGUAL) {
-        const hit = m.kind === 'cjk' ? squeezed.includes(m.term)
-            : m.kind === 'sub' ? masked.includes(m.term)
-                : m.re.test(masked);
+        const hit = m.kind === 'cjk' ? squeezed.includes(m.term) : m.re.test(masked);
         if (hit) r.multilingual.push(m.id);
     }
 
@@ -355,13 +386,11 @@ function classifyTiered(text) {
 
     const evidence = r.strong.length * WEIGHT.strong + r.multilingual.length * WEIGHT.multilingual
         + r.context.length * WEIGHT.context;
-    if (r.spam.length) {
-        r.proposedFlags.unshift('SPAM');
-        r.score = 0;
-    } else {
-        r.score = Math.round(Math.min(1, evidence / SCORE_SATURATION) * 1e6) / 1e6;
-        r.ai = evidence > 0;
-    }
+    // Spam proposes the SPAM flag only: the codebook labels AI-themed spam by
+    // topic and flags it, so `ai` and `score` stay topic-based.
+    if (r.spam.length) r.proposedFlags.unshift('SPAM');
+    r.score = Math.round(Math.min(1, evidence / SCORE_SATURATION) * 1e6) / 1e6;
+    r.ai = evidence > 0;
     r.label = r.ai ? 'AI' : 'NOT_AI';
     return r;
 }

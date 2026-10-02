@@ -5,7 +5,7 @@
 
 'use strict';
 
-const { dbRun, closePool } = require('../src/db/connection');
+const { dbTransaction, closePool } = require('../src/db/connection');
 
 // Tables in dependency order (children before parents) to respect FK constraints.
 // All listed in a single TRUNCATE so PostgreSQL handles cross-table deps atomically.
@@ -50,7 +50,12 @@ const TABLES = [
 
 beforeEach(async () => {
     // CASCADE handles any FK dependencies not covered by the ordering above
-    await dbRun(`TRUNCATE ${TABLES} RESTART IDENTITY CASCADE`);
+    // The gold tables (migration 070) refuse TRUNCATE unless the transaction
+    // opts in; this test harness (test DB only) is the one caller that does.
+    await dbTransaction(async (client) => {
+        await client.query("SET LOCAL pulse.gold_allow_truncate = 'on'");
+        await client.query(`TRUNCATE ${TABLES} RESTART IDENTITY CASCADE`);
+    });
 });
 
 // Every test file gets its own module registry, so its own pg Pool (up to

@@ -20,8 +20,16 @@ const goldAgreement = require('../../scripts/gold-agreement');
 const relevanceEval = require('../../scripts/relevance-eval');
 const store = require('../../src/gold/store');
 
+// The gold tools fingerprint post text with a keyed hash and run only against a
+// local database on the dev/test port (or one acknowledged with GOLD_ALLOW_DB_PORT).
+process.env.GOLD_HASH_KEY = process.env.GOLD_HASH_KEY || 'integration-test-gold-hash-key';
+process.env.POSTGRES_HOST = process.env.POSTGRES_HOST || 'localhost';
+const TEST_PORT = String(process.env.POSTGRES_TEST_PORT || '5433');
+if (!['5433', '5434'].includes(TEST_PORT)) process.env.GOLD_ALLOW_DB_PORT = TEST_PORT;
+const goldErase = require('../../scripts/gold-erase');
+
 const sha = (t) => crypto.createHash('sha256').update(t).digest('hex');
-const LOCAL = { POSTGRES_HOST: 'localhost', NODE_ENV: 'test' };
+const LOCAL = { POSTGRES_HOST: 'localhost', NODE_ENV: 'test', POSTGRES_TEST_PORT: TEST_PORT, GOLD_ALLOW_DB_PORT: process.env.GOLD_ALLOW_DB_PORT };
 const quiet = () => {};
 let seq = 0;
 
@@ -112,7 +120,8 @@ describe('scripts/gold-sample.js', () => {
         expect(rows).toHaveLength(5);
         for (const row of rows) {
             const p = await dbGet('SELECT content FROM raw_posts WHERE id = $1', [row.raw_post_id]);
-            expect(row.input_hash).toBe(sha(p.content));
+            expect(row.input_hash).toBe(store.inputHash(p.content));
+            expect(row.input_hash).not.toBe(sha(p.content));   // keyed, never a bare sha256 of the text
             expect(row.stratum).toBe(`${row.category}|${row.scope}|${row.decision}|${row.script}`);
             expect(Number(row.design_weight)).toBeCloseTo(row.stratum_population / row.stratum_sample_size, 9);
             expect(row.sampler_version).toBe('1.0.0');
@@ -148,6 +157,84 @@ describe('scripts/gold-label.js', () => {
             .rejects.toThrow(/local-only/);
         await expect(goldLabel.main(['--sample', 'gold-lab', '--labeller', 'ann'], { env: { POSTGRES_HOST: 'localhost', NODE_ENV: 'production' } }))
             .rejects.toThrow(/production/);
+        // A loopback host can be a tunnel: an unexpected port needs an explicit acknowledgement.
+        await expect(goldLabel.main(['--sample', 'gold-lab', '--labeller', 'ann'], { env: { POSTGRES_HOST: 'localhost', POSTGRES_PORT: '5432' } }))
+            .rejects.toThrow(/port 5432/);
+        for (const tool of [() => goldSample.main(['--total', '2', '--seed', 's'], { env: { POSTGRES_HOST: 'db.example.com' }, out: quiet }),
+            () => goldAgreement.main([], { env: { POSTGRES_HOST: 'db.example.com' }, out: quiet }),
+            () => relevanceEval.main([], { env: { POSTGRES_HOST: 'db.example.com' }, out: quiet }),
+            () => goldErase.main(['--removed'], { env: { POSTGRES_HOST: 'db.example.com' }, out: quiet })]) {
+            await expect(tool()).rejects.toThrow(/local-only/);
+        }
+    });
+
+    it('a different hash key makes every item read as changed (never labelled from a stale fingerprint)', async () => {
+        const saved = process.env.GOLD_HASH_KEY;
+        process.env.GOLD_HASH_KEY = 'a-different-gold-hash-key-entirely';
+        try {
+            const { lines, io } = fakeIo(['c']);
+            const r = await goldLabel.main(['--sample', 'gold-lab', '--labeller', 'ann'], { env: LOCAL, io });
+            expect(r).toMatchObject({ labelled: 0, unavailable: 6 });
+            expect(lines.join('\n')).toMatch(/text changed/);
+        } finally {
+            process.env.GOLD_HASH_KEY = saved;
+        }
+    });
+
+    it('no key, no gold tools: a missing or short key is an error, never an unkeyed hash', () => {
+        expect(() => store.hashKey({})).toThrow(/GOLD_HASH_KEY/);
+        expect(() => store.hashKey({ GOLD_HASH_KEY: 'short' })).toThrow(/GOLD_HASH_KEY/);
+        expect(store.hashKey({ AUDIT_HASH_KEY: 'audit-key-0123456789' })).toBe('audit-key-0123456789');
+    });
+
+    it('prints post text with terminal escapes neutralised', async () => {
+        await dbRun(`UPDATE raw_posts SET content = $2 WHERE id = $1`, [ids.vacuum, 'robot vacuum \u001b]52;c;QQ==\u0007 on sale']);
+        await goldSample.main(['--total', '6', '--seed', 'seed-esc', '--min-per-stratum', '1', '--sample-id', 'gold-esc', '--write'], { out: quiet });
+        const { lines, io } = fakeIo(Array(6).fill('n'));
+        await goldLabel.main(['--sample', 'gold-esc', '--labeller', 'esc'], { env: LOCAL, io });
+        expect(lines.join('\n')).toMatch(/robot vacuum \uFFFD\]52;c;QQ==\uFFFD on sale/);
+        expect(lines.join('\n')).not.toMatch(/\u001b|\u0007/);
+    });
+
+    it('relabel appends a correction (the latest row counts) and re-opens an adjudicated item', async () => {
+        await goldLabel.main(['--sample', 'gold-lab', '--labeller', 'ann'], { env: LOCAL, io: fakeIo(Array(6).fill('c')).io });
+        await goldLabel.main(['--sample', 'gold-lab', '--labeller', 'bob'], { env: LOCAL, io: fakeIo(['n', 'c', 'c', 'c', 'c', 'c']).io });
+        const [dispute] = await store.pendingItems({ sampleId: 'gold-lab', labeller: 'jen', method: 'adjudicated' });
+        await goldLabel.main(['--sample', 'gold-lab', '--labeller', 'jen', '--method', 'adjudicated'], { env: LOCAL, io: fakeIo(['c']).io });
+        expect(await store.pendingItems({ sampleId: 'gold-lab', labeller: 'jen', method: 'adjudicated' })).toEqual([]);
+        // bob corrects his label to NOT_AI on the disputed item: the later human row re-opens it.
+        const { lines, io } = fakeIo(['i']);
+        const r = await goldLabel.main(['--sample', 'gold-lab', '--labeller', 'bob', '--relabel', dispute.id], { env: LOCAL, io });
+        expect(r.labelled).toBe(1);
+        expect(lines.join('\n')).toMatch(/bob \(human\)/);
+        expect(lines.join('\n')).not.toMatch(/ann \(human\)/);
+        const rows = await dbAll(`SELECT label FROM relevance_gold_labels WHERE item_id = $1 AND labeller = 'bob' ORDER BY seq`, [dispute.id]);
+        expect(rows.length).toBe(2);
+        const reopened = await store.pendingItems({ sampleId: 'gold-lab', labeller: 'jen', method: 'adjudicated' });
+        expect(reopened.map(x => x.id)).toContain(dispute.id);
+        await expect(goldLabel.main(['--sample', 'gold-lab', '--labeller', 'bob', '--relabel', '33333333-3333-4333-8333-333333333333'], { env: LOCAL, io: fakeIo([]).io }))
+            .rejects.toThrow(/not a live item/);
+    });
+
+    it('refuses a note that quotes the post and a labeller in the llm: namespace', async () => {
+        const lines = [];
+        let asked = 0;
+        const io = {
+            print: (l) => lines.push(String(l)),
+            // Skip posts too short to be quoted (under the 25-character window); quote the first
+            // long post that was just printed; then quit. The draw order is not fixed.
+            ask: async () => {
+                const last = lines[lines.length - 1];
+                if (last.length < 30) return 'k';
+                asked += 1;
+                return asked === 1 ? `c # ${last.slice(0, 40)}` : 'q';
+            },
+        };
+        await goldLabel.main(['--sample', 'gold-lab', '--labeller', 'ann'], { env: LOCAL, io });
+        expect(lines.join('\n')).toMatch(/may not quote the post/);
+        expect((await dbGet('SELECT COUNT(*)::int AS n FROM relevance_gold_labels')).n).toBe(0);
+        await expect(goldLabel.main(['--sample', 'gold-lab', '--labeller', 'llm:evil'], { env: LOCAL, io: fakeIo([]).io }))
+            .rejects.toThrow(/reserved/);
     });
 
     it('labels blind, records the hash the labeller saw, and handles help / invalid / skip / quit', async () => {
@@ -155,7 +242,7 @@ describe('scripts/gold-label.js', () => {
         const r = await goldLabel.main(['--sample', 'gold-lab', '--labeller', 'ann'], { env: LOCAL, io });
         expect(r).toMatchObject({ labelled: 2, skipped: 1, quit: true });
         const labels = await dbAll(`SELECT l.label, l.flags, l.method, l.note, l.input_hash, i.input_hash AS item_hash
-                                    FROM relevance_gold_labels l JOIN relevance_gold_items i ON i.id = l.item_id ORDER BY l.created_at, l.id`);
+                                    FROM relevance_gold_labels l JOIN relevance_gold_items i ON i.id = l.item_id ORDER BY l.seq`);
         expect(labels.map(x => x.label)).toEqual(['AI_CENTRAL', 'NOT_AI']);
         expect(labels[1]).toMatchObject({ flags: ['SPAM'], method: 'human', note: 'spam' });
         for (const x of labels) expect(x.input_hash).toBe(x.item_hash);
@@ -203,9 +290,9 @@ describe('scripts/gold-label.js', () => {
         const good = path.join(dir, 'good.jsonl');
         fs.writeFileSync(good, items.map(i => JSON.stringify({ item_id: i.id, label: 'AI_INCIDENTAL', flags: [], input_hash: i.input_hash })).join('\n'));
         const out = [];
-        const r = await goldLabel.main(['--import', good, '--labeller', 'llm-batch-1', '--model', 'model-x'], { env: LOCAL, out: l => out.push(l) });
-        expect(r.imported).toBe(items.length);
-        const rows = await dbAll(`SELECT method, model_id FROM relevance_gold_labels WHERE labeller = 'llm-batch-1'`);
+        const r = await goldLabel.main(['--import', good, '--model', 'model-x'], { env: LOCAL, out: l => out.push(l) });
+        expect(r).toMatchObject({ imported: items.length, labeller: 'llm:model-x' });
+        const rows = await dbAll(`SELECT method, model_id FROM relevance_gold_labels WHERE labeller = 'llm:model-x'`);
         expect(rows).toHaveLength(items.length);
         for (const x of rows) expect(x).toEqual({ method: 'llm_proposed', model_id: 'model-x' });
 
@@ -214,9 +301,19 @@ describe('scripts/gold-label.js', () => {
             JSON.stringify({ item_id: items[0].id, label: 'NOT_AI', input_hash: items[0].input_hash }),
             JSON.stringify({ item_id: items[1].id, label: 'NOT_AI', input_hash: 'f'.repeat(64) }),
         ].join('\n'));
-        await expect(goldLabel.main(['--import', bad, '--labeller', 'llm-batch-2', '--model', 'model-x'], { env: LOCAL, out: quiet }))
+        await expect(goldLabel.main(['--import', bad, '--model', 'model-y'], { env: LOCAL, out: quiet }))
             .rejects.toThrow(/input_hash does not match/);
-        expect((await dbGet(`SELECT COUNT(*)::int AS n FROM relevance_gold_labels WHERE labeller = 'llm-batch-2'`)).n).toBe(0);
+        expect((await dbGet(`SELECT COUNT(*)::int AS n FROM relevance_gold_labels WHERE labeller = 'llm:model-y'`)).n).toBe(0);
+
+        // One item named twice, a directory, and a model name posing as a person are all refused.
+        const dup = path.join(dir, 'dup.jsonl');
+        const line = JSON.stringify({ item_id: items[0].id, label: 'NOT_AI', input_hash: items[0].input_hash });
+        fs.writeFileSync(dup, `${line}\n${line}`);
+        await expect(goldLabel.main(['--import', dup, '--model', 'model-z'], { env: LOCAL, out: quiet })).rejects.toThrow(/more than once/);
+        await expect(goldLabel.main(['--import', dir, '--model', 'model-z'], { env: LOCAL, out: quiet })).rejects.toThrow(/regular file/);
+        // A model's labels never collapse into a person's: the human queue of "model-x" is untouched.
+        const queue = await store.pendingItems({ sampleId: 'gold-lab', labeller: 'model-x', method: 'human' });
+        expect(queue).toHaveLength(items.length);
         fs.rmSync(dir, { recursive: true, force: true });
     });
 });
@@ -241,6 +338,9 @@ describe('scripts/gold-agreement.js', () => {
         expect(p.binary.kappa).toBe(1);
         expect(p.binary.reading).toBe('reliable');
         expect(p.flags.SPAM.po).toBeCloseTo(5 / 6, 12);
+        expect(p.enough_items).toBe(false);                       // 6 shared items: indicative only
+        expect(p.design_weighted.binary.kappa).toBe(1);
+        expect(p.ordinal.kappa).toBeGreaterThan(0.5);
     });
 
     it('prints a readable report and honours --a / --b', async () => {
@@ -264,7 +364,8 @@ describe('scripts/relevance-eval.js (read-only harness)', () => {
         // relevance@1.2.0 has no "AGI" term and no Chinese terms)
         expect(news).toMatchObject({ n: 4, current_relevant: 2, tiered_ai: 3, both: 1, current_only: 1, tiered_only: 2 });
         const forums = r.categories.find(c => c.category === 'forums');
-        expect(forums).toMatchObject({ n: 2, spam: 1, tiered_ai: 0 });
+        // spam proposes the flag only: the airline-support post is still AI by topic ("AI"), and nonspam shows the screen's effect
+        expect(forums).toMatchObject({ n: 2, spam: 1, tiered_ai: 1, tiered_ai_nonspam: 0 });
         expect(r.total.n).toBe(6);                                // demo and removed-text posts excluded
     });
 
@@ -286,5 +387,65 @@ describe('scripts/relevance-eval.js (read-only harness)', () => {
         expect(await count()).toEqual(before);
         await expect(store.readOnly(c => c.query(`INSERT INTO processing_jobs (triggered_by) VALUES ('x')`)))
             .rejects.toThrow(/read-only transaction/);
+    });
+});
+
+describe('scripts/gold-erase.js (the erasure path)', () => {
+    let ids;
+    beforeEach(async () => {
+        ({ ids } = await seedPopulation());
+        await goldSample.main(['--total', '6', '--seed', 'seed-e', '--min-per-stratum', '1', '--sample-id', 'gold-er', '--write'], { out: quiet });
+        await goldLabel.main(['--sample', 'gold-er', '--labeller', 'ann'], { env: LOCAL, io: fakeIo(Array(6).fill('c # short note')).io });
+    });
+
+    it('--post erases one post\'s gold rows and nothing else', async () => {
+        const out = [];
+        const r = await goldErase.main(['--post', ids.llm], { env: LOCAL, out: l => out.push(l) });
+        expect(r.erased).toBe(1);
+        const gone = await dbGet(`SELECT raw_post_id, input_hash, erased_at FROM relevance_gold_items WHERE erased_at IS NOT NULL`);
+        expect(gone).toMatchObject({ raw_post_id: null, input_hash: null });
+        expect((await dbGet(`SELECT COUNT(*)::int AS n FROM relevance_gold_labels WHERE erased_at IS NOT NULL AND note IS NULL AND input_hash IS NULL`)).n).toBe(1);
+        expect((await dbGet(`SELECT COUNT(*)::int AS n FROM relevance_gold_labels`)).n).toBe(6);   // labels stay
+        expect(out.join('\n')).toMatch(/1 item\(s\) erased/);
+        // An erased item leaves every labelling queue.
+        expect(await store.pendingItems({ sampleId: 'gold-er', labeller: 'zed', method: 'human' })).toHaveLength(5);
+    });
+
+    it('--removed erases the items whose post text is gone (retention) or whose post was deleted', async () => {
+        await dbRun(`UPDATE raw_posts SET content = '', text_removed_at = NOW() WHERE id = $1`, [ids.vacuum]);
+        await dbRun('DELETE FROM raw_posts WHERE id = $1', [ids.spam]);
+        const r = await goldErase.main(['--removed'], { env: LOCAL, out: quiet });
+        expect(r.erased).toBe(2);
+        expect((await dbGet('SELECT COUNT(*)::int AS n FROM relevance_gold_items WHERE erased_at IS NULL')).n).toBe(4);
+        expect((await goldErase.main(['--removed'], { env: LOCAL, out: quiet })).erased).toBe(0);
+    });
+
+    it('rejects bad arguments', () => {
+        expect(() => goldErase.parseArgs([])).toThrow(/exactly one/);
+        expect(() => goldErase.parseArgs(['--post', 'x'])).toThrow(/UUID/);
+        expect(() => goldErase.parseArgs(['--post', ids.llm, '--removed'])).toThrow(/exactly one/);
+        expect(() => goldErase.parseArgs(['--what'])).toThrow(/unknown argument/);
+    });
+});
+
+describe('scripts/gold-sample.js two passes', () => {
+    it('fails closed, writing nothing, when the population changes between the passes', async () => {
+        await seedPopulation();
+        const real = store.streamCandidates;
+        let call = 0;
+        const spy = jest.spyOn(store, 'streamCandidates').mockImplementation((o) => {
+            call += 1;
+            const it = real(o);
+            if (call === 1) return it;
+            // Second pass: drop one post, as retention removing its text would.
+            return (async function* () { let n = 0; for await (const c of it) { n += 1; if (n > 1) yield c; } })();
+        });
+        try {
+            await expect(goldSample.main(['--total', '4', '--seed', 's', '--min-per-stratum', '1', '--sample-id', 'gold-chg', '--write'], { out: quiet }))
+                .rejects.toThrow(/population changed/);
+        } finally {
+            spy.mockRestore();
+        }
+        expect((await dbGet('SELECT COUNT(*)::int AS n FROM relevance_gold_items')).n).toBe(0);
     });
 });
