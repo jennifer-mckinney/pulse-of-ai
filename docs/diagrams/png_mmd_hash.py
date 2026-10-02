@@ -76,9 +76,24 @@ def read_chunks(data):
             # IEND must be the terminal chunk: reject any trailing bytes.
             if i != len(data):
                 raise ValueError(f"{len(data) - i} trailing bytes after IEND")
+            _check_structure(chunks)
             return chunks
     # The loop ran out of data without seeing IEND: the file is truncated.
     raise ValueError("missing IEND (truncated PNG)")
+
+
+def _check_structure(chunks):
+    """Require the PNG skeleton: exactly one 13-byte IHDR as the FIRST chunk
+    and an empty IEND as the LAST (the signature, CRCs and IEND position are
+    already verified by read_chunks)."""
+    if chunks[0][0] != b"IHDR":
+        raise ValueError("first chunk is not IHDR")
+    if len(chunks[0][1]) != 13:
+        raise ValueError("IHDR is not 13 bytes")
+    if sum(1 for c in chunks if c[0] == b"IHDR") != 1:
+        raise ValueError("duplicate IHDR")
+    if chunks[-1][0] != b"IEND" or len(chunks[-1][1]) != 0:
+        raise ValueError("IEND is not an empty last chunk")
 
 
 def write_chunks(chunks):

@@ -896,6 +896,24 @@ describe('demoAuditModel — prototype buildAudit receipt', () => {
 
     // No demo step may hand out a replay command for its own fictional post
     // as if it would run: the replay rule is stated for live posts only.
+    // Every audience view of the demo ingestion step says the same thing: a
+    // fictional bundled post, nothing collected or stored. None may claim a
+    // collection route, stripped fields, a city-level location or a legal basis.
+    test('demo ingestion step is consistent across all four audience views', () => {
+        const post = P.demoPostsForCity(posCity(), NOW)[0];
+        const a = P.demoAuditModel(post).steps[0].audiences;
+        expect(a.public).toMatch(/fictional/);
+        expect(a.public).toMatch(/Nothing was collected/);
+        expect(a.plain).toMatch(/Fictional demo post/);
+        expect(a.plain).toMatch(/not collected/);
+        expect(a.config.collected).toBe(false);
+        expect(a.config.stored).toBe(false);
+        expect(a.config.legal_basis).toMatch(/not applicable/);
+        expect(a.researcher).toMatch(/never stored/);
+        const all = JSON.stringify(a);
+        expect(all).not.toMatch(/public source|public API|legitimate_interest|stripped before|pii_fields_removed|city level/i);
+    });
+
     test('no demo step offers a runnable replay of the fictional post', () => {
         const post = P.demoPostsForCity(posCity(), NOW)[0];
         for (const s of P.demoAuditModel(post).steps) {

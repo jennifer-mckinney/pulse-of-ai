@@ -90,6 +90,16 @@ test('demo fallback: /api/** blocked → 30-city demo, DEMO badges, local receip
     // audit_narration@1.4.0 wording). No simhash anywhere.
     const tabs = drawer.locator('.drawer-seg .seg-btn');
     const ingestStep = drawer.locator('.steps .step').first();
+    // All four audience views describe the same fictional, never-stored post.
+    await tabs.nth(0).click();
+    await expect(ingestStep).toContainText('fictional example post');
+    await expect(ingestStep).not.toContainText('came from a public source');
+    await tabs.nth(1).click();
+    await expect(ingestStep).toContainText('not collected from any source');
+    await expect(ingestStep).not.toContainText('public API');
+    await tabs.nth(2).click();
+    await expect(ingestStep.locator('.kv')).toContainText('not applicable: fictional demo data');
+    await expect(ingestStep.locator('.kv')).not.toContainText('legitimate_interest');
     await tabs.nth(2).click();
     await expect(ingestStep.locator('.kv')).toContainText('dedup_strategy');
     await expect(ingestStep.locator('.kv')).toContainText('UNIQUE(source_id, external_id)');

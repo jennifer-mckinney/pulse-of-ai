@@ -13,7 +13,7 @@ x-logging: &logging
     max-size: "10m"
     max-file: "5"
 
-# Environment of every Node role (migrate, web, worker, populate): the
+# Environment of the four Node roles built on this anchor (migrate, web, worker, populate; the watchdog has its own): the
 # database, Redis, and the base secret AUDIT_HASH_KEY (with PROVENANCE_KEY).
 # CORRELATION_SALT is NOT here: only the worker computes pseudonyms, so only
 # the worker gets it; web gets a presence flag (PR #22 security L1).

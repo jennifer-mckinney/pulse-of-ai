@@ -176,9 +176,10 @@ fi
 #   bad-crc    flip one byte of the first IDAT payload, CRC left as is
 #   trailing   append bytes after IEND
 damage_png() {
-    python3 - "$1" "$2" <<'PY'
-import struct, sys
+    python3 - "$1" "$2" "$HASH" <<'PY'
+import importlib.util, struct, sys
 mode, p = sys.argv[1], sys.argv[2]
+spec = importlib.util.spec_from_file_location("h", sys.argv[3]); h = importlib.util.module_from_spec(spec); spec.loader.exec_module(h)
 data = bytearray(open(p, "rb").read())
 assert data[-8:-4] == b"IEND", "fixture PNG must end with IEND"
 if mode == "no-iend":
@@ -191,6 +192,18 @@ elif mode == "bad-crc":
     data[i + 8] ^= 0xFF
 elif mode == "trailing":
     data += b"junk"
+elif mode in ("no-ihdr", "dup-ihdr", "misplaced-ihdr", "iend-payload"):
+    chunks = h.read_chunks(bytes(data))
+    if mode == "no-ihdr":
+        chunks = [c for c in chunks if c[0] != b"IHDR"]
+    elif mode == "dup-ihdr":
+        chunks.insert(1, chunks[0])
+    elif mode == "misplaced-ihdr":
+        ihdr = chunks.pop(0)
+        chunks.insert(1, ihdr)
+    else:
+        chunks[-1] = (b"IEND", b"x")
+    data = bytearray(h.write_chunks(chunks))
 elif mode == "oversize":
     data += b"\0" * (33 * 1024 * 1024)
 open(p, "wb").write(bytes(data))
@@ -212,6 +225,10 @@ expect_damaged() {
 expect_damaged "a PNG truncated before IEND fails" no-iend "missing IEND"
 expect_damaged "a PNG with a corrupted chunk CRC fails" bad-crc "CRC mismatch"
 expect_damaged "a PNG with bytes after IEND fails" trailing "after IEND"
+expect_damaged "a PNG with no IHDR fails" no-ihdr "first chunk is not IHDR"
+expect_damaged "a PNG with a duplicate IHDR fails" dup-ihdr "duplicate IHDR"
+expect_damaged "a PNG with a misplaced IHDR fails" misplaced-ihdr "first chunk is not IHDR"
+expect_damaged "a PNG with a non-empty IEND fails" iend-payload "IEND is not an empty last chunk"
 expect_damaged "a PNG over the size cap fails before it is parsed" oversize "larger than"
 
 # 6c. The HTML must load the pinned Mermaid release (render.sh

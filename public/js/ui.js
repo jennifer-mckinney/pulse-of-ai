@@ -1021,15 +1021,21 @@
                 stage: 'Ingestion', model: 'pulse-ingest', version: '2.4.1',
                 status: 'pass', score: null, scoreKind: null,
                 audiences: {
-                    public: 'This post came from a public source. Before we saved it, we removed anything that could identify who wrote it. We only keep the city it came from.',
-                    plain: 'Collected via the source’s public API. 2 identifying fields (handle, user ID) were stripped before anything was stored. Location was kept at city level only.',
+                    // Every audience view describes the SAME thing: a fictional
+                    // post bundled with the page. Nothing was collected or
+                    // stored, so no view claims a collection route, stripped
+                    // fields or a legal basis.
+                    public: 'This is a fictional example post bundled with the page, shown because live data could not be loaded. Nothing was collected from anyone, and nothing about it was stored.',
+                    plain: 'Fictional demo post generated in your browser. It was not collected from any source, no identifying fields existed to strip, and nothing was stored.',
                     config: {
-                        pii_fields_removed: 2,
-                        location_granularity: 'city',
-                        // Real rule (001_core_schema.sql): duplicates are
-                        // dropped by source + upstream id; no simhash exists.
-                        dedup_strategy: 'unique source + upstream id: UNIQUE(source_id, external_id)',
-                        legal_basis: 'legitimate_interest § 6(1)(f)',
+                        demo_data: true,
+                        collected: false,
+                        stored: false,
+                        // The live system's rule, stated as such (real rule,
+                        // 001_core_schema.sql; no simhash exists); this demo
+                        // post is not subject to it.
+                        dedup_strategy: 'live system: unique source + upstream id: UNIQUE(source_id, external_id)',
+                        legal_basis: 'not applicable: fictional demo data, nothing collected',
                     },
                     // audit_narration@1.4.0 INGEST_HASH_NOTE wording (src/config/
                     // audit-narration.js), stated conditionally for the demo:
