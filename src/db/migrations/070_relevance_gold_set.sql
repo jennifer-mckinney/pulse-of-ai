@@ -80,6 +80,8 @@ CREATE TABLE IF NOT EXISTS relevance_gold_items (
 );
 
 CREATE INDEX IF NOT EXISTS idx_relevance_gold_items_sample ON relevance_gold_items (sample_id, draw_rank);
+-- gold_erase_post (called by retention once per post) looks items up by post id alone.
+CREATE INDEX IF NOT EXISTS idx_relevance_gold_items_post ON relevance_gold_items (raw_post_id) WHERE raw_post_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS relevance_gold_labels (
     id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

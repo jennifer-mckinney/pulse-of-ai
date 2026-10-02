@@ -218,4 +218,9 @@ describe('migration 070: relevance gold set', () => {
             })).rejects.toThrow(/cannot change again/);
         });
     });
+
+    it('indexes items by post id alone (retention erases per post)', async () => {
+        const idx = await dbAll(`SELECT indexname FROM pg_indexes WHERE tablename = 'relevance_gold_items' AND indexdef LIKE '%(raw_post_id)%'`);
+        expect(idx.map(r => r.indexname)).toContain('idx_relevance_gold_items_post');
+    });
 });
