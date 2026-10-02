@@ -462,12 +462,16 @@ describe('discovery: plain 403s on /about (owner decision 2026-10-02)', () => {
         await expect(discoverSubreddits({ api, env: {}, now: () => NOW })).rejects.toBeInstanceOf(AccessDeniedError);
     });
 
-    test('a bot wall at any status, a 451 or an escalated refusal is rethrown at once — never a private subreddit (grumpy 3)', async () => {
+    test('a bot wall at any status, a 401, a 451 or an escalated refusal is rethrown at once — never a private subreddit (grumpy 3)', async () => {
         for (const e of [
             new AccessDeniedError('bot wall', { status: 200, refusal: 'bot_wall' }),
             new AccessDeniedError('bot wall', { status: 302, refusal: 'bot_wall' }),
             new AccessDeniedError('bot wall', { status: 403, refusal: 'bot_wall' }),
             new AccessDeniedError('escalated', { status: 403, refusal: 'escalated' }),
+            // A plain 401 on /about (no prior bot-wall/escalation flag) must rethrow too —
+            // grumpy re-review: this call site had no direct 401 coverage (the only
+            // existing 401 test is for listing(), a different code path).
+            new AccessDeniedError('refused', { status: 401 }),
             new AccessDeniedError('refused', { status: 451 }),
         ]) {
             const api = { listing: listing(['alpha', 'beta']), async about() { throw e; } };
