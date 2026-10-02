@@ -27,7 +27,20 @@ function readFixture(rel) {
     return fs.readFileSync(path.join(ROOT, rel), 'utf8');
 }
 
-const RECORDED_AT = JSON.parse(readFixture('recorded/manifest.json')).recordedAt;
+const MANIFEST = JSON.parse(readFixture('recorded/manifest.json'));
+const RECORDED_AT = MANIFEST.recordedAt;
+
+/**
+ * The clock a recorded fixture was captured at ("recorded/<file>" or the bare
+ * file name): its own entry in the manifest's recordedAtByFile when the
+ * recorder wrote one, else the manifest's overall clock. A fixture kept from an
+ * earlier recording run keeps its original clock, so a recency window sees what
+ * it saw live.
+ */
+function recordedAtOf(file) {
+    const name = String(file).replace(/^recorded\//, '');
+    return (MANIFEST.recordedAtByFile && MANIFEST.recordedAtByFile[name]) || RECORDED_AT;
+}
 
 /** Sorted [key, value] pairs of a query (repeated keys kept). */
 function queryPairs(u) {
@@ -71,4 +84,4 @@ const TEST_ENV = Object.freeze({
     GATE_APPROVED_BY: 'Test Operator 2026-09-29',
 });
 
-module.exports = { fixtureTransport, readFixture, sameUrl, RECORDED_AT, TEST_ENV, FIXTURE_ROOT: ROOT };
+module.exports = { fixtureTransport, readFixture, sameUrl, RECORDED_AT, recordedAtOf, TEST_ENV, FIXTURE_ROOT: ROOT };

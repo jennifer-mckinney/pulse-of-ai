@@ -25,6 +25,10 @@ jest.mock('../../src/collectors/governance', () => ({
     recordCorrelationGate: jest.fn().mockResolvedValue(null),
 }));
 const governance = require('../../src/collectors/governance');
+// Migration 073: the database route kill switches (covered against Postgres
+// in tests/integration/collect.routeKillSwitch.test.js); none by default.
+jest.mock('../../src/collectors/state', () => ({ allRouteKillSwitches: jest.fn() }));
+const state = require('../../src/collectors/state');
 
 const { dbAll } = require('../../src/db/connection');
 const { COLLECT_QUEUES } = require('../../src/queues/index');
@@ -41,6 +45,7 @@ const upserts = () => Object.values(COLLECT_QUEUES).flatMap(q => q.upsertJobSche
 
 beforeEach(() => {
     jest.clearAllMocks();
+    state.allRouteKillSwitches.mockResolvedValue(new Map());
     for (const q of Object.values(COLLECT_QUEUES)) {
         q.upsertJobScheduler.mockResolvedValue({});
         q.getJobSchedulers.mockResolvedValue([]);
@@ -136,4 +141,53 @@ test('records source and correlation gate changes even when nothing is collectin
     lines.length = 0;
     await scheduleAllSources({ env: ENV, log: l => lines.push(l) });
     expect(lines).toContain('[scheduler] gate events not recorded: db down');
+});
+
+// Migration 073: COLLECTORS_DISABLED_ROUTES. A route switched off by env
+// leaves its source scheduled while another route runs; a source with every
+// route off (or held by a mistyped entry) is not scheduled; an entry naming
+// no registry source holds every source off and is logged on every reschedule.
+test('per-route kill switch (env): scheduling, and entries naming no registry source', async () => {
+    dbAll.mockResolvedValue(rows(['hugging_face', 'hacker_news', 'gitlab']));
+    const log = jest.fn();
+    const n = await scheduleAllSources({
+        env: { ...ENV, COLLECTORS_DISABLED_ROUTES: 'hugging_face/forum-latest,hacker_news/algolia-search,gitlab/forum' }, log,
+    });
+    // hugging_face keeps two routes; hacker_news has none left; gitlab is held by the typo.
+    expect(n).toBe(1);
+    expect(upserts().map(u => u[1])).toEqual(['hugging_face']);
+    expect(log.mock.calls.flat().join('\n')).not.toMatch(/COLLECTORS_DISABLED_ROUTES/);
+
+    jest.clearAllMocks();
+    expect(await scheduleAllSources({ env: { ...ENV, COLLECTORS_DISABLED_ROUTES: 'hugging_face/forum-latest,nope/x' }, log })).toBe(0);
+    expect(log).toHaveBeenCalledWith('[scheduler] COLLECTORS_DISABLED_ROUTES: 1 entry names no registry source ("nope/x"); '
+        + 'every source is held disabled until fixed — entries are "slug/route"');
+});
+
+// Grumpy #6: the database route kill switches count for scheduling and cadence.
+test('per-route kill switch (database): an all-off source is not scheduled; a killed route\'s quota no longer sets the cadence', async () => {
+    dbAll.mockResolvedValue(rows(['youtube', 'hacker_news', 'hugging_face']));
+    const kill = route_id => ({ route_id, disabled_at: '2026-09-30T12:00:00Z', reason: 'r', by: 'Tess Tester 2026-09-30' });
+    state.allRouteKillSwitches.mockResolvedValue(new Map([
+        ['id-hacker_news', [kill('algolia-search')]],
+        ['id-hugging_face', [kill('forum-latest')]],
+    ]));
+    const env = { ...ENV, YOUTUBE_API_KEY: 'k' };
+    expect(await scheduleAllSources({ env })).toBe(2);
+    const byId = Object.fromEntries(upserts().map(([, id, repeat]) => [id, repeat]));
+    expect(Object.keys(byId).sort()).toEqual(['hugging_face', 'youtube']);
+    expect(byId.youtube.every).toBe(900000);                     // its quota route is open
+
+    jest.clearAllMocks();
+    state.allRouteKillSwitches.mockResolvedValue(new Map([['id-youtube', [kill('data-api')]]]));
+    expect(await scheduleAllSources({ env })).toBe(2);           // youtube's only route is off
+    expect(upserts().map(u => u[1]).sort()).toEqual(['hacker_news', 'hugging_face']);
+});
+
+test('a failed read of the database route switches is logged; scheduling falls back to the env (the runner still enforces them)', async () => {
+    dbAll.mockResolvedValue(rows(['hacker_news']));
+    state.allRouteKillSwitches.mockRejectedValue(new Error('db down'));
+    const log = jest.fn();
+    expect(await scheduleAllSources({ env: ENV, log })).toBe(1);
+    expect(log).toHaveBeenCalledWith('[scheduler] route kill switches not read (db down) — scheduling from the env alone; the runner still enforces them');
 });

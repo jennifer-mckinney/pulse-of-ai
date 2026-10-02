@@ -41,6 +41,7 @@ const TABLES = [
     'source_run_daily',
     'source_runs',
     'source_collection_state',
+    'source_route_state',
     'raw_posts',
     'processing_jobs',
     'methodology_errata',
