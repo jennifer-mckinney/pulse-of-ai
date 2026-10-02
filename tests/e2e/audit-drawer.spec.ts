@@ -131,9 +131,13 @@ test('audit drawer: audiences, bias layers, timer freeze, close restores view', 
 // that browser behaviour in Chromium.
 async function openWithoutFocus(page: Page, opener: Locator) {
     await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-    await opener.dispatchEvent('click');
     expect(await page.evaluate(() => document.activeElement === document.body),
-        'the synthetic click must leave focus on <body>').toBe(true);
+        'focus must start on <body>').toBe(true);
+    await opener.dispatchEvent('click');
+    // The synthetic click itself never focuses the opener (opening moves
+    // focus into the drawer, not onto the opener).
+    expect(await opener.evaluate((el) => document.activeElement === el),
+        'the synthetic click must not focus the opener').toBe(false);
 }
 
 test('audit drawer: focus returns to an opener the click never focused', async ({ page }) => {
@@ -168,6 +172,37 @@ test('audit drawer: focus returns to an opener the click never focused', async (
     await drawer.locator('.drawer-x').click();
     await expect(drawer).not.toHaveClass(/open/);
     await expect(why).toBeFocused();
+
+    expectNoConsoleErrors(errors);
+});
+
+// Safari can leave ANOTHER control as document.activeElement after a click
+// (a button click does not focus it), and a click on the drawer's close
+// button does not change that either. Opening moves focus into the drawer,
+// so every close path still returns it to the stored opener: here another
+// control holds focus when a focusless click opens the receipt, and a
+// focusless click closes it.
+test('audit drawer: focus returns to the opener when another control held focus (Safari)', async ({ page }) => {
+    const errors = consoleErrors(page);
+    await stabilizeSnapshot(page);
+    await gotoAndWaitForData(page);
+    const drawer = page.locator('#audit-drawer');
+
+    await scrollToBeat(page, 4);
+    const card = page.locator('#card-col .chapter-card').nth(4);
+    await expect(card.locator('.mini-post')).toBeVisible({ timeout: 15000 });
+    const trace = card.locator('.btn-trace');
+
+    const other = page.locator('#about-chip');
+    await other.focus();
+    await expect(other).toBeFocused();
+    await trace.dispatchEvent('click');          // focusless open
+    await expect(drawer).toHaveClass(/open/);
+    // Focus moved into the drawer instead of staying on the other control.
+    expect(await page.evaluate(() => document.getElementById('audit-drawer')!.contains(document.activeElement))).toBe(true);
+    await drawer.locator('.drawer-x').dispatchEvent('click');   // focusless close
+    await expect(drawer).not.toHaveClass(/open/);
+    await expect(trace).toBeFocused();
 
     expectNoConsoleErrors(errors);
 });

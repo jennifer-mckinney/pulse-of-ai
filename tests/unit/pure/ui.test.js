@@ -1033,3 +1033,21 @@ describe('layerRowView — fairness-layer display strings (P0-3)', () => {
         expect(P.layerRowView(bias.layers[0]).noteText).toBe(NOTE);
     });
 });
+
+// Safari leaves another control as document.activeElement after a click and
+// a click on the drawer's close button does not change it, so setDrawerOpen
+// must not rely on activeElement alone: opening moves focus INTO the drawer,
+// and closing returns it to the explicitly stored opener. Source-level lock
+// (setDrawerOpen is private to the IIFE); the behaviour is covered by
+// tests/e2e/audit-drawer.spec.ts (focusless open + close with another
+// control focused).
+describe('setDrawerOpen focus contract (Safari)', () => {
+    const src = require('fs').readFileSync(require('path').join(__dirname, '../../../public/js/ui.js'), 'utf8');
+    test('opening moves focus into the drawer', () => {
+        expect(src).toMatch(/if \(open && !wasOpen\) \{[\s\S]{0,900}drawer\.setAttribute\('tabindex', '-1'\);[\s\S]{0,200}drawer\.focus\(/);
+    });
+    test('closing returns focus to the stored opener, not an inferred activeElement', () => {
+        expect(src).toContain('const opener = drawerOpeners.get(drawer);');
+        expect(src).toContain('drawer.contains(active)');
+    });
+});

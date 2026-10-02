@@ -45,7 +45,7 @@ flowchart LR
     E4["x-collector-presence: the literal set, or empty,<br/>per credential, so web can report gate status"]:::done
     E5["web only: PULSE_BIND_ADDR, HOST, PULSE_IN_CONTAINER,<br/>PULSE_CONTAINER_PUBLISHED_ADDR, CORRELATION_SALT_SET<br/>(presence flag), REFRESH_TOKEN, REFRESH_STALE_MINUTES"]:::done
     E6["other values come from .env by ${VAR} interpolation"]:::done
-    E7["worker env_file: PULSE_ENV_FILE (default .env),<br/>loaded whole, required: true;<br/>environment wins: SMTP_PASSWORD blanked"]:::done
+    E7["worker env_file: PULSE_ENV_FILE (default .env),<br/>loaded whole, required: true;<br/>environment wins: SMTP_PASSWORD blanked<br/>and CORRELATION_MIN_CONFIDENCE blanked (removed<br/>setting, PR #37; a legacy value in the env file<br/>cannot reach the process)"]:::done
     E8["worker only: CORRELATION_SALT"]:::done
     E9["watchdog only (no x-app-env): POSTGRES_#42; incl. the<br/>DB password, WATCHDOG_#42;, SMTP_#42; incl. SMTP_PASSWORD<br/>(the only role with it); no Valkey password,<br/>no audit key, no collector credential"]:::done
   end

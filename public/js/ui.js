@@ -1794,6 +1794,17 @@
         }
         drawer.classList.toggle('open', open);
         drawer.setAttribute('aria-hidden', open ? 'false' : 'true');
+        if (open && !wasOpen) {
+            // Move focus INTO the drawer on every open. Safari does not focus
+            // a button on a mouse click, so another control (or a notice link)
+            // can still be document.activeElement and a later click on the
+            // drawer's close button would not change it: closing would then
+            // read "focus is elsewhere" and skip the stored opener. With focus
+            // inside the drawer, every close path sees it there and returns it
+            // to the explicitly stored opener (or the fallback control).
+            drawer.setAttribute('tabindex', '-1');
+            if (typeof drawer.focus === 'function') drawer.focus({ preventScroll: true });
+        }
         if (open || !wasOpen) return;
 
         const opener = drawerOpeners.get(drawer);
