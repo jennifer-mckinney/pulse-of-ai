@@ -85,6 +85,21 @@ describe('gold-agreement parseArgs', () => {
     });
 });
 
+describe('argv echoed in errors is made single-line and printable', () => {
+    it.each([
+        ['gold-sample', () => sample.parseArgs(['--\u001b]52;c;QQ==\u0007'])],
+        ['gold-sample since', () => sample.parseArgs(['--total', '1', '--seed', 's', '--since', '\u001b[2J'])],
+        ['gold-agreement', () => agreement.parseArgs(['--\u001b[2J'])],
+        ['relevance-eval', () => evalScript.parseArgs(['--since', '\u001b[2J'])],
+        ['relevance-eval category', () => evalScript.parseArgs(['--category', '\u001b[2J'])],
+    ])('%s', (_n, run) => {
+        let msg = '';
+        try { run(); } catch (e) { msg = e.message; }
+        expect(msg).not.toBe('');
+        expect(msg.split('\n')[0]).not.toMatch(/[\u0000-\u001f]/);
+    });
+});
+
 describe('relevance-eval parseArgs', () => {
     it('parses every option', () => {
         expect(evalScript.parseArgs(['--since', '2026-09-01', '--category', 'news', '--limit', '100', '--json']))

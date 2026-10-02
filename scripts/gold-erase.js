@@ -23,6 +23,7 @@
 'use strict';
 
 require('dotenv').config();
+const { oneLine } = require('../src/gold/labelling');
 
 const USAGE = 'usage: npm run gold:erase -- --post POST_ID | --removed';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -39,7 +40,7 @@ function parseArgs(argv) {
         } else if (a === '--removed') {
             out.removed = true;
         } else {
-            throw new Error(`unknown argument ${a}\n${USAGE}`);
+            throw new Error(`unknown argument ${oneLine(a).slice(0, 60)}\n${USAGE}`);
         }
     }
     if (Boolean(out.post) === out.removed) throw new Error(`give exactly one of --post and --removed\n${USAGE}`);

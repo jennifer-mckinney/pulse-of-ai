@@ -22,12 +22,14 @@ const { latestPerLabeller } = require('./agreement');
 const { scriptOf, scopeOf, decisionOf, SAMPLER_VERSION } = require('./sampler');
 
 const MIN_KEY_LENGTH = 32;
+const MIN_KEY_DISTINCT = 8;
 // Template values shipped in .env.example are public: never a key.
 const PLACEHOLDER_KEY_RE = /^(?:replace|changeme|change[-_]me|example|your[-_]|xxx|todo)/i;
 
 /** The hash key (GOLD_HASH_KEY, else AUDIT_HASH_KEY); throws when neither is set or it is too short. */
 function hashKey(env = process.env) {
-    const valid = (v) => typeof v === 'string' && v.length >= MIN_KEY_LENGTH && !PLACEHOLDER_KEY_RE.test(v);
+    const valid = (v) => typeof v === 'string' && v.length >= MIN_KEY_LENGTH && !PLACEHOLDER_KEY_RE.test(v)
+        && new Set(v).size >= MIN_KEY_DISTINCT;   // a repeated character is not a key
     // An explicitly configured GOLD_HASH_KEY is never silently replaced: a typo must fail, not
     // fingerprint a sample under the audit key (fixing the typo later would orphan every item).
     const gold = env.GOLD_HASH_KEY;
@@ -108,9 +110,10 @@ async function insertItems(items, { sampleId, seed }) {
         await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`relevance_gold_sample:${sampleId}`]);
         const exists = await client.query('SELECT 1 FROM relevance_gold_items WHERE sample_id = $1 LIMIT 1', [sampleId]);
         if (exists.rows.length) throw new Error(`sample "${sampleId}" already exists; choose a new --sample-id`);
-        // Lock and re-check every selected post: retention's text removal needs the row lock, so
-        // it either committed before this (the post is refused here) or waits until this commits
-        // (and then erases the new item). Never store the id and fingerprint of removed text.
+        // Lock and re-check every selected post: text removal needs the row lock. Retention's batch
+        // selector skips a locked post (SKIP LOCKED) and takes it on a later run, erasing the new
+        // item then; any other removal path waits until this commits. A removal that committed first
+        // is refused here. Never store the id and fingerprint of removed text.
         const ids = items.map(it => it.rawPostId);
         const locked = await client.query(
             'SELECT id, content, text_removed_at FROM raw_posts WHERE id = ANY($1::uuid[]) ORDER BY id FOR SHARE', [ids]);
@@ -242,7 +245,7 @@ async function itemText(item) {
 
 /**
  * The labels that currently count for an item: this codebook version only, and
- * each labeller's latest row (the table is append-only, so corrections are new
+ * each labeller's latest row per method (the table is append-only, so corrections are new
  * rows and the older ones are superseded). Ordered by seq.
  */
 async function labelsFor(itemId, codebookVersion) {
@@ -251,9 +254,13 @@ async function labelsFor(itemId, codebookVersion) {
          WHERE item_id = $1 AND codebook_version = $2 ORDER BY seq`,
         [itemId, codebookVersion],
     );
-    const latest = latestPerLabeller(rows);
+    // Latest per (labeller, method): the same person's human label and adjudication are both shown.
     const keep = new Set();
-    for (const m of latest.values()) for (const r of m.values()) keep.add(r.id);
+    for (const method of new Set(rows.map(r => r.method))) {
+        for (const m of latestPerLabeller(rows.filter(r => r.method === method)).values()) {
+            for (const r of m.values()) keep.add(r.id);
+        }
+    }
     return rows.filter(r => keep.has(r.id));
 }
 

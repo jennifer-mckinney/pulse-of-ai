@@ -100,6 +100,9 @@ async function removeTextBatch(client, slug, postIds, { reason, rule, performedB
     const src = getSource(slug);
     const notice = platform ? removalNoticeFor(slug) : DETAIL_NOTICE;
     const keepUrl = platform && src && src.retention && src.retention.keepUrlPrefix ? src.retention.keepUrlPrefix : null;
+    // Lock the rows in id order first: the gold sampler locks posts in the same order, so the two
+    // can never wait on each other in opposite orders (no deadlock).
+    await client.query('SELECT id FROM raw_posts WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE', [postIds]);
     const res = await client.query(
         `UPDATE raw_posts rp
          SET content = $4,

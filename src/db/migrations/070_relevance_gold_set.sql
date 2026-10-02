@@ -112,6 +112,21 @@ CREATE TABLE IF NOT EXISTS relevance_gold_labels (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_relevance_gold_labels_seq ON relevance_gold_labels (seq);
 CREATE INDEX IF NOT EXISTS idx_relevance_gold_labels_item ON relevance_gold_labels (item_id, labeller, seq);
 
+-- A database that applied an earlier draft of this migration has seq as a BIGSERIAL (an INSERT may
+-- supply its own seq). CREATE TABLE IF NOT EXISTS leaves it, so convert it here, once: continue
+-- from the highest seq already used.
+DO $$
+DECLARE next_seq BIGINT;
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_attribute
+               WHERE attrelid = 'relevance_gold_labels'::regclass AND attname = 'seq' AND attidentity = '') THEN
+        SELECT COALESCE(MAX(seq), 0) + 1 INTO next_seq FROM relevance_gold_labels;
+        ALTER TABLE relevance_gold_labels ALTER COLUMN seq DROP DEFAULT;
+        DROP SEQUENCE IF EXISTS relevance_gold_labels_seq_seq;
+        EXECUTE format('ALTER TABLE relevance_gold_labels ALTER COLUMN seq ADD GENERATED ALWAYS AS IDENTITY (START WITH %s)', next_seq);
+    END IF;
+END $$;
+
 -- A label must be of the text the item was drawn with (the hash the
 -- labelling tool computed from raw_posts at labelling time), on an item that
 -- has not been erased, and list each flag once.

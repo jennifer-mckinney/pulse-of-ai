@@ -13,6 +13,7 @@
 'use strict';
 
 require('dotenv').config();
+const { oneLine } = require('../src/gold/labelling');
 
 // A calendar date, optionally with a time (what Postgres and Date.parse agree on).
 const DATE_RE = /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
@@ -34,13 +35,13 @@ function parseArgs(argv) {
             case '--category': out.category = value(a); break;
             case '--limit': out.limit = Number(value(a)); break;
             case '--json': out.json = true; break;
-            default: throw new Error(`unknown argument ${a}\n${USAGE}`);
+            default: throw new Error(`unknown argument ${oneLine(a).slice(0, 60)}\n${USAGE}`);
         }
     }
-    if (out.since !== null && !(DATE_RE.test(out.since) && !Number.isNaN(Date.parse(out.since)))) throw new Error(`--since must be a date, YYYY-MM-DD (got "${out.since}")`);
+    if (out.since !== null && !(DATE_RE.test(out.since) && !Number.isNaN(Date.parse(out.since)))) throw new Error(`--since must be a date, YYYY-MM-DD (got "${oneLine(out.since).slice(0, 60)}")`);
     if (out.limit !== null && (!Number.isInteger(out.limit) || out.limit <= 0)) throw new Error('--limit must be a positive integer');
     if (out.category !== null && !require('../src/config/categories').isCanonicalCategory(out.category)) {
-        throw new Error(`--category must be a canonical category slug (got "${out.category}")`);
+        throw new Error(`--category must be a canonical category slug (got "${oneLine(out.category).slice(0, 60)}")`);
     }
     return out;
 }

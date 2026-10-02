@@ -148,7 +148,7 @@ function parseAnswer(input) {
  * @param {NodeJS.ProcessEnv} env
  */
 function assertLocalOnly(env = process.env) {
-    if (env.NODE_ENV === 'production') {
+    if (String(env.NODE_ENV || '').trim().toLowerCase() === 'production') {
         throw new Error('gold tools are local-only: refusing to run with NODE_ENV=production');
     }
     const host = String(env.POSTGRES_HOST || '').trim().toLowerCase();
@@ -193,7 +193,7 @@ function validateLabeller(labeller) {
     const name = String(labeller === null || labeller === undefined ? '' : labeller).trim();
     if (!name) throw new Error('a labeller name is required');
     if (name.length > 100) throw new Error('a labeller name is at most 100 characters');
-    if (hasControl(name)) throw new Error('a labeller name may not contain control characters');
+    if (hasControl(name)) throw new Error('a labeller name may not contain control or format characters');
     if (name.toLowerCase().startsWith(LLM_PREFIX)) {
         throw new Error(`the "${LLM_PREFIX}" labeller namespace is reserved for llm_proposed labels (use --import)`);
     }
@@ -278,7 +278,7 @@ async function importProposals({ store, text, modelId, codebookVersion = CODEBOO
     const model = String(modelId === null || modelId === undefined ? '' : modelId).trim();
     if (!model) throw new Error('--model is required for llm_proposed labels');
     const labeller = `${LLM_PREFIX}${model}`;
-    if (labeller.length > 100 || hasControl(labeller)) throw new Error('--model must be a printable id of at most 96 characters');
+    if (labeller.length > 100 || hasControl(labeller)) throw new Error('--model must be a printable id of at most 96 characters (no control or format characters)');
     const lines = String(text).split(/\r?\n/);
     if (lines.length > IMPORT_MAX_LINES) throw new Error(`an import file is at most ${IMPORT_MAX_LINES} lines`);
     const rows = [];

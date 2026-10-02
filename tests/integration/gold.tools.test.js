@@ -193,6 +193,7 @@ describe('scripts/gold-label.js', () => {
     it('an explicitly set but invalid GOLD_HASH_KEY never falls back to the audit key', () => {
         const audit = 'audit-key-0123456789-abcdefghijklmnop';
         expect(() => store.hashKey({ GOLD_HASH_KEY: 'x'.repeat(31), AUDIT_HASH_KEY: audit })).toThrow(/GOLD_HASH_KEY is set but invalid/);
+        expect(() => store.hashKey({ GOLD_HASH_KEY: 'a'.repeat(40) })).toThrow(/GOLD_HASH_KEY/);   // one repeated character is not a key
         expect(store.hashKey({ GOLD_HASH_KEY: '', AUDIT_HASH_KEY: audit })).toBe(audit);   // unset or empty: the audit key
     });
 
@@ -497,7 +498,7 @@ describe('store.insertItems revalidates the post under a row lock', () => {
 
 describe('adjudication shows only the labels that count', () => {
     it('labelsFor returns this codebook version, each labeller\'s latest row only', async () => {
-        const { ids } = await seedPopulation();
+        await seedPopulation();
         await goldSample.main(['--total', '3', '--seed', 'adj', '--min-per-stratum', '0', '--sample-id', 'gold-adj', '--write'], { out: quiet });
         const item = await dbGet('SELECT id, input_hash FROM relevance_gold_items WHERE sample_id = $1 ORDER BY draw_rank LIMIT 1', ['gold-adj']);
         const add = (label, who, cv) => store.recordLabel({ itemId: item.id, label, flags: [], labeller: who, method: 'human', codebookVersion: cv, inputHash: item.input_hash });
@@ -506,7 +507,10 @@ describe('adjudication shows only the labels that count', () => {
         await add('AI_INCIDENTAL', 'bob', '0.9.0');   // older codebook
         const rows = await store.labelsFor(item.id, '1.0.0');
         expect(rows.map(r => [r.labeller, r.label])).toEqual([['ann', 'AI_CENTRAL']]);
-        expect(ids.llm).toBeTruthy();
+        // The same person's human label and adjudication are both shown (latest per labeller AND method).
+        await store.recordLabel({ itemId: item.id, label: 'NOT_AI', flags: [], labeller: 'ann', method: 'adjudicated', codebookVersion: '1.0.0', inputHash: item.input_hash });
+        const both = await store.labelsFor(item.id, '1.0.0');
+        expect(both.map(r => [r.labeller, r.method, r.label])).toEqual([['ann', 'human', 'AI_CENTRAL'], ['ann', 'adjudicated', 'NOT_AI']]);
     });
 });
 

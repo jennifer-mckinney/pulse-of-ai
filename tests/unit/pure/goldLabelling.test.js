@@ -164,6 +164,7 @@ describe('review fixes: import namespace, terminal safety, notes, local-only por
     it('assertLocalOnly also checks the database port', () => {
         expect(() => l.assertLocalOnly({ POSTGRES_HOST: 'localhost', POSTGRES_PORT: '5434' })).not.toThrow();
         expect(() => l.assertLocalOnly({ POSTGRES_HOST: 'localhost', NODE_ENV: 'test', POSTGRES_TEST_PORT: '5433' })).not.toThrow();
+        expect(() => l.assertLocalOnly({ NODE_ENV: 'Production', POSTGRES_HOST: 'localhost', POSTGRES_PORT: '5434' })).toThrow(/production/);
         expect(() => l.assertLocalOnly({ POSTGRES_HOST: 'localhost', POSTGRES_PORT: '5432' })).toThrow(/port 5432/);
         // Unset: src/db/connection.js would connect to 5432, so it fails closed.
         expect(() => l.assertLocalOnly({ POSTGRES_HOST: 'localhost' })).toThrow(/port 5432/);

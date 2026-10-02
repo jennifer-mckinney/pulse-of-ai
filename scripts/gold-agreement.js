@@ -34,7 +34,7 @@ function parseArgs(argv) {
             case '--b': out.b = value(a); break;
             case '--codebook': out.codebook = value(a); break;
             case '--json': out.json = true; break;
-            default: throw new Error(`unknown argument ${a}\n${USAGE}`);
+            default: throw new Error(`unknown argument ${oneLine(a).slice(0, 60)}\n${USAGE}`);
         }
     }
     // Identifiers are echoed in the report: no control or format characters.

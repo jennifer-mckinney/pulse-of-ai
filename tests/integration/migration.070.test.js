@@ -141,6 +141,24 @@ describe('migration 070: relevance gold set', () => {
         expect(BigInt(rows[1].seq) > BigInt(rows[0].seq)).toBe(true);
     });
 
+    it('upgrades a database that applied an earlier draft (seq BIGSERIAL) to GENERATED ALWAYS', async () => {
+        await dbTransaction(async (c) => {
+            await c.query('ALTER TABLE relevance_gold_labels ALTER COLUMN seq DROP IDENTITY');
+            await c.query('CREATE SEQUENCE relevance_gold_labels_seq_seq OWNED BY relevance_gold_labels.seq');
+            await c.query(`ALTER TABLE relevance_gold_labels ALTER COLUMN seq SET DEFAULT nextval('relevance_gold_labels_seq_seq')`);
+        });
+        const item = await insertItem();
+        await dbRun(`INSERT INTO relevance_gold_labels (item_id, label, labeller, method, codebook_version, input_hash, seq)
+                     VALUES ($1, 'NOT_AI', 'ann', 'human', '1.0.0', $2, 41)`, [item, H('a')]);   // the old shape accepts it
+        await dbTransaction(c => c.query(SQL_070));
+        await expect(dbRun(`INSERT INTO relevance_gold_labels (item_id, label, labeller, method, codebook_version, input_hash, seq)
+                            VALUES ($1, 'NOT_AI', 'bob', 'human', '1.0.0', $2, 7)`, [item, H('a')])).rejects.toThrow(/generated always|cannot insert/i);
+        await dbRun(`INSERT INTO relevance_gold_labels (item_id, label, labeller, method, codebook_version, input_hash)
+                     VALUES ($1, 'AI_CENTRAL', 'bob', 'human', '1.0.0', $2)`, [item, H('a')]);
+        const rows = await dbAll('SELECT labeller, seq FROM relevance_gold_labels ORDER BY seq');
+        expect(BigInt(rows[1].seq) > BigInt(rows[0].seq)).toBe(true);   // continues after the highest existing seq
+    });
+
     it('seq is GENERATED ALWAYS: an explicit seq is rejected', async () => {
         const item = await insertItem();
         await expect(dbRun(

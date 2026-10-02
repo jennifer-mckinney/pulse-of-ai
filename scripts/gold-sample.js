@@ -58,14 +58,14 @@ function parseArgs(argv) {
             case '--sample-id': out.sampleId = value(a); break;
             case '--write': out.write = true; break;
             case '--json': out.json = true; break;
-            default: throw new Error(`unknown argument ${a}\n${USAGE}`);
+            default: throw new Error(`unknown argument ${oneLine(a).slice(0, 60)}\n${USAGE}`);
         }
     }
     if (!Number.isInteger(out.total) || out.total <= 0) throw new Error(`--total must be a positive integer\n${USAGE}`);
     if (!out.seed || !out.seed.trim() || out.seed.length > 200) throw new Error(`--seed is required (1–200 characters)\n${USAGE}`);
     if (hasControl(out.seed)) throw new Error('--seed may not contain control or format characters');
     if (!Number.isInteger(out.minPerStratum) || out.minPerStratum < 0) throw new Error('--min-per-stratum must be a non-negative integer');
-    if (out.since !== null && !(DATE_RE.test(out.since) && !Number.isNaN(Date.parse(out.since)))) throw new Error(`--since must be a date, YYYY-MM-DD (got "${out.since}")`);
+    if (out.since !== null && !(DATE_RE.test(out.since) && !Number.isNaN(Date.parse(out.since)))) throw new Error(`--since must be a date, YYYY-MM-DD (got "${oneLine(out.since).slice(0, 60)}")`);
     if (out.write && !out.sampleId) throw new Error(`--write needs --sample-id\n${USAGE}`);
     if (out.sampleId !== null && !SAMPLE_ID_RE.test(out.sampleId)) {
         throw new Error('--sample-id must be 3–64 characters of a-z, 0-9, ".", "_" or "-", starting with a letter or digit');

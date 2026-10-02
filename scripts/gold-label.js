@@ -23,6 +23,7 @@
 'use strict';
 
 require('dotenv').config();
+const { oneLine } = require('../src/gold/labelling');
 
 const fs = require('fs');
 
@@ -47,7 +48,7 @@ function parseArgs(argv) {
             case '--import': out.importFile = value(a); break;
             case '--model': out.model = value(a); break;
             case '--relabel': out.relabel = value(a); break;
-            default: throw new Error(`unknown argument ${a}\n${USAGE}`);
+            default: throw new Error(`unknown argument ${oneLine(a).slice(0, 60)}\n${USAGE}`);
         }
     }
     if (out.importFile) {
