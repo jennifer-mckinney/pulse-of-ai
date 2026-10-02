@@ -57,6 +57,11 @@ describe('safeHttpUrl (browser mirror of the server rule)', () => {
         'https://www.npr.org/x', 'http://example.org/a?b#c',
     ])('accepts %s', (u) => expect(attribution.safeHttpUrl(u)).toBe(u));
 
+    test('only a default port; credential keys leave a fragment too', () => {
+        expect(attribution.safeHttpUrl('https://example.org:8443/x')).toBeNull();
+        expect(attribution.safeHttpUrl('https://example.org/x#access_token=abc')).toBe('https://example.org/x');
+    });
+
     test('strips tracking/credential keys, trims, normalises', () => {
         expect(attribution.safeHttpUrl(' https://www.npr.org/x?utm_source=a&id=1 ')).toBe('https://www.npr.org/x?id=1');
         expect(attribution.safeHttpUrl('HTTPS://Example.ORG')).toBe('https://example.org/');
@@ -87,6 +92,11 @@ describe('creditModel: the cite date', () => {
     test('an ISO string keeps its own calendar day (no timezone shift)', () => {
         expect(attribution.creditModel(pew('2026-09-29T23:30:00-08:00')).date).toBe('2026-09-29');
         expect(attribution.creditModel(pew('2026-09-29')).date).toBe('2026-09-29');
+    });
+    test('a calendar day that does not exist is not a date (the server agrees)', () => {
+        expect(attribution.creditModel(pew('2026-02-31')).date).toBeNull();
+        expect(attribution.parseIsoDate('2026-02-31')).toBeNull();
+        expect(attribution.parseIsoDate('2026-09-29T10:00')).toBe('2026-09-29T10:00:00.000Z');
     });
     test('a lenient-but-not-ISO string is not a date', () => {
         expect(attribution.creditModel(pew('<img src=x onerror=1>')).date).toBeNull();

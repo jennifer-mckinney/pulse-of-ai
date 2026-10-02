@@ -88,6 +88,20 @@ describe('safeSourceUrl: the base rule (no slug)', () => {
         expect(safeSourceUrl('https://news.ycombinator.com/item?id=1')).toBe('https://news.ycombinator.com/item?id=1');
     });
 
+    test('only a default port is accepted', () => {
+        expect(safeSourceUrl('https://example.org:8443/x')).toBeNull();
+        expect(safeSourceUrl('https://example.org:0/x')).toBeNull();
+        expect(safeSourceUrl('http://example.org:80/x')).toBe('http://example.org/x');
+        expect(safeSourceUrl('https://example.org:443/x')).toBe('https://example.org/x');
+    });
+
+    test('credential keys are also removed from a key=value fragment and after a semicolon; plain anchors stay', () => {
+        expect(safeSourceUrl('https://example.org/x#access_token=abc&state=1')).toBe('https://example.org/x#state=1');
+        expect(safeSourceUrl('https://example.org/x#token=abc')).toBe('https://example.org/x');
+        expect(safeSourceUrl('https://example.org/x?a=1;token=abc')).toBe('https://example.org/x?a=1');
+        expect(safeSourceUrl('https://en.wikipedia.org/wiki/Talk:AI#c-Example-2026-09-29')).toBe('https://en.wikipedia.org/wiki/Talk:AI#c-Example-2026-09-29');
+    });
+
     test('the server base rule IS the browser rule (one function: no drift)', () => {
         const vectors = [
             'https://www.npr.org/x?utm_source=a', 'javascript:alert(1)', 'https://localhost./x', 'https://example.org/a b',
@@ -139,6 +153,24 @@ describe('safeSourceUrl: bound to the source', () => {
         expect(safeSourceUrl('https://www.npr.org/u/someone', 'npr')).toBeNull();
     });
 
+    test('profile pages the ingest identity rule does not cover are never published', () => {
+        expect(safeSourceUrl('https://news.ycombinator.com/user?id=pg', 'hacker_news')).toBeNull();
+        expect(safeSourceUrl('https://scholar.google.com/citations?user=abc', 'google_scholar')).toBeNull();
+        expect(safeSourceUrl('https://news.ycombinator.com/item?id=1', 'hacker_news')).toBe('https://news.ycombinator.com/item?id=1');
+    });
+
+    test('a multi-tenant platform host is not shared across sources (One Useful Thing is not any Substack)', () => {
+        expect(safeSourceUrl('https://evil.substack.com/p/x', 'one_useful_thing')).toBeNull();
+        expect(safeSourceUrl('https://www.oneusefulthing.org/p/x', 'one_useful_thing')).toBe('https://www.oneusefulthing.org/p/x');
+        expect(safeSourceUrl('https://importai.substack.com/p/x', 'substack')).toBe('https://importai.substack.com/p/x');
+    });
+
+    test('linkOnly sources do not derive link domains from their feed host', () => {
+        const dom = (slug) => [...linkDomains(SOURCES.find(s => s.slug === slug))].sort();
+        expect(dom('wsj')).toEqual(['dowjones.com', 'wsj.com']);
+        expect(dom('bbc_news')).toEqual(['bbc.co.uk', 'bbc.com']);
+    });
+
     test('the base rule still applies with a slug', () => {
         expect(safeSourceUrl('javascript:alert(1)', 'npr')).toBeNull();
         expect(safeSourceUrl('https://www.npr.org/x?token=S&id=1', 'npr')).toBe('https://www.npr.org/x?id=1');
@@ -155,7 +187,7 @@ describe('safeSourceUrl: bound to the source', () => {
         expect(dom('youtube')).not.toContain('googleapis.com');
         expect(dom('tiktok')).not.toContain('tiktokapis.com');
         expect(dom('guardian')).not.toContain('guardianapis.com');
-        expect(dom('wsj')).toEqual(expect.arrayContaining(['wsj.com']));   // its RSS feed host (dowjones.io) is a route URL, so it stays
+        expect(dom('wsj')).not.toContain('dowjones.io');
         expect(dom('hacker_news')).not.toContain('algolia.com');
         expect(dom('reuters')).not.toContain('thomsonreuters.com');
         expect(dom('sciencedirect')).not.toContain('elsevier.com');
@@ -198,6 +230,12 @@ describe('safeIsoDate', () => {
     test('normalises a date to ISO UTC, null for anything else', () => {
         expect(safeIsoDate('2026-09-29T10:00:00Z')).toBe('2026-09-29T10:00:00.000Z');
         expect(safeIsoDate('2026-09-29')).toBe('2026-09-29T00:00:00.000Z');
+        // a calendar day that does not exist is not rolled over, a zoneless time is UTC
+        expect(safeIsoDate('2026-02-31')).toBeNull();
+        expect(safeIsoDate('2026-13-01')).toBeNull();
+        expect(safeIsoDate('2026-09-29T10:00')).toBe('2026-09-29T10:00:00.000Z');
+        expect(safeIsoDate('2026-09-29 10:00:00')).toBe('2026-09-29T10:00:00.000Z');
+        expect(safeIsoDate('2026-09-29T10:00:00+02:00')).toBe('2026-09-29T08:00:00.000Z');
         expect(safeIsoDate('<img src=x onerror=1>')).toBeNull();
         expect(safeIsoDate('')).toBeNull();
         expect(safeIsoDate(5)).toBeNull();

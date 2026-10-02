@@ -26,7 +26,8 @@
     'use strict';
 
     const MAX_URL_LENGTH = 2048;
-    const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
+    // ISO-8601: a date, or a date and time with an optional zone.
+    const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(Z|[+-]\d{2}:?\d{2})?)?$/;
     // whitespace, C0/C1 controls, and invisible / bidirectional-control characters
     const UNSAFE_CHAR_RE = /[\s\u0000-\u001f\u007f-\u009f\u00ad\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/;
     const IPV4_RE = /^\d{1,3}(?:\.\d{1,3}){3}$/;
@@ -36,14 +37,27 @@
     const TLD_RE = /^(?:[a-z]{2,63}|xn--[a-z0-9-]{1,59})$/;
     // Names that only resolve on a private network.
     const PRIVATE_SUFFIX_RE = /\.(?:local|localhost|localdomain|internal|intranet|corp|home|lan|private|invalid|home\.arpa)$/;
-    // Query keys that track a reader or carry a credential: never kept in a link
-    // we publish (a signed or session URL from an upstream API must not be echoed).
+    // Keys (of the query, or of a key=value fragment) that track a reader or carry a
+    // credential: never kept in a link we publish (a signed or session URL from an
+    // upstream API must not be echoed).
     const DROP_QUERY_KEY_RE = /^(?:utm_[a-z0-9_]*|fbclid|gclid|dclid|msclkid|mc_cid|mc_eid|igshid|_hsenc|_hsmi|token|access_token|id_token|refresh_token|api_?key|key|sig|signature|auth|authorization|session|session_?id|sid|password|passwd|secret)$/i;
 
     // What a demo post shows instead of a credit: it is fictional, so it
     // names no real source and links to nothing.
     const DEMO_LABEL = 'fictional demo post · no real source';
     const MODIFIED_LABEL = 'excerpt shortened and redacted';
+
+    // keepParams: the "k=v" parts of a query or fragment without the tracking /
+    // credential keys (";" separates like "&"), joined with "&".
+    function keepParams(raw) {
+        const kept = raw.split(/[&;]/).filter((p) => {
+            if (p === '') return false;
+            let k = p.split('=')[0];
+            try { k = decodeURIComponent(k); } catch (e) { /* keep the raw key */ }
+            return !DROP_QUERY_KEY_RE.test(k);
+        });
+        return kept.join('&');
+    }
 
     // safeHttpUrl: the normalized URL when it is an absolute http(s) URL a link
     // may point at, else null. The SERVER uses this same function as the base of
@@ -55,7 +69,8 @@
     //     IDN), there are at least two labels, and it is not an IP literal,
     //     localhost or a private-network suffix (.local, .internal, .corp, ...);
     //   - tracking and credential query keys (utm_*, fbclid, token, key, sig, ...)
-    //     are removed; the result is the WHATWG-normalized href.
+    //     are removed from the query (and from a key=value fragment); only a
+    //     default port is accepted; the result is the WHATWG-normalized href.
     function safeHttpUrl(raw) {
         if (typeof raw !== 'string') return null;
         const s = raw.trim();
@@ -64,22 +79,17 @@
         let u;
         try { u = new URL(s); } catch (e) { return null; }
         if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
-        if (u.username || u.password) return null;
+        if (u.username || u.password || u.port) return null;
         const host = u.hostname.toLowerCase().replace(/\.+$/, '');
         if (host === '' || host.includes(':') || host.startsWith('[') || IPV4_RE.test(host)) return null;
         if (host === 'localhost' || PRIVATE_SUFFIX_RE.test(host)) return null;
         const labels = host.split('.');
         if (labels.length < 2 || !labels.every((l) => LABEL_RE.test(l))) return null;
         if (!TLD_RE.test(labels[labels.length - 1])) return null;
-        if (u.search !== '') {
-            const kept = u.search.slice(1).split('&').filter((p) => {
-                if (p === '') return false;
-                let k = p.split('=')[0];
-                try { k = decodeURIComponent(k); } catch (e) { /* keep the raw key */ }
-                return !DROP_QUERY_KEY_RE.test(k);
-            });
-            u.search = kept.join('&');
-        }
+        if (u.search !== '') u.search = keepParams(u.search.slice(1));
+        // a fragment is kept (Wikipedia comment anchors), unless it is a key=value
+        // list: then its credential keys go too
+        if (u.hash.length > 1 && u.hash.includes('=')) u.hash = keepParams(u.hash.slice(1));
         if (u.hostname !== host) u.hostname = host;     // serve the dotless host
         return u.href;
     }
@@ -90,16 +100,27 @@
         try { return new URL(url).hostname.toLowerCase().replace(/^www\./, ''); } catch (e) { return ''; }
     }
 
+    // parseIsoDate: an ISO-8601 date or date-time as an ISO UTC string, or null.
+    // Date.parse is lenient (it reads "<img src=x onerror=1>" as a date and rolls
+    // 2026-02-31 over to March), so the shape and the calendar day are checked
+    // first; a time without a zone is UTC (never the machine's timezone).
+    function parseIsoDate(v) {
+        if (typeof v !== 'string' || v.length > 40) return null;
+        const m = v.match(ISO_DATE_RE);
+        if (!m) return null;
+        const y = Number(m[1]);
+        const mo = Number(m[2]);
+        const d = Number(m[3]);
+        const probe = new Date(Date.UTC(y, mo - 1, d));
+        if (probe.getUTCFullYear() !== y || probe.getUTCMonth() !== mo - 1 || probe.getUTCDate() !== d) return null;
+        const t = Date.parse(m[4] || v.length <= 10 ? v : v + 'Z');
+        return Number.isFinite(t) ? new Date(t).toISOString() : null;
+    }
+
     // isoDay: 'YYYY-MM-DD' of a date string, or null when it is not a date.
     // An ISO string keeps its own calendar day (no timezone shift).
     function isoDay(v) {
-        // Date.parse is lenient (it reads "<img src=x onerror=1>" as a date):
-        // only an ISO-8601 shape is accepted.
-        if (typeof v !== 'string' || v.length > 40 || !ISO_DATE_RE.test(v)) return null;
-        const t = Date.parse(v);
-        if (!Number.isFinite(t)) return null;
-        const m = /^(\d{4}-\d{2}-\d{2})(?:$|[T ])/.exec(v);
-        return m ? m[1] : new Date(t).toISOString().slice(0, 10);
+        return parseIsoDate(v) ? v.slice(0, 10) : null;
     }
 
     const str = (v) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null);
@@ -205,5 +226,5 @@
         return line;
     }
 
-    return { safeHttpUrl, hostOf, creditModel, buildCredit, ISO_DATE_RE, DEMO_LABEL, MODIFIED_LABEL };
+    return { safeHttpUrl, parseIsoDate, hostOf, creditModel, buildCredit, DEMO_LABEL, MODIFIED_LABEL };
 }));

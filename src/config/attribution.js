@@ -29,9 +29,7 @@ const { DEMO_SOURCE_TYPE } = require('./data-mode');
 const { isIdentityUrl } = require('../collectors/identity');
 // Layering note (as in routes/posts.js): the URL base check is the browser
 // module's own function, so the server and the browser can never drift apart.
-const { safeHttpUrl, ISO_DATE_RE } = require('../../public/js/attribution');
-
-const MAX_DATE_LENGTH = 40;
+const { safeHttpUrl, parseIsoDate } = require('../../public/js/attribution');
 
 // Site-wide statements the credits page and the receipts show.
 const SITE_NOTICES = Object.freeze({
@@ -56,12 +54,28 @@ function registrable(host) {
 const linkDomainCache = new Map();
 
 /**
+ * A person's profile page on a source whose profile URL shape the ingest
+ * identity rule (src/collectors/identity.js) does not cover: Hacker News
+ * /user?id=<name> and Google Scholar /citations?user=<id>. Checked at read
+ * time only, so a legacy or odd row never publishes it.
+ */
+function isProfileLink(url) {
+    const u = new URL(url);
+    const host = u.hostname.toLowerCase();
+    if (host === 'ycombinator.com' || host.endsWith('.ycombinator.com')) return u.pathname === '/user';
+    if (host === 'scholar.google.com') return u.pathname.startsWith('/citations') && u.searchParams.has('user');
+    return false;
+}
+
+/**
  * The domains a source's links may point at: the registrable domain of every
  * URL its routes read (params.urls: feeds; params.baseUrl: Discourse forums),
  * whose items link to their own pages, plus the registry's explicit
  * `linkHosts` for API-only routes and feeds that link elsewhere. API hosts
  * (api.github.com, content.guardianapis.com, ...) are deliberately NOT derived:
  * their parent domains can serve user-controlled content or unrelated sites.
+ * A source with `linkOnly: true` (its feed host is not a permalink host, e.g.
+ * feeds.content.dowjones.io) uses `linkHosts` alone.
  * @param {object} src registry entry
  * @returns {Set<string>}
  */
@@ -69,7 +83,7 @@ function linkDomains(src) {
     let d = linkDomainCache.get(src.slug);
     if (!d) {
         d = new Set();
-        for (const route of src.routes || []) {
+        for (const route of src.linkOnly === true ? [] : src.routes || []) {
             const p = route.params || {};
             for (const u of [...(p.urls || []), ...(p.baseUrl ? [p.baseUrl] : [])]) {
                 try { d.add(registrable(new URL(u).hostname.toLowerCase().replace(/^www\./, ''))); } catch { /* not a URL */ }
@@ -101,7 +115,7 @@ function safeSourceUrl(raw, slug) {
     if (slug === undefined) return url;
     const src = typeof slug === 'string' ? getSource(slug) : null;
     if (!src) return null;
-    if (isIdentityUrl(url)) return null;
+    if (isIdentityUrl(url) || isProfileLink(url)) return null;
     const host = new URL(url).hostname.toLowerCase().replace(/\.+$/, '');
     for (const d of linkDomains(src)) {
         if (host === d || host.endsWith('.' + d)) return url;
@@ -115,11 +129,7 @@ function safeSourceUrl(raw, slug) {
  * @returns {string|null}
  */
 function safeIsoDate(v) {
-    // Date.parse is lenient (it reads "<img src=x onerror=1>" as a date), so
-    // only an ISO-8601 shape is accepted.
-    if (typeof v !== 'string' || v.length > MAX_DATE_LENGTH || !ISO_DATE_RE.test(v)) return null;
-    const t = Date.parse(v);
-    return Number.isFinite(t) ? new Date(t).toISOString() : null;
+    return parseIsoDate(v);
 }
 
 /**

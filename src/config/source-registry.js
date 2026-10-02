@@ -55,6 +55,8 @@
 //                 A link back is published only when its host is on, or under,
 //                 the registrable domain of a route URL or one of these. API
 //                 hosts (googleapis.com, guardianapis.com, ...) are never added
+//   linkOnly      true: linkHosts is the COMPLETE list (the route's feed host is
+//                 not a permalink host: feeds.content.dowjones.io)
 //   creditText    overrides the credit shown next to an excerpt (default:
 //                 `attribution`, else the name without a trailing "(...)")
 //   citeDate      true: the credit also shows the item's publication date (Pew)
@@ -309,7 +311,7 @@ const SOURCES = [
         closedStatus: 'awaiting_approval', ruling: LEGAL_RISK_RULING,
         routes: [{ id: 'technology-rss', adapter: 'rss', requires: [PERMISSION_GATED_ACK_ENV], permissionGated: true, params: { urls: ['https://feeds.bbci.co.uk/news/technology/rss.xml'] }, scope: 'filter' }],
         recordEnv: ['BBC_LICENSE_REF'],
-        linkHosts: ['bbc.co.uk', 'bbc.com'],
+        linkOnly: true, linkHosts: ['bbc.co.uk', 'bbc.com'],
         termsUrl: 'https://www.bbc.co.uk/usingthebbc/terms-of-use',
         termsNote: '§8a: computer analysis needs permission; §15: RSS metadata and business use need permission.',
         rateLimit: { minIntervalMs: 1000, note: 'conditional GET' },
@@ -417,7 +419,7 @@ const SOURCES = [
                 note: 'Paid tier: the contract feed Dow Jones provisions (Factiva / feeds)',
             },
         ],
-        linkHosts: ['wsj.com', 'dowjones.com'],
+        linkOnly: true, linkHosts: ['wsj.com', 'dowjones.com'],
         termsUrl: 'https://www.dowjones.com/terms-of-use/',
         termsNote: '§9.1 no commercial use of content incl. RSS without consent; §9.3 no text/data mining; §9.4.2 no AI ingestion without permission.',
         rateLimit: { minIntervalMs: 1000, note: 'conditional GET; the old feeds.a.dj.com host is stale and not used' },
@@ -1071,7 +1073,7 @@ const SOURCES = [
         auth: { kind: 'none', program: 'Substack publication feed', signup: 'https://substack.com/tos' },
         closedStatus: 'awaiting_key',
         routes: [{ id: 'feed', adapter: 'rss', params: { urls: ['https://www.oneusefulthing.org/feed'] }, scope: 'ai' }],
-        linkHosts: ['oneusefulthing.org', 'substack.com'],
+        linkHosts: ['oneusefulthing.org'],
         termsUrl: 'https://substack.com/tos',
         termsNote: 'Substack Terms: only the published RSS feed is polled.',
         rateLimit: { minIntervalMs: 1000, note: 'conditional GET' },
