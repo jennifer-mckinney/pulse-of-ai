@@ -152,7 +152,7 @@ describe('matrix: the held second call (heldError)', () => {
             expect(sent).toBe(0);
         } else if (sc.kind === 'server') {
             // A server backoff is honoured too, but it is an http_5xx failure — never rate_limited.
-            expect(again).toBeInstanceOf(path === 'robots' || path === 'robotsRedirect' ? Error : HttpError);
+            expect(again).toBeInstanceOf(HttpError);
             expect(again).not.toBeInstanceOf(RateLimitedError);
             expect(again).toMatchObject({ held: true, status: 503 });
             expect(classifyError(again).error_kind).toBe('http_5xx');
@@ -273,5 +273,63 @@ describe('security F6: hold maps have no prototype', () => {
         expect(Object.getPrototypeOf(rl.activeHolds(stored, NOW))).toBeNull();
         for (const k of ['__proto__', 'constructor', 'hasOwnProperty', 'toString']) expect(rl.heldUntil(out, k, NOW)).toBeNull();
         expect(Object.getPrototypeOf(new HttpClient({ transport: async () => ({}), env: TEST_ENV }).holds)).toBeNull();
+    });
+});
+
+describe('review round: false-positive walls, forged resets, escalation behind a redirect, undecodable robots 5xx', () => {
+    const jsd = '<html><body>Not found<script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script></body></html>';
+
+    test('Cloudflare\'s jsd beacon on an ordinary 404 / 503 / small 200 page is NOT a bot wall; robots 404 through Cloudflare is "no rules"', async () => {
+        for (const status of [404, 503, 200]) {
+            const t = build('page', { status, headers: { 'content-type': 'text/html' }, body: jsd });
+            const err = await t.run().catch(e => e);
+            expect(err && err.refusal).toBeUndefined();
+            if (status !== 200) expect(err).toBeInstanceOf(HttpError);
+        }
+        const r = build('robots', { status: 404, headers: { 'content-type': 'text/html' }, body: jsd });
+        expect(await r.run().catch(e => e)).toMatchObject({ status: 200 });
+    });
+
+    test('a 200 text/plain robots.txt that names a vendor is rules, not a wall; an HTML wall without a content-type still is one', async () => {
+        const rules = build('robots', { status: 200, headers: { 'content-type': 'text/plain' }, body: 'User-agent: DataDome\nDisallow: /cdn-cgi/challenge-platform/\n' });
+        expect(await rules.run().catch(e => e)).toMatchObject({ status: 200 });
+        const wall = build('page', { status: 200, headers: {}, body: '<!doctype html><html><div id="cf-chl-widget"></div></html>' });
+        expect(await wall.run().catch(e => e)).toBeInstanceOf(AccessDeniedError);
+        const px = build('page', { status: 200, headers: { 'content-type': 'text/html' }, body: '<html><div id="px-captcha"></div></html>' });
+        expect(await px.run().catch(e => e)).toBeInstanceOf(AccessDeniedError);
+    });
+
+    test('a forged relative reset (x-ratelimit-reset: 1 / 60) on a 403 is a refusal; a 429 may carry one', async () => {
+        for (const reset of ['1', '60']) {
+            const t = build('page', { status: 403, headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': reset }, body: '' });
+            expect(await t.run().catch(e => e)).toBeInstanceOf(AccessDeniedError);
+            expect(t.http.holds).toEqual({});
+        }
+        const t = build('page', { status: 429, headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '90' }, body: '' });
+        expect(await t.run().catch(e => e)).toBeInstanceOf(RateLimitedError);
+    });
+
+    test('an escalated refusal behind a redirect holds the host first asked too', async () => {
+        let t0 = NOW;
+        const reset = () => String(Math.floor(t0 / 1000) + 600);
+        const tr = fixtureTransport([
+            [/a\.example\/page/, { status: 302, headers: { location: 'https://b.example/page' }, body: '' }],
+            [/b\.example\/page/, () => ({ status: 403, headers: { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': reset() }, body: '' })],
+        ]);
+        const http = new HttpClient({ transport: tr, env: TEST_ENV, now: () => t0, sleep: noSleep, robotsCache: new Map() });
+        let err;
+        for (let i = 0; i < 5; i++) {
+            err = await http.request('https://a.example/page').catch(e => e);
+            t0 = Date.parse(http.holds['b.example'].until);
+            if (i < 4) delete http.holds['a.example'];
+        }
+        expect(err).toMatchObject({ refusal: 'escalated' });
+        expect(http.holds['a.example']).toMatchObject({ count: 5 });
+    });
+
+    test.each([['robots'], ['robotsRedirect']])('an undecodable 503 robots.txt with a long Retry-After holds the host (%s)', async (path) => {
+        const t = build(path, () => { throw Object.assign(new Error('incorrect header check'), { decode: true, status: 503, headers: { 'retry-after': '3600' } }); });
+        await t.run().catch(() => {});
+        expect(t.http.holds[t.final]).toMatchObject({ signal: 'retry_after_5xx' });
     });
 });

@@ -50,7 +50,7 @@ Ruling 5 holds per source across runs, not only per request. A run refused by th
 ### Terms, robots and politeness
 - Every request carries `PulseOfAI/<version> (+<COLLECTOR_CONTACT_URL>; non-commercial AI discourse research)`. Without `COLLECTOR_CONTACT_URL` no source collects: every source is `disabled` except the blocked 4, which still report `blocked` (a blocked source is reported as blocked before the contact URL is checked, unless a kill switch makes it `disabled` or its official permission env is set). A fresh clone ships the URL empty (decision D1 below), so it reports 48 `disabled` and 4 `blocked`.
 - HTML-origin routes (feeds on a publisher's site) are checked against that host's `robots.txt` before every request, redirects included. **Conservative matching:** a `Disallow: /x/` rule is also applied to the path `/x`. This resolves the CFR ambiguity (`Disallow: /feed/` vs the feed at `/feed`) conservatively: the CFR feed is not fetched and CFR shows `awaiting_approval` until `CFR_FEED_PERMISSION_REF` records CFR's confirmation, after which literal RFC 9309 matching applies to CFR only.
-- Documented API hosts are not robots-gated (their terms and rate limits govern them), but the same per-host spacing, backoff (429/5xx; a `Retry-After` of up to 10 s is waited out, a longer one on 429/503 holds the host up to 24 h and nothing is sent to it until then), timeouts and conditional GET (ETag / Last-Modified) apply.
+- Documented API hosts are not robots-gated (their terms and rate limits govern them), but the same per-host spacing, backoff (429/5xx; a `Retry-After` of up to 10 s is waited out, a longer one on 429 holds the host up to 24 h, on a 5xx up to 1 h, and nothing is sent to it until then; see the note of 2026-10-02 below), timeouts and conditional GET (ETag / Last-Modified) apply.
 - Collectors never request identity fields (authors, usernames, profile locations); the normaliser drops any that arrive, does not store links whose path names a person, and redacts identities in the text (`ingest@1.3.0`, migration 017; decision D2 below).
 
 ### Location
@@ -255,6 +255,16 @@ Dated note to "The refused state (F10-5)" above, from the 2026-09-30 diagnosis o
 - **Also fixed (Internet Archive, same diagnosis):** a response with no content (1xx, 204, 304, HEAD, `Content-Length: 0`) is never decoded. blog.archive.org's 304 repeats `Content-Encoding: gzip`, and gunzip over its empty body failed 91% of runs with three requests each. An undecodable body is a `parse` error and is not retried, except on 401 / 403 / 451, where it is still a refusal (AccessDeniedError): a WAF page mislabelled as gzip is honoured, never retried into.
 - **Methodology:** refusal handling is not registered in `src/config/methodology-registry.js` (it doesn't change what is stored or how posts are scored), so no methodology version changes. This note is the record.
 - Tests: `tests/unit/pure/collectorRefusal.test.js`, `tests/unit/pure/collectorHttp.test.js`, `tests/unit/pure/collectorNetguard.test.js`, `tests/integration/collect.refusal.test.js`, `tests/integration/collect.notModifiedEncoding.test.js`.
+
+### Note 2026-10-02: a rate limit is a per-host backoff, not a refusal (PR #45)
+
+Amends "Ruling 5" and the politeness bullet above; nothing is worked around.
+- **Evidence.** A rate limit is HTTP 429; a 403 with `x-ratelimit-remaining: 0` AND an absolute `x-ratelimit-reset` instant in the future within 24 h; or, from `api.github.com` only, a 403 whose JSON message starts with GitHub's rate-limit wording (strong with a strict `Retry-After`). A bot wall is never a rate limit. A plain 403, 401, 451 and any other 403 stay refusals.
+- **Backoff.** Per hostname, until the source's time, at least 60 s doubling per consecutive limit, at most 24 h; one store (`source_collection_state.rate_limited_hosts`, migrations 075-077). A rate limit never touches the refusal count, probation or the critical alert; persistent throttling opens the `source_rate_limited` warning.
+- **Escalation (fail closed).** The 5th consecutive body-only limit, the 5th consecutive strong 403, or the 14th consecutive rate limit of any kind with no success is a refusal (ruling 5); the host stays held.
+- **Server backoff.** A 5xx's long `Retry-After` holds the host at most 1 h as a separate server backoff (not a rate limit).
+- **Behaviour changes decided here.** A 401 / 403 / 451 on `robots.txt` is a refusal (ruling 5), no longer "no rules" (RFC 9309's permissive reading). A bot wall at any status (including a small HTML 2xx challenge page) is a refusal. Reddit discovery treats three consecutive plain 403s on `/about` as Reddit refusing us (one is a private or quarantined subreddit) — owner decision, Jennifer to confirm.
+- Cell-by-cell behaviour: `docs/research/rate-limit-hold-matrix.md`.
 
 ### Merge order
 PR #22 merges first; the docs branch (`docs/diagrams-and-readme`) then reconciles its v1.2.0 spec against master.

@@ -471,8 +471,9 @@ async function runCollection(o = {}) {
             const after = rateLimit.holdGate(src, env, runHolds, Date.now(), { routeKills });
             // Grumpy #10: per host, merged under a row lock — never a blind
             // overwrite of another run's newer hold.
+            const savedChanges = http.drainHoldChanges();
             await state.saveHolds(sourceId, {
-                hosts: myHosts, changes: http.drainHoldChanges(), view: runHolds, routes: after.routes,
+                hosts: myHosts, changes: savedChanges, view: runHolds, routes: after.routes,
                 limited: !!limitedErr, headers: rateLimitHeaders, src, env, routeKills,
             });
             if (heldRoutes.length) log(`[collect] ${slug}: not requested (host backoff after a rate limit or a server error's Retry-After, honoured): ${[...new Set(heldRoutes)].join(', ')}`);
@@ -489,6 +490,11 @@ async function runCollection(o = {}) {
                 row[after.kind === 'server' ? 'backoffUntil' : 'rateLimitedUntil'] = after.until;
                 await touch();
                 continue;
+            }
+            // Operator log (worker stdout only — never the API or mail): which holds this
+            // source's run set or cleared, with the real host.
+            for (const [h, e] of savedChanges) {
+                log(`[collect] ${slug}: hold ${e ? `set on ${scrub(h, env)} until ${e.until} (${e.signal || 'unclassified'}, streak ${e.count})` : `cleared on ${scrub(h, env)} (a success)`}`);
             }
             // F10-5: any refused route refuses the source (the source said no).
             const refused = refusalOf(classified);

@@ -160,7 +160,7 @@ async function runRedditMaintenance({ env = process.env, transport, log = () => 
             }
         }
     } catch (err) {
-        if (http) await state.saveHoldChanges(http.drainHoldChanges(), http.holds, { env }).catch(() => {});
+        if (http) await state.saveHoldChanges(http.drainHoldChanges(), http.holds, { env }).catch(serr => log(`[reddit] could not save the rate-limit holds (${scrub(serr && serr.message, env)})`));
         throw err;
     }
     // Grumpy #1 / N2: the hold changes of this run are saved, so the

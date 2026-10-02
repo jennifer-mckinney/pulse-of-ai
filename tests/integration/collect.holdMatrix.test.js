@@ -199,3 +199,33 @@ describe('supervised and smoke runs fail closed when the holds cannot be read', 
         spy.mockRestore();
     });
 });
+
+describe('review round: long single hold, stale views, no-op saves', () => {
+    const NOW = Date.now();
+
+    test('ONE rate limit parking a host for 6 h or more opens the warning; a 5xx hold of any length never does', () => {
+        const gh = getSource('github');
+        const long = { until: iso(NOW + 7 * 3600000), http_status: 429, signal: 'http_429', count: 1, weak: 0, at: iso(NOW) };
+        expect(conditionsFor({ rate_limited_hosts: { 'api.github.com': long } }, gh, NOW).source_rate_limited).toMatchObject({ hosts: ['api.github.com'] });
+        expect(conditionsFor({ rate_limited_hosts: { 'api.github.com': { ...long, until: iso(NOW + 3600000) } } }, gh, NOW).source_rate_limited).toBeUndefined();
+        expect(conditionsFor({ rate_limited_hosts: { 'api.github.com': { ...long, signal: 'retry_after_5xx', http_status: 503, count: 0 } } }, gh, NOW).source_rate_limited).toBeUndefined();
+    });
+
+    test('an EXPIRED entry of the run\'s snapshot never brings a cleared streak back', async () => {
+        const hn = getSource('hacker_news');
+        const id = await idOf('hacker_news');
+        const expired = { until: iso(NOW - 1000), http_status: 429, signal: 'http_429', count: 4, weak: 0, at: iso(NOW - 600000) };
+        await state.saveHolds(id, { hosts: ['hn.algolia.com'], changes: new Map(), view: { 'hn.algolia.com': expired }, src: hn, env: TEST_ENV });
+        expect((await stateOf('hacker_news')).rate_limited_hosts['hn.algolia.com']).toBeUndefined();
+    });
+
+    test('a save that changes nothing writes nothing (updated_at is untouched)', async () => {
+        const hn = getSource('hacker_news');
+        const id = await idOf('hacker_news');
+        const h = { until: iso(NOW + 600000), http_status: 429, signal: 'http_429', count: 1, weak: 0, at: iso(NOW) };
+        await state.saveHolds(id, { hosts: ['hn.algolia.com'], changes: new Map([['hn.algolia.com', h]]), view: {}, src: hn, env: TEST_ENV });
+        const before = (await stateOf('hacker_news')).updated_at;
+        await state.saveHolds(id, { hosts: ['hn.algolia.com'], changes: new Map(), view: { 'hn.algolia.com': h }, src: hn, env: TEST_ENV });
+        expect((await stateOf('hacker_news')).updated_at).toEqual(before);
+    });
+});

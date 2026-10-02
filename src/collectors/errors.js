@@ -13,7 +13,8 @@
 //                       no refusal count, probation or critical alert — the
 //                       host is backed off until the source's reset time
 //                       (diagnosis 2026-10-01, GitHub). The 5th body-only
-//                       one in a row is an AccessDeniedError (fail closed).
+//                       one, the 5th strong 403 or the 14th rate limit of
+//                       any kind in a row is an AccessDeniedError (fail closed).
 //                       `held: true` marks a request that was never sent
 //                       because its host is still backing off.
 //   RobotsDisallowedError  robots.txt disallows the path for our User-Agent.

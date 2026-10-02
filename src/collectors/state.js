@@ -396,7 +396,7 @@ async function loadHolds() {
          WHERE rate_limited_hosts <> '{}'::jsonb
             OR EXISTS (SELECT 1 FROM jsonb_object_keys(http_cache) AS k WHERE k LIKE $1)`,
         [`${LEGACY_HOLD_PREFIX}%`]);
-    const out = {};
+    const out = Object.create(null);
     for (const r of rows) {
         mergeHolds(out, r.rate_limited_hosts);
         mergeHolds(out, legacyHolds(r.legacy || {}).holds);
@@ -454,7 +454,7 @@ async function saveHolds(sourceId, { hosts, changes = new Map(), view = {}, rout
         // A source skipped before its first claim has no state row yet.
         await client.query('INSERT INTO source_collection_state (source_id) VALUES ($1) ON CONFLICT (source_id) DO NOTHING', [sourceId]);
         const cur = await client.query(
-            'SELECT rate_limited_hosts FROM source_collection_state WHERE source_id = $1 FOR UPDATE', [sourceId]);
+            'SELECT rate_limited_hosts, rate_limited_until, rate_limited_routes FROM source_collection_state WHERE source_id = $1 FOR UPDATE', [sourceId]);
         if (!cur.rows.length) return [];
         const stored = rl.sanitizeHolds(cur.rows[0].rate_limited_hosts, now);
         const viewClean = rl.sanitizeHolds(view, now);
@@ -475,7 +475,9 @@ async function saveHolds(sourceId, { hosts, changes = new Map(), view = {}, rout
                     const mine = rl.sanitizeHolds({ [host]: next }, now)[host];
                     if (mine) stored[host] = rl.combineHold(stored[host], mine);
                 }
-            } else if (viewClean[host]) {
+            } else if (viewClean[host] && Date.parse(viewClean[host].until) > now) {
+                // Only an ACTIVE hold of the run's snapshot is imported: an expired entry
+                // would bring back a streak another process's success just cleared.
                 stored[host] = rl.combineHold(stored[host], viewClean[host]);
             }
         }
@@ -490,6 +492,16 @@ async function saveHolds(sourceId, { hosts, changes = new Map(), view = {}, rout
         const active = Object.values(rl.activeHolds(rl.rateLimitHolds(src ? rl.collectionHolds(src, stored, env) : stored), now)).map(h => h.until).sort();
         const saved = headers && Object.keys(headers).length ? JSON.stringify(headers) : null;
         const routeMap = src ? rl.storedRouteMap(rl.holdGate(src, env, stored, now, { routeKills: kills })) : (routes || {});
+        // Nothing changed (the usual tick of a source whose routes are all held): no write.
+        const row0 = cur.rows[0];
+        const nextUntil = active.length ? new Date(active[active.length - 1]).getTime() : null;
+        const curUntil = row0.rate_limited_until ? new Date(row0.rate_limited_until).getTime() : null;
+        const sortedJson = v => JSON.stringify(v, (_k, x) => (x && typeof x === 'object' && !Array.isArray(x)
+            ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => a.localeCompare(b))) : x));
+        if (!limited && done.length === 0 && nextUntil === curUntil
+            && sortedJson(stored) === sortedJson(row0.rate_limited_hosts) && sortedJson(routeMap) === sortedJson(row0.rate_limited_routes)) {
+            return done;
+        }
         await client.query(
             `UPDATE source_collection_state
              SET rate_limited_hosts  = $2::jsonb,

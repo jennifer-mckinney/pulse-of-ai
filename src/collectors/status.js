@@ -170,7 +170,7 @@ function registryFields(row, env, now, routeKills = []) {
         rate_limited_until: held.until,
         // Copilot review: a 5xx's Retry-After is honoured too, but it is not a
         // rate limit — it never sets the status or rate_limited_until; its own
-        // time is here (the host list carries signal retry_after_5xx).
+        // time is here (its hosts are server_backoff_hosts).
         server_backoff_until: held.serverUntil,
         server_backoff_routes: Object.keys(held.serverMap),
         rate_limited_hosts: held.hosts,

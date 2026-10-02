@@ -32,8 +32,10 @@ describe('rateLimitSignal: positive evidence only', () => {
     });
 
     test('x-ratelimit-reset as seconds-until-reset (Reddit) is read relative to now', () => {
-        const res = { status: 403, headers: { 'x-ratelimit-remaining': '0.0', 'x-ratelimit-reset': '42' }, body: '' };
-        expect(rl.rateLimitSignal(res, NOW)).toMatchObject({ signal: 'ratelimit_remaining_zero', retryAt: NOW + 42000 });
+        const res = { status: 429, headers: { 'x-ratelimit-remaining': '0.0', 'x-ratelimit-reset': '42' }, body: '' };
+        expect(rl.rateLimitSignal(res, NOW)).toMatchObject({ signal: 'http_429', retryAt: NOW + 42000 });
+        // A 403 needs an absolute instant: a relative one is forgeable (security review).
+        expect(rl.rateLimitSignal({ ...res, status: 403 }, NOW)).toBeNull();
     });
 
     const GH = 'api.github.com';

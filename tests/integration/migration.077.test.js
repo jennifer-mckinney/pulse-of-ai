@@ -23,7 +23,7 @@ beforeEach(async () => {
 });
 
 describe('migration 077_rate_limit_hold_store_unify.sql', () => {
-    it('moves active PR #44 keys into rate_limited_hosts, drops every key from http_cache, keeps validators and existing #45 holds, and is idempotent', async () => {
+    it('copies active PR #44 keys into rate_limited_hosts (the keys stay for a previous-release worker), keeps validators and existing #45 holds, and is idempotent', async () => {
         const now = Date.now();
         const tldr = await idOf('tldr');
         const github = await idOf('github');
@@ -51,11 +51,18 @@ describe('migration 077_rate_limit_hold_store_unify.sql', () => {
         const once = { tldr: await stateOf('tldr'), github: await stateOf('github') };
         await dbTransaction(c => c.query(SQL_077));
         expect(await stateOf('tldr')).toEqual(once.tldr);
-        expect(await stateOf('github')).toEqual(once.github);
+        // The keys stay, so a second run re-reads them: everything is identical except a 503's
+        // NOW()-relative 1 h cap, which may sit a few milliseconds later.
+        const again = await stateOf('github');
+        expect(Math.abs(Date.parse(again.rate_limited_hosts['srv.example'].until) - Date.parse(once.github.rate_limited_hosts['srv.example'].until))).toBeLessThan(1000);
+        const strip = st => { const c = structuredClone(st); c.rate_limited_hosts['srv.example'].until = 'x'; c.updated_at = null; return c; };
+        expect(strip(again)).toEqual(strip(once.github));
         expect(await dbGet('SELECT * FROM source_collection_state WHERE source_id = $1', [owid])).toEqual(owidBefore);
 
-        // TLDR: the active key is a hold; the expired and garbage keys are gone.
-        expect(once.tldr.http_cache).toEqual({ 'https://tldr.tech/api/rss/ai': validator });
+        // TLDR: the active key is a hold AND stays in the cache (a previous-release worker
+        // reads only those keys); the runner removes it on the source's next claim.
+        expect(once.tldr.http_cache['retry-after:tldr.tech']).toBeDefined();
+        expect(once.tldr.http_cache['https://tldr.tech/api/rss/ai']).toEqual(validator);
         expect(Object.keys(once.tldr.rate_limited_hosts)).toEqual(['tldr.tech']);
         const t = once.tldr.rate_limited_hosts['tldr.tech'];
         expect(t).toMatchObject({ until: iso(now + 3600 * 1000), http_status: 429, signal: 'http_429', count: 1, weak: 0 });
@@ -66,8 +73,9 @@ describe('migration 077_rate_limit_hold_store_unify.sql', () => {
         // GitHub: the port is dropped; the existing #45 record keeps its
         // streak with the later until; a 503 is retry_after_5xx (count 0),
         // capped at 1 h (rate-limit.js MAX_5XX_HOLD_MS).
-        expect(once.github.http_cache).toEqual({});
-        expect(once.github.rate_limited_hosts['api.github.com']).toEqual({ ...existing, until: iso(now + 600 * 1000) });
+        expect(Object.keys(once.github.http_cache).sort()).toEqual(['retry-after:api.github.com:443', 'retry-after:srv.example']);
+        // Same class (both rate limits): the later until also supplies the cause, the streaks stay.
+        expect(once.github.rate_limited_hosts['api.github.com']).toEqual({ ...existing, until: iso(now + 600 * 1000), http_status: 429, signal: 'http_429' });
         const srv = once.github.rate_limited_hosts['srv.example'];
         expect(srv).toMatchObject({ http_status: 503, signal: 'retry_after_5xx', count: 0, weak: 0 });
         expect(Math.abs(Date.parse(srv.until) - (now + rl.MAX_5XX_HOLD_MS))).toBeLessThan(60 * 1000);
@@ -122,11 +130,26 @@ describe('migration 077_rate_limit_hold_store_unify.sql', () => {
         }), JSON.stringify({ 'api.github.com': { until: '2026-99-99T00:00:00Z', http_status: 403, signal: 'http_429', count: 2, weak: 0, at: iso(now) } })]);
         await dbTransaction(c => c.query(SQL_077));
         const t = await stateOf('tldr');
-        expect(t.http_cache).toEqual({});
         expect(Object.keys(t.rate_limited_hosts)).toEqual(['path.example']);
         const g = await stateOf('github');
         expect(g.rate_limited_hosts['api.github.com']).toMatchObject({ count: 2, until: iso(now + 300 * 1000) });
         // The helper function is gone (a second run in this session recreates it).
         await dbTransaction(c => c.query(SQL_077));
+    });
+
+    it('review: a trailing-dot or single-label key is normalised or dropped; a 075-era entry with no signal takes a later legacy 503\'s cause', async () => {
+        const now = Date.now();
+        const tldr = await idOf('tldr');
+        const github = await idOf('github');
+        await dbRun(`INSERT INTO source_collection_state (source_id, http_cache) VALUES ($1, $2::jsonb)`, [tldr, JSON.stringify({
+            'retry-after:dot.example.': { until: iso(now + 600 * 1000), status: 429 },
+            'retry-after:constructor': { until: iso(now + 600 * 1000), status: 429 },
+        })]);
+        await dbRun(`INSERT INTO source_collection_state (source_id, http_cache, rate_limited_hosts) VALUES ($1, $2::jsonb, $3::jsonb)`, [github, JSON.stringify({
+            'retry-after:api.github.com': { until: iso(now + 1200 * 1000), status: 503 },
+        }), JSON.stringify({ 'api.github.com': { until: iso(now + 600 * 1000), http_status: 403, count: 2, weak: 0, at: iso(now) } })]);
+        await dbTransaction(c => c.query(SQL_077));
+        expect(Object.keys((await stateOf('tldr')).rate_limited_hosts)).toEqual(['dot.example']);
+        expect((await stateOf('github')).rate_limited_hosts['api.github.com']).toMatchObject({ signal: 'retry_after_5xx', http_status: 503, count: 2 });
     });
 });

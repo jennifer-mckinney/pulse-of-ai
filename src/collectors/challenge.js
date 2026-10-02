@@ -14,7 +14,10 @@
 'use strict';
 
 // A body that is a bot-wall challenge page, whatever the status code.
-const CHALLENGE_RE = /(cf-chl|challenge-platform|_Incapsula_Resource|datadome|captcha-delivery|Attention Required! \| Cloudflare)/i;
+// Security review: NOT the bare `challenge-platform` token — Cloudflare's JS-detections
+// beacon (/cdn-cgi/challenge-platform/scripts/jsd/main.js) is injected into ordinary pages
+// (404s and 5xx pages included); only the challenge's own orchestration path counts.
+const CHALLENGE_RE = /(cf-chl|_cf_chl_opt|\/cdn-cgi\/challenge-platform\/h\/|_Incapsula_Resource|datadome|captcha-delivery|px-captcha|_pxCaptcha|bm-verify|Attention Required! \| Cloudflare|Checking your browser before accessing)/i;
 
 /** Whether the headers carry Cloudflare's challenge marker (case-insensitive). */
 function challengeHeader(headers) {

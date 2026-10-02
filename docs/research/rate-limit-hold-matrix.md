@@ -9,10 +9,10 @@ A 5xx Retry-After hold (`retry_after_5xx`) is a separate server backoff, not a r
 
 | Class | Result | Hold | Refused state |
 |---|---|---|---|
-| 429 | RateLimitedError (`rate_limited`) | host, until the source's time (60 s floor doubling, 24 h cap; 5 min with no time) | never |
-| 403 + `x-ratelimit-remaining: 0` + a reset in (now, now+24 h] | RateLimitedError | host, until the reset | never; the 5th consecutive one escalates to a refusal |
-| 403 + `x-ratelimit-remaining: 0` without a plausible reset | AccessDeniedError (a bare header proves nothing) | none | yes |
-| Bot wall: `cf-mitigated: challenge` at any status, a challenge page at 3xx / 4xx / 5xx, a small HTML 2xx challenge page, a redirect into `/cdn-cgi/challenge-platform/` | AccessDeniedError (`refusal: 'bot_wall'`), checked before a redirect is followed and before a success clears anything | none | yes |
+| 429 | RateLimitedError (`rate_limited`) | host, until the source's time (60 s floor doubling, 24 h cap; 5 min with no time) | never; the 14th consecutive rate limit of any kind with no success escalates to a refusal |
+| 403 + `x-ratelimit-remaining: 0` + an ABSOLUTE reset instant in (now, now+24 h] | RateLimitedError | host, until the reset | never; the 5th consecutive strong 403 (or the 14th rate limit of any kind) escalates to a refusal |
+| 403 + `x-ratelimit-remaining: 0` without an absolute, plausible reset (none, past, beyond 24 h, or a relative `1` / `60`) | AccessDeniedError (a bare header proves nothing) | none | yes |
+| Bot wall: `cf-mitigated: challenge` at any status, a challenge page at 3xx / 4xx / 5xx, a small HTML 2xx challenge page (a robots.txt 2xx only as an HTML page too), a redirect into `/cdn-cgi/challenge-platform/` | AccessDeniedError (`refusal: 'bot_wall'`), checked before a redirect is followed and before a success clears anything | none | yes |
 | 2xx JSON / feed / text that merely mentions a vendor | content | n/a | no |
 | 503 + Retry-After over 10 s | HttpError `http_5xx` | host, `retry_after_5xx`, capped 1 h, no streak | never |
 | Plain 403 / 401 / 451 | AccessDeniedError | none | yes |
@@ -32,9 +32,9 @@ A 5xx Retry-After hold (`retry_after_5xx`) is a separate server backoff, not a r
 | governance terms fetch | refused unsent | same | recorded unreachable | same | unreachable | clears and saves |
 | `saveHolds` / `mergeHolds` / `combineHold` | until = latest; cause = record with the latest until (tie to the rate limit); streaks = record whose rate limit wrote them last; order-independent | same | no hold | never writes streaks | n/a | expired copies cleared on every row; an active copy kept |
 | `loadHolds` | merged across rows, plus `retry-after:` keys left in `http_cache` by a previous-release worker (rows with an empty map too) | same | n/a | key 503 is a server backoff | n/a | n/a |
-| migration 077 | moves keys; keeps existing streaks; cause rule as runtime; `IS DISTINCT FROM` for a null signal | n/a | n/a | 503 never in `rate_limited_until` | n/a | n/a |
+| migration 077 | COPIES keys (they stay for a previous-release worker; the runner removes them on the source's next claim); keeps existing streaks; cause rule as runtime (also between two records of one class); `IS DISTINCT FROM` for a null signal | n/a | n/a | 503 never in `rate_limited_until` | n/a | n/a |
 | status / `/api/sources` | `rate_limited_*`; all open routes held with at least one rate limit gives `rate_limited` | same | refusal wins | `server_backoff_until`, `_routes`, `_hosts`, never `rate_limited_*`; every route held means not online | n/a | n/a |
-| source health | `source_rate_limited` warning at 3, only for routes open now | same | critical `source_refused` | never | critical `source_refused` | resolves |
+| source health | `source_rate_limited` warning at 3, or one hold of 6 h or more, only for routes open now | same | critical `source_refused` | never (a host answering 5xx for ever opens `source_failing` after 3 runs) | critical `source_refused` | resolves |
 | Reddit discovery `about()` | stops, incomplete | stops | rethrown at once | stops, incomplete | 3 in a row rethrown; one is "unavailable" | resets the 403 run |
 | Reddit recheck / maintenance | stops, hold saved | same | refusal recorded | stops (`serverBackoff`) | refusal recorded | clears |
 | runner | host skipped; all-held is a skip, not a failure | same | refusal | `backoffUntil`, not `rateLimitedUntil` | refusal | clears |
@@ -50,3 +50,5 @@ process, the evaluator and the 5xx time all see the collection hold).
 - Reddit `about()`: a lone plain 403 is how Reddit answers a private or quarantined subreddit; a refusing Reddit answers every lookup, so 3 in a
   row (`ABOUT_REFUSAL_AFTER`) are a refusal. A bot wall, 401, 451 or an escalated refusal is rethrown at once. Owner decision (Copilot suggested the first 403).
 - Behaviour change: a 401 / 403 / 451 on `robots.txt` is a refusal (ADR 0001 ruling 5), no longer "no rules".
+
+Diagrams (`docs/diagrams/states/source-gate-status`, `flows/collection-1-schedule-and-gates`) do not yet show the `rate_limited` state; they are updated under the diagram accuracy contract (independent row-by-row audit, PNG regenerated), tracked with the other diagram issues, not edited here.

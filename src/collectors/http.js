@@ -23,7 +23,8 @@
 //     requests, redirect hops, robots.txt, the governance terms fetch) to a
 //     held host is refused unsent (RateLimitedError { held: true } — F5). A
 //     success from the host resets its streak; the ESCALATE_AFTER-th
-//     consecutive body-only rate limit is a refusal (fail closed — F1). A
+//     consecutive body-only rate limit, 5th consecutive strong 403 or 14th
+//     consecutive rate limit of any kind is a refusal (fail closed — F1). A
 //     5xx whose Retry-After is too long to wait in-run holds the host too
 //     (signal retry_after_5xx, grumpy #7). A hold learned BEHIND a redirect
 //     holds the requested URL's host as well (PR #44), so a fresh client
@@ -93,8 +94,9 @@ function isWallPage(res) {
     // Only an explicitly HTML page can be a challenge page (a wall always is one);
     // a response with no content type, or any payload type, is content.
     const type = String((res.headers && res.headers['content-type']) || '').toLowerCase();
-    if (!/html/.test(type)) return false;
     const body = typeof res.body === 'string' ? res.body : '';
+    // No content type: an HTML-looking body is a page (a wall), anything else is content.
+    if (type ? !/html/.test(type) : !/^\s*<(!doctype|html)/i.test(body)) return false;
     return body.length <= WALL_PAGE_MAX_BYTES && CHALLENGE_RE.test(body);
 }
 const MAX_RETRIES = 2;
@@ -423,8 +425,10 @@ class HttpClient {
             if (limited) throw limited;
         }
         // Copilot review: whatever the status — a 2xx bot-wall page is not a
-        // robots policy (parsing it as allow-all would then request the page).
-        if (isChallenge(res)) {
+        // robots policy (parsing it as allow-all would then request the page). A 2xx
+        // is a wall only as a small HTML page (isWallPage: a robots.txt that merely
+        // names a vendor is rules, not a wall); from 3xx up the body test applies as before.
+        if (res.status >= 200 && res.status < 300 ? isWallPage(res) : isChallenge(res)) {
             throw new AccessDeniedError(`${rateLimit.publicHostName(host)} refused access (HTTP ${res.status}, bot wall on robots.txt) — not retried, not worked around`,
                 { status: res.status, url: redactUrl(url), headers: refusalHeaders(res.headers, this.env), refusal: 'bot_wall' });
         }
@@ -459,7 +463,7 @@ class HttpClient {
         const aliasHold = (err, at) => {
             const h = hostnameOf(at);
             const entry = h !== firstHost ? this.holdEntryOf(h) : null;
-            if ((err instanceof RateLimitedError || (err && err.held === true)) && entry) this.holdAlso(firstHost, entry);
+            if ((err instanceof RateLimitedError || err instanceof AccessDeniedError || (err && err.held === true)) && entry) this.holdAlso(firstHost, entry);
             return err;
         };
         for (let hop = 0; hop < 5; hop++) {
@@ -476,6 +480,8 @@ class HttpClient {
                 } catch (cerr) {
                     throw aliasHold(cerr, current);
                 }
+                // An undecodable 5xx robots.txt with a long Retry-After holds the host too.
+                if (err.status >= 500) this.hold5xx(hostnameOf(current), { status: err.status, headers: err.headers || {} }, firstHost);
                 throw err;
             }
             try {
@@ -494,7 +500,6 @@ class HttpClient {
         return { status: 508, headers: {}, body: '' };
     }
 
-    /** One transport call with UA + timeout (no retries, no robots). */
     /** Throw when the run's deadline has passed (never retried). */
     checkDeadline() {
         if (this.signal && this.signal.aborted) {
@@ -502,6 +507,7 @@ class HttpClient {
         }
     }
 
+    /** One transport call with UA + timeout (no retries, no robots). */
     async raw(url, { method = 'GET', headers = {}, body, maxBytes }, minIntervalMs = 0) {
         const u = checkUrl(url);
         this.checkDeadline();
@@ -626,7 +632,7 @@ class HttpClient {
             // 5th body-only one is one again — rateLimitError).
             const limited = this.rateLimitError(current, res);
             if (limited) {
-                if (limited instanceof RateLimitedError && firstHost !== uh) this.holdAlso(firstHost, this.holdEntryOf(uh));
+                if (firstHost !== uh) this.holdAlso(firstHost, this.holdEntryOf(uh));
                 throw limited;
             }
             if (REFUSAL_STATUSES.includes(res.status) || (res.status >= 400 && isChallenge(res)) || challengeHeader(res.headers)) {

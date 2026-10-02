@@ -9,9 +9,10 @@
 -- store: the HTTP cache holds validators only again, and a hold can never be
 -- rolled back with it (G10-5).
 --
--- This migration moves every still-active PR #44 key into
--- rate_limited_hosts and removes every PR #44 key (active or expired) from
--- http_cache:
+-- This migration COPIES every still-active PR #44 key into
+-- rate_limited_hosts (the keys stay in http_cache until the runner removes them on the
+-- source's next claim, so a previous-release worker still running during a rolling deploy
+-- keeps honouring them):
 --   - the host is the key's host without a port, lower-cased (#45 holds are
 --     keyed by hostname — security F5);
 --   - 429 → { signal: "http_429", count: 1 }, 503 → { signal:
@@ -53,7 +54,7 @@ $fn$ LANGUAGE plpgsql IMMUTABLE;
 
 WITH legacy AS (
     SELECT s.source_id,
-           lower(split_part(regexp_replace(substring(e.key FROM length('retry-after:') + 1), '[/?#].*$', ''), ':', 1)) AS host,
+           regexp_replace(lower(split_part(regexp_replace(substring(e.key FROM length('retry-after:') + 1), '[/?#].*$', ''), ':', 1)), '\.+$', '') AS host,
            -- LEAST ignores NULL: an unparseable until must stay NULL (never a hold).
            CASE WHEN pg_temp.hold_ts(e.value ->> 'until') IS NULL THEN NULL
                 ELSE LEAST(pg_temp.hold_ts(e.value ->> 'until'),
@@ -65,7 +66,7 @@ WITH legacy AS (
 live AS (
     SELECT DISTINCT ON (source_id, host) source_id, host, until, status
     FROM legacy
-    WHERE until IS NOT NULL AND until > NOW() AND host ~ '^[a-z0-9.-]{1,253}$'
+    WHERE until IS NOT NULL AND until > NOW() AND host ~ '^[a-z0-9.-]{1,253}$' AND host LIKE '%.%'
     -- Deterministic: the later until, then a 429 over a 503 (two keys that normalize to
     -- one host with the same expiry).
     ORDER BY source_id, host, until DESC, (status = 503), status
@@ -90,6 +91,13 @@ entries AS (
                                'signal', CASE WHEN l.status = 503 THEN 'retry_after_5xx' ELSE 'http_429' END,
                                'count', CASE WHEN l.status = 503 THEN pg_temp.hold_count(s.rate_limited_hosts -> l.host ->> 'count')
                                              ELSE GREATEST(pg_temp.hold_count(s.rate_limited_hosts -> l.host ->> 'count'), 1) END)
+                           -- Two records of one class: the later until also supplies the
+                           -- signal and status (the runtime cause rule), the streaks stay.
+                           WHEN (COALESCE(s.rate_limited_hosts -> l.host ->> 'signal', '') = 'retry_after_5xx') = (l.status = 503)
+                             AND l.until > pg_temp.hold_ts(s.rate_limited_hosts -> l.host ->> 'until')
+                           THEN jsonb_build_object(
+                               'http_status', l.status,
+                               'signal', CASE WHEN l.status = 503 THEN 'retry_after_5xx' ELSE 'http_429' END)
                            ELSE '{}'::jsonb END
                ELSE jsonb_build_object(
                    'until', to_char(l.until AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
@@ -109,7 +117,9 @@ UPDATE source_collection_state s
 SET rate_limited_hosts = s.rate_limited_hosts || COALESCE(e.holds, '{}'::jsonb),
     rate_limited_until = CASE WHEN e.last_until IS NULL THEN s.rate_limited_until
                               ELSE GREATEST(s.rate_limited_until, e.last_until) END,
-    http_cache = s.http_cache - ARRAY(SELECT k FROM jsonb_object_keys(s.http_cache) k WHERE k LIKE 'retry-after:%'),
+    -- The keys STAY in http_cache (copied, not moved): a previous-release worker, still
+    -- running during a rolling deploy, reads only those keys. The runner removes them on
+    -- the source's next claim (rate-limit.js legacyHolds).
     updated_at = NOW()
 FROM (SELECT DISTINCT source_id FROM legacy) moved
 LEFT JOIN entries e ON e.source_id = moved.source_id

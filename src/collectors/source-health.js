@@ -19,7 +19,10 @@
 //                             RATE_LIMITED_WARN_AFTER (3) times in a row
 //                             (rate_limited_hosts streak, migration 075;
 //                             diagnosis 2026-10-01 — never critical, never
-//                             a refusal); resolved by the host's next success
+//                             a refusal), or ONE rate limit that parks a host for 6 h or more;
+//                             resolved by the host's next success (or the hold's end). A server
+//                             backoff (5xx Retry-After) never opens it: a host that keeps
+//                             answering 5xx opens source_failing after 3 runs instead
 //   source_refused  critical  the source refused access (F10-5); normally
 //                             opened by state.recordRefusal — the evaluator
 //                             only makes sure it exists
@@ -44,6 +47,7 @@ const FAILING_AFTER = 3;
 // first success). A run whose OTHER routes succeed is 'ok', so
 // consecutive_failures never sees persistent throttling of one host.
 const { WARN_AFTER: RATE_LIMITED_WARN_AFTER, sanitizeHolds, collectionHolds, CONFIGURED_HOST } = require('./rate-limit');
+const LONG_HOLD_MS = 6 * 60 * 60 * 1000;
 const TYPES = Object.freeze(['source_stale', 'source_failing', 'source_refused', 'source_rate_limited']);
 
 /**
@@ -59,7 +63,11 @@ function throttledHosts(row, src, now, { env = null, routeKills = [] } = {}) {
     const live = env ? new Set(openRoutes(src, env, { routeKills }).flatMap(r => routeAllowedHosts(r, env))) : null;
     // A throttled terms page is not the source being rate-limited.
     const hit = Object.entries(sanitizeHolds(collectionHolds(src, row.rate_limited_hosts, env || {}), now))
-        .filter(([host, h]) => h.count >= RATE_LIMITED_WARN_AFTER && (!live || live.has(host)));
+        // Principal review: ONE rate limit that parks a host for LONG_HOLD_MS or more
+        // (a Retry-After of a day) is persistent throttling too.
+        .filter(([host, h]) => (h.count >= RATE_LIMITED_WARN_AFTER
+            || (h.signal !== 'retry_after_5xx' && Date.parse(h.until) - now >= LONG_HOLD_MS))
+            && (!live || live.has(host)));
     return {
         hosts: [...new Set(hit.map(([host]) => (registry.has(host) ? host : CONFIGURED_HOST)))].sort(),
         max_count: hit.reduce((m, [, h]) => Math.max(m, h.count), 0),

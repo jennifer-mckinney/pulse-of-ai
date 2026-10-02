@@ -5,10 +5,14 @@
 // the whole source, the unaffected github.blog RSS route paused too,
 // probation, a critical alert).
 //
+// Escalation to a refusal (fail closed): the 5th consecutive WEAK limit, the 5th
+// consecutive strong 403, or the 14th consecutive rate limit of any kind.
+//
 // What counts as a rate limit — POSITIVE evidence only (rateLimitSignal),
 // and fail closed (security review F2 / F6):
 //   HTTP 429                                     'http_429'                  strong
-//   403 with x-ratelimit-remaining: 0            'ratelimit_remaining_zero'  strong
+//   403 with x-ratelimit-remaining: 0 AND an        'ratelimit_remaining_zero'  strong
+//       absolute reset instant in (now, now+24 h]
 //   403 from api.github.com whose JSON body      'body_rate_limit'           WEAK
 //       `message` STARTS WITH GitHub's own wording ("API rate limit
 //       exceeded", "You have exceeded a secondary rate limit", "You have
@@ -84,7 +88,7 @@ const LEGACY_HOLD_PREFIX = 'retry-after:';
 const ESCALATE_AFTER = 5;
 // Security review L3: a 403 with `x-ratelimit-remaining: 0` is a strong signal
 // from ANY host (GitHub's body wording, by contrast, counts only from
-// api.github.com and never escalates — N1), so a host that really refuses could add the header and never
+// api.github.com; the wording WITH a Retry-After never escalates — N1), so a host that really refuses could add the header and never
 // be treated as refusing (ADR 0001 ruling 5). A 403 counts as a spent limit
 // only with a reset instant of the source's own that lies in the future and
 // within 24 h (security review F1: the bare header proves nothing), and
@@ -187,7 +191,7 @@ function parseRetryAfter(headers, now = Date.now()) {
  * magnitude. Infinity when it overflows (F4); null when absent, negative or
  * unparseable.
  */
-function parseReset(value, now = Date.now()) {
+function parseReset(value, now = Date.now(), { absoluteOnly = false } = {}) {
     if (value === undefined || value === null) return null;
     const s = String(value).trim();
     if (s === '' || s.length > HEADER_NUMBER_MAX || !DECIMAL.test(s)) return null;
@@ -195,6 +199,9 @@ function parseReset(value, now = Date.now()) {
     if (!Number.isFinite(n) || !Number.isFinite(n * 1000)) return Infinity;
     if (n >= EPOCH_MS_MIN) return n;
     if (n >= EPOCH_SECONDS_MIN) return n * 1000;
+    // Security review: a relative "seconds until reset" can only LENGTHEN a 429's hold;
+    // a 403 proves a spent limit only with an absolute instant (GitHub's epoch seconds).
+    if (absoluteOnly) return null;
     return now + n * 1000;
 }
 
@@ -234,7 +241,7 @@ function rateLimitSignal(res, now = Date.now(), host = null) {
     // reset instant, in the future and within the 24 h cap. The bare header
     // (any host can send it) proves nothing: without a reset the 403 is
     // judged on its body (GitHub's wording) or stays a refusal.
-    const reset = spent ? parseReset(header(headers, 'x-ratelimit-reset'), now) : null;
+    const reset = spent ? parseReset(header(headers, 'x-ratelimit-reset'), now, { absoluteOnly: res.status === 403 }) : null;
     const resetPlausible = reset !== null && Number.isFinite(reset) && reset > now && reset <= now + MAX_BACKOFF_MS;
     let signal = null;
     if (res.status === 429) signal = 'http_429';
@@ -431,7 +438,9 @@ function mergeHolds(target, source, now = Date.now()) {
  * @param {object} b       a sanitised record
  */
 function combineHold(a, b) {
-    if (!a) return b;
+    // A lone record is normalised the same way a merged one is (limit_at written out), so
+    // saving a record twice stores the same JSON.
+    if (!a) { const l = b.limit_at ? null : limitAtOf(b); return l === null || l === undefined ? b : { ...b, limit_at: new Date(l).toISOString() }; }
     // A join of three INDEPENDENT fields, each the maximum of a total order, so
     // the result is the same in either argument order and for any fold order of
     // three or more records (concurrent savers, rows merged in any order —
@@ -679,7 +688,7 @@ function publicHostName(host) {
  * The hosts of a source's active holds as /api/sources may publish them
  * (security F3): a host the REGISTRY names (env-free) is served; any other
  * (from a contract feed URL in the env) is CONFIGURED_HOST.
- * @returns {Array<{ host, until, http_status, signal, count }>}
+ * @returns {Array<{ host, until, http_status }>} (no signal and no streak count are ever published)
  */
 function publicHosts(src, holds, now = Date.now(), env = {}, { kind = 'rate_limit' } = {}) {
     const { routeAllowedHosts } = require('../config/source-registry');
