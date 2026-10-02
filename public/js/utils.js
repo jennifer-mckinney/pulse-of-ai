@@ -4,16 +4,18 @@
 //
 // Dual export guard with dependency injection: CommonJS requires the design
 // config for jest; browser script tags read the window global (load
-// config/design.config.js BEFORE this file). No DOM access — this module
-// must stay pure.
+// config/design.config.js AND attribution.js BEFORE this file). No DOM
+// access — this module must stay pure. K1: the source-credit helpers
+// (js/attribution.js) are re-exported here so story.js and ui.js share ONE
+// mechanism without a new factory parameter.
 (function (root, factory) {
     if (typeof module === 'object' && module.exports) {
-        module.exports = factory(require('./config/design.config')); // Node / jest
+        module.exports = factory(require('./config/design.config'), require('./attribution')); // Node / jest
     } else {
         /* istanbul ignore next -- Browser UMD global; unreachable in Node tests */
-        root.PulseUtils = factory(root.PulseDesignConfig);           // browser global
+        root.PulseUtils = factory(root.PulseDesignConfig, root.PulseAttribution); // browser global
     }
-}(typeof self !== 'undefined' ? self : this, function (designConfig) {
+}(typeof self !== 'undefined' ? self : this, function (designConfig, attribution) {
     'use strict';
 
     // ── Escape HTML special characters in any data value rendered to the page ──
@@ -181,5 +183,9 @@
         fmtPct,
         fmtCount,
         fmtNet,
+        // K1: source credit + link back (js/attribution.js)
+        buildCredit: attribution.buildCredit,
+        creditModel: attribution.creditModel,
+        safeHttpUrl: attribution.safeHttpUrl,
     };
 }));

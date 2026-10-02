@@ -68,7 +68,7 @@
     designConfig, apiConfig, storyConfig) {
     'use strict';
 
-    const { catLabel, fmtNet, netSentiment } = utils;
+    const { catLabel, fmtNet, netSentiment, buildCredit } = utils;
     const {
         computeInsights, allCategoryRows, partitionThemes, themeNet,
     } = insightsMod;
@@ -472,14 +472,15 @@
         const minutes = minutesAgoFrom(post.collected_at, Date.now());
         const metaParts = [];
         if (post.source_name) metaParts.push(String(post.source_name));
-        // Credit the source's terms require next to its content (NPR …).
-        if (post.attribution) metaParts.push('via ' + String(post.attribution));
         // Category meta: display label lowercased (prototype mini-post
         // casing — 'blogs', 'non-profit'), never the raw slug.
         if (post.platform) metaParts.push(catLabel(post.platform).toLowerCase());
         if (minutes !== null) metaParts.push(minutes + 'm ago');
         wrap.appendChild(el('div', 'mini-post-meta mono', metaParts.join(' · ')));
         wrap.appendChild(el('div', 'mini-post-text', post.content_snippet || ''));
+        // K1: the source credit and the link back, right under the excerpt.
+        const credit = buildCredit(document, post, 'credit mono');
+        if (credit) wrap.appendChild(credit);
         const row = el('div', 'mini-post-row');
         const score = Number(post.comparative);
         const pill = el('span', 'score-pill mono', fmtNet(score));

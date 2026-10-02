@@ -10,6 +10,7 @@
 const { HttpClient } = require('../../../src/collectors/http');
 const { ADAPTERS, buildCollectors } = require('../../../src/collectors');
 const { getSource } = require('../../../src/config/source-registry');
+const { safeSourceUrl } = require('../../../src/config/attribution');
 const { PII_FIELDS } = require('../../../src/pipeline/ingest');
 const { fixtureTransport, RECORDED_AT, TEST_ENV } = require('../../helpers/fixtureTransport');
 
@@ -22,7 +23,16 @@ function run(slug, routeId, routes, { cursor = {}, env = TEST_ENV } = {}) {
     const transport = fixtureTransport(routes);
     const http = new HttpClient({ transport, env, sleep: noSleep });
     const c = new ADAPTERS[route.adapter]({ source, route, env, http, cursor, httpCache: {}, now: () => NOW });
-    return c.collect().then(r => ({ ...r, transport, collector: c, cursor }));
+    return c.collect().then(r => {
+        // K1: every permalink a RECORDED live response yields must survive the
+        // link-back rule for its own source (src/config/attribution.js): a
+        // registry link domain that missed a real host would silently drop the
+        // link from every excerpt of that source.
+        for (const p of r.payloads || []) {
+            if (p.url) expect([slug, p.url, safeSourceUrl(p.url, slug) !== null]).toEqual([slug, p.url, true]);
+        }
+        return { ...r, transport, collector: c, cursor };
+    });
 }
 
 /** No stored payload may carry identity fields or a person-naming link. */

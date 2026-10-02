@@ -7,5 +7,7 @@ module.exports = {
     // Own database on the dev Postgres (port 5434). E2E_DB overrides it, so a
     // gate run can use a FRESH database on a throwaway compose project.
     E2E_DB: process.env.E2E_DB || 'pulse_of_ai_e2e',
-    E2E_PORT: 3100,              // own server; never the dev server on 3000
+    // Own server; never the dev server on 3000. E2E_PORT overrides it so
+    // concurrent runs (parallel worktrees) cannot collide on one port.
+    E2E_PORT: Number(process.env.E2E_PORT) || 3100,
 };

@@ -272,6 +272,24 @@ describe('mapAuditResponse — served audit shape → drawer model', () => {
         expect(P.provenanceFrom({ retention: { notice: '' } })).toBeNull();
     });
 
+    test('K1: the served credit, link back, date and origin ride on the drawer model post', () => {
+        const credit = { text: 'NPR', required: true, license: null, license_url: null, modified: false, cite_date: false, notice: null, notice_url: null };
+        const m = P.mapAuditResponse(auditPayload({
+            post: Object.assign({}, auditPayload().post, {
+                attribution: 'NPR', credit, source_url: 'https://www.npr.org/x',
+                published_at: '2026-09-28T09:00:00.000Z', data_origin: 'live',
+            }),
+        }));
+        expect(m.post).toEqual(expect.objectContaining({
+            attribution: 'NPR', credit, source_url: 'https://www.npr.org/x',
+            published_at: '2026-09-28T09:00:00.000Z', data_origin: 'live',
+        }));
+        // an older server (no K1 fields) maps to nulls, never a made-up credit
+        const old = P.mapAuditResponse(auditPayload());
+        expect(old.post.credit).toBeNull();
+        expect(old.post.source_url).toBeNull();
+    });
+
     test('builds ingest + decisions + bias steps in order', () => {
         const m = P.mapAuditResponse(auditPayload());
         expect(m.steps.map(s => s.stage)).toEqual([

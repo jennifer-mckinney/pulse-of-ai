@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Sources, licences and credits for The Pulse of AI: every excerpt links back to the original and credits its source.">
+<title>Credits · The Pulse of AI</title>
+<!-- K1: static page, no inline script or style (strict CSP). The list is
+     filled from GET /api/credits by js/credits.js. -->
+<link rel="stylesheet" href="styles/main.css">
+<link rel="stylesheet" href="styles/credits.css">
+</head>
+<body class="credits-page">
+<main class="credits-main" id="credits-main">
+  <p class="credits-back"><a href="./">&larr; The Pulse of AI</a></p>
+  <h1 class="credits-title">Sources and credits</h1>
+  <p class="credits-lede">Every excerpt on The Pulse of AI names its source and links to the original item. This page lists each source that has contributed posts, the licence its content is published under where it has one, and the notices the sources ask us to show.</p>
+  <section aria-labelledby="credits-notices-h">
+    <h2 id="credits-notices-h" class="credits-h">How excerpts are shown</h2>
+    <ul class="credits-notices" id="credits-notices"></ul>
+  </section>
+  <section aria-labelledby="credits-sources-h">
+    <h2 id="credits-sources-h" class="credits-h">Sources</h2>
+    <div id="credits-sources"><p class="credits-status mono" role="status">loading the list of sources…</p></div>
+  </section>
+  <noscript><p class="credits-status mono">This page needs JavaScript to list the sources. The same data is at <code>/api/credits</code>.</p></noscript>
+</main>
+<script defer src="js/config/design.config.js"></script>
+<script defer src="js/attribution.js"></script>
+<script defer src="js/credits.js"></script>
+</body>
+</html>

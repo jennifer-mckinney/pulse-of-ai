@@ -439,6 +439,7 @@ All endpoints are prefixed `/api`.
 | `GET` | `/api/methodology` | Current and historical methodology versions |
 | `GET` | `/api/sources` | All 50 monitored data sources |
 | `GET` | `/api/themes` | Trending topics / discourse themes |
+| `GET` | `/api/credits` | Credits, licences and notices of every source with stored posts; every excerpt row also carries its `credit` and a validated `source_url` link back (K1, `docs/research/k1-attribution-design.md`) |
 | `POST` | `/api/query` | Semantic vector search over ingested posts |
 
 ---

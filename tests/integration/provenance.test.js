@@ -15,11 +15,13 @@ const { provenanceKey } = require('../../src/collectors/provenance');
 const { main } = require('../../scripts/verify-provenance');
 const { METHODOLOGY_VERSIONS } = require('../../src/config/methodology-registry');
 
-// A collector-type source row (source_type 'api', like the registry seed).
+// A collector-type source row (source_type 'api', like the registry seed:
+// name = the registry slug). K1: the receipt's permalink is published only for
+// a registry source whose link domains include the permalink's host.
 async function insertSource() {
     const row = await db.dbRun(
         `INSERT INTO data_sources (name, display_name, source_type, category)
-         VALUES ('Hacker News', 'Hacker News', 'api', 'forums')
+         VALUES ('hacker_news', 'Hacker News (Y Combinator)', 'api', 'forums')
          ON CONFLICT (name) DO UPDATE SET source_type = 'api'
          RETURNING id`);
     return row.id;
@@ -77,7 +79,7 @@ describe('provenance fingerprint (D2, migration 017)', () => {
         const res = await request(app).get(`/api/audit/${postId}`);
         expect(res.status).toBe(200);
         expect(res.body.provenance).toEqual({
-            source: 'Hacker News',
+            source: 'hacker_news',
             published_at: '2026-09-29T10:00:00.000Z',
             permalink: 'https://news.ycombinator.com/item?id=77',
             external_id: 'hn-algolia:77',

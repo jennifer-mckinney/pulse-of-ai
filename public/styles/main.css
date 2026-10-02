@@ -285,6 +285,21 @@ body {
 .post-meta { font-size: 10.5px; color: var(--ink-dim); margin-bottom: 7px; }
 .post-text { font-size: 13.5px; line-height: 1.5; }
 .post-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+
+/* K1: the source credit + link back under every excerpt (js/attribution.js) */
+.credit { font-size: 10.5px; line-height: 1.7; color: var(--ink-dim); margin-top: 8px; overflow-wrap: anywhere; }
+.credit-link, .credit-license {
+  color: var(--accent); text-decoration: underline; text-underline-offset: 2px;
+  display: inline-block; padding: 4px 0; min-height: 24px; line-height: 16px;
+}
+.credit-link:hover, .credit-license:hover { text-decoration-thickness: 2px; }
+.credit-link:focus-visible, .credit-license:focus-visible,
+.hdr-credits:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+.credit-notice { margin-top: 4px; }
+.credit-demo { font-style: italic; }
+/* header "credits" chip (a link to credits.html) */
+.hdr-credits { text-decoration: none; color: var(--ink); transition: border-color 0.15s; }
+.hdr-credits:hover { border-color: rgba(59,220,178,0.5); }
 .btn-why {
   margin-left: auto; font-size: 11.5px; font-weight: 600; color: var(--accent);
   background: transparent; border: 1px solid rgba(59,220,178,0.4); border-radius: 99px;
@@ -483,6 +498,19 @@ body {
   .hdr-tag, .legend-sep { display: none; }
   .exp-filters { width: min(320px, 86vw); }
   .exp-detail { right: 12px; left: 12px; width: auto; top: auto; bottom: 68px; max-height: 48vh; }
+}
+
+/* K1: the header gained a "credits" chip; on a phone the chips must still all
+   fit (the health chip opens the health drawer and must never be clipped by
+   body overflow-x: hidden). */
+@media (max-width: 520px) {
+  /* the brand takes the first row, the three chips the second */
+  .hdr { padding: 12px 14px; flex-wrap: wrap; row-gap: 8px; }
+  .hdr-brand { flex: 1 1 100%; min-width: 0; }
+  .hdr-name { font-size: 12px; letter-spacing: 0.08em; white-space: nowrap; }
+  .hdr-right { gap: 6px; flex-wrap: wrap; }
+  .hdr-chip { padding: 5px 9px; gap: 6px; }
+  .exp-filters { margin-top: 100px; }
 }
 
 /* ── Reduced motion: disable decorative CSS loops (cue bob, header
