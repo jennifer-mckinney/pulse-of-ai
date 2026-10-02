@@ -14,7 +14,7 @@ erDiagram
     text language
     timestamptz collected_at
     uuid pseudo_user_id FK "nullable, 006"
-    text provenance_fingerprint "017: HMAC-SHA256"
+    text provenance_fingerprint "017: HMAC-SHA256; NULL when no key is set"
     uuid ingest_mv_id FK "022: ingest version stored under"
     timestamptz text_removed_at "025: set when retention blanks the text"
     text text_removed_reason "025"

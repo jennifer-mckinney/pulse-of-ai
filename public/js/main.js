@@ -217,10 +217,24 @@
         // called directly as well as through the pulse:trace event). The
         // drawers toggle an `open` class, so that is observed rather than one
         // event. Focus is NOT moved: the drawer's own opener handling owns it.
-        const foldAway = () => { if (!panel.hidden) setOpen(false); };
+        // The one exception: when focus sits INSIDE the panel being folded (a
+        // notice link was focused and the drawer opened without moving
+        // focus, e.g. a Safari click that does not focus the button), focus
+        // would be stranded in a hidden subtree, so it moves to the opened
+        // drawer (a dialog; made programmatically focusable).
+        const foldAway = (drawer) => {
+            if (panel.hidden) return;
+            const strandsFocus = panel.contains(document.activeElement);
+            setOpen(false);
+            if (strandsFocus && drawer && typeof drawer.focus === 'function') {
+                drawer.setAttribute('tabindex', '-1');
+                drawer.focus();
+            }
+        };
         if (typeof MutationObserver !== 'undefined') {
             const observer = new MutationObserver((records) => {
-                if (records.some((r) => r.target.classList.contains('open'))) foldAway();
+                const opened = records.find((r) => r.target.classList.contains('open'));
+                if (opened) foldAway(opened.target);
             });
             ['audit-drawer', 'health-drawer'].forEach((id) => {
                 const d = document.getElementById(id);

@@ -85,6 +85,22 @@ test('legal notice: opening the receipt drawer folds the panel away', async ({ p
     await expect(chip).toHaveAttribute('aria-expanded', 'false');
 });
 
+test('legal notice: a drawer opening without moving focus takes it out of the folded panel', async ({ page }) => {
+    await gotoAndWaitForData(page);
+    const chip = page.locator('#about-chip');
+    await chip.click();
+    // Focus a notice link, then open the drawer by a path that does not move
+    // focus (a Safari click on a button): toggle the class the drawer API sets.
+    await page.locator('#about-panel a').first().focus();
+    await page.evaluate(() => {
+        const d = document.getElementById('health-drawer');
+        d.classList.add('open');
+        d.setAttribute('aria-hidden', 'false');
+    });
+    await expect(page.locator('#about-panel')).toBeHidden();
+    await expect(page.locator('#health-drawer')).toBeFocused();
+});
+
 test('legal notice: a short viewport bounds the panel and scrolls to the last notice', async ({ page }) => {
     const errors = consoleErrors(page);
     await page.setViewportSize({ width: 320, height: 240 });

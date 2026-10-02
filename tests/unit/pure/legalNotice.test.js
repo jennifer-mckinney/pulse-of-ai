@@ -128,6 +128,8 @@ describe('main.js — renders the notice through the DOM API only', () => {
     test('every drawer opening folds the panel away (observed, not one event)', () => {
         expect(main).toContain('MutationObserver');
         expect(main).toContain("['audit-drawer', 'health-drawer']");
+        // Focus inside the folded panel moves to the drawer, never stranded.
+        expect(main).toContain('strandsFocus');
     });
 
     test('never uses innerHTML / outerHTML / insertAdjacentHTML', () => {

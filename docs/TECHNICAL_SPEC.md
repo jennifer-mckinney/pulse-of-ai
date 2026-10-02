@@ -450,7 +450,7 @@ CREATE TABLE raw_posts (                                     -- 001
     language        TEXT DEFAULT 'en',
     collected_at    TIMESTAMPTZ DEFAULT NOW(),
     pseudo_user_id  UUID REFERENCES pseudonymous_users(id),  -- FK added by 006; nullable
-    provenance_fingerprint TEXT,              -- 017: HMAC (§8)
+    provenance_fingerprint TEXT,              -- 017: HMAC (§8); NULL when no key is set
     ingest_mv_id    UUID REFERENCES methodology_versions(id), -- 022: ingest version the post was stored under
     text_removed_at     TIMESTAMPTZ,          -- 025: text retention (§19), every source since 031
     text_removed_reason TEXT,                 -- 025
