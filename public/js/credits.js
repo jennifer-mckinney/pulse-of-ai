@@ -111,7 +111,7 @@
             return true;
         }
         for (const g of groupByCategory(payload.sources)) {
-            els.sources.appendChild(node(doc, 'div', 'credits-cat mono', catLabel(g.category)));
+            els.sources.appendChild(node(doc, 'h3', 'credits-cat mono', catLabel(g.category)));
             for (const s of g.rows) els.sources.appendChild(sourceRow(doc, s));
         }
         return true;

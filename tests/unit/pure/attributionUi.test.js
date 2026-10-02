@@ -188,6 +188,15 @@ describe('buildCredit', () => {
         ]);
     });
 
+    test('a licence without a URL is plain text and carries no link class (no false affordance)', () => {
+        const doc = makeDoc();
+        const gov = live({ source_url: null, credit: { ...live().credit, text: 'GovInfo (US GPO)', license: 'Public domain (US federal works)', license_url: null } });
+        const line = attribution.buildCredit(doc, gov);
+        expect(find(line, c => c.className === 'credit-license-text').map(textOf)).toEqual(['Public domain (US federal works)']);
+        expect(find(line, c => c.className === 'credit-license')).toHaveLength(0);
+        expect(links(line)).toHaveLength(0);
+    });
+
     test('Pew: citation form with the date', () => {
         const doc = makeDoc();
         const pew = live({ source_url: 'https://www.pewresearch.org/x', credit: { ...live().credit, text: 'Pew Research Center, Washington, D.C.', cite_date: true } });
@@ -265,7 +274,9 @@ describe('PulseCredits.render', () => {
         expect(els.notices.children.map(textOf)).toEqual([
             'Excerpts are shortened.', 'Every excerpt links back.', 'Demo posts are fictional.',
         ]);
-        const cats = find(els.sources, c => c.className === 'credits-cat mono').map(textOf);
+        const catNodes = find(els.sources, c => c.className === 'credits-cat mono');
+        expect(catNodes.every(c => c.tagName === 'H3')).toBe(true);   // headings under the Sources h2
+        const cats = catNodes.map(textOf);
         expect(cats).toEqual(['News', 'Non-profit', 'Academic']);   // the main page's display labels
         const text = textOf(els.sources);
         expect(text).toContain('Excerpts are credited: via NPR');

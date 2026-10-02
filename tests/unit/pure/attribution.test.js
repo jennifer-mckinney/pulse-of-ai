@@ -217,6 +217,16 @@ describe('safeSourceUrl: bound to the source', () => {
         for (const [slug, url] of samples) expect([slug, safeSourceUrl(url, slug)]).toEqual([slug, url]);
     });
 
+    test('the e2e seed permalink shape (scripts/test/seed-e2e.js fixtureUrl) is published for EVERY registry source', () => {
+        // e2e.<link domain>/e2e/<id>: an "e2e." subdomain keeps account-root shapes
+        // (instagram.com/<handle>/..., x.com/<handle>/...) from reading as identity links
+        for (const src of SOURCES) {
+            const domain = [...linkDomains(src)].sort()[0];
+            const url = `https://e2e.${domain}/e2e/dev-seed-0-0`;
+            expect([src.slug, safeSourceUrl(url, src.slug)]).toEqual([src.slug, url]);
+        }
+    });
+
     test('registrable() keeps three labels under a country second level', () => {
         expect(registrable('feeds.bbci.co.uk')).toBe('bbci.co.uk');
         expect(registrable('api.github.com')).toBe('github.com');

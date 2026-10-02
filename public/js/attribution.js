@@ -207,7 +207,7 @@
             parts.push(m.licenseUrl
                 ? externalLink(doc, 'credit-license', m.license, m.licenseUrl,
                     'Licence: ' + m.license + ' (opens in a new tab)')
-                : node(doc, 'span', 'credit-license', m.license));
+                : node(doc, 'span', 'credit-license-text', m.license));
         }
         if (m.modified) parts.push(node(doc, 'span', 'credit-note', MODIFIED_LABEL));
         parts.forEach((p, i) => {

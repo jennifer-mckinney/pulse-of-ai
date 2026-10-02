@@ -35,12 +35,14 @@ const { getSource } = require('../../src/config/source-registry');
 const { linkDomains } = require('../../src/config/attribution');
 
 // K1: a fixture permalink on the post's OWN source domain (the API publishes a
-// link only when its host belongs to the source). Fixture posts are synthetic
-// and live only in e2e or disposable databases (the fixture-db guard above).
+// link only when its host belongs to the source). It uses an "e2e." subdomain so
+// that account-root shapes (instagram.com/<handle>/..., x.com/<handle>/...,
+// t.me/<handle>/...) are never mistaken for an identity link. Fixture posts are
+// synthetic and live only in e2e or disposable databases (the fixture-db guard).
 function fixtureUrl(sourceName, externalId) {
     const src = getSource(sourceName);
     const domain = src ? [...linkDomains(src)].sort()[0] : null;
-    return domain ? `https://${domain}/e2e/${externalId}` : null;
+    return domain ? `https://e2e.${domain}/e2e/${externalId}` : null;
 }
 
 const CITIES = [
