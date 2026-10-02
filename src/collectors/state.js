@@ -372,11 +372,26 @@ async function clearRefusal(sourceId, resolution, { client = null } = {}) {
  * @returns {Promise<object>} { hostname: hold } (rate-limit.js sanitizeHolds)
  */
 async function loadHolds() {
-    const { mergeHolds } = require('./rate-limit');
+    const { mergeHolds, legacyHolds, LEGACY_HOLD_PREFIX } = require('./rate-limit');
+    // Copilot review: during a rolling deploy a previous-release worker can still
+    // write a PR #44 `retry-after:<host>` key into http_cache AFTER migration 077
+    // moved the stored ones (and a row with such a key may have no new-store hold
+    // at all). Those keys are holds of the one store too: folded in here, for every
+    // source, the terms fetch and Reddit maintenance — not only for the source
+    // that wrote them, whenever it is next claimed.
     const rows = await dbAll(
-        `SELECT rate_limited_hosts FROM source_collection_state WHERE rate_limited_hosts <> '{}'::jsonb`);
+        `SELECT rate_limited_hosts,
+                (SELECT COALESCE(jsonb_object_agg(e.key, e.value), '{}'::jsonb)
+                   FROM jsonb_each(http_cache) AS e WHERE e.key LIKE $1) AS legacy
+         FROM source_collection_state
+         WHERE rate_limited_hosts <> '{}'::jsonb
+            OR EXISTS (SELECT 1 FROM jsonb_object_keys(http_cache) AS k WHERE k LIKE $1)`,
+        [`${LEGACY_HOLD_PREFIX}%`]);
     const out = {};
-    for (const r of rows) mergeHolds(out, r.rate_limited_hosts);
+    for (const r of rows) {
+        mergeHolds(out, r.rate_limited_hosts);
+        mergeHolds(out, legacyHolds(r.legacy || {}).holds);
+    }
     return out;
 }
 
@@ -423,6 +438,9 @@ async function saveHolds(sourceId, { hosts, changes = new Map(), view = {}, rout
             // keep the caller's rows: the save must not be lost over a read
         }
     }
+    // A hold may be recorded under a host's www. / bare twin (the allow-list
+    // ignores a leading "www." — rate-limit.js hostKeys): the source's own.
+    const hostSet = new Set(hosts.flatMap(h => rl.hostKeys(h)));
     const cleared = await dbTransaction(async (client) => {
         // A source skipped before its first claim has no state row yet.
         await client.query('INSERT INTO source_collection_state (source_id) VALUES ($1) ON CONFLICT (source_id) DO NOTHING', [sourceId]);
@@ -432,7 +450,7 @@ async function saveHolds(sourceId, { hosts, changes = new Map(), view = {}, rout
         const stored = rl.sanitizeHolds(cur.rows[0].rate_limited_hosts, now);
         const viewClean = rl.sanitizeHolds(view, now);
         const done = [];
-        for (const host of hosts) {
+        for (const host of hostSet) {
             if (changes.has(host)) {
                 const next = changes.get(host);
                 if (next === null) {
@@ -452,10 +470,15 @@ async function saveHolds(sourceId, { hosts, changes = new Map(), view = {}, rout
                 stored[host] = rl.combineHold(stored[host], viewClean[host]);
             }
         }
+        // Copilot review: the worker, which sees the real env, records which host
+        // is this source's terms page ONLY (no route requests it) — the web process
+        // cannot tell, so /api/sources, the warning and the 5xx backoff time read
+        // the verdict from the hold itself.
+        if (src) Object.assign(stored, rl.markTermsOnly(src, stored, env));
         // rate_limited_until: the source's COLLECTION holds only — a held
         // terms page (src given) is not the source being rate-limited.
         // A 5xx hold (retry_after_5xx) is not a rate limit: never in rate_limited_until.
-        const active = Object.values(rl.activeHolds(rl.rateLimitHolds(src ? rl.collectionHolds(src, stored) : stored), now)).map(h => h.until).sort();
+        const active = Object.values(rl.activeHolds(rl.rateLimitHolds(src ? rl.collectionHolds(src, stored, env) : stored), now)).map(h => h.until).sort();
         const saved = headers && Object.keys(headers).length ? JSON.stringify(headers) : null;
         const routeMap = src ? rl.storedRouteMap(rl.holdGate(src, env, stored, now, { routeKills: kills })) : (routes || {});
         await client.query(
@@ -510,9 +533,9 @@ async function saveHoldChanges(changes, view, { env = process.env } = {}) {
     const { SOURCES } = require('../config/source-registry');
     const ids = await sourceIdsBySlug(SOURCES.map(s => s.slug));
     for (const src of SOURCES) {
-        const hosts = new Set(rl.sourceHosts(src, env));
+        const hosts = new Set(rl.sourceHosts(src, env).flatMap(h => rl.hostKeys(h)));
         const terms = rl.hostOf(src.termsUrl);
-        if (terms) hosts.add(terms);
+        if (terms) for (const k of rl.hostKeys(terms)) hosts.add(k);
         const mine = [...changes.keys()].filter(h => hosts.has(h));
         const id = ids.get(src.slug);
         if (!mine.length || !id) continue;

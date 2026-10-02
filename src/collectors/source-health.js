@@ -58,7 +58,7 @@ function throttledHosts(row, src, now, { env = null, routeKills = [] } = {}) {
     // answer successfully to resolve the warning.
     const live = env ? new Set(openRoutes(src, env, { routeKills }).flatMap(r => routeAllowedHosts(r, env))) : null;
     // A throttled terms page is not the source being rate-limited.
-    const hit = Object.entries(sanitizeHolds(collectionHolds(src, row.rate_limited_hosts), now))
+    const hit = Object.entries(sanitizeHolds(collectionHolds(src, row.rate_limited_hosts, env || {}), now))
         .filter(([host, h]) => h.count >= RATE_LIMITED_WARN_AFTER && (!live || live.has(host)));
     return {
         hosts: [...new Set(hit.map(([host]) => (registry.has(host) ? host : CONFIGURED_HOST)))].sort(),

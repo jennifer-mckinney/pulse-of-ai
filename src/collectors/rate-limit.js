@@ -85,11 +85,17 @@ const ESCALATE_AFTER = 5;
 // Security review L3: a 403 with `x-ratelimit-remaining: 0` is a strong signal
 // from ANY host (GitHub's body wording, by contrast, counts only from
 // api.github.com and never escalates — N1), so a host that really refuses could add the header and never
-// be treated as refusing (ADR 0001 ruling 5). Consecutive STRONG 403s (not
-// 429s) of one host therefore escalate too, at a higher threshold: by the
-// 10th the doubling floor is hours, far past any real window reset, and a
-// success resets the streak.
-const ESCALATE_STRONG_403_AFTER = 10;
+// be treated as refusing (ADR 0001 ruling 5). A 403 counts as a spent limit
+// only with a reset instant of the source's own that lies in the future and
+// within 24 h (security review F1: the bare header proves nothing), and
+// consecutive STRONG 403s (not 429s) of one host escalate too: by the 5th the
+// doubling floor is far past any real window reset, and a success resets the
+// streak.
+const ESCALATE_STRONG_403_AFTER = 5;
+// Security review F3: a refusing host may answer 429 for ever. Consecutive
+// rate limits of one host of ANY kind with no success in between (by the 14th
+// the doubling floor has sat at the 24 h cap for days) are a refusal too.
+const ESCALATE_ANY_AFTER = 14;
 // Grumpy #5: consecutive rate limits of one host before the source_rate_limited
 // warning opens (a run whose other routes succeed never fails, so
 // consecutive_failures cannot see this).
@@ -123,7 +129,10 @@ const EPOCH_SECONDS_MIN = 1e9;
 const HOST_MAX = 253;
 // RFC 9110 §5.6.7 IMF-fixdate, the only HTTP-date form accepted.
 const IMF_FIXDATE = /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/;
-const DECIMAL = /^[+]?(\d+\.?\d*|\.\d+)(e[+]?\d+)?$/i;
+// Security review F5: unambiguous alternatives (no backtracking), and a value
+// longer than HEADER_NUMBER_MAX characters is never run through it.
+const DECIMAL = /^[+]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+]?\d+)?$/i;
+const HEADER_NUMBER_MAX = 512;
 
 const header = (headers, name) => {
     const v = headers ? headers[name] : undefined;
@@ -168,7 +177,7 @@ function parseRetryAfter(headers, now = Date.now()) {
     }
     // Not strict delay-seconds, but a number beyond the cap (1e306): the
     // cap, never an early retry (F4).
-    if (DECIMAL.test(v) && secondsToMs(Number(v)) > MAX_BACKOFF_MS) return Infinity;
+    if (v.length <= HEADER_NUMBER_MAX && DECIMAL.test(v) && secondsToMs(Number(v)) > MAX_BACKOFF_MS) return Infinity;
     return null;
 }
 
@@ -181,7 +190,7 @@ function parseRetryAfter(headers, now = Date.now()) {
 function parseReset(value, now = Date.now()) {
     if (value === undefined || value === null) return null;
     const s = String(value).trim();
-    if (s === '' || !DECIMAL.test(s)) return null;
+    if (s === '' || s.length > HEADER_NUMBER_MAX || !DECIMAL.test(s)) return null;
     const n = Number(s);
     if (!Number.isFinite(n) || !Number.isFinite(n * 1000)) return Infinity;
     if (n >= EPOCH_MS_MIN) return n;
@@ -218,12 +227,18 @@ function rateLimitSignal(res, now = Date.now(), host = null) {
     if (isChallenge(res)) return null;
     const headers = res.headers || {};
     const remaining = header(headers, 'x-ratelimit-remaining');
-    const spent = remaining !== null && DECIMAL.test(remaining.trim()) && Number(remaining) === 0;
+    const spent = remaining !== null && remaining.length <= HEADER_NUMBER_MAX && DECIMAL.test(remaining.trim()) && Number(remaining) === 0;
     const retryAfter = parseRetryAfter(headers, now);
     const bodyHost = typeof host === 'string' && BODY_HOSTS.includes(host.toLowerCase());
+    // Security review F1: a 403 is a spent limit only with the source's own
+    // reset instant, in the future and within the 24 h cap. The bare header
+    // (any host can send it) proves nothing: without a reset the 403 is
+    // judged on its body (GitHub's wording) or stays a refusal.
+    const reset = spent ? parseReset(header(headers, 'x-ratelimit-reset'), now) : null;
+    const resetPlausible = reset !== null && Number.isFinite(reset) && reset > now && reset <= now + MAX_BACKOFF_MS;
     let signal = null;
     if (res.status === 429) signal = 'http_429';
-    else if (spent) signal = 'ratelimit_remaining_zero';
+    else if (spent && resetPlausible) signal = 'ratelimit_remaining_zero';
     else if (bodyHost && bodyNamesRateLimit(res.body)) {
         // N1 (grumpy re-review; security agreed): GitHub's documented
         // secondary-limit response — its wording AND a strictly parsed
@@ -236,10 +251,7 @@ function rateLimitSignal(res, now = Date.now(), host = null) {
     // lengthens a classified hold — F2).
     const times = [];
     if (retryAfter !== null) times.push(now + retryAfter);
-    if (spent) {
-        const reset = parseReset(header(headers, 'x-ratelimit-reset'), now);
-        if (reset !== null) times.push(reset);
-    }
+    if (spent && reset !== null) times.push(reset);
     return { signal, retryAt: times.length ? Math.max(...times) : null, weak: WEAK_SIGNALS.includes(signal) };
 }
 
@@ -255,7 +267,27 @@ function backoffUntil(retryAt, now = Date.now(), count = 1) {
     return Math.min(now + MAX_BACKOFF_MS, Math.max(floor, t));
 }
 
-const validHost = h => typeof h === 'string' && h.length > 0 && h.length <= HOST_MAX && /^[a-z0-9.:[\]-]+$/i.test(h);
+/**
+ * A hostname as a hold key (security review F4): lower case, no trailing dot
+ * (`api.github.com.` is the same host to DNS and TLS).
+ */
+const normHost = h => String(h).trim().toLowerCase().replace(/\.+$/, '');
+
+/**
+ * Every key a host's hold may be stored under: the host itself and its
+ * `www.` / bare twin — the source allow-list (netguard hostAllowed) ignores a
+ * leading "www." both ways, so a hold on one is a hold on the other.
+ */
+function hostKeys(h) {
+    const n = normHost(h);
+    const bare = n.replace(/^www\./, '');
+    return [...new Set([n, bare, `www.${bare}`])];
+}
+
+// A host has at least one dot (netguard refuses single-label names): that also
+// keeps `constructor` / `toString` out of a plain-object map (security F6).
+const validHost = h => typeof h === 'string' && h.length > 0 && h.length <= HOST_MAX && h.includes('.') && /^[a-z0-9.:[\]-]+$/i.test(h);
+const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 const streak = v => (Number.isInteger(v) && v >= 0 ? Math.min(v, STREAK_MAX) : 0);
 
 /**
@@ -268,29 +300,41 @@ function sanitizeHolds(stored, now = Date.now()) {
     const out = {};
     if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return out;
     for (const [rawHost, h] of Object.entries(stored)) {
-        const host = String(rawHost).toLowerCase();
+        const host = normHost(rawHost);
         if (!validHost(host) || !h || typeof h !== 'object') continue;
         // Security review L5: a stored `until` is never read beyond the
-        // 24 h cap (a poisoned or legacy row could hold a host for years).
+        // 24 h cap (a poisoned or legacy row could hold a host for years) —
+        // and a 5xx's Retry-After hold never beyond its own 1 h cap (grumpy 11).
         const rawUntil = Date.parse(h.until);
         if (!Number.isFinite(rawUntil) || rawUntil <= now - STALE_MS) continue;
-        const until = Math.min(rawUntil, now + MAX_BACKOFF_MS);
-        // `at`: when the hold was recorded — the NEWEST record of a host wins
-        // a merge (Copilot review: never a fieldwise maximum, which would
-        // resurrect a weak streak a later strong limit reset). Legacy
-        // entries without it read as recorded a minute before their until.
+        const signal = SIGNALS.includes(h.signal) ? h.signal : null;
+        const until = Math.min(rawUntil, now + (signal === 'retry_after_5xx' ? MAX_5XX_HOLD_MS : MAX_BACKOFF_MS));
+        // `at`: when the hold was recorded. Legacy entries without it read as
+        // recorded a minute before their until.
         const at = Date.parse(h.at);
-        out[host] = {
+        const atMs = Number.isFinite(at) && at <= until ? at : until - MIN_BACKOFF_MS;
+        // `limit_at`: when the host's streaks were last written by a RATE LIMIT
+        // (a 5xx hold carries them forward without writing them) — what makes
+        // combineHold order-independent.
+        const lim = Date.parse(h.limit_at);
+        const rec = {
             until: new Date(until).toISOString(),
             http_status: Number.isInteger(h.http_status) ? h.http_status : null,
-            signal: SIGNALS.includes(h.signal) ? h.signal : null,
+            signal,
             // 0 only for a hold that was never a rate limit (a 5xx's
             // Retry-After — grumpy N4); a legacy entry without one is 1.
             count: h.count === undefined ? 1 : streak(h.count),
             weak: streak(h.weak),
             ...(streak(h.strong403) ? { strong403: streak(h.strong403) } : {}),
-            at: new Date(Number.isFinite(at) && at <= until ? at : until - MIN_BACKOFF_MS).toISOString(),
+            // Set by the WORKER when it stores a source's row: whether this
+            // host is that source's terms-page host ONLY (no route of the
+            // source, under the worker's env, requests it) — markTermsOnly /
+            // collectionHolds. Unset on every host that is not the terms host.
+            ...(typeof h.terms_only === 'boolean' ? { terms_only: h.terms_only } : {}),
+            at: new Date(atMs).toISOString(),
         };
+        if (Number.isFinite(lim)) rec.limit_at = new Date(Math.min(lim, atMs)).toISOString();
+        out[host] = out[host] ? combineHold(out[host], rec) : rec;
     }
     return out;
 }
@@ -331,17 +375,39 @@ function nextHold(prev, { retryAt = null, status = null, signal = null, weak = f
     const prevUntil = prev ? Date.parse(prev.until) : NaN;
     let outStatus = status;
     let outSignal = SIGNALS.includes(signal) ? signal : null;
-    if (Number.isFinite(prevUntil) && prevUntil > until) {
-        until = prevUntil;
-        // Copilot review: the expiry keeps its CAUSE — a 5xx's (short) hold never
-        // takes over the cause of a longer rate-limit hold already in force.
+    if (Number.isFinite(prevUntil) && prevUntil >= until) {
+        // The expiry keeps its CAUSE (the same rule as combineHold: the record
+        // that supplies the latest until, a tie going to the rate limit): a 5xx's
+        // (short) hold never takes over the cause of a longer rate-limit hold
+        // already in force, and a rate limit never takes over a longer server
+        // backoff's — its streak (count / weak) still advances.
         if (notLimit && prev.signal !== 'retry_after_5xx') { outSignal = prev.signal; outStatus = prev.http_status; }
+        if (!notLimit && prevUntil > until && prev.signal === 'retry_after_5xx') { outSignal = 'retry_after_5xx'; outStatus = prev.http_status; }
+        until = Math.max(until, prevUntil);
     }
+    // limit_at: a rate limit writes the streaks now; a 5xx carries the previous writer's forward.
+    const limitAt = notLimit ? limitAtOf(prev) : now;
     return {
         entry: { until: new Date(until).toISOString(), http_status: outStatus, signal: outSignal,
-            count, weak: weakCount, ...(strong403 ? { strong403 } : {}), at: new Date(now).toISOString() },
-        escalate: !notLimit && ((weak && weakCount >= ESCALATE_AFTER) || strong403 >= ESCALATE_STRONG_403_AFTER),
+            count, weak: weakCount, ...(strong403 ? { strong403 } : {}),
+            ...(limitAt !== null ? { limit_at: new Date(limitAt).toISOString() } : {}), at: new Date(now).toISOString() },
+        escalate: !notLimit && ((weak && weakCount >= ESCALATE_AFTER) || strong403 >= ESCALATE_STRONG_403_AFTER || count >= ESCALATE_ANY_AFTER),
     };
+}
+
+/**
+ * When a record's streaks were last WRITTEN by a rate limit (epoch ms), or
+ * null when none was (a 5xx hold that never carried a streak). A record
+ * without `limit_at` (stored before it existed) reads as written at its `at`
+ * unless it is a 5xx hold with no streak.
+ */
+function limitAtOf(r) {
+    if (!r) return null;
+    const lim = Date.parse(r.limit_at);
+    if (Number.isFinite(lim)) return lim;
+    if (r.signal === 'retry_after_5xx' && streak(r.count) === 0) return null;
+    const at = Date.parse(r.at);
+    return Number.isFinite(at) ? at : null;
 }
 
 /**
@@ -365,39 +431,54 @@ function mergeHolds(target, source, now = Date.now()) {
  */
 function combineHold(a, b) {
     if (!a) return b;
-    const ta = Date.parse(a.at);
-    const newest = !Number.isFinite(ta) || Date.parse(b.at) > ta ? b : a;
-    const ua = Date.parse(a.until);
-    const ub = Date.parse(b.until);
-    const until = Math.max(ub, Number.isFinite(ua) ? ua : -Infinity);
-    // Copilot review: the expiry keeps its CAUSE. The newest record gives the
-    // streaks (and, between two records of one class, the signal); when one
-    // record is a 5xx's Retry-After hold and the other a rate limit, the signal
-    // and status come from the record that supplied the latest until (a tie
-    // goes to the rate-limit cause) — a concurrent 1 h 5xx hold must never
-    // relabel a 24 h rate limit.
+    // A join of three INDEPENDENT fields, each the maximum of a total order, so
+    // the result is the same in either argument order and for any fold order of
+    // three or more records (concurrent savers, rows merged in any order —
+    // grumpy review 4):
+    //   until   the latest (security N6: a newer, shorter record never frees a
+    //           host before another copy's stated time);
+    //   cause   (signal, http_status) of the record that supplies the latest
+    //           until, a tie going to the rate-limit cause, then the text of the
+    //           signal — a concurrent 1 h 5xx hold never relabels a 24 h rate limit;
+    //   streaks (count, weak, strong403) of the record whose RATE LIMIT wrote
+    //           them last (limit_at), then the larger — a 5xx record carries the
+    //           streaks it saw but never wins them from a newer rate limit, and a
+    //           later strong limit's reset weak streak is never resurrected.
     const is5xx = r => r.signal === 'retry_after_5xx';
-    let cause = newest;
-    if (is5xx(a) !== is5xx(b)) {
-        if (Number.isFinite(ua) && ua !== ub) cause = ua > ub ? a : b;
-        else cause = is5xx(a) ? b : a;
-    }
-    // A 5xx hold carries no streak of its own (it leaves the host's streaks as its
-    // writer saw them): its streak fields never replace a rate limit's.
-    let streaks = newest;
-    if (is5xx(newest) && !is5xx(newest === a ? b : a)) streaks = newest === a ? b : a;
-    const merged = { ...newest, signal: cause.signal, http_status: cause.http_status, count: streaks.count, weak: streaks.weak, until: new Date(until).toISOString() };
-    if (streaks.strong403) merged.strong403 = streaks.strong403;
-    else delete merged.strong403;
+    const num = v => (Number.isFinite(v) ? v : -Infinity);
+    const cmp = (x, y) => { for (let i = 0; i < x.length; i++) { if (x[i] !== y[i]) return x[i] > y[i] ? 1 : -1; } return 0; };
+    const causeKey = r => [num(Date.parse(r.until)), is5xx(r) ? 0 : 1, `${r.signal || ''}|${r.http_status || ''}`];
+    const streakKey = r => [num(limitAtOf(r)), streak(r.count), streak(r.weak), streak(r.strong403)];
+    const cause = cmp(causeKey(b), causeKey(a)) > 0 ? b : a;
+    const streaks = cmp(streakKey(b), streakKey(a)) > 0 ? b : a;
+    const until = Math.max(num(Date.parse(a.until)), num(Date.parse(b.until)));
+    const at = Math.max(num(Date.parse(a.at)), num(Date.parse(b.at)));
+    const limitAt = limitAtOf(streaks);
+    const merged = {
+        until: new Date(until).toISOString(), http_status: cause.http_status, signal: cause.signal,
+        count: streaks.count, weak: streaks.weak,
+        ...(streaks.strong403 ? { strong403: streaks.strong403 } : {}),
+        ...(limitAt !== null ? { limit_at: new Date(limitAt).toISOString() } : {}),
+        at: new Date(Number.isFinite(at) ? at : until).toISOString(),
+    };
+    // A host is a terms-page-only host only when BOTH records say so (the worker
+    // recomputes the flag whenever it stores a row — state.saveHolds).
+    if (a.terms_only === true && b.terms_only === true) merged.terms_only = true;
     return merged;
 }
 
 /** The active hold of a host (hostname), or null. @returns {{ until: number, http_status, signal }|null} */
 function heldUntil(holds, host, now = Date.now()) {
     if (!holds || typeof host !== 'string') return null;
-    const h = holds[host.toLowerCase()];
-    const until = h ? Date.parse(h.until) : NaN;
-    return Number.isFinite(until) && until > now ? { until, http_status: h.http_status, signal: h.signal } : null;
+    // Security review F4: a trailing dot or a www. twin is the same host (hostKeys).
+    let best = null;
+    for (const key of hostKeys(host)) {
+        if (!hasOwn(holds, key)) continue;
+        const h = holds[key];
+        const until = h ? Date.parse(h.until) : NaN;
+        if (Number.isFinite(until) && until > now && (!best || until > best.until)) best = { until, http_status: h.http_status, signal: h.signal };
+    }
+    return best;
 }
 
 // How a route's hosts combine (grumpy #2, Copilot review):
@@ -412,7 +493,7 @@ const ROUTE_HOST_MODE = Object.freeze({
 
 const hostOf = (u) => {
     try {
-        return typeof u === 'string' && u.trim() ? new URL(u.trim()).hostname.toLowerCase() : null;
+        return typeof u === 'string' && u.trim() ? normHost(new URL(u.trim()).hostname) : null;
     } catch {
         return null;
     }
@@ -467,8 +548,8 @@ function holdReason(state, routes, until, kind = 'rate_limit') {
  * hosts passes (ISO), or null — a server error's Retry-After, honoured but
  * never reported as a rate limit (Copilot review).
  */
-function serverBackoffUntil(src, holds, now = Date.now()) {
-    const only = Object.fromEntries(Object.entries(collectionHolds(src, holds) || {})
+function serverBackoffUntil(src, holds, now = Date.now(), env = {}) {
+    const only = Object.fromEntries(Object.entries(collectionHolds(src, holds, env) || {})
         .filter(([, h]) => h && h.signal === 'retry_after_5xx'));
     const times = Object.values(activeHolds(only, now)).map(h => h.until).sort();
     return times.length ? times[times.length - 1] : null;
@@ -544,13 +625,39 @@ function holdGate(src, env, holds, now = Date.now(), { routeKills = [] } = {}) {
  * shows on /api/sources, in rate_limited_until or in the warning (grumpy
  * re-review).
  */
-function collectionHolds(src, holds) {
+function collectionHolds(src, holds, env = {}) {
     const { routeAllowedHosts } = require('../config/source-registry');
     const terms = hostOf(src && src.termsUrl);
     if (!holds || typeof holds !== 'object' || !terms) return holds;
-    const routeHosts = new Set(src.routes.flatMap(r => routeAllowedHosts(r, {})));
-    if (routeHosts.has(terms)) return holds;
-    return Object.fromEntries(Object.entries(holds).filter(([h]) => String(h).toLowerCase() !== terms));
+    // Copilot review: the hosts of the routes are those of the ACTIVE env (a
+    // contract feed URL may share the terms page's host). The web process cannot
+    // see that env, so the worker writes the verdict into the hold itself
+    // (`terms_only`, markTermsOnly); only an unmarked entry is judged here.
+    let routeHosts = null;
+    return Object.fromEntries(Object.entries(holds).filter(([h, e]) => {
+        if (normHost(h) !== terms) return true;
+        if (e && typeof e.terms_only === 'boolean') return !e.terms_only;
+        routeHosts = routeHosts || new Set(src.routes.flatMap(r => routeAllowedHosts(r, env || {})));
+        return routeHosts.has(terms);
+    }));
+}
+
+/**
+ * A source's stored holds with the terms-page verdict written in (the worker
+ * calls this when it stores the row, with the REAL env): the terms host's hold
+ * is `terms_only` unless a route of the source — under that env — requests the
+ * host too; every other host carries no mark.
+ */
+function markTermsOnly(src, holds, env = {}) {
+    const { routeAllowedHosts } = require('../config/source-registry');
+    const terms = hostOf(src && src.termsUrl);
+    const routeHosts = new Set(src.routes.flatMap(r => routeAllowedHosts(r, env || {})));
+    const out = {};
+    for (const [h, e] of Object.entries(holds || {})) {
+        const { terms_only: _drop, ...rest } = e || {};
+        out[h] = terms && normHost(h) === terms ? { ...rest, terms_only: !routeHosts.has(terms) } : rest;
+    }
+    return out;
 }
 
 let registryHostSet = null;
@@ -573,11 +680,17 @@ function publicHostName(host) {
  * (from a contract feed URL in the env) is CONFIGURED_HOST.
  * @returns {Array<{ host, until, http_status, signal, count }>}
  */
-function publicHosts(src, holds, now = Date.now()) {
+function publicHosts(src, holds, now = Date.now(), env = {}, { kind = 'rate_limit' } = {}) {
     const { routeAllowedHosts } = require('../config/source-registry');
     const registry = new Set(src.routes.flatMap(r => routeAllowedHosts(r, {})));
-    return Object.entries(activeHolds(collectionHolds(src, holds), now))
-        .map(([host, h]) => ({ host: registry.has(host) ? host : CONFIGURED_HOST, until: h.until, http_status: h.http_status, signal: h.signal, count: h.count }))
+    // A 5xx's Retry-After hold is not a rate limit: `rate_limited_hosts` lists
+    // rate limits only, `server_backoff_hosts` (kind 'server') the others.
+    const wanted = kind === 'server'
+        ? Object.fromEntries(Object.entries(collectionHolds(src, holds, env) || {}).filter(([, h]) => h && h.signal === 'retry_after_5xx'))
+        : rateLimitHolds(collectionHolds(src, holds, env));
+    // The streak counter is internal (never published); the signal is an enum.
+    return Object.entries(activeHolds(wanted, now))
+        .map(([host, h]) => ({ host: registry.has(host) ? host : CONFIGURED_HOST, until: h.until, http_status: h.http_status, signal: h.signal }))
         .sort((a, b) => a.host.localeCompare(b.host) || a.until.localeCompare(b.until));
 }
 
@@ -605,6 +718,10 @@ function legacyHolds(httpCache, now = Date.now()) {
             until: new Date(Math.min(until, now + (status === 503 ? MAX_5XX_HOLD_MS : MAX_BACKOFF_MS))).toISOString(), http_status: status,
             signal: status === 503 ? 'retry_after_5xx' : 'http_429', count: status === 503 ? 0 : 1, weak: 0,
             at: new Date(now).toISOString(),
+            // The legacy key is not a newer rate limit than an existing streak
+            // (migration 077 keeps the existing streaks too): it joins its
+            // time and cause only.
+            ...(status === 503 ? {} : { limit_at: new Date(0).toISOString() }),
         } }, now)[host];
         if (rec) holds[host] = combineHold(holds[host], rec);
     }
@@ -615,6 +732,6 @@ module.exports = {
     MIN_BACKOFF_MS, MAX_BACKOFF_MS, MAX_5XX_HOLD_MS, publicHostName, rateLimitHolds, serverBackoffUntil, storedRouteMap, SERVER_ROUTE_PREFIX, MAX_IN_RUN_WAIT_MS, NO_TIME_429_HOLD_MS, LEGACY_HOLD_PREFIX, ESCALATE_AFTER, ESCALATE_STRONG_403_AFTER, WARN_AFTER, STALE_MS, RATE_LIMITED, SIGNALS,
     WEAK_SIGNALS, BODY_HOSTS, CONFIGURED_HOST, BODY_RE,
     parseRetryAfter, parseReset, bodyNamesRateLimit, rateLimitSignal, backoffUntil,
-    sanitizeHolds, activeHolds, nextHold, mergeHolds, combineHold, collectionHolds, heldUntil, hostOf,
+    sanitizeHolds, activeHolds, nextHold, mergeHolds, combineHold, collectionHolds, markTermsOnly, heldUntil, hostOf, normHost, hostKeys, limitAtOf, ESCALATE_ANY_AFTER,
     routeRequestHosts, sourceHosts, routeHeldUntil, routeHeld, holdGate, holdReason, publicHosts, legacyHolds,
 };

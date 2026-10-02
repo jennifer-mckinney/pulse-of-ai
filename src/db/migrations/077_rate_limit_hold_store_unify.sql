@@ -81,7 +81,7 @@ entries AS (
                    (s.rate_limited_hosts -> l.host) || jsonb_build_object('until', to_char(
                        GREATEST(l.until, pg_temp.hold_ts(s.rate_limited_hosts -> l.host ->> 'until'))
                        AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))
-                   || CASE WHEN ((s.rate_limited_hosts -> l.host ->> 'signal') = 'retry_after_5xx') <> (l.status = 503)
+                   || CASE WHEN (COALESCE(s.rate_limited_hosts -> l.host ->> 'signal', '') = 'retry_after_5xx') IS DISTINCT FROM (l.status = 503)
                              AND (pg_temp.hold_ts(s.rate_limited_hosts -> l.host ->> 'until') IS NULL
                                   OR l.until > pg_temp.hold_ts(s.rate_limited_hosts -> l.host ->> 'until')
                                   OR (l.until = pg_temp.hold_ts(s.rate_limited_hosts -> l.host ->> 'until') AND l.status <> 503))

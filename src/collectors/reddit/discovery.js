@@ -140,13 +140,22 @@ async function discoverSubreddits({ api, env = process.env, now = () => Date.now
                 // the subreddit being unavailable — stop the discovery, never
                 // ask for the next one.
                 if (err instanceof RateLimitedError || (err && err.held === true)) throw err;
-                // A private, banned or missing subreddit answers 403 / 404;
-                // any other failure leaves it out of today's ranking.
-                if (err && err.status === 403 && err instanceof AccessDeniedError && ++refused403 >= ABOUT_REFUSAL_AFTER) throw err;
+                // Reddit refusing us (grumpy 3 / security review F8): a 401 / 451, a bot
+                // wall at ANY status, or the HTTP client's own fail-closed escalation
+                // (err.refusal) is never "a private subreddit" — rethrown at once, so a
+                // wall can never wipe the ranking with a snapshot of 'unavailable' rows.
+                if (err instanceof AccessDeniedError && (err.refusal || err.status === 401 || err.status === 451)) throw err;
+                // A private, banned or missing subreddit answers a PLAIN 403 / 404 on its
+                // own: ONE 403 is "unavailable". ABOUT_REFUSAL_AFTER plain 403s in a row
+                // (any other outcome — a success, a 404, another failure — ends the run)
+                // are Reddit refusing every lookup: the AccessDeniedError is rethrown.
+                if (err instanceof AccessDeniedError && err.status === 403) {
+                    if (++refused403 >= ABOUT_REFUSAL_AFTER) throw err;
+                } else {
+                    refused403 = 0;
+                }
                 if (err && (err.status === 403 || err.status === 404)) {
                     abouts.set(q.name.toLowerCase(), { about: null, unavailable: `HTTP ${err.status}` });
-                } else if (err && err.status === 401) {
-                    throw err;
                 } else {
                     abouts.set(q.name.toLowerCase(), { about: null, unavailable: 'lookup failed' });
                 }

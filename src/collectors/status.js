@@ -69,7 +69,7 @@ function isOnline(status, lastSuccessAt, now = Date.now(), lastErrorAt = null) {
  * route ids only), its active hosts as they may be published (security F3),
  * when the last hold passes, and whether every open route is held.
  */
-function rateLimitView(src, row, openRouteIds, now) {
+function rateLimitView(src, row, openRouteIds, now, env = {}) {
     const stored = row.rate_limited_routes && typeof row.rate_limited_routes === 'object' && !Array.isArray(row.rate_limited_routes)
         ? row.rate_limited_routes : {};
     const routeMap = {};
@@ -84,10 +84,16 @@ function rateLimitView(src, row, openRouteIds, now) {
         const ts = Date.parse(stored[SERVER_ROUTE_PREFIX + r.id]);
         if (Number.isFinite(ts) && ts > now) serverMap[r.id] = new Date(ts).toISOString();
     }
-    const hosts = publicHosts(src, row.rate_limited_hosts, now);
-    const times = [...Object.values(routeMap), ...Object.values(activeHolds(rateLimitHolds(collectionHolds(src, row.rate_limited_hosts)), now)).map(h => h.until)].sort();
-    const all = openRouteIds.length > 0 && openRouteIds.every(id => routeMap[id]);
-    return { routeMap, serverMap, hosts, until: times.length ? times[times.length - 1] : null, all, serverUntil: serverBackoffUntil(src, row.rate_limited_hosts, now) };
+    // Rate limits and server backoffs are listed apart (a 5xx's Retry-After hold is
+    // not a rate limit). `env` is only the web process's view: the worker's verdict
+    // on a terms-page host that a route shares travels in the hold itself.
+    const hosts = publicHosts(src, row.rate_limited_hosts, now, env);
+    const serverHosts = publicHosts(src, row.rate_limited_hosts, now, env, { kind: 'server' });
+    const times = [...Object.values(routeMap), ...Object.values(activeHolds(rateLimitHolds(collectionHolds(src, row.rate_limited_hosts, env)), now)).map(h => h.until)].sort();
+    // Every open route is held — by a rate limit or a server backoff (grumpy 7).
+    const all = openRouteIds.length > 0 && openRouteIds.every(id => routeMap[id] || serverMap[id]);
+    return { routeMap, serverMap, hosts, serverHosts, until: times.length ? times[times.length - 1] : null, all,
+        serverUntil: serverBackoffUntil(src, row.rate_limited_hosts, now, env) };
 }
 
 
@@ -108,8 +114,11 @@ function registryFields(row, env, now, routeKills = []) {
     // F10-10: the database kill switch disables a source whatever its gate.
     const dbKilled = !!row.collection_disabled_at;
     // Diagnosis 2026-10-01: the rate-limit backoff (a refusal wins over it).
-    const held = rateLimitView(src, row, st.openRoutes, now);
-    const limited = st.status === 'collecting' && !refused && held.all;
+    const held = rateLimitView(src, row, st.openRoutes, now, env);
+    // Every open route held, at least one by a rate limit → rate_limited (as the
+    // runner reads it: holdGate kind 'rate_limit'). All held by server backoffs
+    // alone stays 'collecting' with no open route, never online (below).
+    const limited = st.status === 'collecting' && !refused && held.all && Object.keys(held.routeMap).length > 0;
     const status = dbKilled ? 'disabled' : (refused ? BLOCKED_BY_SOURCE : (limited ? RATE_LIMITED : st.status));
     const dbReason = dbKilled
         ? `kill switch (database): disabled${row.collection_disabled_by ? ` by ${row.collection_disabled_by}` : ''}${row.collection_disabled_reason ? ` — ${row.collection_disabled_reason}` : ''}`
@@ -145,7 +154,8 @@ function registryFields(row, env, now, routeKills = []) {
         }),
         licence_refs_on_file: st.recorded,
         kill_switch_env: killSwitchEnv(src.slug),
-        online: isOnline(status, row.last_success_at, now, row.last_error_at),
+        // Nothing runs while every open route is held (a server backoff too).
+        online: isOnline(status, row.last_success_at, now, row.last_error_at) && !(held.all && !dbKilled && !refused),
         access_denied_at: row.access_denied_at || null,
         refused_until: row.refused_until || null,
         // Grumpy #8: a count whose probation is over no longer applies (the
@@ -164,6 +174,7 @@ function registryFields(row, env, now, routeKills = []) {
         server_backoff_until: held.serverUntil,
         server_backoff_routes: Object.keys(held.serverMap),
         rate_limited_hosts: held.hosts,
+        server_backoff_hosts: held.serverHosts,
         rate_limited_routes: Object.keys(held.routeMap),
         last_attempt_at: row.last_attempt_at || null,
         last_success_at: row.last_success_at || null,

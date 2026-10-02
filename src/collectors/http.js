@@ -74,6 +74,29 @@ const rateLimit = require('./rate-limit');
 const { CHALLENGE_RE, challengeHeader, isChallenge } = require('./challenge');
 
 const DEFAULT_TIMEOUT_MS = 20000;
+// Holds are keyed by the NORMALISED hostname (rate-limit.js normHost: lower
+// case, no trailing dot — security review F4).
+const hostnameOf = url => rateLimit.normHost(new URL(url).hostname);
+// Security review P2: a source's HTTP validator cache never grows past this many
+// URLs (a hostile redirect chain could add keys for ever); the oldest go first.
+const VALIDATOR_CACHE_MAX = 500;
+// A 2xx is a bot wall (not content) when it is an HTML page this small that
+// matches a known challenge page — a JSON / feed / text payload that merely
+// MENTIONS a vendor (an article about DataDome) is content.
+const WALL_PAGE_MAX_BYTES = 64 * 1024;
+// A redirect INTO a challenge platform URL is the wall too, whatever it answers next.
+const CHALLENGE_LOCATION_RE = /\/cdn-cgi\/challenge-platform\//i;
+
+/** Whether a 2xx response is a bot-wall page (an HTML page matching CHALLENGE_RE, or Cloudflare's header). */
+function isWallPage(res) {
+    if (challengeHeader(res.headers)) return true;
+    // Only an explicitly HTML page can be a challenge page (a wall always is one);
+    // a response with no content type, or any payload type, is content.
+    const type = String((res.headers && res.headers['content-type']) || '').toLowerCase();
+    if (!/html/.test(type)) return false;
+    const body = typeof res.body === 'string' ? res.body : '';
+    return body.length <= WALL_PAGE_MAX_BYTES && CHALLENGE_RE.test(body);
+}
 const MAX_RETRIES = 2;
 // Diagnosis 2026-10-01: the longest wait slept INSIDE a run before a retry
 // (rate-limit.js MAX_IN_RUN_WAIT_MS, 10 s — PR #44: two waits stay inside
@@ -213,7 +236,15 @@ class HttpClient {
         this.transport = transport;
         this.env = env;
         this.ua = userAgent(env);
-        this.sleep = sleep || (ms => new Promise(r => setTimeout(r, ms)));
+        // Security review F7: the default sleep ends when the run's deadline
+        // fires (the next checkDeadline then reports it), so a hostile
+        // Retry-After cannot hold a request past the deadline.
+        this.sleep = sleep || (ms => new Promise((resolve) => {
+            if (this.signal && this.signal.aborted) return resolve();
+            const done = () => { clearTimeout(timer); if (this.signal) this.signal.removeEventListener('abort', done); resolve(); };
+            const timer = setTimeout(done, ms);
+            if (this.signal) this.signal.addEventListener('abort', done, { once: true });
+        }));
         this.limiter = limiter || new HostLimiter({ sleep: this.sleep });
         this.timeoutMs = timeoutMs;
         this.requests = 0;
@@ -273,12 +304,13 @@ class HttpClient {
      * stands (PR #44: a success never clears a hold set while in flight).
      */
     clearHold(hostname) {
-        const h = this.holds[hostname];
-        if (!h) return;
-        const until = Date.parse(h.until);
-        if (Number.isFinite(until) && until > this.now()) return;
-        delete this.holds[hostname];
-        this.holdChanges.set(hostname, null);
+        for (const key of rateLimit.hostKeys(hostname)) {
+            if (!Object.prototype.hasOwnProperty.call(this.holds, key)) continue;
+            const until = Date.parse(this.holds[key].until);
+            if (Number.isFinite(until) && until > this.now()) continue;
+            delete this.holds[key];
+            this.holdChanges.set(key, null);
+        }
     }
 
     /**
@@ -295,17 +327,24 @@ class HttpClient {
         this.holdChanges.set(hostname, next);
     }
 
+    /** The hold entry that stops `hostname` (its own, or its www. twin's), or null. */
+    holdEntryOf(hostname) {
+        let best = null;
+        for (const key of rateLimit.hostKeys(hostname)) {
+            const e = Object.prototype.hasOwnProperty.call(this.holds, key) ? this.holds[key] : null;
+            if (e && (!best || Date.parse(e.until) > Date.parse(best.until))) best = e;
+        }
+        return best;
+    }
+
     /** Record the next hold of a host (rate-limit.js nextHold). @returns {{ entry, escalate }} */
     recordHold(hostname, sig) {
         const next = rateLimit.nextHold(this.holds[hostname] || null, sig, this.now());
-        if (next.escalate) {
-            // The refused state takes over; the streak ends here.
-            delete this.holds[hostname];
-            this.holdChanges.set(hostname, null);
-        } else {
-            this.holds[hostname] = next.entry;
-            this.holdChanges.set(hostname, next.entry);
-        }
+        // Security review F9: an escalation (the refused state takes over for the
+        // source) still HOLDS the host for every other source and route sharing
+        // it, and keeps its streak: only a success ends a streak.
+        this.holds[hostname] = next.entry;
+        this.holdChanges.set(hostname, next.entry);
         return next;
     }
 
@@ -321,7 +360,7 @@ class HttpClient {
     rateLimitError(url, res) {
         // The FINAL response's hostname (after redirects) decides whether
         // GitHub's wording is evidence at all (rate-limit.js BODY_HOSTS).
-        const host = new URL(url).hostname;
+        const host = hostnameOf(url);
         const sig = rateLimit.rateLimitSignal(res, this.now(), host);
         if (!sig) return null;
         const { entry, escalate } = this.recordHold(host, { ...sig, status: res.status });
@@ -329,10 +368,12 @@ class HttpClient {
             // L3: a body-only streak (ESCALATE_AFTER) or a long run of strong 403s.
             const why = sig.weak
                 ? `${rateLimit.ESCALATE_AFTER} rate limits in a row on body text alone`
-                : `${rateLimit.ESCALATE_STRONG_403_AFTER} rate-limit 403s in a row`;
+                : (entry.strong403 >= rateLimit.ESCALATE_STRONG_403_AFTER
+                    ? `${rateLimit.ESCALATE_STRONG_403_AFTER} rate-limit 403s in a row`
+                    : `${rateLimit.ESCALATE_ANY_AFTER} rate limits in a row with no success`);
             return new AccessDeniedError(`${rateLimit.publicHostName(host)} refused access (HTTP ${res.status}): ${why}`
                 + ' — treated as a refusal (fail closed), not retried, not worked around', {
-                status: res.status, url: redactUrl(url), headers: refusalHeaders(res.headers, this.env),
+                status: res.status, url: redactUrl(url), headers: refusalHeaders(res.headers, this.env), refusal: 'escalated',
             });
         }
         return new RateLimitedError(`${rateLimit.publicHostName(host)} rate-limited us (HTTP ${res.status}, ${sig.signal}) — not a refusal; not retried,`
@@ -340,6 +381,12 @@ class HttpClient {
             status: res.status, url: redactUrl(url), host, signal: sig.signal, retryAt: Date.parse(entry.until),
             headers: refusalHeaders(res.headers, this.env),
         });
+    }
+
+    /** The refusal for a bot wall (a challenge page or marker, at any status): never retried, never a rate limit. */
+    wallError(url, res) {
+        return new AccessDeniedError(`${rateLimit.publicHostName(hostnameOf(url))} refused access (HTTP ${res.status}, bot wall) — not retried, not worked around`,
+            { status: res.status, url: redactUrl(url), headers: refusalHeaders(res.headers, this.env), refusal: 'bot_wall' });
     }
 
     /**
@@ -369,8 +416,8 @@ class HttpClient {
      * RobotsPolicy rethrows both errors uncached. A plain 4xx without either
      * still means "allow all" (RFC 9309).
      */
-    classifyRobots(url, res) {
-        const host = new URL(url).hostname;
+    classifyRobots(url, res, firstHost = null) {
+        const host = hostnameOf(url);
         if (res.status === 429 || res.status === 403) {
             const limited = this.rateLimitError(url, res);
             if (limited) throw limited;
@@ -379,9 +426,22 @@ class HttpClient {
         // robots policy (parsing it as allow-all would then request the page).
         if (isChallenge(res)) {
             throw new AccessDeniedError(`${rateLimit.publicHostName(host)} refused access (HTTP ${res.status}, bot wall on robots.txt) — not retried, not worked around`,
+                { status: res.status, url: redactUrl(url), headers: refusalHeaders(res.headers, this.env), refusal: 'bot_wall' });
+        }
+        // Security review P1 (ADR 0001 ruling 5): a 401 / 403 / 451 on robots.txt is
+        // the source saying no — a refusal, never "no rules" (that would then ask
+        // for the page itself). A 404 / 410 still means "no robots.txt" (RFC 9309).
+        if (REFUSAL_STATUSES.includes(res.status)) {
+            throw new AccessDeniedError(`${rateLimit.publicHostName(host)} refused access (HTTP ${res.status}, robots.txt) — not retried, not worked around`,
                 { status: res.status, url: redactUrl(url), headers: refusalHeaders(res.headers, this.env) });
         }
-        if (res.status >= 200 && res.status < 300) this.clearHold(host);
+        // A success ends the streak of every host the request touched: the one
+        // that answered and the one robots.txt was first asked of (request() does
+        // the same for a page).
+        if (res.status >= 200 && res.status < 300) {
+            this.clearHold(host);
+            if (firstHost && firstHost !== host) this.clearHold(firstHost);
+        }
     }
 
     /**
@@ -391,14 +451,15 @@ class HttpClient {
      */
     async fetchRobots(url) {
         let current = url;
-        const firstHost = new URL(url).hostname;
+        const firstHost = hostnameOf(url);
         // Copilot review: a rate limit (or a hold) met on a redirect target
         // also holds the host robots.txt was asked of, as request() does for
         // a redirected page — the target need not be one of the source's
         // hosts, so its hold alone would never be saved.
         const aliasHold = (err, at) => {
-            const h = new URL(at).hostname;
-            if ((err instanceof RateLimitedError || (err && err.held === true)) && h !== firstHost && this.holds[h]) this.holdAlso(firstHost, this.holds[h]);
+            const h = hostnameOf(at);
+            const entry = h !== firstHost ? this.holdEntryOf(h) : null;
+            if ((err instanceof RateLimitedError || (err && err.held === true)) && entry) this.holdAlso(firstHost, entry);
             return err;
         };
         for (let hop = 0; hop < 5; hop++) {
@@ -411,23 +472,24 @@ class HttpClient {
                 // any response from its headers (the body cannot be read).
                 if (!(err && err.decode && Number.isInteger(err.status))) throw aliasHold(err, current);
                 try {
-                    this.classifyRobots(current, { status: err.status, headers: err.headers || {}, body: '' });
+                    this.classifyRobots(current, { status: err.status, headers: err.headers || {}, body: '' }, firstHost);
                 } catch (cerr) {
                     throw aliasHold(cerr, current);
                 }
                 throw err;
             }
             try {
-                this.classifyRobots(current, res);
+                this.classifyRobots(current, res, firstHost);
             } catch (err) {
                 throw aliasHold(err, current);
             }
             // Copilot review: a 5xx robots.txt with a long Retry-After holds the
             // host as a page's 5xx does (it stays a server failure: the policy
             // reads it as unreachable, not as a rate limit).
-            if (res.status >= 500) this.hold5xx(new URL(current).hostname, res, firstHost);
+            if (res.status >= 500) this.hold5xx(hostnameOf(current), res, firstHost);
             if (!REDIRECTS.includes(res.status) || !res.headers.location) return res;
             current = new URL(res.headers.location, current).toString();
+            if (CHALLENGE_LOCATION_RE.test(current)) throw this.wallError(current, res);
         }
         return { status: 508, headers: {}, body: '' };
     }
@@ -446,7 +508,7 @@ class HttpClient {
         // Security F5: the one place every transport call passes — a held
         // host is never sent anything (redirect hops, robots.txt and its
         // redirects, the governance terms fetch included).
-        const held = this.heldError(u.hostname, url);
+        const held = this.heldError(rateLimit.normHost(u.hostname), url);
         if (held) throw held;
         await this.limiter.wait(new URL(url).host, minIntervalMs);
         this.checkDeadline();
@@ -491,7 +553,7 @@ class HttpClient {
         let origin = null;
         // PR #44: the host the route asked for — held too when a redirect
         // target holds (holdAlso), cleared too by a success through it.
-        const firstHost = new URL(url).hostname;
+        const firstHost = hostnameOf(url);
         for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
             const u = checkUrl(current, { allowedHosts: o.allowedHosts });
             if (origin && u.origin !== origin) {
@@ -507,8 +569,15 @@ class HttpClient {
             origin = u.origin;
             // Diagnosis 2026-10-01: a host that rate-limited us is not asked
             // again (not even for robots.txt) until its time has passed.
-            const held = this.heldError(u.hostname, current);
-            if (held) throw held;
+            const uh = rateLimit.normHost(u.hostname);
+            const held = this.heldError(uh, current);
+            if (held) {
+                // A redirect into a host that is already backing off holds the host
+                // the route asked for too (grumpy 8): a fresh client then sends
+                // nothing at all — not even the first hop.
+                if (firstHost !== uh) this.holdAlso(firstHost, this.holdEntryOf(uh));
+                throw held;
+            }
             if (o.robots) {
                 const verdict = await this.robots.check(current, { conservative: o.robotsConservative !== false });
                 // An unreachable robots.txt blocks this run (RFC 9309) but is
@@ -529,10 +598,15 @@ class HttpClient {
             const res = await this.withRetries(current, { method, headers, body, maxBytes: o.maxBytes }, o.minIntervalMs);
             // Copilot review: a bot wall is a refusal at any status — checked BEFORE a
             // redirect is followed (a 301/302 carrying cf-mitigated: challenge, or a
-            // challenge page, is the source saying no, never a hop to follow).
-            if (res.status !== 304 && (challengeHeader(res.headers) || (res.status >= 300 && isChallenge(res)))) {
-                throw new AccessDeniedError(`${rateLimit.publicHostName(new URL(current).hostname)} refused access (HTTP ${res.status}, bot wall) — not retried, not worked around`,
-                    { status: res.status, url: redactUrl(current), headers: refusalHeaders(res.headers, this.env) });
+            // challenge page, is the source saying no, never a hop to follow). A 2xx is
+            // a wall when it is a small HTML page matching a challenge page (isWallPage;
+            // a JSON / feed payload that mentions a vendor is content), and — security
+            // review F2 — it is checked BEFORE a success clears the host's streaks. A
+            // redirect INTO a challenge-platform URL is the wall too.
+            if (res.status !== 304 && (challengeHeader(res.headers) || (res.status >= 300 && isChallenge(res))
+                || (res.status >= 200 && res.status < 300 && isWallPage(res))
+                || (REDIRECTS.includes(res.status) && CHALLENGE_LOCATION_RE.test(String(res.headers.location || ''))))) {
+                throw this.wallError(current, res);
             }
             if (REDIRECTS.includes(res.status) && res.headers.location) {
                 current = new URL(res.headers.location, current).toString();
@@ -543,8 +617,8 @@ class HttpClient {
                 continue;
             }
             if (res.status === 304) {
-                this.clearHold(u.hostname);
-                if (firstHost !== u.hostname) this.clearHold(firstHost);
+                this.clearHold(uh);
+                if (firstHost !== uh) this.clearHold(firstHost);
                 return { ...res, notModified: true, url: current };
             }
             // Checked BEFORE the refusal statuses: a 403 with positive
@@ -552,11 +626,11 @@ class HttpClient {
             // 5th body-only one is one again — rateLimitError).
             const limited = this.rateLimitError(current, res);
             if (limited) {
-                if (limited instanceof RateLimitedError && firstHost !== u.hostname) this.holdAlso(firstHost, this.holds[u.hostname]);
+                if (limited instanceof RateLimitedError && firstHost !== uh) this.holdAlso(firstHost, this.holdEntryOf(uh));
                 throw limited;
             }
             if (REFUSAL_STATUSES.includes(res.status) || (res.status >= 400 && isChallenge(res)) || challengeHeader(res.headers)) {
-                throw new AccessDeniedError(`${rateLimit.publicHostName(new URL(current).hostname)} refused access (HTTP ${res.status}) — not retried, not worked around`,
+                throw new AccessDeniedError(`${rateLimit.publicHostName(hostnameOf(current))} refused access (HTTP ${res.status}) — not retried, not worked around`,
                     { status: res.status, url: redactUrl(current), headers: refusalHeaders(res.headers, this.env) });
             }
             if (res.status < 200 || res.status >= 300) {
@@ -564,13 +638,18 @@ class HttpClient {
                 // in-run (withRetries) holds the host until then, so the
                 // next poll does not ask before the source's time either.
                 const extra = {};
-                const entry = res.status >= 500 ? this.hold5xx(u.hostname, res, firstHost) : null;
-                if (entry) Object.assign(extra, { host: u.hostname, retryAt: Date.parse(entry.until) });
+                const entry = res.status >= 500 ? this.hold5xx(uh, res, firstHost) : null;
+                if (entry) Object.assign(extra, { host: uh, retryAt: Date.parse(entry.until) });
                 throw new HttpError(`HTTP ${res.status} from ${redactUrl(current)}`, { status: res.status, url: redactUrl(current), ...extra });
             }
-            this.clearHold(u.hostname);
-            if (firstHost !== u.hostname) this.clearHold(firstHost);
+            this.clearHold(uh);
+            if (firstHost !== uh) this.clearHold(firstHost);
             if (o.cache && method === 'GET' && (res.headers.etag || res.headers['last-modified'])) {
+                // Security review P2: bounded — the oldest validators go first.
+                if (!Object.prototype.hasOwnProperty.call(o.cache, current)) {
+                    const keys = Object.keys(o.cache);
+                    for (const k of keys.slice(0, Math.max(0, keys.length - VALIDATOR_CACHE_MAX + 1))) delete o.cache[k];
+                }
                 o.cache[current] = { etag: res.headers.etag || null, last_modified: res.headers['last-modified'] || null };
             }
             return { ...res, notModified: false, url: current };
@@ -587,6 +666,10 @@ class HttpClient {
             } catch (err) {
                 lastErr = err;
                 if (err && err.kind === 'deadline') throw err;
+                // Grumpy 1: a hold set while this request was between attempts (a
+                // concurrent request of the client), a rate limit or a refusal is the
+                // answer — never retried, never wrapped into a plain failure.
+                if (err && (err.held === true || err instanceof RateLimitedError || err instanceof AccessDeniedError)) throw err;
                 // Diagnosis 2026-10-01: an undecodable 429, or 403 whose
                 // HEADERS prove a rate limit (x-ratelimit-remaining 0 — the
                 // body cannot be checked), is handed back to request() as a
@@ -602,8 +685,14 @@ class HttpClient {
                 // any 4xx that Cloudflare marks as a challenge (F6).
                 if (err && err.decode && (REFUSAL_STATUSES.includes(err.status)
                     || challengeHeader(err.headers))) {
-                    throw new AccessDeniedError(`${rateLimit.publicHostName(new URL(url).hostname)} refused access (HTTP ${err.status}; body undecodable) — not retried, not worked around`,
-                        { status: err.status, url: redactUrl(url), headers: refusalHeaders(err.headers, this.env) });
+                    throw new AccessDeniedError(`${rateLimit.publicHostName(hostnameOf(url))} refused access (HTTP ${err.status}; body undecodable) — not retried, not worked around`,
+                        { status: err.status, url: redactUrl(url), headers: refusalHeaders(err.headers, this.env),
+                            ...(challengeHeader(err.headers) ? { refusal: 'bot_wall' } : {}) });
+                }
+                // Grumpy 14: an undecodable 5xx is a 5xx — handed back bodiless so
+                // request() holds the host for a long Retry-After like any other.
+                if (err && err.decode && Number.isInteger(err.status) && err.status >= 500) {
+                    return { status: err.status, headers: err.headers || {}, body: '' };
                 }
                 if (attempt < MAX_RETRIES && !/network disabled/.test(err.message) && !isDeterministic(err)) {
                     await this.sleep(1000 * 2 ** attempt);

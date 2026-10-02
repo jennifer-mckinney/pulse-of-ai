@@ -248,14 +248,20 @@ async function runCollection(o = {}) {
             // run's ONE map (security F5: a host held for any source is held
             // for all), shared with the HTTP client. Every route held → the
             // source is skipped before its claim, no request.
-            rateLimit.mergeHolds(runHolds, await state.loadHolds(), Date.now());
+            // Security review P3: rebuilt from the database for EVERY source (in
+            // place — the HTTP client shares the object), so a hold another replica's
+            // success cleared since the last source never lingers in this run.
+            const stored = await state.loadHolds();
+            for (const k of Object.keys(runHolds)) delete runHolds[k];
+            rateLimit.mergeHolds(runHolds, stored, Date.now());
             const myHosts = rateLimit.sourceHosts(src, env);
             const held = rateLimit.holdGate(src, env, runHolds, Date.now(), { routeKills });
             if (held.state === 'all') {
                 // A 5xx's Retry-After hold is honoured but is not a rate limit.
                 row.status = held.kind === 'server' ? 'backing_off' : RATE_LIMITED;
                 row.reason = held.reason;
-                row.rateLimitedUntil = held.until;
+                // A server backoff is not a rate limit: its own field (grumpy 13).
+                row[held.kind === 'server' ? 'backoffUntil' : 'rateLimitedUntil'] = held.until;
                 await state.saveHolds(sourceId, { hosts: myHosts, view: runHolds, routes: held.routes, src, env, routeKills });
                 log(`[collect] ${slug}: skipped — ${held.reason}`);
                 continue;
@@ -458,7 +464,7 @@ async function runCollection(o = {}) {
                 if (http.requests === before) queried--;
                 row.status = after.kind === 'server' ? 'backing_off' : RATE_LIMITED;
                 row.reason = after.reason || 'every route is backing off after a rate limit';
-                row.rateLimitedUntil = after.until;
+                row[after.kind === 'server' ? 'backoffUntil' : 'rateLimitedUntil'] = after.until;
                 await touch();
                 continue;
             }
