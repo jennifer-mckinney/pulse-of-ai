@@ -90,6 +90,8 @@ describe('argv echoed in errors is made single-line and printable', () => {
         ['gold-sample', () => sample.parseArgs(['--\u001b]52;c;QQ==\u0007'])],
         ['gold-sample since', () => sample.parseArgs(['--total', '1', '--seed', 's', '--since', '\u001b[2J'])],
         ['gold-agreement', () => agreement.parseArgs(['--\u001b[2J'])],
+        ['gold-label', () => label.parseArgs(['--\u001b[2J'])],
+        ['gold-erase', () => require('../../../scripts/gold-erase').parseArgs(['--\u001b[2J'])],
         ['relevance-eval', () => evalScript.parseArgs(['--since', '\u001b[2J'])],
         ['relevance-eval category', () => evalScript.parseArgs(['--category', '\u001b[2J'])],
     ])('%s', (_n, run) => {

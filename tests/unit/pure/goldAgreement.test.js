@@ -141,6 +141,17 @@ describe('agreementReport — every labeller pair with shared items', () => {
         expect(r.labellers).toEqual(['ann', 'bob', 'cat']);
     });
 
+    it('a labeller\'s later adjudicated row does not replace their human label in the agreement', () => {
+        const rows = [
+            { item_id: 'i1', labeller: 'ann', method: 'human', seq: 1, label: 'AI_CENTRAL', flags: [], created_at: 't', id: '1' },
+            { item_id: 'i1', labeller: 'bob', method: 'human', seq: 2, label: 'NOT_AI', flags: [], created_at: 't', id: '2' },
+            { item_id: 'i1', labeller: 'ann', method: 'adjudicated', seq: 3, label: 'NOT_AI', flags: [], created_at: 't', id: '3' },
+        ];
+        const r = a.agreementReport(rows, { pair: ['ann', 'bob'] });
+        expect(r.pairs[0].threeClass.confusion).toEqual({ AI_CENTRAL: { AI_CENTRAL: 0, NOT_AI: 1 }, NOT_AI: { AI_CENTRAL: 0, NOT_AI: 0 } });
+        expect(r.pairs[0].threeClass.po).toBe(0);   // ann's human AI_CENTRAL still counts against bob's NOT_AI
+    });
+
     it('restricts to one named pair when asked', () => {
         const rows = [
             { item_id: 'i1', labeller: 'ann', label: 'NOT_AI', flags: [], created_at: 't', id: '1' },

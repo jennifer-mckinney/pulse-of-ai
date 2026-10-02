@@ -334,6 +334,11 @@ async function postTextGone(rawPostId) {
     return !row || Boolean(row.text_removed_at) || !row.content;
 }
 
+/** Live (not erased) gold items of a post. */
+async function liveItemCount(rawPostId) {
+    return (await dbGet('SELECT COUNT(*)::int AS n FROM relevance_gold_items WHERE raw_post_id = $1 AND erased_at IS NULL', [rawPostId])).n;
+}
+
 /** Erase one post's gold rows (migration 070's gold_erase_post); returns the number of items erased. */
 async function erasePost(rawPostId) {
     return (await dbGet('SELECT gold_erase_post($1::uuid) AS n', [rawPostId])).n;
@@ -359,5 +364,5 @@ async function eraseRemoved() {
 module.exports = {
     readOnly, streamEvalRows, hashKey, inputHash,
     streamCandidates, sampleExists, insertItems, labelRows, pendingItems, getItem, itemText, labelsFor,
-    recordLabel, recordLabels, erasePost, eraseRemoved, postTextGone,
+    recordLabel, recordLabels, liveItemCount, erasePost, eraseRemoved, postTextGone,
 };

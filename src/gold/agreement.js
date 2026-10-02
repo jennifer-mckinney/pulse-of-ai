@@ -37,6 +37,7 @@
 
 const { BINARY, FLAGS, LABELS, KAPPA_RELIABLE, KAPPA_TENTATIVE, KAPPA_MIN_ITEMS } = require('./codebook');
 
+const AGREEMENT_METHODS = ['human', 'llm_proposed'];
 const sorted = (xs) => [...xs].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 
 /**
@@ -224,7 +225,9 @@ function pairReport(A, B) {
  * @param {{ pair?: [string, string] }} [opts]
  */
 function agreementReport(rows, { pair = null } = {}) {
-    const latest = latestPerLabeller(rows);
+    // Only the methods that measure agreement: a person's later `adjudicated` row is a ruling on a
+    // dispute, not a replacement for their own independent label.
+    const latest = latestPerLabeller(rows.filter(r => r.method === undefined || AGREEMENT_METHODS.includes(r.method)));
     const labellers = sorted(latest.keys());
     const candidates = [];
     if (pair) {

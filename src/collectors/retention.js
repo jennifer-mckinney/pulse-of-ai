@@ -92,17 +92,25 @@ function removalNoticeFor(slug) {
  * @param {import('pg').PoolClient} client
  * @param {string} slug  data_sources.name
  * @param {string[]} postIds
- * @param {{ reason: string, rule: string, performedBy: string, platform: boolean }} o
+ * @param {{ reason: string, rule: string, performedBy: string, platform: boolean,
+ *          deleteEmbeddings?: boolean, legalBasis?: string }} o   deleteEmbeddings defaults to `platform`; an erasure request sets it
+ *          for any source
  * @returns {Promise<string[]>} ids changed
  */
-async function removeTextBatch(client, slug, postIds, { reason, rule, performedBy, platform }) {
+async function removeTextBatch(client, slug, postIds, { reason, rule, performedBy, platform, deleteEmbeddings = platform, legalBasis = null }) {
     if (!postIds.length) return [];
     const src = getSource(slug);
     const notice = platform ? removalNoticeFor(slug) : DETAIL_NOTICE;
     const keepUrl = platform && src && src.retention && src.retention.keepUrlPrefix ? src.retention.keepUrlPrefix : null;
-    // Lock the rows in id order first: the gold sampler locks posts in the same order, so the two
-    // can never wait on each other in opposite orders (no deadlock).
-    await client.query('SELECT id FROM raw_posts WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE', [postIds]);
+    // Lock exactly the rows the UPDATE will touch, in id order first: the gold sampler locks posts in
+    // the same order (FOR SHARE, which FOR NO KEY UPDATE still conflicts with), so the two can never
+    // wait on each other in opposite orders. NO KEY UPDATE is enough (no key column changes) and
+    // does not block foreign-key child inserts.
+    await client.query(
+        `SELECT rp.id FROM raw_posts rp JOIN data_sources ds ON ds.id = rp.source_id
+         WHERE rp.id = ANY($1::uuid[]) AND ds.name = $2 AND ds.source_type <> $3 AND rp.text_removed_at IS NULL
+         ORDER BY rp.id FOR NO KEY UPDATE OF rp`,
+        [postIds, slug, DEMO_SOURCE_TYPE]);
     const res = await client.query(
         `UPDATE raw_posts rp
          SET content = $4,
@@ -130,7 +138,7 @@ async function removeTextBatch(client, slug, postIds, { reason, rule, performedB
     // embedding computed concurrently is either deleted here or never
     // written — src/pipeline/embeddings.js saveEmbeddingIfTextStored).
     let embeddingsDeleted = 0;
-    if (ids.length && platform) {
+    if (ids.length && deleteEmbeddings) {
         embeddingsDeleted = (await client.query(
             'DELETE FROM post_embeddings WHERE raw_post_id = ANY($1::uuid[])', [ids])).rowCount;
     }
@@ -140,7 +148,7 @@ async function removeTextBatch(client, slug, postIds, { reason, rule, performedB
         // never leaves a permanent link to removed text (gold_erase_post; labels and strata stay).
         await client.query('SELECT gold_erase_post(id) FROM unnest($1::uuid[]) AS id', [ids]);
         const name = src ? src.name : slug;
-        const legal = platform ? `${src.retention.legalBasis} ${RETAINED_NOTE}` : DETAIL_LEGAL_BASIS;
+        const legal = legalBasis || (platform ? `${src.retention.legalBasis} ${RETAINED_NOTE}` : DETAIL_LEGAL_BASIS);
         await client.query(
             `INSERT INTO data_retention_log (raw_post_id, action, reason, legal_basis, performed_by)
              VALUES (NULL, $1, $2, $3, $4)`,
@@ -148,12 +156,37 @@ async function removeTextBatch(client, slug, postIds, { reason, rule, performedB
                 summary: `Text of ${ids.length} ${name} post(s) replaced by the removal notice.`,
                 source: slug, rule, reason, post_ids: ids,
                 retained: platform ? RETAINED_NOTE : 'Scores, audit rows and monthly rollups are retained (spec §19).',
-                ...(platform ? { embeddings_deleted: embeddingsDeleted } : {}),
+                ...(deleteEmbeddings ? { embeddings_deleted: embeddingsDeleted } : {}),
                 ...(platform && src.retention.byAnalogy ? { applied_by_analogy: src.retention.byAnalogy } : {}),
             }), legal, performedBy],
         );
     }
     return ids;
+}
+
+const ERASURE_LEGAL_BASIS = 'GDPR Article 17 - right to erasure: the post text was removed on request; '
+    + 'scores and audit rows are retained (they hold no post text).';
+
+/**
+ * Remove ONE post's text on an erasure request (any real source, platform terms or not), in one
+ * transaction: the same scrub as retention (text, raw_payload text keys, url), the post's embedding
+ * deleted, its gold-set rows erased (gold_erase_post), and a data_retention_log row written.
+ * @param {string} postId
+ * @param {{ performedBy?: string }} [o]
+ * @returns {Promise<{ removed: boolean, source: string|null }>}  removed=false when it had no text left (or is a demo post)
+ */
+async function removeTextOnRequest(postId, { performedBy = 'scripts/gold-erase.js' } = {}) {
+    return dbTransaction(async (client) => {
+        const row = (await client.query(
+            `SELECT ds.name FROM raw_posts rp JOIN data_sources ds ON ds.id = rp.source_id WHERE rp.id = $1::uuid`, [postId])).rows[0];
+        if (!row) return { removed: false, source: null };
+        const src = getSource(row.name);
+        const ids = await removeTextBatch(client, row.name, [postId], {
+            reason: 'erasure request', rule: 'erasure request', performedBy,
+            platform: !!(src && src.retention), deleteEmbeddings: true, legalBasis: ERASURE_LEGAL_BASIS,
+        });
+        return { removed: ids.length === 1, source: row.name };
+    });
 }
 
 /** Ruling-9 blanking of specific posts of a platform-terms source (kept name). */
@@ -275,6 +308,6 @@ function retentionStatus(slug, { collectedAt, textRemovedAt, textRemovedReason }
 
 module.exports = {
     BLANK_ACTION, DETAIL_ACTION, REMOVAL_NOTICE, DETAIL_NOTICE, RETAINED_NOTE, DETAIL_LEGAL_BASIS,
-    retentionSources, removalNoticeFor, removeTextBatch, blankPlatformPosts, blankPosts,
+    retentionSources, removalNoticeFor, removeTextBatch, removeTextOnRequest, blankPlatformPosts, blankPosts,
     blankExpired, postsWithText, retentionStatus,
 };

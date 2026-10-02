@@ -25,18 +25,20 @@
 require('dotenv').config();
 const { oneLine } = require('../src/gold/labelling');
 
-const USAGE = 'usage: npm run gold:erase -- --post POST_ID | --removed';
+const USAGE = 'usage: npm run gold:erase -- --post POST_ID [--remove-text] | --removed';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function parseArgs(argv) {
     const args = Array.isArray(argv) ? [...argv] : [];
-    const out = { post: null, removed: false };
+    const out = { post: null, removed: false, removeText: false };
     while (args.length) {
         const a = args.shift();
         if (a === '--post') {
             const v = args.shift();
             if (v === undefined || v.startsWith('--')) throw new Error(`--post needs a value\n${USAGE}`);
             out.post = v;
+        } else if (a === '--remove-text') {
+            out.removeText = true;
         } else if (a === '--removed') {
             out.removed = true;
         } else {
@@ -45,6 +47,7 @@ function parseArgs(argv) {
     }
     if (Boolean(out.post) === out.removed) throw new Error(`give exactly one of --post and --removed\n${USAGE}`);
     if (out.post && !UUID_RE.test(out.post)) throw new Error('--post must be a post UUID');
+    if (out.removeText && !out.post) throw new Error(`--remove-text goes with --post\n${USAGE}`);
     return out;
 }
 
@@ -52,11 +55,18 @@ async function main(argv, { env = process.env, out = l => process.stdout.write(l
     const opts = parseArgs(argv);
     require('../src/gold/labelling').assertLocalOnly(env);
     const store = require('../src/gold/store');
+    let erasedByRemoval = 0;
+    if (opts.post && opts.removeText) {
+        erasedByRemoval = await store.liveItemCount(opts.post.toLowerCase());
+        // Erasure request: remove the text (scrub, embedding, retention log) AND the gold rows in one transaction.
+        const r = await require('../src/collectors/retention').removeTextOnRequest(opts.post.toLowerCase());
+        out(r.source ? `gold erase: text of the post ${r.removed ? 'removed' : 'was already gone'} (${r.source})` : 'gold erase: no such post');
+    }
     if (opts.post && !(await store.postTextGone(opts.post.toLowerCase()))) {
-        throw new Error('that post still has text: remove its text first (retention), which erases its gold rows too; '
+        throw new Error('that post still has text: add --remove-text to remove its text (scrub, embedding, retention log) and its gold rows together; '
             + 'erasing only the gold rows would let a later sample draw the post again');
     }
-    const erased = opts.post ? await store.erasePost(opts.post.toLowerCase()) : await store.eraseRemoved();
+    const erased = erasedByRemoval + (opts.post ? await store.erasePost(opts.post.toLowerCase()) : await store.eraseRemoved());
     out(`gold erase: ${erased} item(s) erased${opts.post ? '' : ' (posts whose text is gone)'}`);
     return { erased };
 }
