@@ -228,7 +228,7 @@ class HttpClient {
      */
     constructor({
         transport = defaultTransport, env = process.env, limiter, sleep, timeoutMs = DEFAULT_TIMEOUT_MS, robotsCache, signal,
-        now = () => Date.now(), holds = {},
+        now = () => Date.now(), holds = Object.create(null),
     } = {}) {
         // G10-9 / G10-16: the run's deadline. Once it fires no new request
         // starts and in-flight ones are aborted (error kind 'deadline').
@@ -258,7 +258,7 @@ class HttpClient {
         // before every transport call (raw()). holdChanges: the hosts whose
         // hold was set (entry) or cleared by a success (null) since the last
         // drainHoldChanges() — what the caller persists.
-        this.holds = holds || {};
+        this.holds = holds || Object.create(null);
         this.holdChanges = new Map();
     }
 

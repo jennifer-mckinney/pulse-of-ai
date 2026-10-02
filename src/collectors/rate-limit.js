@@ -297,7 +297,8 @@ const streak = v => (Number.isInteger(v) && v >= 0 ? Math.min(v, STREAK_MAX) : 0
  * and invalid hosts are dropped.
  */
 function sanitizeHolds(stored, now = Date.now()) {
-    const out = {};
+    // Security review F6: a prototype-less map — no host name can ever hit an inherited key.
+    const out = Object.create(null);
     if (!stored || typeof stored !== 'object' || Array.isArray(stored)) return out;
     for (const [rawHost, h] of Object.entries(stored)) {
         const host = normHost(rawHost);
@@ -342,7 +343,7 @@ function sanitizeHolds(stored, now = Date.now()) {
 /** The holds still in force (until > now), sanitised. */
 function activeHolds(stored, now = Date.now()) {
     const all = sanitizeHolds(stored, now);
-    return Object.fromEntries(Object.entries(all).filter(([, h]) => Date.parse(h.until) > now));
+    return Object.assign(Object.create(null), Object.fromEntries(Object.entries(all).filter(([, h]) => Date.parse(h.until) > now)));
 }
 
 /**
@@ -688,9 +689,9 @@ function publicHosts(src, holds, now = Date.now(), env = {}, { kind = 'rate_limi
     const wanted = kind === 'server'
         ? Object.fromEntries(Object.entries(collectionHolds(src, holds, env) || {}).filter(([, h]) => h && h.signal === 'retry_after_5xx'))
         : rateLimitHolds(collectionHolds(src, holds, env));
-    // The streak counter is internal (never published); the signal is an enum.
+    // Security review F10: the streak counter and the signal are internal — never published.
     return Object.entries(activeHolds(wanted, now))
-        .map(([host, h]) => ({ host: registry.has(host) ? host : CONFIGURED_HOST, until: h.until, http_status: h.http_status, signal: h.signal }))
+        .map(([host, h]) => ({ host: registry.has(host) ? host : CONFIGURED_HOST, until: h.until, http_status: h.http_status }))
         .sort((a, b) => a.host.localeCompare(b.host) || a.until.localeCompare(b.until));
 }
 

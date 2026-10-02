@@ -178,7 +178,7 @@ async function runCollection(o = {}) {
         let http = null;
         // The run's ONE rate-limit holds map (hostname → hold), shared by
         // the HTTP client (security F5).
-        const runHolds = {};
+        const runHolds = Object.create(null);
 
         for (const slug of slugs) {
             const src = getSource(slug);

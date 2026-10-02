@@ -350,7 +350,8 @@ describe('a source whose every route is held is skipped, not failed', () => {
             const hn = res.body.find(s => s.slug === 'hacker_news');
             expect(hn).toMatchObject({ status: 'rate_limited', online: false, rate_limited_routes: ['algolia-search'],
                 rate_limited_until: new Date(st.rate_limited_until).toISOString(), last_error_kind: 'rate_limited' });
-            expect(hn.rate_limited_hosts).toEqual([expect.objectContaining({ host: 'hn.algolia.com', http_status: 429, signal: 'http_429' })]);
+            expect(hn.rate_limited_hosts).toEqual([expect.objectContaining({ host: 'hn.algolia.com', http_status: 429 })]);
+            expect(JSON.stringify(hn.rate_limited_hosts)).not.toMatch(/signal|count/);
         } finally {
             for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
             Object.assign(process.env, saved);
@@ -448,7 +449,7 @@ describe('a source whose every route is held is skipped, not failed', () => {
         expect(row.status).toBe('collecting');
         expect(row.rate_limited_until).toBeNull();
         expect(row.rate_limited_hosts).toEqual([]);
-        expect(row.server_backoff_hosts).toEqual([expect.objectContaining({ host: 'hn.algolia.com', signal: 'retry_after_5xx' })]);
+        expect(row.server_backoff_hosts).toEqual([expect.objectContaining({ host: 'hn.algolia.com', http_status: 503 })]);
         expect(Date.parse(row.server_backoff_until)).toBeGreaterThan(Date.now());
         // The held route does not run now: out of open_routes, in server_backoff_routes, never in rate_limited_routes.
         expect(row.open_routes).toEqual([]);

@@ -20,7 +20,7 @@
 //                                             // rate_limited (every route backing
 //                                             // off after a rate limit; NOT a refusal)
 //           rate_limited_until,               // when the last hold passes (ISO) or null
-//           rate_limited_hosts,               // [{ host, until, http_status, signal, count }]
+//           rate_limited_hosts,               // [{ host, until, http_status }]
 //                                             // host: a registry host, else "configured
 //                                             // host" (a contract feed host never leaks)
 //           rate_limited_routes,              // route ids the worker found held

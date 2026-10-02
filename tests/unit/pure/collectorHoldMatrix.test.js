@@ -262,3 +262,16 @@ describe('matrix: held-host aliases and mid-flight holds', () => {
         expect(t.http.holds).toEqual({});
     });
 });
+
+describe('security F6: hold maps have no prototype', () => {
+    test('__proto__, constructor, hasOwnProperty and toString are never hosts; maps are prototype-less; heldUntil ignores inherited keys', () => {
+        const until = iso(NOW + 600000);
+        const stored = JSON.parse(`{"__proto__":{"until":"${until}"},"constructor":{"until":"${until}"},"hasOwnProperty":{"until":"${until}"},"toString":{"until":"${until}"},"ok.example":{"until":"${until}"}}`);
+        const out = rl.sanitizeHolds(stored, NOW);
+        expect(Object.getPrototypeOf(out)).toBeNull();
+        expect(Object.keys(out)).toEqual(['ok.example']);
+        expect(Object.getPrototypeOf(rl.activeHolds(stored, NOW))).toBeNull();
+        for (const k of ['__proto__', 'constructor', 'hasOwnProperty', 'toString']) expect(rl.heldUntil(out, k, NOW)).toBeNull();
+        expect(Object.getPrototypeOf(new HttpClient({ transport: async () => ({}), env: TEST_ENV }).holds)).toBeNull();
+    });
+});

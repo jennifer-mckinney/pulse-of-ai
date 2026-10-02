@@ -406,7 +406,7 @@ describe('security F3: what /api/sources may publish about a hold', () => {
         const env = { ...TEST_ENV, CNN_FEED_URL: 'https://acme-123.feeds.example/x' };
         const holds = { 'acme-123.feeds.example': { until: iso(NOW + 60000), http_status: 429, signal: 'http_429', count: 2, weak: 0 } };
         const pub = rl.publicHosts(cnn, holds, NOW);
-        expect(pub).toEqual([{ host: 'configured host', until: iso(NOW + 60000), http_status: 429, signal: 'http_429' }]);
+        expect(pub).toEqual([{ host: 'configured host', until: iso(NOW + 60000), http_status: 429 }]);
         expect(JSON.stringify(rl.holdGate(cnn, env, holds, NOW))).not.toMatch(/acme-123/);
         const gh = rl.publicHosts(getSource('github'),
             { 'api.github.com': { until: iso(NOW + 60000), http_status: 403, signal: 'body_rate_limit', count: 1, weak: 1 } }, NOW);
@@ -438,7 +438,7 @@ describe('classification and status: a rate limit is never a refusal', () => {
         const row = registryFields({ ...base, rate_limited_hosts: hnHold, rate_limited_routes: { 'algolia-search': at(300) } }, TEST_ENV, NOW);
         expect(row).toMatchObject({
             status: 'rate_limited', online: false, rate_limited_until: at(300), rate_limited_routes: ['algolia-search'],
-            rate_limited_hosts: [{ host: 'hn.algolia.com', until: at(300), http_status: 429, signal: 'http_429' }],
+            rate_limited_hosts: [{ host: 'hn.algolia.com', until: at(300), http_status: 429 }],
             refusal_count: 0, access_denied_at: null,
         });
         expect(row.status_reason).toMatch(/routes held: algolia-search .*not a refusal/);
@@ -648,7 +648,7 @@ describe('security review L3-L6', () => {
         expect(g.reason).not.toMatch(/backing off after a rate limit/);
         // Served: the host with its distinct signal, and its own time — never as a rate limit.
         expect(rl.publicHosts(src, five, NOW)).toEqual([]);
-        expect(rl.publicHosts(src, five, NOW, {}, { kind: 'server' })).toEqual([expect.objectContaining({ host: 'hn.algolia.com', signal: 'retry_after_5xx' })]);
+        expect(rl.publicHosts(src, five, NOW, {}, { kind: 'server' })).toEqual([expect.objectContaining({ host: 'hn.algolia.com', http_status: 503 })]);
         expect(rl.serverBackoffUntil(src, five, NOW)).toBe(iso(NOW + 600000));
         expect(rl.serverBackoffUntil(src, {}, NOW)).toBeNull();
         const limit = { 'hn.algolia.com': { ...five['hn.algolia.com'], http_status: 429, signal: 'http_429', count: 1 } };

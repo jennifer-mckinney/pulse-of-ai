@@ -56,7 +56,7 @@ describe('Copilot 4162210579: an env-derived route sharing the terms host keeps 
             expect(row.server_backoff_hosts).toEqual([expect.objectContaining({ host: 'configured host' })]);
             expect(row.rate_limited_hosts).toEqual([]);
         } else {
-            expect(row.rate_limited_hosts).toEqual([expect.objectContaining({ host: 'configured host', signal: h.signal })]);
+            expect(row.rate_limited_hosts).toEqual([expect.objectContaining({ host: 'configured host' })]);
             expect(row.rate_limited_until).toBe(hold.until);
             // Three in a row opens the warning (the evaluator runs with the worker's env).
             const cond = conditionsFor(st, cnn, Date.now(), { env: WORKER_ENV, routeKills: [] });
