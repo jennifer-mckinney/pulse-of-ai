@@ -130,11 +130,14 @@ class RobotsPolicy {
 
     async policyFor(origin) {
         const hit = this.cache.get(origin);
-        if (hit && this.now() - hit.at < (hit.unreachable ? Math.min(UNREACHABLE_TTL_MS, this.ttlMs) : this.ttlMs)) return hit;
+        // A 403's "no rules" is soft too (security review): a transient WAF block must not
+        // pin "allow everything" for a day, so it is re-checked like an unreachable file.
+        if (hit && this.now() - hit.at < (hit.unreachable || hit.soft ? Math.min(UNREACHABLE_TTL_MS, this.ttlMs) : this.ttlMs)) return hit;
         let entry;
         try {
             const res = await this.fetchRobots(`${origin}/robots.txt`);
             if (res.status >= 200 && res.status < 300) entry = { groups: parseRobots(res.body) };
+            else if (res.status === 403) entry = { allowAll: true, soft: true };
             else if (res.status >= 400 && res.status < 500 && res.status !== 429) entry = { allowAll: true };
             else entry = { denyAll: true, unreachable: true, reason: `robots.txt unreachable (HTTP ${res.status}) — complete disallow` };
         } catch (err) {

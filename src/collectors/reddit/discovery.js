@@ -32,9 +32,6 @@ const { TOP_N, WINDOW_DAYS, DENY_LIST, minAiPosts, rankSubreddits } = require('.
 
 const MAX_PAGES_PER_QUERY = 10;
 const MAX_ABOUT_LOOKUPS = 250;
-// Plain 403s on /about that are read as Reddit refusing us rather than as a
-// private subreddit. Owner decision 2026-10-02: the FIRST one is a refusal.
-const ABOUT_REFUSAL_AFTER = 1;
 const MAX_QUERY_CHARS = 400;
 
 /** OR-join the shared AI terms into queries of at most MAX_QUERY_CHARS. */
@@ -115,11 +112,6 @@ async function discoverSubreddits({ api, env = process.env, now = () => Date.now
         stats.qualifying = qualifying.length;
         const abouts = new Map();
         let looked = 0;
-        // Owner decision 2026-10-02: the first plain 403 on /about puts Reddit
-        // into the refused state (the AccessDeniedError is rethrown), never a
-        // ranking of 'unavailable' subreddits. ABOUT_REFUSAL_AFTER counts the
-        // consecutive plain 403s that make it so (1: the first one).
-        let refused403 = 0;
         for (const q of qualifying) {
             if (isDenied(q.name)) continue;   // excluded without a request
             if (looked >= maxAboutLookups) {
@@ -131,7 +123,6 @@ async function discoverSubreddits({ api, env = process.env, now = () => Date.now
             try {
                 const about = await api.about(q.name);
                 stats.about_lookups++;
-                refused403 = 0;
                 abouts.set(q.name.toLowerCase(), about ? { about } : { about: null, unavailable: 'not a subreddit' });
             } catch (err) {
                 if (err instanceof BudgetExhaustedError) throw err;
@@ -140,19 +131,15 @@ async function discoverSubreddits({ api, env = process.env, now = () => Date.now
                 // ask for the next one.
                 if (err instanceof RateLimitedError || (err && err.held === true)) throw err;
                 // Reddit refusing us (grumpy 3 / security review F8): a 401 / 451, a bot
-                // wall at ANY status, or the HTTP client's own fail-closed escalation
-                // (err.refusal) is never "a private subreddit" — rethrown at once, so a
-                // wall can never wipe the ranking with a snapshot of 'unavailable' rows.
-                if (err instanceof AccessDeniedError && (err.refusal || err.status === 401 || err.status === 451)) throw err;
-                // A missing subreddit answers 404 (= "unavailable"). A plain 403 is Reddit
-                // saying no (owner decision 2026-10-02): rethrown from the first one.
-                if (err instanceof AccessDeniedError && err.status === 403) {
-                    if (++refused403 >= ABOUT_REFUSAL_AFTER) throw err;
-                } else {
-                    refused403 = 0;
-                }
-                if (err && (err.status === 403 || err.status === 404)) {
-                    abouts.set(q.name.toLowerCase(), { about: null, unavailable: `HTTP ${err.status}` });
+                // wall at ANY status, the HTTP client's own fail-closed escalation
+                // (err.refusal), and — owner decision 2026-10-02 — the FIRST plain 403
+                // (the old ABOUT_REFUSAL_AFTER = 1) are never "a private subreddit":
+                // rethrown at once (the refused state), so they can never wipe the
+                // ranking with a snapshot of 'unavailable' rows.
+                if (err instanceof AccessDeniedError && (err.refusal || [401, 403, 451].includes(err.status))) throw err;
+                // A missing subreddit answers 404: unavailable, nothing more.
+                if (err && err.status === 404) {
+                    abouts.set(q.name.toLowerCase(), { about: null, unavailable: 'HTTP 404' });
                 } else {
                     abouts.set(q.name.toLowerCase(), { about: null, unavailable: 'lookup failed' });
                 }
@@ -169,4 +156,4 @@ async function discoverSubreddits({ api, env = process.env, now = () => Date.now
     }
 }
 
-module.exports = { discoverSubreddits, buildQueries, MAX_PAGES_PER_QUERY, MAX_ABOUT_LOOKUPS, ABOUT_REFUSAL_AFTER };
+module.exports = { discoverSubreddits, buildQueries, MAX_PAGES_PER_QUERY, MAX_ABOUT_LOOKUPS };

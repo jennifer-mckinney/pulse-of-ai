@@ -30,7 +30,8 @@
 //     holds the requested URL's host as well (PR #44), so a fresh client
 //     sends nothing at all — not robots.txt, not the first hop. This is the
 //     ONE hold path: PR #44's TLDR Retry-After holds are a case of it;
-//   - 401 / 451, any other 403 (on a page; a plain 403 on robots.txt is "no rules"), and bot challenges (a challenge page or
+//   - 401 / 451, any other 403 (on a page only: on robots.txt a plain 403 is
+//     "no rules"), and bot challenges (a challenge page or
 //     cf-mitigated: challenge — F6, src/collectors/challenge.js) → AccessDeniedError,
 //     never retried; it carries an ALLOW-LIST of the refusal's response
 //     headers (server, date, retry-after, x-ratelimit-*, cache / edge
@@ -445,6 +446,14 @@ class HttpClient {
         if (ROBOTS_REFUSAL_STATUSES.includes(res.status)) {
             throw new AccessDeniedError(`${rateLimit.publicHostName(host)} refused access (HTTP ${res.status}, robots.txt) — not retried, not worked around`,
                 { status: res.status, url: redactUrl(url), headers: refusalHeaders(res.headers, this.env) });
+        }
+        // Security review: a 403 on robots.txt that names a Retry-After is the host asking us
+        // to wait, whatever else it says: robots.txt is read as unreachable (a complete
+        // disallow for this run, re-checked in 10 minutes), never as "no rules" with the
+        // page asked at once.
+        if (res.status === 403 && rateLimit.parseRetryAfter(res.headers, this.now()) !== null) {
+            throw new HttpError(`${rateLimit.publicHostName(host)} answered 403 with a Retry-After on robots.txt — read as unreachable, not as "no rules"`,
+                { status: 403, url: redactUrl(url) });
         }
         // A success ends the streak of every host the request touched: the one
         // that answered and the one robots.txt was first asked of (request() does

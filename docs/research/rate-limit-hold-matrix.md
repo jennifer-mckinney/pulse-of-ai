@@ -11,7 +11,7 @@ A 5xx Retry-After hold (`retry_after_5xx`) is a separate server backoff, not a r
 |---|---|---|---|
 | 429 | RateLimitedError (`rate_limited`) | host, until the source's time (60 s floor doubling, 24 h cap; 5 min with no time) | never; the 14th consecutive rate limit of any kind with no success escalates to a refusal |
 | 403 + `x-ratelimit-remaining: 0` + an ABSOLUTE reset instant in (now, now+24 h] | RateLimitedError | host, until the reset | never; the 5th consecutive strong 403 (or the 14th rate limit of any kind) escalates to a refusal |
-| 403 + `x-ratelimit-remaining: 0` without an absolute, plausible reset (none, past, beyond 24 h, or a relative `1` / `60`) | AccessDeniedError (a bare header proves nothing) | none | yes |
+| 403 + `x-ratelimit-remaining: 0` without an absolute, plausible reset (none, past, beyond 24 h, or a relative `1` / `60`) | AccessDeniedError on a page (a bare header proves nothing); on robots.txt it is "no rules" (owner decision 2026-10-02) | none | yes, on a page |
 | Bot wall: `cf-mitigated: challenge` at any status, a challenge page at 3xx / 4xx / 5xx, a small HTML 2xx challenge page (a robots.txt 2xx only as an HTML page too), a redirect into `/cdn-cgi/challenge-platform/` | AccessDeniedError (`refusal: 'bot_wall'`), checked before a redirect is followed and before a success clears anything | none | yes |
 | 2xx JSON / feed / text that merely mentions a vendor | content | n/a | no |
 | 503 + Retry-After over 10 s | HttpError `http_5xx` | host, `retry_after_5xx`, capped 1 h, no streak | never |
@@ -47,7 +47,7 @@ process, the evaluator and the 5xx time all see the collection hold).
 
 - After migration 077, `rate_limited_routes` is recomputed by the worker's next save (it needs the registry and env, not SQL). Enforcement is
   immediate (`loadHolds` reads the hold map). `rate_limited_until` is informational only; `/api/sources` computes its time from the holds.
-- Reddit `about()`: the first plain 403 puts Reddit into the refused state (`ABOUT_REFUSAL_AFTER = 1`; owner decision 2026-10-02). A 404 is an unavailable subreddit; a bot wall, 401, 451 or an escalated refusal is rethrown at once; a rate limit stops the discovery.
-- Behaviour change (owner decision 2026-10-02): a 401 / 451 on `robots.txt` is a refusal (ADR 0001 ruling 5), no longer "no rules". A plain 403 on `robots.txt` stays "no rules", as before this PR; a 403 with rate-limit evidence is still a rate limit and a bot-wall challenge at any status is still a refusal. The page itself keeps its 401 / 403 / 451 refusal.
+- Reddit `about()`: the first plain 403 puts Reddit into the refused state (owner decision 2026-10-02; no counter). A 404 is an unavailable subreddit; a bot wall, 401, 451 or an escalated refusal is rethrown at once; a rate limit stops the discovery.
+- Behaviour change (owner decision 2026-10-02): a 401 / 451 on `robots.txt` is a refusal (ADR 0001 ruling 5), no longer "no rules". A plain 403 on `robots.txt` stays "no rules", as before this PR (re-checked after 10 minutes, not 24 h; a 403 naming a `Retry-After` is read as robots.txt unreachable, a complete disallow for that run); a 403 with rate-limit evidence is still a rate limit and a bot-wall challenge at any status is still a refusal. The page itself keeps its 401 / 403 / 451 refusal.
 
 Diagrams (`docs/diagrams/states/source-gate-status`, `flows/collection-1-schedule-and-gates`) do not yet show the `rate_limited` state; they are updated under the diagram accuracy contract (independent row-by-row audit, PNG regenerated), tracked with the other diagram issues, not edited here.

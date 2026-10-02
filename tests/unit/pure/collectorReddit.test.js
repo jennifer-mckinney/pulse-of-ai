@@ -448,10 +448,6 @@ describe('discovery: plain 403s on /about (owner decision 2026-10-02)', () => {
     const denied = () => new AccessDeniedError('refused (HTTP 403)', { status: 403 });
     const ok = () => ({ display_name: 'x', subscribers: 5000, subreddit_type: 'public' });
 
-    test('ABOUT_REFUSAL_AFTER is 1 (owner decision 2026-10-02)', () => {
-        expect(require('../../../src/collectors/reddit/discovery').ABOUT_REFUSAL_AFTER).toBe(1);
-    });
-
     test('the FIRST plain 403 is Reddit refusing us: the AccessDeniedError is rethrown, no ranking is stored', async () => {
         let calls = 0;
         const api = { listing: listing(['alpha', 'beta', 'gamma']), async about() { calls++; if (calls === 1) throw denied(); return ok(); } };

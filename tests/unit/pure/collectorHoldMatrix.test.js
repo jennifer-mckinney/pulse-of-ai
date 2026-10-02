@@ -276,7 +276,24 @@ describe('matrix: held-host aliases and mid-flight holds', () => {
     test('a 403 on /robots.txt with a bare remaining: 0 (no reset) is not rate-limit evidence: "no rules", never a hold (owner decision 2026-10-02)', async () => {
         const t = build('robots', { status: 403, headers: { 'x-ratelimit-remaining': '0' }, body: '' });
         expect(await t.run().catch(e => e)).toMatchObject({ status: 200 });
+        expect(t.transport.calls.filter(c => c.url.includes('/page'))).toHaveLength(1);   // "no rules": the page was asked
         expect(t.http.holds).toEqual({});
+    });
+
+    test('a 403 on /robots.txt naming a Retry-After is robots unreachable (a complete disallow), never "no rules" (security review)', async () => {
+        const t = build('robots', { status: 403, headers: { 'retry-after': '600' }, body: '' });
+        const err = await t.run().catch(e => e);
+        expect(err).toBeInstanceOf(RobotsDisallowedError);
+        expect(err.kind).toBe('robots_unreachable');
+        expect(t.transport.calls.filter(c => c.url.includes('/page'))).toHaveLength(0);
+        expect(t.http.holds).toEqual({});
+    });
+
+    test('a 403 on /robots.txt with an undecodable body and no header cannot be read: robots unreachable, the page is not asked', async () => {
+        const t = build('robots', () => { throw Object.assign(new Error('incorrect header check'), { decode: true, status: 403, headers: {} }); });
+        const err = await t.run().catch(e => e);
+        expect(err).toBeInstanceOf(RobotsDisallowedError);
+        expect(t.transport.calls.filter(c => c.url.includes('/page'))).toHaveLength(0);
     });
 });
 

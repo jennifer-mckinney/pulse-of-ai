@@ -55,3 +55,19 @@ test('an unreachable robots.txt is cached only briefly and classified robots_unr
     expect(classifyError(denied).error_kind).toBe('robots');
     expect(refusalOf([classifyError(denied)])).toEqual({ kind: 'robots', status: null });
 });
+
+// Owner decision 2026-10-02 + security review: a 403 on robots.txt is "no rules", but a
+// transient WAF block must not pin "allow everything" for 24 h; a 404 is a real "no file".
+test('a 403 robots.txt ("no rules") is re-checked after the short TTL; a 404 is cached for the full TTL', async () => {
+    const run = async (status) => {
+        let t = 0;
+        let calls = 0;
+        const policy = new RobotsPolicy({ now: () => t, cache: new Map(), fetchRobots: async () => { calls++; return { status, body: '' }; } });
+        expect((await policy.check(FEED)).allowed).toBe(true);
+        t = UNREACHABLE_TTL_MS + 1;
+        await policy.check(FEED);
+        return calls;
+    };
+    expect(await run(403)).toBe(2);
+    expect(await run(404)).toBe(1);
+});
