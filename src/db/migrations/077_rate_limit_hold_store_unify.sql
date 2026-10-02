@@ -21,7 +21,8 @@
 --     (not a rate limit) at NOW() + 1 h (rate-limit.js MAX_5XX_HOLD_MS);
 --   - a host that already has a #45 entry keeps it (its streaks), with the
 --     LATER until of the two (never shortened — security N6);
---   - rate_limited_until becomes the later of its value and the moved holds'.
+--   - rate_limited_until becomes the later of its value and the moved RATE-LIMIT
+--     holds' (a 503's hold never counts: it is not a rate limit).
 -- An unparseable `until` is dropped (it never held: #44 read it with
 -- Date.parse). The runner also folds such a key in at claim
 -- (rate-limit.js legacyHolds), for a previous-release worker that writes one
@@ -77,7 +78,9 @@ entries AS (
                    'weak', 0,
                    'at', to_char(NOW() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))
            END) AS holds,
-           MAX(l.until) AS last_until
+           -- rate_limited_until counts rate limits only: a 503's hold is enforced
+           -- (retry_after_5xx) but never a rate limit (as state.saveHolds).
+           MAX(l.until) FILTER (WHERE l.status <> 503) AS last_until
     FROM live l JOIN source_collection_state s ON s.source_id = l.source_id
     GROUP BY l.source_id
 )

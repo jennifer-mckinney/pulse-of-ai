@@ -425,6 +425,38 @@ describe('rate limits (grumpy #1, diagnosis 2026-10-01): Reddit asked us to wait
     });
 });
 
+describe('discovery: plain 403s on /about (Copilot review)', () => {
+    const { AccessDeniedError } = require('../../../src/collectors/errors');
+    const [q1] = buildQueries();
+    const listing = names => async (path, params) => (params.q === q1 && !params.after
+        ? { children: names.flatMap(n => Array.from({ length: 30 }, (_, i) => ({ kind: 't3', data: { name: `t3_${n}${i}`, subreddit: n, title: 'AI news', selftext: '', created_utc: 1790679600 } }))), after: null }
+        : { children: [], after: null });
+    const denied = () => new AccessDeniedError('refused (HTTP 403)', { status: 403 });
+    const ok = () => ({ display_name: 'x', subscribers: 5000, subreddit_type: 'public' });
+
+    test('one private subreddit (a lone 403) is "unavailable", not a refusal', async () => {
+        const answers = [denied, ok, ok];
+        let i = 0;
+        const api = { listing: listing(['alpha', 'beta', 'gamma']), async about() { const a = answers[i++]; if (a === denied) throw denied(); return ok(); } };
+        const d = await discoverSubreddits({ api, env: {}, now: () => NOW });
+        expect(d.complete).toBe(true);
+        expect(JSON.stringify(d.exclusions)).toMatch(/HTTP 403/);
+    });
+
+    test('three 403s in a row (none succeeding between) are Reddit refusing us: the AccessDeniedError is rethrown', async () => {
+        const api = { listing: listing(['alpha', 'beta', 'gamma', 'delta']), async about() { throw denied(); } };
+        await expect(discoverSubreddits({ api, env: {}, now: () => NOW })).rejects.toBeInstanceOf(AccessDeniedError);
+    });
+
+    test('a success between 403s resets the run', async () => {
+        const seq = [true, true, false, true, true, false];
+        let i = 0;
+        const api = { listing: listing(['a1', 'b1', 'c1', 'd1', 'e1', 'f1']), async about() { if (seq[i++]) throw denied(); return ok(); } };
+        const d = await discoverSubreddits({ api, env: {}, now: () => NOW });
+        expect(d.complete).toBe(true);
+    });
+});
+
 describe('RedditApi guards', () => {
     test('rejects malformed paths and /api/info batches over 100', async () => {
         const api = new RedditApi({ http: {}, env: ENV, budget: new budget.MemoryBudget() });

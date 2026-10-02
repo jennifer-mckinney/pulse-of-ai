@@ -27,11 +27,14 @@
 const { SEARCH_TERMS, isAiRelated } = require('../ai-filter');
 const { pickAllowed, FULLNAME_RE, SUBREDDIT_RE } = require('./fields');
 const { BudgetExhaustedError } = require('./budget');
-const { RateLimitedError } = require('../errors');
+const { RateLimitedError, AccessDeniedError } = require('../errors');
 const { TOP_N, WINDOW_DAYS, DENY_LIST, minAiPosts, rankSubreddits } = require('./selection');
 
 const MAX_PAGES_PER_QUERY = 10;
 const MAX_ABOUT_LOOKUPS = 250;
+// Consecutive plain 403s on /about (no lookup succeeding between) that are read as
+// Reddit refusing us, not as private subreddits (Copilot review).
+const ABOUT_REFUSAL_AFTER = 3;
 const MAX_QUERY_CHARS = 400;
 
 /** OR-join the shared AI terms into queries of at most MAX_QUERY_CHARS. */
@@ -112,6 +115,12 @@ async function discoverSubreddits({ api, env = process.env, now = () => Date.now
         stats.qualifying = qualifying.length;
         const abouts = new Map();
         let looked = 0;
+        // Copilot review: a private subreddit answers 403 on its own, so ONE plain
+        // 403 is "unavailable" — but Reddit refusing us would answer every lookup
+        // so. ABOUT_REFUSAL_AFTER 403s in a row (no lookup succeeding between)
+        // are the source saying no: the AccessDeniedError is rethrown (the
+        // refused state), never read as a ranking of unavailable subreddits.
+        let refused403 = 0;
         for (const q of qualifying) {
             if (isDenied(q.name)) continue;   // excluded without a request
             if (looked >= maxAboutLookups) {
@@ -123,6 +132,7 @@ async function discoverSubreddits({ api, env = process.env, now = () => Date.now
             try {
                 const about = await api.about(q.name);
                 stats.about_lookups++;
+                refused403 = 0;
                 abouts.set(q.name.toLowerCase(), about ? { about } : { about: null, unavailable: 'not a subreddit' });
             } catch (err) {
                 if (err instanceof BudgetExhaustedError) throw err;
@@ -132,6 +142,7 @@ async function discoverSubreddits({ api, env = process.env, now = () => Date.now
                 if (err instanceof RateLimitedError) throw err;
                 // A private, banned or missing subreddit answers 403 / 404;
                 // any other failure leaves it out of today's ranking.
+                if (err && err.status === 403 && err instanceof AccessDeniedError && ++refused403 >= ABOUT_REFUSAL_AFTER) throw err;
                 if (err && (err.status === 403 || err.status === 404)) {
                     abouts.set(q.name.toLowerCase(), { about: null, unavailable: `HTTP ${err.status}` });
                 } else if (err && err.status === 401) {
@@ -151,4 +162,4 @@ async function discoverSubreddits({ api, env = process.env, now = () => Date.now
     }
 }
 
-module.exports = { discoverSubreddits, buildQueries, MAX_PAGES_PER_QUERY, MAX_ABOUT_LOOKUPS };
+module.exports = { discoverSubreddits, buildQueries, MAX_PAGES_PER_QUERY, MAX_ABOUT_LOOKUPS, ABOUT_REFUSAL_AFTER };

@@ -71,7 +71,9 @@ describe('migration 077_rate_limit_hold_store_unify.sql', () => {
         const srv = once.github.rate_limited_hosts['srv.example'];
         expect(srv).toMatchObject({ http_status: 503, signal: 'retry_after_5xx', count: 0, weak: 0 });
         expect(Math.abs(Date.parse(srv.until) - (now + rl.MAX_5XX_HOLD_MS))).toBeLessThan(60 * 1000);
-        expect(new Date(once.github.rate_limited_until).toISOString()).toBe(srv.until);
+        // rate_limited_until: the later RATE-LIMIT hold only — the 503's later hold is not one.
+        expect(new Date(once.github.rate_limited_until).toISOString()).toBe(iso(now + 600 * 1000));
+        expect(Date.parse(srv.until)).toBeGreaterThan(Date.parse(once.github.rate_limited_until));
     });
 
     it('security review L1/L2: an impossible timestamp never aborts the migration; a key with a path still names its host', async () => {
