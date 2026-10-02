@@ -462,11 +462,10 @@ async function runCollection(o = {}) {
                 }
             } catch (loopErr) {
                 const lostChanges = http.drainHoldChanges();
-                logHolds(lostChanges);
                 await state.saveHolds(sourceId, {
                     hosts: myHosts, changes: lostChanges, view: runHolds,
                     routes: rateLimit.holdGate(src, env, runHolds, Date.now(), { routeKills }).routes, src, env, routeKills,
-                }).catch(serr => log(`[collect] ${slug}: could not save the rate-limit holds (${scrub(serr.message, env)})`));
+                }).then(() => logHolds(lostChanges), serr => log(`[collect] ${slug}: could not save the rate-limit holds (${scrub(serr.message, env)})`));
                 throw loopErr;
             }
             const classified = routeErrors.map(e => classifyError(e.err));
@@ -481,11 +480,11 @@ async function runCollection(o = {}) {
             // Grumpy #10: per host, merged under a row lock — never a blind
             // overwrite of another run's newer hold.
             const savedChanges = http.drainHoldChanges();
-            logHolds(savedChanges);
             await state.saveHolds(sourceId, {
                 hosts: myHosts, changes: savedChanges, view: runHolds, routes: after.routes,
                 limited: !!limitedErr, headers: rateLimitHeaders, src, env, routeKills,
             });
+            logHolds(savedChanges);
             if (heldRoutes.length) log(`[collect] ${slug}: not requested (host backoff after a rate limit or a server error's Retry-After, honoured): ${[...new Set(heldRoutes)].join(', ')}`);
             if (okRoutes === 0 && routeErrors.length === 0 && heldRoutes.length > 0) {
                 // Every route that would have run was held (e.g. a hold

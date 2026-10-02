@@ -357,3 +357,16 @@ describe('review round 2: vendor script tags on ordinary pages are not walls; th
         }
     });
 });
+
+describe('review round 3: narrow vendor tokens', () => {
+    test('a page that merely mentions bm-verify or px-captcha is content; the real interstitials are walls', async () => {
+        for (const body of ['<html>Our docs mention bm-verify and px-captcha cookies.</html>', '<html><div class="px-captcha-note"></div></html>']) {
+            const t = build('page', { status: 200, headers: { 'content-type': 'text/html' }, body });
+            expect((await t.run()).status).toBe(200);
+        }
+        for (const body of ['<html><div id="px-captcha"></div></html>', '<html><a href="/x?bm-verify=abc">go</a></html>', '<html><script src="https://ct.captcha-delivery.com/i.js"></script></html>']) {
+            const t = build('page', { status: 200, headers: { 'content-type': 'text/html' }, body });
+            expect(await t.run().catch(e => e)).toMatchObject({ refusal: 'bot_wall' });
+        }
+    });
+});

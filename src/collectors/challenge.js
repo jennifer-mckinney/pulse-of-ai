@@ -20,7 +20,7 @@
 // path counts. Likewise vendor script TAGS on ordinary pages (DataDome's tags.js and
 // ct.captcha-delivery.com, Imperva's _Incapsula_Resource script) are not walls: only the
 // challenge interstitials (geo.captcha-delivery.com, Imperva's block page) are.
-const CHALLENGE_RE = /(cf-chl|_cf_chl_opt|\/cdn-cgi\/challenge-platform\/h\/[a-z]\/orchestrate\b|geo\.captcha-delivery\.com|Incapsula incident ID|_Incapsula_Resource\?SWUDNSAI|px-captcha|_pxCaptcha|bm-verify|Attention Required! \| Cloudflare|Checking your browser before accessing)/i;
+const CHALLENGE_RE = /(cf-chl|_cf_chl_opt|\/cdn-cgi\/challenge-platform\/h\/[a-z]\/orchestrate\b|geo\.captcha-delivery\.com|Incapsula incident ID|_Incapsula_Resource\?SWUDNSAI|id=["']px-captcha|_pxCaptcha|[?&]bm-verify=|ct\.captcha-delivery\.com\/i\.js|Attention Required! \| Cloudflare|Checking your browser before accessing)/i;
 
 /** Whether the headers carry Cloudflare's challenge marker (case-insensitive). */
 function challengeHeader(headers) {
