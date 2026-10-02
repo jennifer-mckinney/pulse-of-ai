@@ -63,7 +63,7 @@
     utils, insightsMod, globeMod, storyMod, designConfig, apiConfig) {
     'use strict';
 
-    const { fmtNet, netSentiment, sentimentBucket } = utils;
+    const { fmtNet, netSentiment, sentimentBucket, buildCredit } = utils;
     const { catBreakdown, allCategoryRows } = insightsMod;
     const gmath = globeMod.math;
     const CAT_COLORS = designConfig.CAT_COLORS;
@@ -474,6 +474,11 @@
                 content_snippet: payload.post.content_snippet || '',
                 source_name: payload.post.source_name || null,
                 attribution: payload.post.attribution || null,
+                // K1: credit, validated link back, date and origin as served
+                credit: payload.post.credit || null,
+                source_url: payload.post.source_url || null,
+                published_at: payload.post.published_at || null,
+                data_origin: payload.post.data_origin || null,
                 platform: payload.post.source_category || null,
                 location: payload.post.location || null,
                 collected_at: payload.post.collected_at || null,
@@ -735,8 +740,9 @@
                     status: r.status,
                     statusLabel: sourceStatusLabel(r),
                     online: r.online === true,
-                    termsUrl: r.status !== 'collecting' && typeof r.terms_url === 'string'
-                        && /^https:\/\//.test(r.terms_url) ? r.terms_url : null,
+                    // K1 review: the shared link validator (no credentials, no
+                    // private or IP hosts, no control characters), https only
+                    termsUrl: r.status !== 'collecting' ? httpsOnly(utils.safeHttpUrl(r.terms_url)) : null,
                     reason: r.status_reason || '',
                 })),
         })).filter((g) => g.sources.length > 0);
@@ -1233,6 +1239,18 @@
         return node;
     }
 
+    // httpsOnly: the URL when it is https, else null (a safeHttpUrl result or null).
+    function httpsOnly(url) {
+        return typeof url === 'string' && url.startsWith('https://') ? url : null;
+    }
+
+    // appendCredit (K1): the credit line + link back under an excerpt;
+    // nothing is added when the post has nothing to credit.
+    function appendCredit(parent, post) {
+        const credit = buildCredit(document, post);
+        if (credit) parent.appendChild(credit);
+    }
+
     function svgEl(tag, attrs) {
         const node = document.createElementNS(SVG_NS, tag);
         for (const key of Object.keys(attrs || {})) {
@@ -1532,14 +1550,15 @@
             const minutes = minutesAgoFrom(p.collected_at, Date.now());
             const metaParts = [];
             if (p.source_name) metaParts.push(String(p.source_name));
-            // Credit the source's terms require next to its content (NPR …).
-            if (p.attribution) metaParts.push('via ' + String(p.attribution));
             // Category meta: display label lowercased (prototype post-meta
             // casing — 'blogs', 'non-profit'), never the raw slug.
             if (p.platform) metaParts.push(catLabel(p.platform).toLowerCase());
             if (minutes !== null) metaParts.push(minutes + 'm ago');
             post.appendChild(el('div', 'post-meta mono', metaParts.join(' · ')));
             post.appendChild(el('div', 'post-text', p.content_snippet || ''));
+            // K1: the source credit and the link back to the original, right
+            // under the excerpt (null for a post with nothing to credit).
+            appendCredit(post, p);
             const row = el('div', 'post-row');
             const score = Number(p.comparative);
             const pill = el('span', 'score-pill mono', fmtNet(score));
@@ -1809,7 +1828,21 @@
             // re-targets an already open drawer.
             drawerOpeners.set(drawer, control);
         } else if (open && !wasOpen) {
-            if (isElementOutside(active, drawer)) drawerOpeners.set(drawer, active);
+            if (isElementOutside(active, drawer)) {
+                // A notice link inside the About panel is not a stable opener
+                // (the panel folds away when a drawer opens): return to the
+                // About chip instead.
+                // Ids read off window.PulseMain (main.js's single source of
+                // truth), with a literal fallback for the pure unit tests
+                // that exercise this function without loading main.js —
+                // grumpy-developer review, K1 round 2: these were two
+                // independent hardcoded copies with no shared source, so an
+                // id rename in index.html could silently break this branch.
+                const pm = typeof window !== 'undefined' ? window.PulseMain : null;
+                const panel = document.getElementById((pm && pm.ABOUT_PANEL_ID) || 'about-panel');
+                const aboutChip = document.getElementById((pm && pm.ABOUT_CHIP_ID) || 'about-chip');
+                drawerOpeners.set(drawer, panel && aboutChip && panel.contains(active) ? aboutChip : active);
+            }
             else drawerOpeners.delete(drawer);
         }
         drawer.classList.toggle('open', open);
@@ -1919,6 +1952,7 @@
             'Why does it say that?', closeAudit));
         const block = el('div', 'drawer-post');
         block.appendChild(el('div', 'post-text', post.content_snippet || ''));
+        appendCredit(block, post);     // K1: the excerpt keeps its credit when the receipt is unavailable
         inner.appendChild(block);
         inner.appendChild(el('div', 'empty mono',
             'audit trail unavailable — the audit service could not be reached. '
@@ -1942,12 +1976,14 @@
         const minutes = minutesAgoFrom(model.post.collected_at, Date.now());
         const metaParts = [];
         if (model.post.source_name) metaParts.push(String(model.post.source_name));
-        if (model.post.attribution) metaParts.push('via ' + String(model.post.attribution));
         if (minutes !== null) metaParts.push(minutes + 'm ago');
         const hashText = fmtHashPrefix(model.inputHash);
         if (hashText) metaParts.push('input ' + hashText);
         block.appendChild(el('div', 'post-meta mono', metaParts.join(' · ')));
         block.appendChild(el('div', 'post-text', model.post.content_snippet));
+        // K1: credit + link back on the receipt too (a local demo receipt is
+        // marked demo through model.isDemo).
+        appendCredit(block, model.isDemo ? Object.assign({}, model.post, { isDemo: true }) : model.post);
         const provText = provenanceLine(model.provenance);
         if (provText) block.appendChild(el('div', 'post-meta mono post-provenance', provText));
         inner.appendChild(block);
@@ -2200,6 +2236,7 @@
                         a.target = '_blank';
                         a.rel = 'noopener noreferrer';
                         a.title = src.reason;
+                        a.setAttribute('aria-label', 'Terms of ' + src.name + ' (opens in a new tab)');
                         line.appendChild(a);
                     }
                     list.appendChild(line);

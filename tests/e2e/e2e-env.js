@@ -11,5 +11,7 @@ module.exports = {
     // pulse_of_ai_e2e_<suffix>); scripts/lib/fixture-db-guard.js refuses anything
     // else, including the dev database and the Jest test database.
     E2E_DB: process.env.E2E_DB || 'pulse_of_ai_e2e',
-    E2E_PORT: 3100,              // own server; never the dev server on 3000
+    // Own server; never the dev server on 3000. E2E_PORT overrides it so
+    // concurrent runs (parallel worktrees) cannot collide on one port.
+    E2E_PORT: Number(process.env.E2E_PORT) || 3100,
 };

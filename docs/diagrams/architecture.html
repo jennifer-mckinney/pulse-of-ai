@@ -38,18 +38,19 @@ flowchart LR
     direction TB
     B1["index.html&lt;br/&gt;UMD scripts in contract order"]:::done
     B2["config/*.config.js&lt;br/&gt;design · api · story · cities · legal"]:::done
-    B3["utils · data · insights · chapters&lt;br/&gt;pure, jest-tested"]:::done
+    B3["utils · attribution · data · insights · chapters&lt;br/&gt;pure, jest-tested"]:::done
     B4["globe.js PulseGlobe&lt;br/&gt;Canvas-2D dot globe"]:::done
     B5["story.js PulseStory&lt;br/&gt;11-beat scroll story"]:::done
     B6["ui.js PulseUI&lt;br/&gt;explore, ribbon, audit + health drawers&lt;br/&gt;SYSTEM ALERT banner, SYSTEM WATCHDOG section"]:::done
     B7["main.js PulseMain&lt;br/&gt;shell, health chip, about panel"]:::done
+    B8["credits.html + credits.js&lt;br/&gt;sources, licences, notices"]:::done
   end
 
   subgraph WEB["③ web · src/server.js · :3000"]
     direction TB
     W0["security headers on every response&lt;br/&gt;CSP script-src 'self', style-src 'self'&lt;br/&gt;+ express.static public/&lt;br/&gt;malformed JSON → 400 JSON (jsonErrorHandler)"]:::done
     W1["refresh router, no CORS&lt;br/&gt;POST /api/refresh&lt;br/&gt;same-origin guard, token rule → 202 / 403 / 409 / 429 / 503 / 500"]:::done
-    W2["read-only router, cors()&lt;br/&gt;GET /api/health · /api/posts/aggregated-by-location&lt;br/&gt;GET /api/sentiment/latest · /api/audit/:post_id&lt;br/&gt;GET /api/bias/latest · /api/bias/history&lt;br/&gt;GET /api/methodology · /api/sources&lt;br/&gt;GET /api/sources/timeseries · /api/themes&lt;br/&gt;POST /api/query"]:::done
+    W2["read-only router, cors()&lt;br/&gt;GET /api/health · /api/posts/aggregated-by-location&lt;br/&gt;GET /api/sentiment/latest · /api/audit/:post_id&lt;br/&gt;GET /api/bias/latest · /api/bias/history&lt;br/&gt;GET /api/methodology · /api/sources&lt;br/&gt;GET /api/sources/timeseries · /api/themes&lt;br/&gt;GET /api/credits · POST /api/query"]:::done
     W3["/api/health (5 s cache): active_alerts incl.&lt;br/&gt;source_stale / source_failing / source_refused,&lt;br/&gt;retention_overdue and watchdog alerts;&lt;br/&gt;queues, maintenance, watchdog, correlation, bias_sample"]:::done
   end
 
@@ -126,6 +127,7 @@ flowchart LR
 
   B1 --&gt; B2 --&gt; B3 --&gt; B4 --&gt; B5 --&gt; B6 --&gt; B7
   B7 -- "same-origin fetch /api/*&lt;br/&gt;poll every 150 s" --&gt; W2
+  B8 -- "fetch /api/credits" --&gt; W2
   B1 -- "GET static assets" --&gt; W0
   W1 -- "insert processing_jobs row" --&gt; D1
   W1 -- "add collect-all job" --&gt; Q2

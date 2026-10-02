@@ -35,6 +35,19 @@ require('dotenv').config();
 try { require('../lib/fixture-db-guard').assertFixtureTarget(process.env); } catch (err) { console.error(require('../../src/collectors/redact').scrub(`seed-e2e: ${err.message}`)); process.exit(1); }
 const crypto = require('crypto');
 const { dbGet, dbAll, dbRun, closePool } = require('../../src/db/connection');
+const { getSource } = require('../../src/config/source-registry');
+const { linkDomains } = require('../../src/config/attribution');
+
+// K1: a fixture permalink on the post's OWN source domain (the API publishes a
+// link only when its host belongs to the source). It uses an "e2e." subdomain so
+// that account-root shapes (instagram.com/<handle>/..., x.com/<handle>/...,
+// t.me/<handle>/...) are never mistaken for an identity link. Fixture posts are
+// synthetic and live only in e2e or disposable databases (the fixture-db guard).
+function fixtureUrl(sourceName, externalId) {
+    const src = getSource(sourceName);
+    const domain = src ? [...linkDomains(src)].sort()[0] : null;
+    return domain ? `https://e2e.${domain}/e2e/${externalId}` : null;
+}
 
 const CITIES = [
     'San Francisco', 'New York', 'London', 'Berlin', 'Tokyo', 'Beijing',
@@ -69,6 +82,22 @@ const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
 async function main() {
     const already = await dbGet(`SELECT 1 FROM raw_posts WHERE external_id = 'dev-seed-0-0'`);
     if (already) {
+        // K1: a database seeded before fixture permalinks existed gets them
+        // now (idempotent: only fixture rows that still have no url).
+        const bare = await dbAll(
+            `SELECT rp.id, rp.external_id, ds.name
+               FROM raw_posts rp JOIN data_sources ds ON ds.id = rp.source_id
+              WHERE rp.external_id LIKE 'dev-seed-%' AND (rp.raw_payload->>'url') IS NULL`);
+        for (const row of bare) {
+            const url = fixtureUrl(row.name, row.external_id);
+            if (!url) continue;
+            await dbRun(
+                `UPDATE raw_posts
+                    SET raw_payload = COALESCE(raw_payload, '{}'::jsonb)
+                        || jsonb_build_object('url', $2::text,
+                                              'published_at', to_char(collected_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))
+                  WHERE id = $1`, [row.id, url]);
+        }
         console.log('seed-e2e: fixture dataset already present — skipped.');
         return;
     }
@@ -104,11 +133,17 @@ async function main() {
             const content = `${text} [${cityName}]`;
 
             const post = await dbGet(
-                `INSERT INTO raw_posts (source_id, external_id, content, content_hash, location, collected_at)
-                 VALUES ($1, $2, $3, $4, $5, NOW() - ($6::int * INTERVAL '1 minute'))
+                `INSERT INTO raw_posts (source_id, external_id, content, content_hash, location, collected_at, raw_payload)
+                 VALUES ($1, $2, $3, $4, $5, NOW() - ($6::int * INTERVAL '1 minute'),
+                         jsonb_build_object('url', $7::text,
+                                            'published_at', to_char((NOW() - ($6::int * INTERVAL '1 minute')) AT TIME ZONE 'UTC',
+                                                                    'YYYY-MM-DD"T"HH24:MI:SS"Z"')))
                  ON CONFLICT (source_id, external_id) DO NOTHING
                  RETURNING id`,
-                [src.id, `dev-seed-${ci}-${pi}`, content, sha256(content), cityName, minutesAgo]);
+                // K1: a fixture permalink on the source's own domain, so the
+                // e2e suite can assert the credit link.
+                [src.id, `dev-seed-${ci}-${pi}`, content, sha256(content), cityName, minutesAgo,
+                    fixtureUrl(src.name, `dev-seed-${ci}-${pi}`)]);
             if (!post) continue;
             n++;
 

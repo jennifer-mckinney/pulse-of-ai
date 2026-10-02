@@ -165,6 +165,7 @@ async function insertPostWithFullPipeline(sourceId, jobId, mvIds, {
     externalId  = null,
     collectedAt = null,
     keywords    = ['ai', 'machine learning'],
+    rawPayload  = null,   // K1: raw_payload metadata (url, published_at) as ingest stores it
 } = {}) {
     const content = `Test post ${externalId || Math.random()}`;
     const hash    = crypto.createHash('sha256').update(content).digest('hex');
@@ -173,12 +174,13 @@ async function insertPostWithFullPipeline(sourceId, jobId, mvIds, {
     // raw_posts — COALESCE keeps the NOW() default when no explicit timestamp
     // is requested (a plain $6 = NULL would store NULL, not the column default)
     const post = await dbRun(
-        `INSERT INTO raw_posts (source_id, external_id, content, content_hash, location, collected_at)
-         VALUES ($1, $2, $3, $4, $5, COALESCE($6::timestamptz, NOW()))
+        `INSERT INTO raw_posts (source_id, external_id, content, content_hash, location, collected_at, raw_payload)
+         VALUES ($1, $2, $3, $4, $5, COALESCE($6::timestamptz, NOW()), $7::jsonb)
          ON CONFLICT (source_id, external_id) DO UPDATE SET content = EXCLUDED.content
          RETURNING id`,
         [sourceId, extId, content, hash, location,
-         collectedAt instanceof Date ? collectedAt.toISOString() : collectedAt],
+         collectedAt instanceof Date ? collectedAt.toISOString() : collectedAt,
+         rawPayload === null ? null : JSON.stringify(rawPayload)],
     );
 
     // Sentiment: audit log + derived result
@@ -247,18 +249,20 @@ async function insertPostWithRelevanceOnly(sourceId, jobId, mvIds, {
     externalId  = null,
     collectedAt = null,
     keywords    = ['ai', 'machine learning'],
+    rawPayload  = null,   // K1: raw_payload metadata (url, published_at)
 } = {}) {
     const content = `Unscored post ${externalId || Math.random()}`;
     const hash    = crypto.createHash('sha256').update(content).digest('hex');
     const extId   = externalId || hash.slice(0, 16);
 
     const post = await dbRun(
-        `INSERT INTO raw_posts (source_id, external_id, content, content_hash, location, collected_at)
-         VALUES ($1, $2, $3, $4, $5, COALESCE($6::timestamptz, NOW()))
+        `INSERT INTO raw_posts (source_id, external_id, content, content_hash, location, collected_at, raw_payload)
+         VALUES ($1, $2, $3, $4, $5, COALESCE($6::timestamptz, NOW()), $7::jsonb)
          ON CONFLICT (source_id, external_id) DO UPDATE SET content = EXCLUDED.content
          RETURNING id`,
         [sourceId, extId, content, hash, location,
-         collectedAt instanceof Date ? collectedAt.toISOString() : collectedAt],
+         collectedAt instanceof Date ? collectedAt.toISOString() : collectedAt,
+         rawPayload === null ? null : JSON.stringify(rawPayload)],
     );
 
     const relAudit = await dbRun(

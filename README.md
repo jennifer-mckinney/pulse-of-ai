@@ -249,7 +249,7 @@ E-mail is on when `SMTP_HOST`, `SMTP_FROM` and `SMTP_TO` are all set. Without th
 
 ![Pulse of AI container architecture](docs/diagrams/architecture.png)
 
-- **Browser** (`public/`, no build step, all assets self-hosted): UMD modules loaded in a fixed order. `globe.js` draws a Canvas-2D dot globe, `story.js` runs the eleven-part scroll story, `ui.js` provides explore mode, the source ribbon and the audit and health drawers, and `main.js` is the page shell.
+- **Browser** (`public/`, no build step, all assets self-hosted): UMD modules loaded in a fixed order. `globe.js` draws a Canvas-2D dot globe, `story.js` runs the eleven-part scroll story, `ui.js` provides explore mode, the source ribbon and the audit and health drawers, `main.js` is the page shell, and `credits.html` (with `credits.js`) is the credits page that the header "credits" chip opens.
 - **web** (`src/server.js`): Express serves the page and the API.
 - **worker** (`src/workers/start.js`): collection, scoring (the `ingest` queue), cycle close and bias checks, source-health alerts, embeddings, the maintenance schedules (text retention, compaction, the rolling bias window, terms snapshots) and Reddit maintenance, over BullMQ queues in Valkey 8.
 - **watchdog** (`scripts/watchdog.js`, `src/watchdog/`): external alerting from its own container (see [Alerting](#alerting)).
@@ -270,16 +270,19 @@ All endpoints are under `/api`. The read-only endpoints send CORS headers; `POST
 |---|---|---|
 | `GET` | `/api/health` | Status, DB connection, last job, unresolved alerts, `data_mode` and `data_window` for the trailing hour, source counts by status, Valkey reachability, the worker heartbeat and queue counts, maintenance, watchdog, bias-sample and correlation-gate status (cached 5 s) |
 | `GET` | `/api/posts/aggregated-by-location` | Sentiment counts per city with coordinates and data origin (`?platform=`, `?from=`, `?to=`) |
-| `GET` | `/api/sentiment/latest` | Sentiment summary and recent posts (`?limit=` up to 100, `?platform=`) |
+| `GET` | `/api/sentiment/latest` | Sentiment summary and recent posts, each with its source credit and link back (`?limit=` up to 100, `?platform=`) |
 | `GET` | `/api/themes` | Up to 12 keyword themes with their sentiment split and top category |
-| `POST` | `/api/query` | Filtered scored posts with source attribution: the newest `limit` matches (up to 100) and the `total` match count; no offset (body: `platform`, `location`, `from`, `to`, `limit`) |
-| `GET` | `/api/audit/:post_id` | The receipt: provenance, post, every decision with four audience views, the ingestion step and the bias layers |
+| `POST` | `/api/query` | Filtered scored posts with source attribution, credit and link back: the newest `limit` matches (up to 100) and the `total` match count; no offset (body: `platform`, `location`, `from`, `to`, `limit`) |
+| `GET` | `/api/audit/:post_id` | The receipt: provenance, post (with its credit and link back), every decision with four audience views, the ingestion step and the bias layers |
 | `GET` | `/api/bias/latest` | The latest job's bias assessments and violations, and the share of "insufficient sample" assessments per check |
 | `GET` | `/api/bias/history` | Bias alert history for a window (`?hours=`, default 12, 1–48) with methodology lineage |
 | `GET` | `/api/methodology` | Every registered methodology version with its config and justification |
 | `GET` | `/api/sources` | The 52 registry sources with runtime status, terms, attribution and last-run classification (`?include_inactive=true` adds demo feeds and retired rows) |
+| `GET` | `/api/credits` | The credit, licence and notice of every registry source that has stored real posts, and the site-wide notices the credits page shows (cached 60 s) |
 | `GET` | `/api/sources/timeseries` | Hourly sentiment volume per category (`?hours=`, default 12, 1–48) |
 | `POST` | `/api/refresh` | Asks the worker for one collection over every source: 202 with a `job_id`; 403 cross-site, without a valid `X-Refresh-Token` once `REFRESH_TOKEN` is set, or with no `REFRESH_TOKEN` when the site is bound beyond loopback or reached through a proxy; 409 while one runs; 429 within 60 s of the last; 503 if the queue is down; 500 on an unexpected error |
+
+**Credits and links back.** Every post row of `/api/query`, `/api/sentiment/latest` and `/api/audit/:post_id` carries `credit`, `source_url`, `published_at` and `data_origin` next to the existing `attribution`, and the page shows a credit line under each excerpt ("via NPR · npr.org"), with the licence link, a "shortened and redacted" note, the Pew citation date or the arXiv and NCBI notices where a source's terms call for them. `credit` comes from the source registry at read time (`src/config/attribution.js`, no schema change). `source_url` is the stored permalink and appears only when it is a public http(s) address on the source's own domains and not a link to a person's profile; otherwise it is `null` and the credit is still shown. A demo post has no credit and no link (`data_origin: "demo"`), and a stored row labelled with a slug that is not in the registry has neither. Where retention has removed a post's text, the credit stays and the link stays only if the stored URL was kept (Reddit's is). The credits page lists the sources, licences and notices; it is separate from the header "about" panel, which carries the software's own licence and attribution. Design and decisions: [docs/research/k1-attribution-design.md](docs/research/k1-attribution-design.md).
 
 `/api/themes`, `/api/posts/aggregated-by-location` and `/api/sources/timeseries` are cached in-process for 10 seconds. Route errors return `{ "error": "..." }` with no stack traces, and so does a malformed JSON request body (`400 { "error": "invalid JSON body" }`) in every environment.
 
@@ -419,6 +422,6 @@ Pulse of AI is open source under the [GNU Affero General Public License v3.0 or 
 
 In plain English: you may use, study, modify and share Pulse of AI, including commercially. If you distribute a version, or run a modified version as a network service, you must release it under the AGPL and offer its complete source code to its users (section 13 for network use), and you must keep and show the "Built on Pulse of AI by Jennifer McKinney" credit. There is no warranty. (The non-commercial basis on which the data sources are collected, ADR 0001 ruling 6, is a separate matter: it describes how this project uses those sources, not what the software license allows.)
 
-**If you deploy a modified version:** the page shows its legal notices in the header "about" panel (`public/js/config/legal.config.js`, and the `<noscript>` block of `public/index.html`). Point `SOURCE_URL` there, and BOTH static "Source code" links in `public/index.html` (the one in the `<noscript>` block and the one in the About-panel markup that remains if the config fails to load), at the source of the version you run, and keep the attribution line.
+**If you deploy a modified version:** the page shows its legal notices in the header "about" panel (`public/js/config/legal.config.js`, and the `<noscript>` block of `public/index.html`). Point `SOURCE_URL` there, and the three static "Source code" links (the `<noscript>` block and the About-panel markup that remains if the config fails to load, both in `public/index.html`, and the footer of `public/credits.html`), at the source of the version you run, and keep the attribution line.
 
 **Third-party components** keep their own licenses. The vendored frontend assets are the Space Grotesk and IBM Plex Mono fonts (SIL Open Font License 1.1) and the world-atlas land geometry (ISC); see [public/vendor/README.md](public/vendor/README.md). The npm, Python and container dependencies are under their own licenses.

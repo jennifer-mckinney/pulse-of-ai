@@ -50,6 +50,7 @@ test('health drawer: yellow banner, alert history, methodology table, sources st
         const row = blocked.filter({ hasText: name });
         await expect(row.locator('.src-status')).toHaveText('blocked: no compliant access');
         await expect(row.locator('a.src-terms')).toHaveAttribute('href', /^https:\/\//);
+        await expect(row.locator('a.src-terms')).toHaveAttribute('aria-label', /^Terms of .+ \(opens in a new tab\)$/);
     }
     await expect(drawer.locator('.src-row', { hasText: 'Hacker News (Y Combinator)' })).toHaveCount(1);
     // Reddit (#52, ADR 0001 ruling 8): built, off until Reddit approves —
@@ -58,6 +59,7 @@ test('health drawer: yellow banner, alert history, methodology table, sources st
     await expect(reddit).toHaveCount(1);
     await expect(reddit.locator('.src-status')).toHaveText('awaiting approval');
     await expect(reddit.locator('a.src-terms')).toHaveAttribute('href', 'https://redditinc.com/policies/data-api-terms');
+    await expect(reddit.locator('a.src-terms')).toHaveAttribute('aria-label', /^Terms of Reddit.* \(opens in a new tab\)$/);
 
     // ALERT HISTORY · LAST 12H rows with severity classes.
     await expect(drawer.locator('.sec-lbl', { hasText: 'ALERT HISTORY · LAST 12H' }))

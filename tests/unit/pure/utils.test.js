@@ -236,13 +236,16 @@ describe('module export shape', () => {
         expect(Object.keys(utils).sort()).toEqual([
             'SENTIMENT_COLORS',
             'SOURCE_PALETTE',
+            'buildCredit',        // K1: re-exported from js/attribution.js
             'catLabel',
+            'creditModel',        // K1
             'esc',
             'fmtCount',
             'fmtNet',
             'fmtPct',
             'healthState',
             'netSentiment',
+            'safeHttpUrl',        // K1
             'sentimentBucket',
         ]);
     });

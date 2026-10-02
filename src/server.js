@@ -15,6 +15,7 @@
 //   GET  /api/methodology
 //   GET  /api/sources
 //   GET  /api/sources/timeseries
+//   GET  /api/credits           (K1: source credits + site notices for credits.html)
 //   POST /api/query
 //   GET  /api/themes
 
@@ -36,6 +37,7 @@ const methodologyRouter = require('./routes/methodology');
 const sourcesRouter     = require('./routes/sources');
 const queryRouter       = require('./routes/query');
 const themesRouter      = require('./routes/themes');
+const creditsRouter     = require('./routes/credits');
 const { logRouteError } = require('./middleware/log-error');
 
 const app  = express();
@@ -91,6 +93,7 @@ readOnlyApi.use(methodologyRouter);
 readOnlyApi.use(sourcesRouter);
 readOnlyApi.use(queryRouter);
 readOnlyApi.use(themesRouter);
+readOnlyApi.use(creditsRouter);
 app.use('/api', readOnlyApi);
 
 // ─── Frontend fallback ────────────────────────────────────────────────────────

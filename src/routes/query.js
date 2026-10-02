@@ -10,7 +10,11 @@
 // Returns:
 //   200 { results: [...], total: number, query: { platform, location, from, to, limit } }
 //     each result carries `attribution` (string|null): the credit the source's
-//     terms require next to its content (NPR, NBCNews.com, Stack Exchange …)
+//     terms require next to its content (NPR, NBCNews.com, Stack Exchange …),
+//     and (K1, src/config/attribution.js) `credit` (object|null: the credit
+//     every real excerpt carries), `source_url` (string|null: the validated
+//     link back to the original), `published_at` and `data_origin`
+//     ('live' | 'demo'; a demo post has no credit and no link)
 //     total = the number of rows MATCHING the filters (COUNT(*) OVER() in
 //     the query), not the page size — results.length can be smaller when
 //     limit truncates. Callers page honestly against total.
@@ -23,7 +27,7 @@ const { logRouteError } = require('../middleware/log-error');
 const { Router } = require('express');
 const { dbAll }  = require('../db/connection');
 const { CATEGORY_SLUGS, isCanonicalCategory } = require('../config/categories');
-const { attributionFor } = require('../config/source-registry');
+const { postAttribution } = require('../config/attribution');
 
 const router = Router();
 
@@ -151,7 +155,10 @@ router.post('/query', async (req, res) => {
                 rp.location,
                 ds.name                 AS source_name,
                 ds.category             AS platform,
-                rp.collected_at
+                rp.collected_at,
+                rp.raw_payload->>'url'          AS stored_url,
+                rp.raw_payload->>'published_at' AS stored_published_at,
+                ds.source_type                  AS stored_source_type
              FROM sentiment_results sr
              JOIN raw_posts rp    ON rp.id = sr.raw_post_id
              JOIN data_sources ds ON ds.id = rp.source_id
@@ -163,9 +170,17 @@ router.post('/query', async (req, res) => {
         );
 
         const total = rows.length > 0 ? rows[0].full_count : 0;
-        // attribution: the text a source's terms require next to its content
-        // (e.g. "NPR") — null when none is required (ADR 0001 ruling 6).
-        const results = rows.map(({ full_count, ...row }) => ({ ...row, attribution: attributionFor(row.source_name) }));
+        // K1: attribution (the text a source's terms require, null when none),
+        // credit, validated link back, date and data origin — one mechanism
+        // for every route (src/config/attribution.js). The stored_* columns
+        // are inputs only and are not served.
+        const results = rows.map(({ full_count, stored_url, stored_published_at, stored_source_type, ...row }) => ({
+            ...row,
+            ...postAttribution({
+                sourceName: row.source_name, sourceType: stored_source_type,
+                url: stored_url, publishedAt: stored_published_at,
+            }),
+        }));
 
         return res.json({
             results,

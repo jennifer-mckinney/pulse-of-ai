@@ -30,7 +30,7 @@
 <pre class="mermaid">
 %% Title: Object model · frontend modules
 %% Summary: The browser UMD modules in their script order, the public API each exposes on window, the document events they exchange, and the API endpoints each one calls.
-%% Sources: public/index.html (script order), public/js/*.js, public/js/config/*.js. Updated 2026-09-29 (PR #22: the watchdog SYSTEM ALERT chip and banner, the SYSTEM WATCHDOG drawer section, the publisher-location layer). Spec: TECHNICAL_SPEC.md section 11; PRD section 4.3 (the FuN.zip prototype is the design of record).
+%% Sources: public/index.html (script order), public/js/*.js, public/js/config/*.js. Updated 2026-10-01 (K1: attribution.js, credits.js, the credit line; 2026-09-29 PR #22: the watchdog SYSTEM ALERT chip and banner, the SYSTEM WATCHDOG drawer section, the publisher-location layer). Spec: TECHNICAL_SPEC.md section 11; PRD section 4.3 (the FuN.zip prototype is the design of record).
 classDiagram
   direction LR
 
@@ -65,8 +65,17 @@ classDiagram
     SOURCE_URL
     NOTICE 6 lines
   }
+  class PulseAttribution {
+    &lt;&lt;attribution.js · pure&gt;&gt;
+    +safeHttpUrl(raw) public http(s) link or null
+    +parseIsoDate(v)
+    +creditModel(post) via, licence, notice, cite date
+    +buildCredit(doc, post, className) the credit line
+    no credit and no link for a demo post
+  }
   class PulseUtils {
     &lt;&lt;utils.js&gt;&gt;
+    +buildCredit() · creditModel() · safeHttpUrl() re-exported
     +esc(s)
     +healthState(health) state, label, systemAlerts
     +catLabel(slug)
@@ -130,6 +139,11 @@ classDiagram
     explore filters, city detail, tooltip, source ribbon
     listens to the four pulse:* events
   }
+  class PulseCredits {
+    &lt;&lt;credits.js · credits.html&gt;&gt;
+    +render(doc, payload, els) sources, licences, notices
+    +groupByCategory(sources)
+  }
   class PulseMain {
     &lt;&lt;main.js · page shell&gt;&gt;
     +freezeInsightTimer()
@@ -141,6 +155,9 @@ classDiagram
   }
 
   PulseUtils --&gt; PulseDesignConfig
+  PulseUtils --&gt; PulseAttribution : re-exports
+  PulseCredits --&gt; PulseAttribution
+  PulseCredits --&gt; PulseUtils : catLabel()
   PulseData --&gt; PulseCityRegistry
   PulseInsights --&gt; PulseUtils
   PulseChapters --&gt; PulseInsights
@@ -165,6 +182,7 @@ classDiagram
     ui.js - POST /api/query
     ui.js - GET /api/sources/timeseries
     ui.js - GET /api/audit/POST_ID
+    credits.js - GET /api/credits
     ui.js - GET /api/health, /api/bias/history
     ui.js - GET /api/methodology, /api/sources
     main.js - GET /api/health

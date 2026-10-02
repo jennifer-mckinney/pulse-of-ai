@@ -29,7 +29,10 @@
 //                                       or { status: 'text_removed',
 //                                       removed_at, reason, notice } (ADR
 //                                       0001 ruling 9)
-//         post: {...}, narration: {...}, ingest: {...}|null,
+//         post: { id, content_snippet, location, source_category, source_name,
+//                 attribution, credit, source_url, published_at, data_origin,
+//                 collected_at },   (K1: credit + validated link back)
+//         narration: {...}, ingest: {...}|null,
 //         decisions: [...],
 //         bias: { job_id, assessed_at, model_name, version,
 //                 lineage, lineage_fallback, layers } }
@@ -56,7 +59,7 @@ const {
 } = require('../config/audit-narration');
 const { buildLayers } = require('../config/bias-vocabulary');
 const { DEMO_SOURCE_TYPE } = require('../config/data-mode');
-const { attributionFor } = require('../config/source-registry');
+const { postAttribution } = require('../config/attribution');
 const { retentionStatus } = require('../collectors/retention');
 const {
     resolveBiasLineage,
@@ -265,10 +268,18 @@ router.get('/audit/:post_id', async (req, res) => {
         // free) external id, and the keyed provenance fingerprint that
         // `npm run verify-provenance` reproduces from the original.
         const demo = post.source_type === DEMO_SOURCE_TYPE;
+        // K1: ONE validation for the receipt's link and date, shared with the
+        // post block below (src/config/attribution.js): the permalink must be a
+        // safe public http(s) URL that belongs to the source; a fictional demo
+        // post links to nothing.
+        const attr = postAttribution({
+            sourceName: post.source_name, sourceType: post.source_type,
+            url: post.permalink, publishedAt: post.published_at,
+        });
         const provenance = {
             source:       post.source_name,
-            published_at: post.published_at || null,
-            permalink:    /^https?:\/\//.test(post.permalink || '') ? post.permalink : null,
+            published_at: attr.published_at,
+            permalink:    attr.source_url,
             external_id:  post.external_id,
             fingerprint:  post.provenance_fingerprint || null,
             verifiable:   post.provenance_fingerprint
@@ -303,10 +314,11 @@ router.get('/audit/:post_id', async (req, res) => {
                 location:        post.location,
                 source_category: post.source_category,
                 source_name:     post.source_name,
-                // credit the source's terms require next to its content, or null
-                attribution:     attributionFor(post.source_name),
-                // 'demo' for fictional demo-feed posts, else 'live'
-                data_origin:     post.source_type === DEMO_SOURCE_TYPE ? 'demo' : 'live',
+                // K1: attribution (the credit the source's terms require, or
+                // null), credit, source_url (the validated link back), the
+                // publication date, and data_origin ('demo' for fictional
+                // demo-feed posts, which have no credit and no link).
+                ...attr,
                 collected_at:    post.collected_at,
             },
             narration: { component: NARRATION_COMPONENT, version: NARRATION_VERSION },

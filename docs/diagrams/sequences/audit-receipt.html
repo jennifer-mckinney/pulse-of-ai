@@ -30,7 +30,7 @@
 <pre class="mermaid">
 %% Title: Sequence · the "why?" audit receipt
 %% Summary: What happens when a reader opens a post's receipt: the drawer request, the queries behind GET /api/audit/:post_id, the provenance and lineage it adds, and the four audience views the drawer switches between.
-%% Sources: public/js/ui.js (openAudit, mapAuditResponse, AUDIENCES), src/routes/audit.js, src/config/{audit-narration,bias-lineage,bias-vocabulary,source-registry,data-mode}.js, src/collectors/retention.js (retentionStatus), src/db/migrations/042_admission_filter.sql. Updated 2026-10-01. Spec: TECHNICAL_SPEC.md sections 7 (GET /api/audit/:post_id), 8 (provenance), 10 (explainability chain, audiences).
+%% Sources: public/js/ui.js (openAudit, mapAuditResponse, AUDIENCES), src/routes/audit.js, src/config/{audit-narration,attribution,bias-lineage,bias-vocabulary,source-registry,data-mode}.js, src/collectors/retention.js (retentionStatus), src/db/migrations/042_admission_filter.sql. Updated 2026-10-01. Spec: TECHNICAL_SPEC.md sections 7 (GET /api/audit/:post_id), 8 (provenance), 10 (explainability chain, audiences).
 sequenceDiagram
   autonumber
   actor Reader
@@ -57,10 +57,10 @@ sequenceDiagram
     API-&gt;&gt;DB: bias methodology versions
     API-&gt;&gt;API: bias lineage: recorded (methodology_version_id),&lt;br/&gt;inferred (effective_from), or current, layers from that version's config
     API-&gt;&gt;DB: ingest methodology: raw_posts.ingest_mv_id (recorded),&lt;br/&gt;else the version effective at collected_at (inferred)
-    API-&gt;&gt;API: provenance: source, published_at, permalink unless an identity link,&lt;br/&gt;external_id, fingerprint, how to verify (npm run verify-provenance),&lt;br/&gt;retention: text_removed (any source) or, on a platform-terms source&lt;br/&gt;(Reddit, YouTube, TikTok), live with removes_at
+    API-&gt;&gt;API: provenance: source, published_at and permalink only when safe and on&lt;br/&gt;the source's own domain (null for a demo post, see src/config/attribution.js),&lt;br/&gt;external_id, fingerprint, how to verify (npm run verify-provenance),&lt;br/&gt;retention: text_removed (any source) or, on a platform-terms source&lt;br/&gt;(Reddit, YouTube, TikTok), live with removes_at
     API-&gt;&gt;DB: admission filter version of raw_posts.admission_mv_id
     API-&gt;&gt;API: provenance.admission: admission_filter@version (recorded),&lt;br/&gt;else not recorded (before migration 042) or not applicable (demo)
-    API--&gt;&gt;UI: 200 provenance, post (attribution, data_origin), narration,&lt;br/&gt;ingest (with lineage), decisions, bias
+    API--&gt;&gt;UI: 200 provenance, post (attribution, credit, source_url, data_origin), narration,&lt;br/&gt;ingest (with lineage), decisions, bias
     UI-&gt;&gt;UI: mapAuditResponse() → steps
   end
   UI--&gt;&gt;Reader: receipt: ingestion step, sentiment, relevance, discourse, bias layers

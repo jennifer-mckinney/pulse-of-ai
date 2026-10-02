@@ -8,18 +8,19 @@ flowchart LR
     direction TB
     B1["index.html<br/>UMD scripts in contract order"]:::done
     B2["config/*.config.js<br/>design · api · story · cities · legal"]:::done
-    B3["utils · data · insights · chapters<br/>pure, jest-tested"]:::done
+    B3["utils · attribution · data · insights · chapters<br/>pure, jest-tested"]:::done
     B4["globe.js PulseGlobe<br/>Canvas-2D dot globe"]:::done
     B5["story.js PulseStory<br/>11-beat scroll story"]:::done
     B6["ui.js PulseUI<br/>explore, ribbon, audit + health drawers<br/>SYSTEM ALERT banner, SYSTEM WATCHDOG section"]:::done
     B7["main.js PulseMain<br/>shell, health chip, about panel"]:::done
+    B8["credits.html + credits.js<br/>sources, licences, notices"]:::done
   end
 
   subgraph WEB["③ web · src/server.js · :3000"]
     direction TB
     W0["security headers on every response<br/>CSP script-src 'self', style-src 'self'<br/>+ express.static public/<br/>malformed JSON → 400 JSON (jsonErrorHandler)"]:::done
     W1["refresh router, no CORS<br/>POST /api/refresh<br/>same-origin guard, token rule → 202 / 403 / 409 / 429 / 503 / 500"]:::done
-    W2["read-only router, cors()<br/>GET /api/health · /api/posts/aggregated-by-location<br/>GET /api/sentiment/latest · /api/audit/:post_id<br/>GET /api/bias/latest · /api/bias/history<br/>GET /api/methodology · /api/sources<br/>GET /api/sources/timeseries · /api/themes<br/>POST /api/query"]:::done
+    W2["read-only router, cors()<br/>GET /api/health · /api/posts/aggregated-by-location<br/>GET /api/sentiment/latest · /api/audit/:post_id<br/>GET /api/bias/latest · /api/bias/history<br/>GET /api/methodology · /api/sources<br/>GET /api/sources/timeseries · /api/themes<br/>GET /api/credits · POST /api/query"]:::done
     W3["/api/health (5 s cache): active_alerts incl.<br/>source_stale / source_failing / source_refused,<br/>retention_overdue and watchdog alerts;<br/>queues, maintenance, watchdog, correlation, bias_sample"]:::done
   end
 
@@ -96,6 +97,7 @@ flowchart LR
 
   B1 --> B2 --> B3 --> B4 --> B5 --> B6 --> B7
   B7 -- "same-origin fetch /api/*<br/>poll every 150 s" --> W2
+  B8 -- "fetch /api/credits" --> W2
   B1 -- "GET static assets" --> W0
   W1 -- "insert processing_jobs row" --> D1
   W1 -- "add collect-all job" --> Q2

@@ -32,10 +32,10 @@
     <!-- Appropriate Legal Notices for no-JS visitors (same text as
          public/js/config/legal.config.js). -->
     <p class="noscript-legal">Copyright © 2026 Jennifer McKinney ·
-       <a href="https://github.com/jennifer-mckinney/pulse-of-ai">Built on Pulse of AI by Jennifer McKinney</a> ·
-       <a href="https://github.com/jennifer-mckinney/pulse-of-ai/blob/master/LICENSE">Licensed under AGPL-3.0-or-later</a> ·
-       <a href="https://github.com/jennifer-mckinney/pulse-of-ai/blob/master/ADDITIONAL-TERMS.md">Additional terms (AGPL section 7(b))</a> ·
-       <a href="https://github.com/jennifer-mckinney/pulse-of-ai">Source code</a> ·
+       <a href="https://github.com/jennifer-mckinney/pulse-of-ai" rel="noopener noreferrer">Built on Pulse of AI by Jennifer McKinney</a> ·
+       <a href="https://github.com/jennifer-mckinney/pulse-of-ai/blob/master/LICENSE" rel="noopener noreferrer">Licensed under AGPL-3.0-or-later</a> ·
+       <a href="https://github.com/jennifer-mckinney/pulse-of-ai/blob/master/ADDITIONAL-TERMS.md" rel="noopener noreferrer">Additional terms (AGPL section 7(b))</a> ·
+       <a href="https://github.com/jennifer-mckinney/pulse-of-ai" rel="noopener noreferrer">Source code</a> ·
        No warranty: provided "as is", without warranty of any kind (AGPL sections 15 and 16).</p>
   </div>
 </noscript>
@@ -64,6 +64,13 @@
         <span class="mono" id="insight-timer">0:00</span>
         <span class="hdr-chip-lbl" id="insight-label">time to insight</span>
       </div>
+      <!-- K1: every excerpt carries its source credit and a link back to the
+           original; the credits page lists every credited source, the
+           licences and the notices the sources' terms require. -->
+      <a class="hdr-chip hdr-credits" id="credits-link" href="credits.html"
+         title="Sources, licences and credits">
+        <span class="hdr-chip-lbl">credits</span>
+      </a>
       <button type="button" class="hdr-chip hdr-health h-green" id="health-chip"
               title="Model health · click for bias assessment &amp; alert history"
               aria-haspopup="dialog" aria-controls="health-drawer">
@@ -170,6 +177,7 @@
 <script defer src="js/config/story.config.js"></script>
 <script defer src="js/config/cities.config.js"></script>
 <script defer src="js/config/legal.config.js"></script>
+<script defer src="js/attribution.js"></script>
 <script defer src="js/utils.js"></script>
 <script defer src="js/data.js"></script>
 <script defer src="js/insights.js"></script>

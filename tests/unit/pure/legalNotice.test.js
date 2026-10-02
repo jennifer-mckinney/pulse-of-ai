@@ -90,7 +90,7 @@ describe('index.html — mount points, script order, no-JS copy', () => {
         const noscript = html.slice(html.indexOf('<noscript>'), html.indexOf('</noscript>'));
         for (const n of legal.NOTICE) {
             expect(noscript).toContain(n.text);
-            if (n.href) expect(noscript).toContain(`<a href="${n.href}">${n.text}</a>`);
+            if (n.href) expect(noscript).toContain(`<a href="${n.href}" rel="noopener noreferrer">${n.text}</a>`);
         }
     });
 
@@ -110,14 +110,67 @@ describe('index.html — mount points, script order, no-JS copy', () => {
     });
 });
 
+describe('index.html <noscript> parity (K1 review)', () => {
+    test('the no-JS copy carries every notice text', () => {
+        const html = read('public/index.html');
+        const noscript = html.slice(html.indexOf('<noscript>'), html.indexOf('</noscript>'));
+        for (const n of legal.NOTICE) expect(noscript).toContain(n.text);
+    });
+});
+
+describe('the three static "Source code" links equal SOURCE_URL (AGPL section 13)', () => {
+    test('index.html noscript, index.html About fallback and credits.html', () => {
+        const idx = read('public/index.html');
+        const cr = read('public/credits.html');
+        const noscript = idx.slice(idx.indexOf('<noscript>'), idx.indexOf('</noscript>'));
+        const panel = idx.slice(idx.indexOf('id="about-panel"'), idx.indexOf('</ul>', idx.indexOf('id="about-panel"')));
+        const re = new RegExp('<a href="([^"]+)"[^>]*>Source code</a>', 'g');
+        const hrefs = (t) => [...t.matchAll(re)].map((m) => m[1]);
+        expect(hrefs(noscript)).toEqual([legal.SOURCE_URL]);
+        expect(hrefs(panel)).toEqual([legal.SOURCE_URL]);
+        expect(hrefs(cr)).toEqual([legal.SOURCE_URL]);
+    });
+});
+
+describe('credits.html — the same notices as static markup (K1)', () => {
+    // The credits page is a second page of the UI, so it carries the
+    // Appropriate Legal Notices too; it is static (no config load) so it shows
+    // without JavaScript. Kept equal to the config like the About panel.
+    const html = read('public/credits.html');
+    const foot = html.slice(html.indexOf('<section class="credits-legal"'), html.lastIndexOf('</section>'));
+
+    test('repeats every notice line and link, once each', () => {
+        for (const n of legal.NOTICE) {
+            expect(foot.split(`data-notice="${n.id}"`).length - 1).toBe(1);
+            if (n.href) expect(foot).toContain(`<a href="${n.href}" rel="noopener noreferrer">${n.text}</a>`);
+            else expect(foot).toContain(n.text);
+        }
+        expect((foot.match(/<li /g) || []).length).toBe(legal.NOTICE.length);
+    });
+
+    test('keeps the strict CSP: no inline style attribute, no inline script', () => {
+        expect(html).not.toMatch(/<[a-z][^>]*\sstyle=/i);
+        expect(html).not.toMatch(/<script(?![^>]*\ssrc=)[^>]*>/i);
+    });
+});
+
 describe('main.js — renders the notice through the DOM API only', () => {
     const main = read('public/js/main.js');
 
     test('reads PulseLegalConfig and fills #about-panel', () => {
         expect(main).toContain('window.PulseLegalConfig');
-        expect(main).toContain("getElementById('about-panel')");
+        // The literal id lives in one place (ABOUT_PANEL_ID), read by
+        // getElementById; main.js itself never hardcodes it a second time
+        // (K1 round-2 grumpy-developer fix: single source of truth, shared
+        // with ui.js via window.PulseMain).
+        expect(main).toContain("const ABOUT_PANEL_ID = 'about-panel'");
+        expect(main).toContain('getElementById(ABOUT_PANEL_ID)');
         expect(main).toContain('legalConfig.NOTICE.forEach');
         expect(main).toContain('renderLegalNotice();');
+    });
+
+    test('exposes the About ids on window.PulseMain for ui.js to share', () => {
+        expect(main).toContain('ABOUT_PANEL_ID, ABOUT_CHIP_ID');
     });
 
     test('a missing or malformed config keeps the static notices and warns; the chip is never hidden', () => {
@@ -149,6 +202,14 @@ describe('main.js — renders the notice through the DOM API only', () => {
     test('never uses innerHTML / outerHTML / insertAdjacentHTML', () => {
         // Code use only: the file's comments name innerHTML to forbid it.
         expect(main).not.toMatch(/\.(innerHTML|outerHTML)\s*[+]?=|insertAdjacentHTML\s*\(/);
+    });
+});
+
+describe('ui.js reads the About ids off window.PulseMain, not a second hardcoded copy', () => {
+    test('setDrawerOpen reads pm.ABOUT_PANEL_ID / pm.ABOUT_CHIP_ID with the same literal fallback', () => {
+        const ui = read('public/js/ui.js');
+        expect(ui).toContain("(pm && pm.ABOUT_PANEL_ID) || 'about-panel'");
+        expect(ui).toContain("(pm && pm.ABOUT_CHIP_ID) || 'about-chip'");
     });
 });
 

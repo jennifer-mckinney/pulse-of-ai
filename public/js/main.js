@@ -36,6 +36,15 @@
     let frozenSeconds = null;   // set once by freezeInsightTimer()
     let timerId = null;
 
+    // Single source of truth for the About chip/panel ids: ui.js reads these
+    // off window.PulseMain (with a literal fallback, since its pure tests
+    // construct a bare DOM without loading main.js) instead of hardcoding
+    // its own copy, so a rename here cannot silently reopen the "focus
+    // stranded on a hidden notice link" bug these ids were introduced to fix
+    // (grumpy-developer review, K1 round 2: no shared source of truth).
+    const ABOUT_PANEL_ID = 'about-panel';
+    const ABOUT_CHIP_ID = 'about-chip';
+
     // mm:ss like the prototype header (0-padded seconds only → "0:00").
     function fmtClock(totalSeconds) {
         const mm = String(Math.floor(totalSeconds / 60));
@@ -177,8 +186,8 @@
     }
 
     function renderLegalNotice() {
-        const panel = document.getElementById('about-panel');
-        const chip = document.getElementById('about-chip');
+        const panel = document.getElementById(ABOUT_PANEL_ID);
+        const chip = document.getElementById(ABOUT_CHIP_ID);
         if (!panel || !chip) return;
         // The panel ships its notices as static markup in index.html, so the
         // AGPL section 7(b) attribution stays reachable (chip + panel) even if
@@ -228,8 +237,23 @@
             setOpen(false);
             if (returnFocus) chip.focus();
         };
+        // A drawer (z-index 50) covers the panel (30): opening the panel
+        // behind an open drawer would set aria-expanded on something nobody
+        // can see, so the chip does nothing while a drawer is open.
+        const drawerOpen = () => !!document.querySelector('#audit-drawer.open, #health-drawer.open');
+        // Reflects drawerOpen() on the chip for assistive technology (the
+        // real gate is the click handler's own drawerOpen() check below,
+        // unchanged); defined here, not inside the MutationObserver branch,
+        // so it still runs — resynced on every click — in a browser without
+        // MutationObserver instead of leaving the chip looking enabled while
+        // inert (grumpy-developer review, K1 round 2).
+        const syncChip = () => {
+            if (drawerOpen()) chip.setAttribute('aria-disabled', 'true');
+            else chip.removeAttribute('aria-disabled');
+        };
         chip.addEventListener('click', () => {
-            if (panel.hidden) setOpen(true);
+            syncChip();
+            if (panel.hidden) { if (!drawerOpen()) setOpen(true); }
             else close();
         });
         document.addEventListener('keydown', (e) => {
@@ -257,20 +281,33 @@
             }
         };
         if (typeof MutationObserver !== 'undefined') {
+            // Only a drawer GAINING `open` folds the panel: another class
+            // change on an already-open drawer must not close a panel the
+            // user has just opened (attributeOldValue gives the old classes).
             const observer = new MutationObserver((records) => {
-                const opened = records.find((r) => r.target.classList.contains('open'));
+                syncChip();
+                const opened = records.find((r) => r.target.classList.contains('open')
+                    && !String(r.oldValue || '').split(/\s+/).includes('open'));
                 if (opened) foldAway(opened.target);
             });
             ['audit-drawer', 'health-drawer'].forEach((id) => {
                 const d = document.getElementById(id);
-                if (d) observer.observe(d, { attributes: true, attributeFilter: ['class'] });
+                if (d) observer.observe(d, { attributes: true, attributeFilter: ['class'], attributeOldValue: true });
             });
         }
+        // Without MutationObserver the panel will not auto-fold when a
+        // drawer opens through another control, but the chip's aria-disabled
+        // state is still correct at load and on every click (syncChip above).
+        syncChip();
     }
 
     // Shared shell surface for later modules (freeze timer on first receipt,
-    // programmatic jump to explore).
-    window.PulseMain = { freezeInsightTimer, scrollToExplore };
+    // programmatic jump to explore) and the About chip/panel ids, so ui.js
+    // does not keep its own independent copy (see ABOUT_PANEL_ID above).
+    window.PulseMain = {
+        freezeInsightTimer, scrollToExplore,
+        ABOUT_PANEL_ID, ABOUT_CHIP_ID,
+    };
 
     document.addEventListener('DOMContentLoaded', () => {
         sizeSpacer();

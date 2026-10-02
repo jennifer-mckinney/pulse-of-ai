@@ -61,11 +61,11 @@ flowchart LR
     direction TB
     A1["GET /api/posts/aggregated-by-location&lt;br/&gt;per city: counts, dominant, lat/lng from&lt;br/&gt;the city registry, demo_posts, data_mode"]:::done
     A2["GET /api/themes&lt;br/&gt;top 12 keywords, sentiment split"]:::done
-    A3["POST /api/query&lt;br/&gt;filtered posts + attribution"]:::done
+    A3["POST /api/query&lt;br/&gt;filtered posts + credit and link back"]:::done
     A4["GET /api/sources/timeseries&lt;br/&gt;hourly counts per category, top site, words"]:::done
-    A5["GET /api/audit/:post_id&lt;br/&gt;the receipt"]:::done
+    A5["GET /api/audit/:post_id&lt;br/&gt;the receipt, with credit and link back"]:::done
     A6["GET /api/health · /api/bias/history&lt;br/&gt;GET /api/methodology · /api/sources"]:::done
-    A7["GET /api/sentiment/latest · /api/bias/latest&lt;br/&gt;API consumers only, not called by the page"]:::done
+    A7["GET /api/sentiment/latest · /api/bias/latest&lt;br/&gt;API consumers only, not called by the page&lt;br/&gt;(sentiment/latest posts carry credit and link back)"]:::done
   end
 
   subgraph PAGE["Page (browser)"]

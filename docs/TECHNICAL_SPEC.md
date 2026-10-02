@@ -1,7 +1,7 @@
 # The Pulse of AI — Technical Specification
 **Version:** 1.2.1
 **Date:** 2026-10-01
-**Status:** Implemented through PR #44 (`master` @ `a17020f`). PR #10 Part 2 landed as PR #22; nothing described here is in flight.
+**Status:** Implemented through PR #44 (`master` @ `a17020f`; PRs #85, #86 and #87 are recorded in the changelog below and not yet in this header or the §13 PR list, which the next reconciliation pass updates). PR #10 Part 2 landed as PR #22; nothing described here is in flight.
 **Maps to:** `pulse-of-ai-mvp-v1-final-requirements.pdf`, `pulse-of-ai-evidence-based-thresholds.pdf`, `pulse-of-ai-model-health-dashboard.pdf`
 
 **Authority.** The code on `master` is the authority for what exists; this specification is the source of truth for names and intent. Legal and product decisions belong to `docs/adr/0001-source-registry-and-collection.md` (ADR 0001); this document references them and does not restate them differently.
@@ -58,6 +58,7 @@ PRs #24–#28 and #31–#34 merged after v1.2.0 (`master` @ `7291490`; #29 and #
 - **Reconciliation with PRs #41 and #43 (2026-10-01; #42 and #44 are still open):** header, §11 and §21 the master SHA 2b5e6c3 and the status line names PR #43; §13 adds PRs #41 and #43 to its PR list; §7 `/api/bias/history` pass summaries carry `latest_insufficient` and word an insufficient-sample latest value as not compared with τ; §11 the health drawer shows such a summary as N/A; §12 the `embed` worker reads the service's `GET /health` before it stamps a vector (registered model, revision and library, else NULL; an unreadable `/health` fails the job), and `python/requirements.txt` pins the registered library stack, torch per platform included; §17 a `SOURCE_<SLUG>_RESET` date in the future is ignored, its accepted forms, and the `last_refused_at` carry for a refusal recorded before migration 062. No methodology version or migration changes.
 - **Reconciliation with PR #44 (2026-10-01; #42 is still open):** header, §11 and §21 the master SHA a17020f and the status line names PR #44; §13 adds PR #44 to its PR list; §3, §4, §6, §16, §17 the HTTP client waits out a `Retry-After` of at most 10 s in a run and holds the host up to 24 h for a longer one (or 5 min for a 429 without one), persisted in `source_collection_state.http_cache`; TLDR polls every 180 s (HTTP 429 at 150 s); §6, §8, §19 the retention-log action `source_reattributed` of the manual `scripts/correct-legacy-seed-attribution.js --apply`. No methodology version or migration changes.
 - **Relevance Stage 0b (PR #86, migration 070; 2026-10-01):** §6 the two gold-set tables (offline evaluation only, no methodology version created or changed, nothing in the live pipeline reads them); `npm run gold:sample | gold:label | gold:agreement | gold:erase | relevance:eval`, `src/gold/`, `src/config/ai-lexicon-tiers.js` (a lexicon library, not wired to scoring) and `docs/governance/relevance-codebook.md` v1 (edge cases Q1-Q7 open for the owner). The post-text fingerprint key `GOLD_HASH_KEY` is a separate production secret (owner decision 2026-10-02): an explicit value equal (ignoring whitespace) to `AUDIT_HASH_KEY` / `PROVENANCE_KEY` / `CORRELATION_SALT` in the invoking environment is refused everywhere; dev/test may fall back to `AUDIT_HASH_KEY` with a notice when it is unset. The gold tools are local-only (they refuse `NODE_ENV=production`), so the production "required" rule in `src/gold/store.js` is defence in depth for non-CLI callers. `gold:erase --post ID --remove-text` is the erasure-request path: it removes the post's text, embedding and gold rows in one transaction, scrubs the url (no Reddit permalink kept) and writes a `data_retention_log` row under GDPR Article 17 (a post whose text retention already removed gets the same cleanup; a demo post is skipped). Per ADR 0001 ruling 9 (non-negotiable), scores, every `decision_audit_log` row, the unkeyed `raw_posts.content_hash` and the provenance fingerprint are intentionally retained after an erasure request: the residual risk (a guessed text can be confirmed against the hash) is an accepted owner ruling, not a defect, and the registered ingest@1.8.0 / audit_narration wording ("content hash kept when the text is removed") stays accurate.
+- **K1 attribution, PR #87 (2026-10-01):** §4 and §7 thirteen endpoints, the new `GET /api/credits`, the `credit`, `source_url`, `published_at` and `data_origin` fields of `/api/query`, `/api/sentiment/latest` and `/api/audit/:post_id`, and the stricter `provenance.permalink`; §11 the credit line, the header "credits" chip and the credits page; §17 the registry's credit fields; §21 how the credits page and the About panel divide the notices. No schema change, no migration, no methodology version change.
 - **Relevance Stage 0a (PR #85, migrations 067-068; 2026-10-01):** §3, §10, §10 "Why?" by audience: `audit_narration@1.5.0` (migration 067, wording only; errata on audit_narration 1.1.0–1.4.0): the relevance step's public sentences say every stored post counts toward the totals whatever its relevance score, and that only-AI-relevant counting arrives with the next relevance version (decision D1); the page's bundled demo receipt states the same sentence conditionally (a fictional post is never stored, so it counts toward nothing), consistent across its audience views; §6 tables 35–36 (`admission_rule_hits`, 068; `source_route_state`, 073, PR #42) and the migration counts (54 files, 001–074), migration 068's dropped-count columns; §7 `/api/health` `admission` and `/api/sources` per-source `admission` (7-day counts); §19 the daily maintenance step that expires `admission_rule_hits` (`ADMISSION_RULE_HITS_DAYS`). Admission decisions are unchanged: the counters are measurement only.
 
 **v1.1.0 Amendments (historical record; v1.2.0 supersedes the source count and categories, the pseudonym format and the retention schedule where the sections below say so):**
@@ -263,23 +264,26 @@ The diagram set in `docs/diagrams/` (entry point `docs/diagrams/architecture.*`)
        │     └──────────────────────────────────────────────┘
        ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  WEB PROCESS — EXPRESS API (src/server.js), 12 endpoints (§7)   │
+│  WEB PROCESS — EXPRESS API (src/server.js), 13 endpoints (§7)   │
 │  GET  /api/health              GET  /api/bias/latest            │
 │  GET  /api/posts/aggregated-   GET  /api/bias/history           │
 │       by-location              GET  /api/methodology            │
 │  GET  /api/sentiment/latest    GET  /api/sources                │
 │  GET  /api/audit/:post_id      GET  /api/sources/timeseries     │
 │  POST /api/query               GET  /api/themes                 │
+│  GET  /api/credits             (source credits, K1; §7, §11)    │
 │  POST /api/refresh (same-origin, token, 409, 60 s debounce;     │
 │       enqueues collect.refresh — the worker collects)           │
 │  Strict CSP; CORS on the read-only routers only; JSON errors    │
 └───────────────────────┬─────────────────────────────────────────┘
                         ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  BROWSER (public/) — no build step, everything self-hosted       │
-│  UMD modules: config/*, utils, data, insights, chapters,        │
-│  globe (Canvas-2D dot globe), story (11 beats), ui, main        │
-│  Demo data always labelled; legal notices in the header panel   │
+│  BROWSER (public/) — no build step, everything self-hosted      │
+│  UMD modules: config/*, attribution, utils, data, insights,     │
+│  chapters, globe (Canvas-2D dot globe), story (11 beats), ui,   │
+│  main                                                           │
+│  Demo data always labelled; legal notices in the header panel;  │
+│  a credit and link back under every excerpt (credits.html)      │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -718,12 +722,12 @@ Migrations 005 and 006 are shown in §19 and §20. The tables of migrations 028�
 
 ## 7. API Specification
 
-Twelve endpoints are mounted (`src/server.js`). `POST /api/refresh` is mounted first and without CORS; every other endpoint sits on a read-only router with `cors()`. Every response carries the security headers of §8.
+Thirteen endpoints are mounted (`src/server.js`). `POST /api/refresh` is mounted first and without CORS; every other endpoint sits on a read-only router with `cors()`. Every response carries the security headers of §8.
 
 **Errors.** Route handlers answer `Content-Type: application/json` with `{ "error": "descriptive message" }` and never return stack traces, SQL errors or file paths: a caught failure is a `500 { "error": "Internal server error" }`.
 - A JSON error handler after the routers (`jsonErrorHandler`, `src/server.js`) answers every error that reaches it as JSON in every environment: a malformed JSON body on `POST /api/query` or `POST /api/refresh` → `400 { "error": "invalid JSON body" }`, an oversized one → `413 { "error": "request body too large" }`, another client error → `{ "error": "bad request" }`, anything else → `500 { "error": "Internal server error" }`. The error is logged server-side, scrubbed (`src/middleware/log-error.js`). (The v1.2.0 draft recorded Express's HTML stack page here as a KNOWN DEFECT; PR #22 fixed it.)
 
-**Response cache.** `GET /api/posts/aggregated-by-location`, `GET /api/sources/timeseries` and `GET /api/themes` are served from a 10 s in-process cache keyed per query string (`src/middleware/response-cache.js`).
+**Response cache.** `GET /api/posts/aggregated-by-location`, `GET /api/sources/timeseries` and `GET /api/themes` are served from a 10 s in-process cache keyed per query string, and `GET /api/credits` from a 60 s one (`src/middleware/response-cache.js`).
 
 ### `GET /api/health`
 System status for the header chip and the health drawer (`src/routes/health.js`). The response is cached in process for 5 s, keyed on the path alone (it fans out to the queue store and the database; PR #22 security L2). The response is cached in process for 5 s, keyed on the path alone (it fans out to the queue store and the database; PR #22 security L2). It also carries `bias_sample` (the insufficient-sample share per bias check, §9), `correlation` (§20) and `admission` (migration 068): over the last 7 UTC days and all sources together, items evaluated, admitted (and admitted on AI-specific feeds although no admission pattern matched) and rejected by reason (out of scope, too old, invalid, duplicate), plus admissions per admission-filter pattern. Counts are per evaluation: an item a feed serves again is counted again; a route whose store failed is counted only by the run that completes it. `admission` is `null` (the endpoint still answers) if its query fails, and `retention_invalid` is true when `ADMISSION_RULE_HITS_DAYS` is malformed.
@@ -836,14 +840,18 @@ Aggregate summary + recent posts, for API consumers. The page does not call it.
       "comparative": -0.21,
       "location": "London",
       "source_category": "news",
+      "source_name": "bbc_news",
       "collected_at": "2026-09-29T09:58:12Z",
-      "audit_id": "uuid"
+      "audit_id": "uuid",
+      "attribution": null, "data_origin": "live",
+      "source_url": "https://www.bbc.co.uk/news/articles/…", "published_at": "2026-09-29T09:40:00Z",
+      "credit": { "text": "BBC News", "required": false, "license": null, "license_url": null, "modified": false, "cite_date": false, "notice": null, "notice_url": null }
     }
   ],
   "refreshed_at": "2026-09-29T10:05:00Z"
 }
 ```
-The summary covers every scored post (all time).
+The summary covers every scored post (all time). Each recent post also carries `source_name` and the K1 fields (`attribution`, `credit`, `source_url`, `published_at`, `data_origin`), described under `GET /api/credits` below.
 
 ---
 
@@ -890,6 +898,9 @@ The explainability endpoint (`src/routes/audit.js`): the receipt for one post. T
     "source_category": "news",
     "source_name": "bbc_news",
     "attribution": null,
+    "credit": { "text": "BBC News", "required": false, "license": null, "license_url": null, "modified": false, "cite_date": false, "notice": null, "notice_url": null },
+    "source_url": "https://www.bbc.co.uk/news/articles/…",
+    "published_at": "2026-09-29T09:40:00Z",
     "data_origin": "live",
     "collected_at": "2026-09-29T09:58:12Z"
   },
@@ -923,8 +934,8 @@ The explainability endpoint (`src/routes/audit.js`): the receipt for one post. T
 }
 ```
 - `decisions` has one entry per `decision_audit_log` row (`sentiment`, `relevance`, `discourse`), oldest first. `input_hash` is `HMAC-SHA256(AUDIT_HASH_KEY, stored hash)` and is **omitted** when the key is unset, never returned raw.
-- `provenance.permalink` is null when the stored link is not http(s). `provenance.retention` (§19) is `{ status: "text_removed", removed_at, reason, notice }` for any post whose text was removed, and `{ status: "live", removes_at, notice }` for a live post of a platform-terms source (Reddit 48 h, YouTube and TikTok 30 days); a live post of any other source has none. `provenance.admission` names the `admission_filter` version the post was stored under (`raw_posts.admission_mv_id`, lineage `recorded`), or says why there is none (demo content; stored before migration 042). For a demo post `verifiable` says the content is fictional; for a post with no fingerprint it says why.
-- `post.attribution` is the credit a source's terms require (e.g. NPR), else null. `post.data_origin` is `demo` for demo-feed posts.
+- `provenance.permalink` and `provenance.published_at` are the same validated values as `post.source_url` and `post.published_at` (K1, `src/config/attribution.js`): the permalink is null unless it passes the link rule under `GET /api/credits` (a public http(s) address on one of the source's own domains, not a link to a person's profile), and both are null for a demo post; `published_at` is an ISO-8601 UTC string or null. `provenance.retention` (§19) is `{ status: "text_removed", removed_at, reason, notice }` for any post whose text was removed, and `{ status: "live", removes_at, notice }` for a live post of a platform-terms source (Reddit 48 h, YouTube and TikTok 30 days); a live post of any other source has none. `provenance.admission` names the `admission_filter` version the post was stored under (`raw_posts.admission_mv_id`, lineage `recorded`), or says why there is none (demo content; stored before migration 042). For a demo post `verifiable` says the content is fictional; for a post with no fingerprint it says why.
+- `post.attribution` is the credit a source's terms require (e.g. NPR), else null. `post.credit`, `post.source_url` and `post.published_at` are the K1 fields (see `GET /api/credits`). `post.data_origin` is `demo` for demo-feed posts, which have no credit and no link.
 - `ingest.lineage` is `recorded` (from `raw_posts.ingest_mv_id`) or `inferred` (the ingest version effective at `collected_at`, for rows stored before migration 022). `bias.lineage` is `recorded`, `inferred` or `current` (§10).
 
 **Response 400:** `{ "error": "Invalid post ID: must be a UUID" }`
@@ -1104,6 +1115,24 @@ Keyword themes for the warm and cold story beats: `relevance_results.matched_key
 
 ---
 
+### `GET /api/credits`
+The credits page's data and the home of the K1 attribution rules (`src/routes/credits.js`, `src/config/attribution.js`; design: `docs/research/k1-attribution-design.md`). Read-only; mounted on the CORS router; cached for 60 s.
+
+**Response 200:** `{ "sources": [...], "notices": { "excerpts": "…", "links": "…", "demo": "…" } }`. `sources` has one entry per registry source that has at least one stored post and is not a demo feed, in registry order (a source with no stored post, a demo feed, and a retired slug with no registry entry are not listed):
+```json
+{ "slug": "npr", "name": "NPR", "category": "news", "terms_url": "https://…",
+  "credit": { "text": "NPR", "required": true, "license": null, "license_url": null,
+              "modified": false, "cite_date": false, "notice": null, "notice_url": null } }
+```
+- `credit` is derived at read time from the registry (§17); no column stores it, so a registry fix applies to every stored post. Every real registry source has one, not only the sources whose terms require it (`required` says whether the terms do). `license` and `license_url` are set only for a source that publishes a licence, `modified` is true for Creative Commons "BY" licences (the excerpt is shortened and redacted), `cite_date` asks the page to show the publication date (Pew), and `notice` and `notice_url` carry a notice the terms require on the product (the arXiv acknowledgement, the NCBI disclaimer).
+- **Fields added to every post row** of `POST /api/query`, `GET /api/sentiment/latest` (`recent_posts`) and `GET /api/audit/:post_id` (`post`): `credit` (the object above, or null), `source_url`, `published_at` and `data_origin` (`live` or `demo`), next to the unchanged `attribution`. `source_url` is the stored permalink and is non-null only when it passes one rule, shared by the server and the browser: a public http(s) address with no credentials and no control or bidirectional characters, with tracking and credential query keys removed, whose host is on (or under) one of the source's own link domains (the registrable domains of its routes' feed or forum URLs plus the registry's `linkHosts`), and which is not an identity link or a profile page. An off-source feed link therefore never appears under a trusted source's name. `published_at` is an ISO-8601 UTC string or null.
+- **Conditions.** A demo post (`data_sources.source_type = 'demo'`) has `credit`, `source_url` and `published_at` null and `data_origin: "demo"`: it is fictional and is never credited to a real source. A stored row whose slug has no registry entry has `credit` and `source_url` null. Where retention has removed a post's text (§19) the credit is still served, and the link is served only if the stored URL was kept (Reddit's is; every other source's is dropped). The credit does not read the kill switches: the stored excerpts of a switched-off source stay displayed and credited, and whether to hide them is a separate display decision (design decision D4).
+- **Not claimed.** Stack Exchange's terms ask for the author's name or an advance exception; author names are stripped on ingest (§8), so that exception still has to be requested. No licence is claimed for a source whose licence has not been verified (Mozilla's blog).
+
+**Response 500:** `{ "error": "Internal server error" }`.
+
+---
+
 ### `POST /api/query`
 Filtered scored posts for journalists and researchers (`src/routes/query.js`). Read-only; mounted on the CORS router. The page's city drill-down uses it.
 
@@ -1120,13 +1149,15 @@ Filtered scored posts for journalists and researchers (`src/routes/query.js`). R
     { "id": "uuid", "content_snippet": "…", "indicator": "negative", "score": -3, "comparative": -0.21,
       "positive_words": [], "negative_words": ["concerns"], "relevance": 0.1,
       "location": "London", "source_name": "bbc_news", "platform": "news",
-      "collected_at": "2026-09-29T09:58:12Z", "attribution": null }
+      "collected_at": "2026-09-29T09:58:12Z", "attribution": null,
+      "data_origin": "live", "source_url": "https://www.bbc.co.uk/news/articles/…", "published_at": "2026-09-29T09:40:00Z",
+      "credit": { "text": "BBC News", "required": false, "license": null, "license_url": null, "modified": false, "cite_date": false, "notice": null, "notice_url": null } }
   ],
   "total": 834,
   "query": { "platform": "news", "location": "London", "from": "…", "to": "…", "limit": 20 }
 }
 ```
-The newest `limit` matching posts (by `collected_at`), with `total` = the number of matches; there is no offset or cursor. `comparative` is clamped to [−1, 1]; `relevance` is null for a post never relevance-scored; `attribution` is the credit the source's terms require, or null. There is no rate limit (§8).
+The newest `limit` matching posts (by `collected_at`), with `total` = the number of matches; there is no offset or cursor. `comparative` is clamped to [−1, 1]; `relevance` is null for a post never relevance-scored; `attribution` is the credit the source's terms require, or null; `credit`, `source_url`, `published_at` and `data_origin` are the K1 fields (see `GET /api/credits`). There is no rate limit (§8).
 
 **PLANNED — not implemented as of v1.2.0 (the v1.1 design, kept as intent):** a grouped-aggregate form of the query. A `filters` object (`source_categories`, `date_from`, `date_to`, `sentiment_indicators`, `locations`, `min_relevance_score`), `group_by` and `limit`; a response with `query_id`, `executed_at`, `filters_applied`, `total_matched` and per-group `positive` / `neutral` / `negative` / `total` / `dominant` / `avg_comparative`; a `note` (and `detail_coverage` / `rollup_coverage`) when the date range reaches back past the detail window into the monthly rollups (§19); and a rate limit of 10 requests per minute per IP with a `429` response.
 
@@ -1451,9 +1482,9 @@ The shipped frontend follows the FuN.zip design-handoff prototype, which Jennife
 ### Page Structure and Modules
 `public/index.html` loads UMD modules in contract order, with no build step and every asset self-hosted (fonts and the world-atlas land GeoJSON under `public/vendor/`):
 - `js/config/` — `design.config.js` (themes, sentiment palette, the 8-category canon, buckets), `api.config.js` (endpoints, refresh cadence), `story.config.js` (the 11 beats, data only), `cities.config.js` (the city registry, shared with the server), `legal.config.js` (the legal notice, §21; added by the `docs/diagrams-and-readme` branch)
-- `js/utils.js`, `js/data.js` (fetch, normalise, demo fallback, data mode), `js/insights.js`, `js/chapters.js` (beat copy resolver)
+- `js/attribution.js` (K1: the link-safety rule and the credit model and builder, shared with the server; loaded before `utils.js`, which re-exports it), `js/utils.js`, `js/data.js` (fetch, normalise, demo fallback, data mode), `js/insights.js`, `js/chapters.js` (beat copy resolver)
 - `js/globe.js` — Canvas-2D orthographic dot globe; posts placed at their publisher's home city (`publisher_posts`, decision D3) are drawn as a separate, dashed-ring publisher-location layer with a legend key and tooltip; a ranked city list (name, volume, sentiment) replaces the globe when canvas is unavailable
-- `js/story.js` — scroll story, progress rail, skip pill, legend; `js/ui.js` — explore filters and city list, city detail, tooltip, source ribbon, audit drawer, health drawer (with a SYSTEM WATCHDOG section, §14); `js/main.js` — shell bootstrap, health chip (a red SYSTEM ALERT while a watchdog alert is open), timer, legal-notice panel
+- `js/story.js` — scroll story, progress rail, skip pill, legend; `js/ui.js` — explore filters and city list, city detail, tooltip, source ribbon, audit drawer, health drawer (with a SYSTEM WATCHDOG section, §14); `js/main.js` — shell bootstrap, health chip (a red SYSTEM ALERT while a watchdog alert is open), timer, legal-notice panel; `credits.html` with `js/credits.js` and `styles/credits.css` — the credits page (K1), a second page that reads `GET /api/credits`
 
 Modules talk through `pulse:*` DOM events (`pulse:data`, `pulse:exploring-changed`, `pulse:drill`, `pulse:trace`).
 
@@ -1476,13 +1507,18 @@ Modules talk through `pulse:*` DOM events (`pulse:data`, `pulse:exploring-change
 Each beat sets a camera intent, a colour mode (`sentiment` | `category` | `warm` | `cold`), a bar metric, a highlight rule, an audit pick and declarative stats; `js/chapters.js` resolves the `{token}` copy from the loaded data, so no insight value is hard-coded. The exact per-beat encodings are in `story.config.js` and are locked by `tests/unit/pure/config.test.js`.
 
 ### Data Sources of the Page
-`GET /api/posts/aggregated-by-location` (the snapshot), `/api/query` (city drill-down posts), `/api/audit/:post_id` (receipts), `/api/health` (chip, re-polled every 150 s), `/api/health` + `/api/bias/history` + `/api/methodology` + `/api/sources?include_inactive=true` (health drawer), `/api/sources` (story stats), `/api/sources/timeseries` (ribbon), `/api/themes` (beats 6 and 7). `api.config.js` also lists `/api/bias/latest` and `/api/refresh`, but no module calls them.
+`GET /api/posts/aggregated-by-location` (the snapshot), `/api/query` (city drill-down posts), `/api/audit/:post_id` (receipts), `/api/health` (chip, re-polled every 150 s), `/api/health` + `/api/bias/history` + `/api/methodology` + `/api/sources?include_inactive=true` (health drawer), `/api/sources` (story stats), `/api/sources/timeseries` (ribbon), `/api/themes` (beats 6 and 7); `credits.html` alone calls `/api/credits`, with its own constant rather than `api.config.js`. `api.config.js` also lists `/api/bias/latest` and `/api/refresh`, but no module calls them.
 
 ### Demo Labelling
 Demo numbers are never presented as live. `data.js` derives a data mode from the snapshot's `demo_posts` counts (`live` | `demo` | `mixed` | `none`), or `fallback` when the API is unreachable or holds no posts, and the bundled deterministic demo set is rendered. Every mode that includes demo posts (`demo`, `mixed`, `fallback`) shows the "Demo data" markers, and the overview kicker states the mode. In `fallback` mode, posts and receipts are synthesised locally (fictional, nothing stored) and their ids are never sent to `/api/audit`; a demo-feed post stored in the database (`demo` / `mixed` mode) is fetched from `/api/audit` like a live post and labelled DEMO DATA from its `data_origin`. Server-side demo posts come only from demo feeds (`data_sources.source_type = 'demo'`, text prefixed `[Demo]`) and are reported with `data_origin: "demo"`.
 
+### Source credits and links back (K1)
+Every excerpt names its source and links to the original, so a reader can check it and the source is credited. `js/attribution.js` builds one credit line from a post row and the city list, the chapter 3 and 4 mini-post, the audit drawer (its error state too) and the receipt all use it: "via NPR · npr.org ↗", then where they apply the licence link where the registry has a `licenseUrl` (Wikipedia, Stack Overflow, Our World in Data, arXiv), "excerpt shortened and redacted" (a CC BY licence needs changes indicated), the publication date (Pew), and the notice a source's terms require (arXiv, PubMed). The link text is the destination's host; the element is built with `createElement` and `textContent` only, `href` is set only after the browser re-validates the address with the same function the server uses, and the link opens in a new tab with `rel="noopener noreferrer"`. Without a validated link the credit shows alone. A demo post, a stored demo-feed post and a local fallback post show "fictional demo post · no real source" instead, with no credit and no link, consistent with the "Demo data" markers below; a row labelled with a slug the registry does not know shows no credit. The header "credits" chip opens `credits.html`, which lists each source that has stored posts with its credit, licence, terms link and notice, and the three site notices of `GET /api/credits`.
+
+The credits are about the third-party content shown. They are separate from the Appropriate Legal Notices (below and §21), which are about the software and sit in the About panel; `credits.html` also carries those six lines at its foot as static markup, because it is a second page of the UI.
+
 ### Legal Notices
-The header "about" chip opens a panel with the Appropriate Legal Notices of §21; `index.html` repeats them in `<noscript>`. This UI is added by the `docs/diagrams-and-readme` branch together with the licence; it is not on `master` @ `a17020f`.
+The header "about" chip opens a panel with the Appropriate Legal Notices of §21; `index.html` repeats them in `<noscript>`. The UI and the licence arrived with PR #40.
 
 ### Page Load Priority (Performance Budget: <3s)
 
@@ -1504,7 +1540,7 @@ Themes (default "Midnight") and the 8 category colours are defined in the same f
 ### Accessibility Requirements
 - Colour is never the only indicator: a numeric score sits next to every sentiment colour
 - Pointer Events for drag, hover, tap and pinch; keyboard zoom step; `prefers-reduced-motion` stops auto-spin, drift and pulse rings
-- The health chip and the about chip expose `aria-expanded`; the about panel closes on Escape or a chip click, and focus that was inside it returns to the chip
+- The health chip and the about chip expose `aria-expanded` (the about chip also `aria-disabled="true"` while a drawer is open); the about panel closes on Escape or a chip click, and focus that was inside it returns to the chip
 - A ranked city list replaces the globe when canvas is unavailable
 - Font contrast ratio ≥ 4.5:1 (AA standard) and screen-reader-compatible structure remain targets; no automated contrast audit runs today
 
@@ -1858,6 +1894,8 @@ Legal and product decisions here are ADR 0001's (rulings 1 to 9, decisions D1 an
 | 6 | At least one route open | `collecting` |
 | 7 | A gated route is configured but `GATE_APPROVED_BY` is missing or invalid (decision G5) | the source's closed status, reason "awaiting named approval" |
 | 8 | Otherwise | the source's closed status: `awaiting_key`, `awaiting_approval`, `awaiting_licence` (or `blocked` for the 4 blocked sources) |
+
+**Credit fields (K1).** Beside `termsUrl`, `attribution` and `license`, a registry entry may carry the fields from which `src/config/attribution.js` derives the credit shown with its excerpts: `licenseUrl` (the https licence text), `creditText` (overrides the credit; the default is `attribution` without a trailing "(LICENCE)", else the source name without a trailing parenthetical), `linkHosts` (the domains the source's permalinks live on where the route's own URLs do not name them: API-only routes and feeds that link elsewhere), `linkOnly` (`linkHosts` is the complete list), `citeDate` (also show the publication date), and `notice` with `noticeUrl` (a notice the terms require on the product). API hosts are never derived as link domains. Every entry must resolve to a credit and a non-empty link-domain set; `tests/unit/pure/attribution.test.js` pins it for all 52 sources and the exact set whose terms require a credit.
 
 A route is **open** when every env var it `requires` is set and, if it requires any (a key, an approval or licence reference, or the acknowledgement `PERMISSION_GATED_FEEDS_ACCEPTED_BY`: a **gated** route), `GATE_APPROVED_BY` holds a valid named approval, "Name YYYY-MM-DD" (PR #22 decision G5); a paid tier `replaces` the free feed it upgrades. Keyless routes need no approval.
 
@@ -2328,16 +2366,17 @@ Before shipping this feature:
 
 ## 21. Licence and Legal Notices
 
-**Scope.** The licence and the legal-notices UI are added by the `docs/diagrams-and-readme` branch; `master` @ `a17020f` still declares `"license": "MIT"` in `package.json` and has no `LICENSE` file or notice UI. The licensing decision and its wording belong to `LICENSE` and `ADDITIONAL-TERMS.md`; this section states how the code carries them and does not restate the terms differently.
+**Scope.** The licence and the legal-notices UI arrived with PR #40 (`docs/diagrams-and-readme`); before it, `master` declared `"license": "MIT"` in `package.json` and had no `LICENSE` file or notice UI. The licensing decision and its wording belong to `LICENSE` and `ADDITIONAL-TERMS.md`; this section states how the code carries them and does not restate the terms differently.
 
 ### Licence
 - `LICENSE` is the complete, unmodified GNU Affero General Public License v3.
 - The project is licensed **AGPL-3.0-or-later** (`package.json` and the `package-lock.json` root entry: `"license": "AGPL-3.0-or-later"`).
 - `ADDITIONAL-TERMS.md` adds exactly one term, under AGPL section 7(b): the author attribution 'Built on Pulse of AI by Jennifer McKinney', with a link to https://github.com/jennifer-mckinney/pulse-of-ai, must be preserved in the Appropriate Legal Notices of any covered work or modified version, including a user interface reached over a network. It places no other restriction.
-- AGPL section 13: whoever runs a modified version for users over a network must offer them its complete corresponding source; `SOURCE_URL` in `legal.config.js` (and BOTH static "Source code" links in `public/index.html`: the `<noscript>` block and the About-panel fallback markup) must then point at that source. The attribution line stays as it is.
+- AGPL section 13: whoever runs a modified version for users over a network must offer them its complete corresponding source; `SOURCE_URL` in `legal.config.js` (and the three static "Source code" links: the `<noscript>` block and the About-panel fallback markup in `public/index.html`, and the footer of `public/credits.html`) must then point at that source. The attribution line stays as it is.
 - Third-party components keep their own licences; vendored frontend assets are listed in `public/vendor/README.md`.
 
 ### Legal-notices UI
+The credits page (`credits.html`, §11) and the About panel are different things. The About panel and these notices concern the software: its licence and the section 7(b) attribution. The credits page and the per-excerpt credit lines concern the third-party content shown, and they never claim the software's licence for that content or the sources' licences for the software. Because `credits.html` is a second page of the UI, it repeats the same six notice lines at its foot as static markup (`<footer class="credits-legal">`, one `<li data-notice>` per line, no JavaScript needed); a deployer of a modified version who changes `SOURCE_URL` must also change its "Source code" link there, in both "Source code" links of `public/index.html`, and in the config.
 - **Data:** `public/js/config/legal.config.js` (`PulseLegalConfig`), frozen data only with zero functions: `UPSTREAM_URL`, `SOURCE_URL` (defaults to the upstream repository) and `NOTICE`, six lines in this order:
   1. `Copyright © 2026 Jennifer McKinney`
   2. `Built on Pulse of AI by Jennifer McKinney` → the upstream repository (the §7(b) attribution)
@@ -2345,7 +2384,7 @@ Before shipping this feature:
   4. `Additional terms (AGPL section 7(b))` → `ADDITIONAL-TERMS.md`
   5. `Source code` → `SOURCE_URL`
   6. `No warranty: provided "as is", without warranty of any kind (AGPL sections 15 and 16).`
-- **Rendering:** `public/js/main.js` `renderLegalNotice` builds the header "about" panel (`#about-panel`, `role="region"`, hidden by default) with `createElement` + `textContent` only. The panel also ships the same notices as static markup in `public/index.html` (a unit test keeps it equal to the config): `renderLegalNotice` replaces it when `legal.config.js` loads, and if that file fails to load the static list stays and a warning is logged, so the attribution is never lost. The about chip toggles it and sets `aria-expanded`; Escape closes it, and opening the audit or health drawer folds it away (a `MutationObserver` on the drawers' `open` class, so every open path is covered). Closing it by Escape or by the chip returns focus to the chip when focus was inside the panel (or on the page body), so it never stays in the hidden subtree, including in Safari, where a click does not focus the button; focus elsewhere on the page is left where it is. The panel is bounded to the viewport below it and scrolls, so every notice stays reachable at a narrow or zoomed viewport (`public/styles/main.css`). Links carry `rel="noopener noreferrer"` and no `target`. All hrefs are static https constants; no API data reaches an href.
-- **No-JS and fallback:** `public/index.html` repeats the same six lines, texts and links inside `<noscript>` and, as the panel's static content, inside `#about-panel` (kept when the config is missing, empty, partial or malformed: `isValidNoticeConfig` in `main.js` accepts only a non-empty array of entries with non-empty string `id` and `text` that carries each of the six ids (`copyright`, `attribution`, `license`, `terms`, `source`, `warranty`) exactly once, with a non-empty `href` on `attribution`, `license`, `terms` and `source`; extra notices with other ids are allowed).
+- **Rendering:** `public/js/main.js` `renderLegalNotice` builds the header "about" panel (`#about-panel`, `role="region"`, hidden by default) with `createElement` + `textContent` only. The panel also ships the same notices as static markup in `public/index.html` (a unit test keeps it equal to the config): `renderLegalNotice` replaces it when `legal.config.js` loads, and if that file fails to load the static list stays and a warning is logged, so the attribution is never lost. The about chip toggles it and sets `aria-expanded`; while a drawer is open the chip is inert and carries `aria-disabled="true"` (kept in sync by the same observer), and a drawer opened with focus on a notice link returns focus to the chip on close, because the panel folds away; Escape closes it, and opening the audit or health drawer folds it away (a `MutationObserver` on the drawers' `open` class, so every open path is covered). Closing it by Escape or by the chip returns focus to the chip when focus was inside the panel (or on the page body), so it never stays in the hidden subtree, including in Safari, where a click does not focus the button; focus elsewhere on the page is left where it is. The panel is bounded to the viewport below it and scrolls, so every notice stays reachable at a narrow or zoomed viewport (`public/styles/main.css`). Links carry `rel="noopener noreferrer"` and no `target`. All hrefs are static https constants; no API data reaches an href.
+- **No-JS and fallback:** `public/index.html` repeats the same six lines, texts and links inside `<noscript>` and, as the panel's static content, inside `#about-panel` (kept when the config is missing, empty, partial or malformed; the `<noscript>` links carry the same `rel="noopener noreferrer"`, pinned by the unit test: `isValidNoticeConfig` in `main.js` accepts only a non-empty array of entries with non-empty string `id` and `text` that carries each of the six ids (`copyright`, `attribution`, `license`, `terms`, `source`, `warranty`) exactly once, with a non-empty `href` on `attribution`, `license`, `terms` and `source`; extra notices with other ids are allowed).
 - **CSP:** the config loads as an external `<script src>` before `main.js`; no inline script or style is added, and styling lives in `styles/main.css`.
-- **Tests:** `tests/unit/pure/legalNotice.test.js` pins the literal texts and URLs, the noscript copy, the absence of inline `style=` and of `innerHTML`-family writes, the `LICENSE` header, the package licence and the additional terms. `tests/e2e/legal-notice.spec.ts` asserts the rendered panel, its links, the Escape behaviour, focus return on a chip click that does not move focus, and a 320 × 240 viewport where the panel stays inside the viewport and scrolls to the last notice, with zero console errors.
+- **Tests:** `tests/unit/pure/legalNotice.test.js` pins the literal texts and URLs, the noscript copy, the absence of inline `style=` and of `innerHTML`-family writes, the `LICENSE` header, the package licence and the additional terms. `tests/e2e/legal-notice.spec.ts` asserts the rendered panel, its links, the Escape behaviour, focus return on a chip click that does not move focus, the chip's `aria-disabled` while a drawer is open and its inert click, a drawer opened from a focused notice link returning focus to the chip, an unrelated class change on an open drawer leaving the panel open, and the panel opening below the header with every chip on screen and the header ending above the explore filters at widths from 320 to 900 px (the header wraps at 640 px and below, and the panel then opens at 112 px instead of 64 px); and a 320 × 240 viewport where the panel stays inside the viewport and scrolls to the last notice, with zero console errors.

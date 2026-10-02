@@ -10,6 +10,7 @@
 const { HttpClient } = require('../../../src/collectors/http');
 const { ADAPTERS, buildCollectors } = require('../../../src/collectors');
 const { getSource } = require('../../../src/config/source-registry');
+const { safeSourceUrl } = require('../../../src/config/attribution');
 const { PII_FIELDS } = require('../../../src/pipeline/ingest');
 const { fixtureTransport, RECORDED_AT, recordedAtOf, TEST_ENV } = require('../../helpers/fixtureTransport');
 
@@ -27,6 +28,13 @@ function clockFor(routes, clockOf = recordedAtOf) {
     return clocks.length ? Math.max(...clocks) : NOW;
 }
 
+// K1: how many recorded permalinks the link rule has checked (see afterAll)
+let linksChecked = 0;
+afterAll(() => {
+    // a fixture refactor that drops every `url` must not pass vacuously
+    expect(linksChecked).toBeGreaterThan(10);
+});
+
 function run(slug, routeId, routes, { cursor = {}, env = TEST_ENV } = {}) {
     const source = getSource(slug);
     const route = source.routes.find(r => r.id === routeId);
@@ -34,7 +42,17 @@ function run(slug, routeId, routes, { cursor = {}, env = TEST_ENV } = {}) {
     const http = new HttpClient({ transport, env, sleep: noSleep });
     const now = clockFor(routes);
     const c = new ADAPTERS[route.adapter]({ source, route, env, http, cursor, httpCache: {}, now: () => now });
-    return c.collect().then(r => ({ ...r, transport, collector: c, cursor }));
+    return c.collect().then(r => {
+        // K1: every permalink a RECORDED live response yields must survive the
+        // link-back rule for its own source (src/config/attribution.js): a
+        // registry link domain that missed a real host would silently drop the
+        // link from every excerpt of that source.
+        for (const p of r.payloads || []) {
+            if (p.url) linksChecked++;
+            if (p.url) expect([slug, p.url, safeSourceUrl(p.url, slug) !== null]).toEqual([slug, p.url, true]);
+        }
+        return { ...r, transport, collector: c, cursor };
+    });
 }
 
 /** No stored payload may carry identity fields or a person-naming link. */
