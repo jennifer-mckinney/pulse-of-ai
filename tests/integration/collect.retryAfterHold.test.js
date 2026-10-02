@@ -116,4 +116,3 @@ describe('a route that passes no validator cache (arXiv)', () => {
         expect(second.error).toMatch(/not requested: export\.arxiv\.org asked us to wait/);
     });
 });
-

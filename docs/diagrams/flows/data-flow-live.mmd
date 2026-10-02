@@ -1,0 +1,81 @@
+%% Title: Data flow · live data from source to page
+%% Summary: Where a collected post's data goes: the tables it is written to, the aggregate API endpoints that read them, and the page modules that render each endpoint.
+%% Sources: src/collectors/runner.js, src/workers/{collect,ingest,maintenance}.worker.js, src/collectors/ai-filter.js, src/pipeline/*.js, src/routes/*.js, public/js/config/api.config.js, public/js/{data,story,ui,main}.js. Spec: TECHNICAL_SPEC.md sections 7 (API), 10 (explainability chain), 11 (user experience).
+flowchart LR
+
+  subgraph SRC["Source"]
+    direction TB
+    S1["registry source, open route<br/>RSS / Atom · JSON API · bulk file"]:::done
+  end
+
+  subgraph COL["Collector (worker)"]
+    direction TB
+    C1["adapter items<br/>fetchItems()"]:::done
+    C2["payload<br/>toPayload(): redacted, allowlisted,<br/>city-level, fingerprinted; then the<br/>admission filter (scope filter routes)"]:::done
+    C1 --> C2
+  end
+
+  subgraph DB["PostgreSQL"]
+    direction TB
+    D1[("raw_posts<br/>ingest_mv_id · admission_mv_id")]:::done
+    D2[("sentiment_results")]:::done
+    D3[("relevance_results<br/>matched_keywords")]:::done
+    D4[("discourse_results")]:::done
+    D5[("decision_audit_log<br/>+ methodology_versions")]:::done
+    D6[("post_embeddings")]:::done
+    D7[("bias_assessments<br/>bias_window_runs / _assessments<br/>alert_events")]:::done
+    D8[("data_sources<br/>source_collection_state<br/>source_runs · processing_jobs")]:::done
+  end
+
+  subgraph API["Aggregate API (web)"]
+    direction TB
+    A1["GET /api/posts/aggregated-by-location<br/>per city: counts, dominant, lat/lng from<br/>the city registry, demo_posts, data_mode"]:::done
+    A2["GET /api/themes<br/>top 12 keywords, sentiment split"]:::done
+    A3["POST /api/query<br/>filtered posts + credit and link back"]:::done
+    A4["GET /api/sources/timeseries<br/>hourly counts per category, top site, words"]:::done
+    A5["GET /api/audit/:post_id<br/>the receipt, with credit and link back"]:::done
+    A6["GET /api/health · /api/bias/history<br/>GET /api/methodology · /api/sources"]:::done
+    A7["GET /api/sentiment/latest · /api/bias/latest<br/>API consumers only, not called by the page<br/>(sentiment/latest posts carry credit and link back)"]:::done
+  end
+
+  subgraph PAGE["Page (browser)"]
+    direction TB
+    P1["data.js loadCityData()<br/>trailing hour, baseline cities"]:::done
+    P2["globe.js + chapters.js<br/>globe, 11 story chapters"]:::done
+    P3["story.js theme beats<br/>(warm / cold)"]:::done
+    P4["story.js featured posts ·<br/>ui.js city detail (explore)"]:::done
+    P5["ui.js source ribbon"]:::done
+    P6["ui.js audit drawer<br/>(why? receipt)"]:::done
+    P7["ui.js health drawer ·<br/>main.js health chip ·<br/>story.js intro byline (sources)"]:::done
+  end
+
+  subgraph LEGEND["Status legend"]
+    L1["all done (every element is on master)"]:::done
+  end
+
+  S1 --> C1
+  C2 -- "storeRawPost" --> D1
+  D1 -- "scorePost (ingest queue, or inline for<br/>npm run collect / standup)" --> D2 & D3 & D4
+  D2 & D3 & D4 --> D5
+  D1 -- "embed job, relevance ≥ 1/21" --> D6
+  D5 -- "cycle close, daily 24 h window" --> D7
+  C2 -- "run outcome" --> D8
+
+  D1 & D2 & D8 --> A1
+  D1 & D2 & D3 & D8 --> A2
+  D1 & D2 & D3 & D8 --> A3
+  D1 & D2 & D3 & D8 --> A4
+  D1 & D5 & D7 & D8 --> A5
+  D1 & D2 & D5 & D7 & D8 --> A6
+  D1 & D2 & D7 & D8 --> A7
+
+  A1 --> P1 --> P2
+  P1 --> P4
+  A2 --> P3
+  A3 --> P4
+  A4 --> P5
+  A5 --> P6
+  A6 --> P7
+
+  classDef done fill:#e8f5e9,stroke:#2e7d32,color:#1b3d1f
+  classDef planned fill:#f2f2f2,stroke:#8a8a8a,color:#4a4a4a,stroke-dasharray:2 3

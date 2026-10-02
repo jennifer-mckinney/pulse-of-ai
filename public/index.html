@@ -29,6 +29,14 @@
        <code>GET /api/posts/aggregated-by-location</code> for the city
        snapshot and <code>GET /api/methodology</code> for the versioned
        models behind each score.</p>
+    <!-- Appropriate Legal Notices for no-JS visitors (same text as
+         public/js/config/legal.config.js). -->
+    <p class="noscript-legal">Copyright © 2026 Jennifer McKinney ·
+       <a href="https://github.com/jennifer-mckinney/pulse-of-ai">Built on Pulse of AI by Jennifer McKinney</a> ·
+       <a href="https://github.com/jennifer-mckinney/pulse-of-ai/blob/master/LICENSE">Licensed under AGPL-3.0-or-later</a> ·
+       <a href="https://github.com/jennifer-mckinney/pulse-of-ai/blob/master/ADDITIONAL-TERMS.md">Additional terms (AGPL section 7(b))</a> ·
+       <a href="https://github.com/jennifer-mckinney/pulse-of-ai">Source code</a> ·
+       No warranty: provided "as is", without warranty of any kind (AGPL sections 15 and 16).</p>
   </div>
 </noscript>
 
@@ -69,8 +77,28 @@
         <span class="health-light" id="health-light" aria-hidden="true"></span>
         <span class="hdr-chip-lbl" id="health-label">model health</span>
       </button>
+      <!-- Appropriate Legal Notices (AGPL-3.0-or-later + the section 7(b)
+           attribution): main.js replaces the static notices in #about-panel with
+           config/legal.config.js and this chip toggles it. -->
+      <button type="button" class="hdr-chip hdr-about" id="about-chip"
+              title="About · copyright, license and source code"
+              aria-expanded="false" aria-controls="about-panel">
+        <span class="hdr-chip-lbl">about</span>
+      </button>
     </div>
   </header>
+  <div class="about-panel mono" id="about-panel" role="region" aria-label="About, license and source code" hidden>
+  <!-- Static copy of config/legal.config.js NOTICE: main.js replaces it when the
+       config loads; it is what remains if the config does not. -->
+  <ul class="about-list">
+    <li class="about-item" data-notice="copyright">Copyright © 2026 Jennifer McKinney</li>
+    <li class="about-item" data-notice="attribution"><a href="https://github.com/jennifer-mckinney/pulse-of-ai" rel="noopener noreferrer">Built on Pulse of AI by Jennifer McKinney</a></li>
+    <li class="about-item" data-notice="license"><a href="https://github.com/jennifer-mckinney/pulse-of-ai/blob/master/LICENSE" rel="noopener noreferrer">Licensed under AGPL-3.0-or-later</a></li>
+    <li class="about-item" data-notice="terms"><a href="https://github.com/jennifer-mckinney/pulse-of-ai/blob/master/ADDITIONAL-TERMS.md" rel="noopener noreferrer">Additional terms (AGPL section 7(b))</a></li>
+    <li class="about-item" data-notice="source"><a href="https://github.com/jennifer-mckinney/pulse-of-ai" rel="noopener noreferrer">Source code</a></li>
+    <li class="about-item" data-notice="warranty">No warranty: provided "as is", without warranty of any kind (AGPL sections 15 and 16).</li>
+  </ul>
+  </div>
 
   <!-- Intro — editorial lede, left column. story.js (C3) fades it with the
        first scroll (opacity = max(0, 1 − progress × 5)). -->
@@ -148,6 +176,7 @@
 <script defer src="js/config/api.config.js"></script>
 <script defer src="js/config/story.config.js"></script>
 <script defer src="js/config/cities.config.js"></script>
+<script defer src="js/config/legal.config.js"></script>
 <script defer src="js/attribution.js"></script>
 <script defer src="js/utils.js"></script>
 <script defer src="js/data.js"></script>

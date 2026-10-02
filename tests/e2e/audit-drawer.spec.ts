@@ -3,10 +3,10 @@
 // table ≠ Researcher mono repro), bias layers render PASS / N-A rows with τ
 // values, the header timer freezes to "first receipt ✓" on the FIRST open,
 // and closing restores the prior view.
-import { test, expect } from '@playwright/test';
+import { test, expect, Page, Locator } from '@playwright/test';
 import {
     consoleErrors, expectNoConsoleErrors, gotoAndWaitForData,
-    scrollToBeat, stabilizeSnapshot, evidence,
+    scrollToBeat, stabilizeSnapshot, evidence, enterExplore,
 } from './helpers';
 
 test('audit drawer: audiences, bias layers, timer freeze, close restores view', async ({ page }) => {
@@ -21,7 +21,8 @@ test('audit drawer: audiences, bias layers, timer freeze, close restores view', 
     const card = page.locator('#card-col .chapter-card').nth(4);
     await expect(card.locator('.mini-post')).toBeVisible({ timeout: 15000 });
     const scrollBefore = await page.evaluate(() => window.scrollY);
-    await card.locator('.btn-trace').click();
+    const opener = card.locator('.btn-trace');
+    await opener.click();
 
     const drawer = page.locator('#audit-drawer');
     await expect(drawer).toHaveClass(/open/);
@@ -114,6 +115,94 @@ test('audit drawer: audiences, bias layers, timer freeze, close restores view', 
     await expect(drawer).toHaveAttribute('aria-hidden', 'true');
     await expect(card).toBeVisible();
     expect(await page.evaluate(() => window.scrollY)).toBe(scrollBefore);
+    // Keyboard focus returns to the button that opened the receipt instead
+    // of staying on the × inside the now-hidden drawer.
+    await expect(opener).toBeFocused();
+
+    expectNoConsoleErrors(errors);
+});
+
+// Safari (and some assistive tech) do not focus a button on a mouse click,
+// so document.activeElement stays <body> when the receipt opens. The drawer
+// must still hand focus back to the button that opened it on close: each
+// opener passes itself explicitly instead of the drawer inferring it from
+// activeElement (Copilot thread on public/js/ui.js setDrawerOpen).
+// dispatchEvent('click') fires the click WITHOUT moving focus, reproducing
+// that browser behaviour in Chromium.
+async function openWithoutFocus(page: Page, opener: Locator) {
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    expect(await page.evaluate(() => document.activeElement === document.body),
+        'focus must start on <body>').toBe(true);
+    await opener.dispatchEvent('click');
+    // The synthetic click itself never focuses the opener (opening moves
+    // focus into the drawer, not onto the opener).
+    expect(await opener.evaluate((el) => document.activeElement === el),
+        'the synthetic click must not focus the opener').toBe(false);
+}
+
+test('audit drawer: focus returns to an opener the click never focused', async ({ page }) => {
+    const errors = consoleErrors(page);
+    await stabilizeSnapshot(page);
+    await gotoAndWaitForData(page);
+    const drawer = page.locator('#audit-drawer');
+
+    // 1. The CH04 featured-post button (story.js → PulseUI.openAudit).
+    await scrollToBeat(page, 4);
+    const card = page.locator('#card-col .chapter-card').nth(4);
+    await expect(card.locator('.mini-post')).toBeVisible({ timeout: 15000 });
+    const trace = card.locator('.btn-trace');
+    await openWithoutFocus(page, trace);
+    await expect(drawer).toHaveClass(/open/);
+    await drawer.locator('.drawer-x').click();
+    await expect(drawer).not.toHaveClass(/open/);
+    await expect(trace).toBeFocused();
+
+    // 2. An explore detail panel "why?" button (ui.js renderDetailPosts).
+    await enterExplore(page);
+    const target: string = await page.evaluate(() => {
+        const cities = (window as any).PulseStory.getCities().slice();
+        cities.sort((a: any, b: any) => b.total - a.total);
+        return cities[0].city;
+    });
+    await page.locator('#exp-filters .city-row', { hasText: target }).first().click();
+    const why = page.locator('#exp-detail .det-posts .btn-why').first();
+    await expect(why).toBeVisible({ timeout: 15000 });
+    await openWithoutFocus(page, why);
+    await expect(drawer).toHaveClass(/open/);
+    await drawer.locator('.drawer-x').click();
+    await expect(drawer).not.toHaveClass(/open/);
+    await expect(why).toBeFocused();
+
+    expectNoConsoleErrors(errors);
+});
+
+// Safari can leave ANOTHER control as document.activeElement after a click
+// (a button click does not focus it), and a click on the drawer's close
+// button does not change that either. Opening moves focus into the drawer,
+// so every close path still returns it to the stored opener: here another
+// control holds focus when a focusless click opens the receipt, and a
+// focusless click closes it.
+test('audit drawer: focus returns to the opener when another control held focus (Safari)', async ({ page }) => {
+    const errors = consoleErrors(page);
+    await stabilizeSnapshot(page);
+    await gotoAndWaitForData(page);
+    const drawer = page.locator('#audit-drawer');
+
+    await scrollToBeat(page, 4);
+    const card = page.locator('#card-col .chapter-card').nth(4);
+    await expect(card.locator('.mini-post')).toBeVisible({ timeout: 15000 });
+    const trace = card.locator('.btn-trace');
+
+    const other = page.locator('#about-chip');
+    await other.focus();
+    await expect(other).toBeFocused();
+    await trace.dispatchEvent('click');          // focusless open
+    await expect(drawer).toHaveClass(/open/);
+    // Focus moved into the drawer instead of staying on the other control.
+    expect(await page.evaluate(() => document.getElementById('audit-drawer')!.contains(document.activeElement))).toBe(true);
+    await drawer.locator('.drawer-x').dispatchEvent('click');   // focusless close
+    await expect(drawer).not.toHaveClass(/open/);
+    await expect(trace).toBeFocused();
 
     expectNoConsoleErrors(errors);
 });

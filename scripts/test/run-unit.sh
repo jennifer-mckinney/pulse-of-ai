@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fast feedback loop: unit tests only (no DB), plus a warn-only black check.
+# Fast feedback loop: unit tests (jest tests/unit; needs the test DB on 5433: npm run docker:up), plus a warn-only black check.
 set -euo pipefail
 
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"

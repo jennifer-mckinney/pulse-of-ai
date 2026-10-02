@@ -324,7 +324,7 @@ describe('mapAuditResponse — served audit shape → drawer model', () => {
         expect(P.fmtHashPrefix(m.inputHash)).toBe('a'.repeat(16) + '…');
     });
 
-    test('fmtHashPrefix passes pre-truncated demo hashes through unchanged', () => {
+    test('fmtHashPrefix passes pre-truncated hashes through unchanged', () => {
         expect(P.fmtHashPrefix('sha256:0123456789abcdef…'))
             .toBe('sha256:0123456789abcdef…');
     });
@@ -889,12 +889,15 @@ describe('demoAuditModel — prototype buildAudit receipt', () => {
         expect(m.footer).toContain('fictional demo data');
     });
 
-    test('deterministic input hash + bias layers incl. the N/A planned layer', () => {
+    // A bundled demo post is never stored or hashed, so its receipt carries
+    // no input fingerprint (spec §1: demo posts carry none); a fabricated
+    // "input sha256:…" would contradict the Researcher text that says this
+    // receipt has no hash (Copilot r4151336195).
+    test('no input hash (never faked) + bias layers incl. the N/A planned layer', () => {
         const post = P.demoPostsForCity(posCity(), NOW)[0];
         const m1 = P.demoAuditModel(post);
-        const m2 = P.demoAuditModel(post);
-        expect(m1.inputHash).toBe(m2.inputHash);
-        expect(m1.inputHash).toMatch(/^sha256:[0-9a-f]{16}…$/);
+        expect(m1.inputHash).toBeNull();
+        expect(P.fmtHashPrefix(m1.inputHash)).toBeNull();
         const bias = m1.steps[3];
         expect(bias.layers).toHaveLength(3);
         expect(bias.layers[2].status).toBe('n-a');
@@ -907,6 +910,67 @@ describe('demoAuditModel — prototype buildAudit receipt', () => {
         expect(m.steps[1].scoreKind).toBe('sentiment');
         expect(m.steps[2].score).toBe(post.relevance);
         expect(m.steps[2].scoreKind).toBe('percent');
+    });
+
+    // No demo step may hand out a replay command for its own fictional post
+    // as if it would run: the replay rule is stated for live posts only.
+    // Every audience view of the demo ingestion step says the same thing: a
+    // fictional bundled post, nothing collected or stored. None may claim a
+    // collection route, stripped fields, a city-level location or a legal basis.
+    test('demo ingestion step is consistent across all four audience views', () => {
+        const post = P.demoPostsForCity(posCity(), NOW)[0];
+        const a = P.demoAuditModel(post).steps[0].audiences;
+        expect(a.public).toMatch(/fictional/);
+        expect(a.public).toMatch(/Nothing was collected/);
+        expect(a.plain).toMatch(/Fictional demo post/);
+        expect(a.plain).toMatch(/not collected/);
+        expect(a.config.collected).toBe(false);
+        expect(a.config.stored).toBe(false);
+        expect(a.config.legal_basis).toMatch(/not applicable/);
+        expect(a.researcher).toMatch(/never stored/);
+        const all = JSON.stringify(a);
+        expect(all).not.toMatch(/public source|public API|legitimate_interest|stripped before|pii_fields_removed|city level/i);
+    });
+
+    test('no demo step offers a runnable replay of the fictional post', () => {
+        const post = P.demoPostsForCity(posCity(), NOW)[0];
+        for (const s of P.demoAuditModel(post).steps) {
+            const r = s.audiences.researcher;
+            expect(r).not.toContain('npm run replay -- --post ' + post.id);
+            expect(r).not.toMatch(/npm run replay -- --post \d+/);
+        }
+    });
+
+    // The offline demo receipt must describe the real ingest system:
+    // the content hash is an integrity check (audit_narration@1.4.0
+    // INGEST_HASH_NOTE), not a join key, and duplicates are dropped by
+    // UNIQUE(source_id, external_id) — there is no simhash anywhere.
+    // The live-system rule is stated conditionally: a bundled demo post is
+    // never stored, hashed or replayable, so this receipt serves no hash
+    // and must not claim that it does (Copilot r4151336195 / audit R6-4).
+    test('ingestion step matches the real system (hash wording + dedupe rule)', () => {
+        const { INGEST_HASH_NOTE } = require('../../../src/config/audit-narration');
+        const post = P.demoPostsForCity(posCity(), NOW)[0];
+        const ingest = P.demoAuditModel(post).steps[0];
+        const researcher = ingest.audiences.researcher;
+        // Tie the shared wording to the registered narration: the closing
+        // "integrity check, not a join key" sentence is INGEST_HASH_NOTE's.
+        const closing = 'It is an integrity check, not a join key.';
+        expect(INGEST_HASH_NOTE.endsWith(closing)).toBe(true);
+        expect(researcher).toContain(closing);
+        // The keyed-hash mechanics (HMAC-SHA256 with AUDIT_HASH_KEY) also
+        // come from INGEST_HASH_NOTE and must stay in step with it.
+        expect(INGEST_HASH_NOTE).toContain('HMAC-SHA256 with AUDIT_HASH_KEY');
+        expect(researcher).toContain('HMAC-SHA256 with AUDIT_HASH_KEY');
+        // Conditional framing: the live system, not this receipt.
+        expect(researcher.startsWith('In the live system')).toBe(true);
+        expect(researcher).not.toMatch(/this receipt serves/);
+        expect(researcher).toMatch(/never stored, so this receipt has no hash/);
+        expect(researcher).toMatch(/nothing to replay/);
+        expect(ingest.audiences.researcher).not.toMatch(/immutable join key|join key across/);
+        expect(ingest.audiences.config).not.toHaveProperty('dedupe');
+        expect(ingest.audiences.config.dedup_strategy).toMatch(/UNIQUE\(source_id, external_id\)/);
+        expect(JSON.stringify(ingest)).not.toMatch(/simhash/i);
     });
 });
 
@@ -1003,5 +1067,23 @@ describe('layerRowView — fairness-layer display strings (P0-3)', () => {
         });
         const bias = m.steps[m.steps.length - 1];
         expect(P.layerRowView(bias.layers[0]).noteText).toBe(NOTE);
+    });
+});
+
+// Safari leaves another control as document.activeElement after a click and
+// a click on the drawer's close button does not change it, so setDrawerOpen
+// must not rely on activeElement alone: opening moves focus INTO the drawer,
+// and closing returns it to the explicitly stored opener. Source-level lock
+// (setDrawerOpen is private to the IIFE); the behaviour is covered by
+// tests/e2e/audit-drawer.spec.ts (focusless open + close with another
+// control focused).
+describe('setDrawerOpen focus contract (Safari)', () => {
+    const src = require('fs').readFileSync(require('path').join(__dirname, '../../../public/js/ui.js'), 'utf8');
+    test('opening moves focus into the drawer', () => {
+        expect(src).toMatch(/if \(open && !wasOpen\) \{[\s\S]{0,900}drawer\.setAttribute\('tabindex', '-1'\);[\s\S]{0,200}drawer\.focus\(/);
+    });
+    test('closing returns focus to the stored opener, not an inferred activeElement', () => {
+        expect(src).toContain('const opener = drawerOpeners.get(drawer);');
+        expect(src).toContain('drawer.contains(active)');
     });
 });

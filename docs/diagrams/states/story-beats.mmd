@@ -1,0 +1,70 @@
+%% Title: State · the 11-beat scroll story and explore
+%% Summary: The page's story beats in order (scroll progress picks the active beat), the shortcuts into explore, and what explore offers once the reader drives.
+%% Sources: public/js/config/story.config.js (STORY, 11 beats), public/js/story.js (onScroll, jump, explore threshold, pulse:* events), public/js/main.js (scrollToExplore, about panel), public/js/config/legal.config.js, public/js/ui.js (explore chrome, drawers), public/index.html. Spec: TECHNICAL_SPEC.md section 11; PRD section 4.3 (FuN.zip prototype).
+stateDiagram-v2
+  direction LR
+
+  [*] --> overview : page load (data mode unknown, then live, demo, mixed, none or fallback)
+
+  state "0 · overview<br/>intro, REFRESH CYCLE 2–3 MIN" as overview
+  state "1 · volume<br/>CHAPTER 01 · VOLUME LEADERS" as volume
+  state "2 · divide<br/>CHAPTER 02 · THE DIVIDE" as divide
+  state "3 · negativity<br/>CHAPTER 03 · NEGATIVITY HOTSPOTS" as negativity
+  state "4 · positivity<br/>CHAPTER 04 · POSITIVITY LEADERS" as positivity
+  state "5 · drivers<br/>CHAPTER 05 · WHO’S DRIVING" as drivers
+  state "6 · themes-warm<br/>CHAPTER 06 · WHAT RUNS WARM" as themes_warm
+  state "7 · themes-cold<br/>CHAPTER 07 · WHAT RUNS COLD" as themes_cold
+  state "8 · messengers<br/>CHAPTER 08 · THE MESSENGERS" as messengers
+  state "9 · summary<br/>CHAPTER 09 · THE HOUR IN REVIEW" as summary
+  state "10 · explore<br/>CHAPTER 10 · YOUR TURN · NEXT STEPS" as explore
+
+  overview --> volume : scroll
+  volume --> divide : scroll
+  divide --> negativity : scroll
+  negativity --> positivity : scroll
+  positivity --> drivers : scroll
+  drivers --> themes_warm : scroll
+  themes_warm --> themes_cold : scroll
+  themes_cold --> messengers : scroll
+  messengers --> summary : scroll
+  summary --> explore : scroll past the explore threshold
+  explore --> summary : scroll back up (exploring-changed event, false)
+
+  overview --> explore : Skip to the globe
+  note left of overview
+    Any beat: a progress rail dot jumps to its beat.
+    The SKIP STORY · EXPLORE pill (shown once progress
+    passes 0.14, outside explore) jumps to explore.
+    The header about chip toggles the about panel
+    (licence, source code, legal notice; legal.config.js).
+  end note
+
+  state explore {
+    direction TB
+    [*] --> free
+    free : globe interactive, filter panel, sorted city list, source ribbon
+    free --> city : click a city, or a story-card drill chip (drill event)
+    city : city detail with its posts
+    city --> receipt : why? on a post
+    receipt : audit drawer, 4 audiences
+    receipt --> city : close
+    city --> free : close
+    free --> health : header health chip (also on every story beat)
+    health : health drawer, system-alert banner, SYSTEM WATCHDOG, alert history, methodology, sources
+    health --> free : close
+  }
+
+  note right of negativity
+    Unless on the bundled fallback, CH03 and CH04 show a featured post
+    whose "Why does it say that?" button opens the
+    same audit drawer (PulseUI.openAudit, or the
+    pulse:trace event if ui.js has not loaded)
+  end note
+
+  note right of summary
+    legend: done: on master, or ships in this PR
+    (the legal-notice UI)
+  end note
+
+  classDef done fill:#e8f5e9,stroke:#2e7d32,color:#1b3d1f
+  class overview, volume, divide, negativity, positivity, drivers, themes_warm, themes_cold, messengers, summary, explore done

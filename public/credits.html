@@ -14,7 +14,7 @@
 <main class="credits-main" id="credits-main">
   <p class="credits-back"><a href="./">&larr; The Pulse of AI</a></p>
   <h1 class="credits-title">Sources and credits</h1>
-  <p class="credits-lede">Every excerpt on The Pulse of AI names its source and, wherever the source supplied an address we could verify as its own, links to the original item. This page lists each source that has contributed posts, the licence its content is published under where it has one, and the notices the sources ask us to show.</p>
+  <p class="credits-lede">Every excerpt on The Pulse of AI names its source and, wherever the source supplied an address we could verify as its own, links to the original item. This page lists each source that has contributed posts, the licence its content is published under where it has one, and the notices the sources ask us to show. The licence and notices of the software itself are at the foot of this page.</p>
   <section aria-labelledby="credits-notices-h">
     <h2 id="credits-notices-h" class="credits-h">How excerpts are shown</h2>
     <ul class="credits-notices" id="credits-notices"></ul>
@@ -24,6 +24,23 @@
     <div id="credits-sources"><p class="credits-status mono" role="status">loading the list of sources…</p></div>
   </section>
   <noscript><p class="credits-status mono">This page needs JavaScript to list the sources. The same data is at <code>/api/credits</code>.</p></noscript>
+  <!-- Appropriate Legal Notices of the software itself (AGPL-3.0-or-later and
+       the section 7(b) attribution), the same six lines as the About panel of
+       the main page (public/js/config/legal.config.js; tests/unit/pure/
+       legalNotice.test.js keeps this copy equal to it). They are about Pulse of
+       AI, not about the third-party sources credited above. Static markup, so
+       they show without JavaScript. -->
+  <footer class="credits-legal" aria-labelledby="credits-legal-h">
+    <h2 id="credits-legal-h" class="credits-h">About this software</h2>
+    <ul class="credits-legal-list mono">
+      <li data-notice="copyright">Copyright © 2026 Jennifer McKinney</li>
+      <li data-notice="attribution"><a href="https://github.com/jennifer-mckinney/pulse-of-ai" rel="noopener noreferrer">Built on Pulse of AI by Jennifer McKinney</a></li>
+      <li data-notice="license"><a href="https://github.com/jennifer-mckinney/pulse-of-ai/blob/master/LICENSE" rel="noopener noreferrer">Licensed under AGPL-3.0-or-later</a></li>
+      <li data-notice="terms"><a href="https://github.com/jennifer-mckinney/pulse-of-ai/blob/master/ADDITIONAL-TERMS.md" rel="noopener noreferrer">Additional terms (AGPL section 7(b))</a></li>
+      <li data-notice="source"><a href="https://github.com/jennifer-mckinney/pulse-of-ai" rel="noopener noreferrer">Source code</a></li>
+      <li data-notice="warranty">No warranty: provided "as is", without warranty of any kind (AGPL sections 15 and 16).</li>
+    </ul>
+  </footer>
 </main>
 <script defer src="js/config/design.config.js"></script>
 <script defer src="js/attribution.js"></script>
