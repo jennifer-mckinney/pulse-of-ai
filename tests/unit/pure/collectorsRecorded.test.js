@@ -28,6 +28,13 @@ function clockFor(routes, clockOf = recordedAtOf) {
     return clocks.length ? Math.max(...clocks) : NOW;
 }
 
+// K1: how many recorded permalinks the link rule has checked (see afterAll)
+let linksChecked = 0;
+afterAll(() => {
+    // a fixture refactor that drops every `url` must not pass vacuously
+    expect(linksChecked).toBeGreaterThan(10);
+});
+
 function run(slug, routeId, routes, { cursor = {}, env = TEST_ENV } = {}) {
     const source = getSource(slug);
     const route = source.routes.find(r => r.id === routeId);
@@ -41,6 +48,7 @@ function run(slug, routeId, routes, { cursor = {}, env = TEST_ENV } = {}) {
         // registry link domain that missed a real host would silently drop the
         // link from every excerpt of that source.
         for (const p of r.payloads || []) {
+            if (p.url) linksChecked++;
             if (p.url) expect([slug, p.url, safeSourceUrl(p.url, slug) !== null]).toEqual([slug, p.url, true]);
         }
         return { ...r, transport, collector: c, cursor };

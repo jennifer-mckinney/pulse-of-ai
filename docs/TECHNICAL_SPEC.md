@@ -1,7 +1,7 @@
 # The Pulse of AI — Technical Specification
 **Version:** 1.2.1
 **Date:** 2026-10-01
-**Status:** Implemented through PR #44 (`master` @ `a17020f`). PR #10 Part 2 landed as PR #22; nothing described here is in flight.
+**Status:** Implemented through PR #44 (`master` @ `a17020f`; PRs #85 and #87 are recorded in the changelog below and not yet in this header or the §13 PR list, which the next reconciliation pass updates). PR #10 Part 2 landed as PR #22; nothing described here is in flight.
 **Maps to:** `pulse-of-ai-mvp-v1-final-requirements.pdf`, `pulse-of-ai-evidence-based-thresholds.pdf`, `pulse-of-ai-model-health-dashboard.pdf`
 
 **Authority.** The code on `master` is the authority for what exists; this specification is the source of truth for names and intent. Legal and product decisions belong to `docs/adr/0001-source-registry-and-collection.md` (ADR 0001); this document references them and does not restate them differently.

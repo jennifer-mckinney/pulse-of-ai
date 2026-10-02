@@ -126,6 +126,16 @@ test('demo fallback: a fictional post shows the demo label and no link', async (
     expectNoConsoleErrors(errors);
 });
 
+test('credits page scrolls to its footer notices at 320px', async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 568 });
+    await page.goto('/credits.html');
+    await expect(page.locator('#credits-sources .credits-row').first()).toBeVisible();
+    const foot = page.locator('.credits-legal');
+    await foot.scrollIntoViewIfNeeded();
+    await expect(foot).toBeInViewport();
+    await expect(foot.locator('li')).toHaveCount(6);
+});
+
 test('credits page: notices, credited sources, safe links', async ({ page }) => {
     const errors = consoleErrors(page);
     await page.goto('/credits.html');

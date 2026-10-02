@@ -32,7 +32,7 @@ Where excerpts are rendered (all covered by this change): the city post list (`u
 | arXiv | the acknowledgement statement on the product | `notice` on the arXiv registry entry, shown on the credits page and in the arXiv receipt |
 | PubMed | NCBI disclaimer and copyright notice evident to users | `notice` + `noticeUrl` (NCBI policies page), shown the same way |
 
-Known limits: the link rule removes credential and tracking keys from the query string and fragment only, so a secret embedded in a URL path is not stripped (the stored permalink is the source's public address; ingest drops identity links). Plain `http:` originals are linked, because many sources serve only http; the link's accessible name says "not encrypted".
+Known limits: the link rule removes credential and tracking keys from the query string and fragment only, so a secret embedded in a URL path is not stripped (the stored permalink is the source's public address; ingest drops identity links). Plain `http:` originals are linked, because many sources serve only http; the link's accessible name says "not encrypted". The query-string filter drops a bare key and joins `;`-separated parameters with `&`, which can change an unusual third-party URL; it is a deliberate trade for removing credential and tracking keys.
 
 Not changed here, because they are not display attribution: setting `NCBI_EMAIL`, TLDR/Pew/GitHub back-off, the registry `termsUrl` hygiene.
 
