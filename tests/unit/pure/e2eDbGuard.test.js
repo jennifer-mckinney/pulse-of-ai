@@ -63,7 +63,7 @@ describe('assertDisposableE2eDatabase — accepts only e2e databases off the tes
         ['a newline injection', 'pulse_of_ai_e2e\nDROP DATABASE pulse_of_ai'],
     ])('refuses %s', (_label, database) => {
         expect(() => assertDisposableE2eDatabase({ database, port: 5434, env: DEV_ENV }))
-            .toThrow(/\[e2e db guard\] refusing/);
+            .toThrow(/\[fixture-db-guard\] refusing/);
     });
 
     test('every protected database fails the e2e name pattern too (two independent layers)', () => {
@@ -134,7 +134,7 @@ describe('assertDisposableE2eDatabase — accepts only e2e databases off the tes
     });
 
     test('called with no argument it refuses instead of crashing', () => {
-        expect(() => assertDisposableE2eDatabase()).toThrow(/\[e2e db guard\] refusing/);
+        expect(() => assertDisposableE2eDatabase()).toThrow(/\[fixture-db-guard\] refusing/);
     });
 });
 
@@ -271,7 +271,7 @@ describe('tests/e2e/global-setup.js wiring', () => {
     ])('%s: refuses before opening any connection or running any step', async (_label, overrides) => {
         Object.assign(process.env, overrides);
         const { setup, Client, execFileSync } = loadGlobalSetup();
-        await expect(setup()).rejects.toThrow(/\[e2e db guard\] refusing/);
+        await expect(setup()).rejects.toThrow(/\[fixture-db-guard\] refusing/);
         expect(Client).not.toHaveBeenCalled();
         expect(execFileSync).not.toHaveBeenCalled();
     });
@@ -309,7 +309,7 @@ describe('tests/e2e/global-setup.js wiring', () => {
         process.env.FIXTURE_DB_ALLOW = 'pulse_of_ai';
         try {
             const { setup, Client, execFileSync } = loadGlobalSetup();
-            await expect(setup()).rejects.toThrow(/\[e2e db guard\] refusing/);
+            await expect(setup()).rejects.toThrow(/\[fixture-db-guard\] refusing/);
             expect(Client).not.toHaveBeenCalled();
             expect(execFileSync).not.toHaveBeenCalled();
         } finally {

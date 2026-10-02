@@ -271,24 +271,28 @@ jobs:
     name: E2E (Playwright)
     runs-on: ubuntu-latest
 
-    # Dev-DB service container on the dev port. The Playwright globalSetup
-    # (tests/e2e/global-setup.js) drops and recreates the isolated
-    # pulse_of_ai_e2e database on it (guarded: scripts/lib/fixture-db-guard.js
-    # refuses the dev database pulse_of_ai and the test Postgres port), then
-    # migrates, seeds (sources + methodology registry),
-    # loads the deterministic e2e fixture (seed:e2e) and freshens its
-    # timestamps before any spec runs.
+    # Dev-DB service container on the dev port, named pulse_of_ai_ci —
+    # deliberately NOT pulse_of_ai (the real dev database's default name):
+    # FIXTURE_DB_ALLOW below names this disposable container, and an operator
+    # must never be able to reuse that exact env-var pairing against a real
+    # dev stack and have it match (2026-10-02 security review, F1). The
+    # Playwright globalSetup (tests/e2e/global-setup.js) drops and recreates
+    # the isolated pulse_of_ai_e2e database on it (guarded:
+    # scripts/lib/fixture-db-guard.js refuses the dev database, this
+    # container's own name, and the test Postgres port), then migrates,
+    # seeds (sources + methodology registry), loads the deterministic e2e
+    # fixture (seed:e2e) and freshens its timestamps before any spec runs.
     services:
       postgres:
         image: pgvector/pgvector:pg16@sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b   # pgvector/pgvector:pg16
         env:
-          POSTGRES_DB: pulse_of_ai
+          POSTGRES_DB: pulse_of_ai_ci
           POSTGRES_USER: pulse_user
           POSTGRES_PASSWORD: ci_password
         ports:
           - 5434:5432
         options: >-
-          --health-cmd "pg_isready -U pulse_user -d pulse_of_ai"
+          --health-cmd "pg_isready -U pulse_user -d pulse_of_ai_ci"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -296,7 +300,7 @@ jobs:
     env:
       POSTGRES_HOST:     localhost
       POSTGRES_PORT:     5434
-      POSTGRES_DB:       pulse_of_ai
+      POSTGRES_DB:       pulse_of_ai_ci
       POSTGRES_USER:     pulse_user
       POSTGRES_PASSWORD: ci_password
       NODE_ENV:          development
@@ -326,21 +330,24 @@ jobs:
         run: npm run migrate
 
       # The fixture scripts refuse any non-e2e database
-      # (scripts/lib/fixture-db-guard.js); this job's pulse_of_ai is a
-      # disposable service container, so it is named as such. Step-scoped on
-      # purpose: the Playwright step does not need it (its globalSetup seeds
-      # pulse_of_ai_e2e), and FIXTURE_DB_ALLOW never opts a database into the
-      # globalSetup's DROP (tests/unit/pure/fixtureDbGuard.test.js pins this
-      # job's settings against both rules).
+      # (scripts/lib/fixture-db-guard.js); this job's pulse_of_ai_ci is a
+      # disposable service container, so it is named as such — and named
+      # differently from pulse_of_ai, the real dev database, so this
+      # FIXTURE_DB_ALLOW value can never be copied onto a real dev stack and
+      # match there (F1). Step-scoped on purpose: the Playwright step does
+      # not need it (its globalSetup seeds pulse_of_ai_e2e), and
+      # FIXTURE_DB_ALLOW never opts a database into the globalSetup's DROP
+      # (tests/unit/pure/fixtureDbGuard.test.js pins this job's settings
+      # against both rules).
       - name: Seed dev DB
         run: npm run seed && npm run seed:e2e
         env:
-          FIXTURE_DB_ALLOW: pulse_of_ai
+          FIXTURE_DB_ALLOW: pulse_of_ai_ci
 
       - name: Freshen seed timestamps
         run: bash scripts/test/freshen-seed.sh
         env:
-          FIXTURE_DB_ALLOW: pulse_of_ai
+          FIXTURE_DB_ALLOW: pulse_of_ai_ci
 
       - name: Run Playwright
         run: npx playwright test

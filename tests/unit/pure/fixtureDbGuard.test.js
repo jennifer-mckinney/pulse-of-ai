@@ -99,6 +99,7 @@ describe('fixtureTarget(env)', () => {
     });
 
     test.each([
+        ['the dev database', { POSTGRES_DB: 'pulse_of_ai', [FIXTURE_DB_ALLOW_ENV]: 'pulse_of_ai' }],
         ['the Jest test database', { POSTGRES_DB: 'pulse_of_ai_test', [FIXTURE_DB_ALLOW_ENV]: 'pulse_of_ai_test' }],
         ['a configured Jest test database', { POSTGRES_DB: 'jest_db', POSTGRES_TEST_DB: 'jest_db', [FIXTURE_DB_ALLOW_ENV]: 'jest_db' }],
         ['the postgres maintenance database', { POSTGRES_DB: 'postgres', [FIXTURE_DB_ALLOW_ENV]: 'postgres' }],
@@ -108,16 +109,28 @@ describe('fixtureTarget(env)', () => {
         expect(fixtureTarget({ POSTGRES_PORT: '5434', ...env })).toMatchObject({ ok: false });
     });
 
-    test('FIXTURE_DB_ALLOW opts ONE named, disposable database in (CI\'s service container)', () => {
-        expect(fixtureTarget({ POSTGRES_DB: 'pulse_of_ai', [FIXTURE_DB_ALLOW_ENV]: 'pulse_of_ai' }))
-            .toMatchObject({ ok: true, database: 'pulse_of_ai' });
-        expect(fixtureTarget({ POSTGRES_DB: 'pulse_of_ai', [FIXTURE_DB_ALLOW_ENV]: ' pulse_of_ai ' }))
+    // 2026-10-02 security review (F1): FIXTURE_DB_ALLOW naming the literal dev
+    // database would let an operator who copies CI's FIXTURE_DB_ALLOW=<service
+    // DB> pattern onto their own dev stack ("to match what CI does") write
+    // fixture rows straight into the real dev database — the exact incident
+    // this module exists to prevent. CI's disposable service database is
+    // therefore never named the same as the dev database (pulse_of_ai_ci, not
+    // pulse_of_ai — see ci.yml and the test below).
+    test('FIXTURE_DB_ALLOW opts ONE named, disposable database in (CI\'s service container) — '
+        + 'but never the dev database itself', () => {
+        expect(fixtureTarget({ POSTGRES_DB: 'pulse_of_ai_ci', [FIXTURE_DB_ALLOW_ENV]: 'pulse_of_ai_ci' }))
+            .toMatchObject({ ok: true, database: 'pulse_of_ai_ci' });
+        expect(fixtureTarget({ POSTGRES_DB: 'pulse_of_ai_ci', [FIXTURE_DB_ALLOW_ENV]: ' pulse_of_ai_ci ' }))
             .toMatchObject({ ok: true });
         // Naming a different database opts nothing in.
-        expect(fixtureTarget({ POSTGRES_DB: 'pulse_of_ai', [FIXTURE_DB_ALLOW_ENV]: 'pulse_of_ai_ci' }))
+        expect(fixtureTarget({ POSTGRES_DB: 'pulse_of_ai_ci', [FIXTURE_DB_ALLOW_ENV]: 'pulse_of_ai' }))
             .toMatchObject({ ok: false });
-        expect(fixtureTarget({ POSTGRES_DB: 'pulse_of_ai', [FIXTURE_DB_ALLOW_ENV]: '' })).toMatchObject({ ok: false });
-        expect(fixtureTarget({ POSTGRES_DB: 'pulse_of_ai', [FIXTURE_DB_ALLOW_ENV]: '1' })).toMatchObject({ ok: false });
+        expect(fixtureTarget({ POSTGRES_DB: 'pulse_of_ai_ci', [FIXTURE_DB_ALLOW_ENV]: '' })).toMatchObject({ ok: false });
+        expect(fixtureTarget({ POSTGRES_DB: 'pulse_of_ai_ci', [FIXTURE_DB_ALLOW_ENV]: '1' })).toMatchObject({ ok: false });
+        // The dev database's own name can never be the FIXTURE_DB_ALLOW match,
+        // however it is spelled in the env — closing the F1 bypass.
+        expect(fixtureTarget({ POSTGRES_DB: 'pulse_of_ai', [FIXTURE_DB_ALLOW_ENV]: 'pulse_of_ai' }))
+            .toMatchObject({ ok: false });
     });
 
     test('assertFixtureTarget throws the refusal, returns the database when allowed', () => {
@@ -200,10 +213,14 @@ describe('one definition of an e2e database, two rules (PR #42 / PR #44 reconcil
     });
 
     test('FIXTURE_DB_ALLOW widens the WRITE rule only — it never opts a database into the DROP', () => {
-        const env = { ...DEV, [FIXTURE_DB_ALLOW_ENV]: 'pulse_of_ai' };
-        expect(fixtureTarget(env)).toMatchObject({ ok: true, database: 'pulse_of_ai' });
-        expect(() => assertDisposableE2eDatabase({ database: 'pulse_of_ai', port: 5434, env }))
-            .toThrow(/\[e2e db guard\] refusing/);
+        // pulse_of_ai itself can never be the FIXTURE_DB_ALLOW match (F1,
+        // above), so this uses the disposable CI service DB name instead —
+        // which the write rule accepts and the drop rule still refuses,
+        // because it is not an e2e-shaped name.
+        const env = { ...DEV, POSTGRES_DB: 'pulse_of_ai_ci', [FIXTURE_DB_ALLOW_ENV]: 'pulse_of_ai_ci' };
+        expect(fixtureTarget(env)).toMatchObject({ ok: true, database: 'pulse_of_ai_ci' });
+        expect(() => assertDisposableE2eDatabase({ database: 'pulse_of_ai_ci', port: 5434, env }))
+            .toThrow(/\[fixture-db-guard\] refusing/);
     });
 
     test('isE2eDatabaseName is the pattern plus the identifier cap', () => {
@@ -226,8 +243,10 @@ describe('the CI e2e job satisfies both rules (.github/workflows/ci.yml)', () =>
         return { ...jobEnv, ...asStrings(s.env) };
     };
 
-    test('the job env targets the disposable service container on the dev port, never the test port', () => {
-        expect(jobEnv).toMatchObject({ POSTGRES_DB: 'pulse_of_ai', POSTGRES_PORT: '5434', NODE_ENV: 'development' });
+    test('the job env targets the disposable service container on the dev port, never the test port, '
+        + 'and never under the dev database\'s own name (F1)', () => {
+        expect(jobEnv).toMatchObject({ POSTGRES_DB: 'pulse_of_ai_ci', POSTGRES_PORT: '5434', NODE_ENV: 'development' });
+        expect(jobEnv.POSTGRES_DB).not.toBe('pulse_of_ai');
         expect(job.services.postgres.ports).toEqual(['5434:5432']);
         // FIXTURE_DB_ALLOW is step-scoped, never job-wide.
         expect(jobEnv[FIXTURE_DB_ALLOW_ENV]).toBeUndefined();
@@ -236,8 +255,8 @@ describe('the CI e2e job satisfies both rules (.github/workflows/ci.yml)', () =>
     test.each(['Seed dev DB', 'Freshen seed timestamps'])(
         'the "%s" step passes the WRITE rule only because FIXTURE_DB_ALLOW names the service DB', (name) => {
             const env = stepEnv(name);
-            expect(env[FIXTURE_DB_ALLOW_ENV]).toBe('pulse_of_ai');
-            expect(assertFixtureTarget(env)).toBe('pulse_of_ai');
+            expect(env[FIXTURE_DB_ALLOW_ENV]).toBe('pulse_of_ai_ci');
+            expect(assertFixtureTarget(env)).toBe('pulse_of_ai_ci');
             const without = { ...env };
             delete without[FIXTURE_DB_ALLOW_ENV];
             expect(fixtureTarget(without)).toMatchObject({ ok: false });
@@ -253,7 +272,7 @@ describe('the CI e2e job satisfies both rules (.github/workflows/ci.yml)', () =>
         expect(assertFixtureTarget({ ...env, POSTGRES_DB: 'pulse_of_ai_e2e', NODE_ENV: 'development' }))
             .toBe('pulse_of_ai_e2e');
         // ...and the service DB itself can never be dropped by that step.
-        expect(() => assertDisposableE2eDatabase({ database: 'pulse_of_ai', port: env.POSTGRES_PORT, env }))
+        expect(() => assertDisposableE2eDatabase({ database: 'pulse_of_ai_ci', port: env.POSTGRES_PORT, env }))
             .toThrow(/refusing/);
     });
 });

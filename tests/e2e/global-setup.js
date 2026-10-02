@@ -37,24 +37,11 @@ const path = require('path');
 const { Client } = require('pg');
 const { E2E_DB } = require('./e2e-env');
 const {
-    assertDisposableE2eDatabase, assertFixtureTarget, parsePort, recreateE2eDatabase,
+    assertDisposableE2eDatabase, assertFixtureTarget, parsePort, recreateE2eDatabase, targetPortSetting,
 } = require('../../scripts/lib/fixture-db-guard');
 
 const ROOT = path.join(__dirname, '..', '..');
 const UNREACHABLE = /ECONNREFUSED|ETIMEDOUT|ENOTFOUND|Connection terminated|timeout expired/i;
-
-/**
- * The dev Postgres port setting the e2e database lives on, RAW: the default
- * (5432, as in src/db/connection.js) applies only when POSTGRES_PORT is
- * unset or empty. A malformed value ('abc', '5434oops') is passed through
- * untouched so the guard refuses it, instead of being normalized to a
- * valid-looking port on an unintended server (PR #42 Copilot review).
- * @returns {string|number}
- */
-function postgresPortSetting() {
-    const v = process.env.POSTGRES_PORT;
-    return v === undefined || v === '' ? 5432 : v;
-}
 
 async function recreateDatabase(port) {
     // Connect to the maintenance DB: a database cannot drop itself.
@@ -92,7 +79,7 @@ function run(cmd, args) {
 module.exports = async () => {
     // Refuse a non-e2e target BEFORE connecting, so the "Postgres
     // unreachable" leniency below can never mask a refusal.
-    const portSetting = postgresPortSetting();
+    const portSetting = targetPortSetting(process.env);
     assertDisposableE2eDatabase({ database: E2E_DB, port: portSetting, env: process.env });
     // The write rule the fixture steps will apply, against their own env.
     assertFixtureTarget(stepEnv());

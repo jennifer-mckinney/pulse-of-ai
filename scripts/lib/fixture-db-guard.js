@@ -51,9 +51,12 @@
 // WRITE rule: the target (resolved exactly as src/db/connection.js resolves
 // it, NODE_ENV=test included) must be an e2e database — or the ONE database
 // an operator names in FIXTURE_DB_ALLOW because it is disposable (CI's
-// Postgres service container). FIXTURE_DB_ALLOW can never name the Jest test
-// database or a system database, and never lifts the test-port refusal.
-// Everything else — the dev database, any other name — is refused before a
+// Postgres service container, which is never named the same as the dev
+// database — see .github/workflows/ci.yml). FIXTURE_DB_ALLOW can never name
+// the dev database, the Jest test database or a system database (so an
+// operator cannot "match what CI does" by pointing it at their real dev
+// stack — 2026-10-02 security review), and never lifts the test-port
+// refusal. Everything else — any other name — is refused before a
 // connection is opened.
 //
 // DROP rule: stricter. FIXTURE_DB_ALLOW plays NO part: only an e2e database
@@ -162,16 +165,20 @@ function targetDatabase(env) {
 }
 
 /**
- * The port src/db/connection.js would connect to under `env`, RAW: the
- * default applies only when the setting is unset or empty; a malformed value
- * is returned untouched so the guard refuses it (connection.js's parseInt
- * would read '5434oops' as 5434 and 'abc' as the default).
+ * The dev Postgres port setting under `env`, RAW: the default (5432, as in
+ * src/db/connection.js) applies only when POSTGRES_PORT is unset or empty; a
+ * malformed value is returned untouched so the guard refuses it instead of
+ * normalizing it to a valid-looking port on an unintended server
+ * (connection.js's parseInt would read '5434oops' as 5434 and 'abc' as the
+ * default). NODE_ENV=test is handled by the caller (fixtureTarget refuses it
+ * outright before this is consulted — src/db/connection.js's POSTGRES_TEST_PORT
+ * branch never applies to a fixture-writing or e2e-dropping script).
+ * Exported so every caller that needs "the dev Postgres port, unparsed"
+ * shares one definition instead of keeping its own copy
+ * (tests/e2e/global-setup.js formerly had one — PR #42 Copilot review).
  * @returns {string|number}
  */
 function targetPortSetting(env) {
-    if (env.NODE_ENV === 'test') {
-        return isUnset(env.POSTGRES_TEST_PORT) ? DEFAULT_TEST_DB_PORT : env.POSTGRES_TEST_PORT;
-    }
     return isUnset(env.POSTGRES_PORT) ? DEFAULT_DB_PORT : env.POSTGRES_PORT;
 }
 
@@ -184,7 +191,7 @@ function fixtureTarget(env = process.env) {
     const refuse = (why) => ({
         ok: false,
         database,
-        reason: `refusing to write fixture data into database "${database}": ${why}. The e2e fixture writes `
+        reason: `[fixture-db-guard] refusing to write fixture data into database "${database}": ${why}. The e2e fixture writes `
             + 'synthetic posts under REAL source rows, so in any database that is not disposable they are counted '
             + 'as live data. Run it through the e2e suite (npm run test:e2e provisions pulse_of_ai_e2e), point '
             + `POSTGRES_DB at pulse_of_ai_e2e[_<suffix>], or — for a disposable database only — set ${FIXTURE_DB_ALLOW_ENV}=${database}.`,
@@ -198,8 +205,14 @@ function fixtureTarget(env = process.env) {
     const testPorts = testDbPorts(env);
     if (!testPorts.ok) return refuse(testPorts.reason);
     if (testPorts.ports.has(port)) return refuse(`port ${port} is the Jest test Postgres (POSTGRES_TEST_PORT)`);
-    if (testDbNames(env).has(database) || SYSTEM_DATABASES.includes(database)) {
-        return refuse('it is the Jest test database (POSTGRES_TEST_DB) or a system database');
+    // The dev database can never be named in FIXTURE_DB_ALLOW either (checked
+    // here, before the FIXTURE_DB_ALLOW fallback below): an operator copying
+    // CI's FIXTURE_DB_ALLOW=<service DB> pattern onto their own dev stack
+    // must not be able to make it match POSTGRES_DB's real default
+    // (2026-10-02 security review — CI's disposable service database is
+    // deliberately never named the same as DEV_DATABASE; see ci.yml).
+    if (testDbNames(env).has(database) || SYSTEM_DATABASES.includes(database) || database === DEV_DATABASE) {
+        return refuse('it is the dev database (POSTGRES_DB), the Jest test database (POSTGRES_TEST_DB) or a system database');
     }
 
     if (isE2eDatabaseName(database)) {
@@ -232,7 +245,7 @@ function assertFixtureTarget(env = process.env) {
  * @returns {string} the validated database name
  */
 function assertDisposableE2eDatabase({ database, port, env = process.env } = {}) {
-    const refuse = (why) => new Error(`[e2e db guard] refusing to recreate database ${JSON.stringify(database)}${why}`);
+    const refuse = (why) => new Error(`[fixture-db-guard] refusing to recreate database ${JSON.stringify(database)}${why}`);
     if (typeof database !== 'string' || !E2E_DB_PATTERN.test(database)) {
         throw refuse(`: only e2e databases matching ${E2E_DB_PATTERN} may be dropped (set E2E_DB to such a name)`);
     }
@@ -277,7 +290,7 @@ function quoteIdentifier(name) {
 async function recreateE2eDatabase(client, target) {
     const database = assertDisposableE2eDatabase(target);
     if (client && client.database === database) {
-        throw new Error(`[e2e db guard] refusing to drop "${database}": the maintenance connection is using it`);
+        throw new Error(`[fixture-db-guard] refusing to drop "${database}": the maintenance connection is using it`);
     }
     const ident = quoteIdentifier(database);
     await client.query(`DROP DATABASE IF EXISTS ${ident} WITH (FORCE)`);
@@ -293,6 +306,7 @@ module.exports = {
     DEFAULT_TEST_DB_PORT,
     isE2eDatabaseName,
     parsePort,
+    targetPortSetting,
     // write rule
     FIXTURE_DB_ALLOW_ENV,
     targetDatabase,
