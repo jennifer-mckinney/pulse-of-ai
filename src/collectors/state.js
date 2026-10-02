@@ -96,8 +96,8 @@ async function countUnchangedRun(sourceId) {
  * (migration 062); null on every other run.
  * `dropped`: the collector's dropped counters summed over the run's routes,
  * { invalid, old, outOfScope, duplicate } (migration 068, relevance-accuracy
- * R1); counts only. `dropped: null` (a run that evaluated no route: gate
- * closed, skipped, refused or failed before any route finished) stores NULL,
+ * R1); counts only. `dropped: null` (a run that evaluated no item: gate
+ * closed, skipped, refused, failed, or every route returned nothing) stores NULL,
  * never a fake 0; so does every row from before the migration. Within an
  * object, a missing key is 0.
  */

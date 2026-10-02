@@ -309,7 +309,9 @@ async function runCollection(o = {}) {
                 for (const w of result.warnings || []) fail(`${c.route.id}: ${w.text}`, w.err);
                 row.fetched += result.fetched;
                 row.kept += result.payloads.length;
-                droppedByRoute.push(result.dropped);
+                // Only a route that fetched items evaluated any: a route that
+                // returned nothing contributes no dropped counts (NULL, not 0).
+                if (result.fetched > 0) droppedByRoute.push(result.dropped);
                 for (const payload of result.payloads) {
                     let stored;
                     try {
@@ -437,7 +439,7 @@ async function runCollection(o = {}) {
                 postsNew: row.new, requests: http.requests - before, error: row.error,
                 errorKind: row.errorKind, httpStatus: row.httpStatus, startedAt,
                 responseHeaders: refused ? refusalHeaders : null,
-                // NULL when no route finished: nothing was evaluated, so there is no 0 to record.
+                // NULL when no item was evaluated (no route fetched anything): there is no 0 to record.
                 dropped: droppedByRoute.length ? counters.mergeDropped(droppedByRoute) : null,
             });
             log(`[collect] ${slug}: ${row.outcome} fetched ${row.fetched}, kept ${row.kept}, new ${row.new}${row.error ? ` — ${row.error}` : ''}`);

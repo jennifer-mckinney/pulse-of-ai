@@ -147,6 +147,23 @@ describe('what is counted, and when', () => {
     });
 });
 
+describe('NULL dropped counts mean no item was evaluated', () => {
+    it('a recorded run whose only route fetched nothing (it also warned) stores NULL, not four zeros', async () => {
+        const { Collector } = require('../../src/collectors/base');
+        const spy = jest.spyOn(Collector.prototype, 'collect').mockResolvedValue({
+            payloads: [], fetched: 0, dropped: { invalid: 0, old: 0, outOfScope: 0, duplicate: 0 },
+            ruleHits: {}, warnings: [{ text: 'a feed was broken', err: new Error('broken feed') }],
+        });
+        try {
+            const res = await collectBbc();
+            expect(res.sources[0]).toMatchObject({ fetched: 0, kept: 0 });
+        } finally { spy.mockRestore(); }
+        expect(await dbGet('SELECT dropped_invalid, dropped_old, dropped_out_of_scope, dropped_duplicate FROM source_runs'))
+            .toEqual({ dropped_invalid: null, dropped_old: null, dropped_out_of_scope: null, dropped_duplicate: null });
+        expect(await hitsByRule()).toEqual({});
+    });
+});
+
 describe('a malformed retention window is visible', () => {
     it('admissionTotals flags retention_invalid and reports no window', async () => {
         const t = await counters.admissionTotals({ env: { ADMISSION_RULE_HITS_DAYS: 'abc' } });
