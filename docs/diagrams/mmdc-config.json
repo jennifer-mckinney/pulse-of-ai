@@ -1,0 +1,7 @@
+{
+  "flowchart": { "useMaxWidth": false },
+  "sequence": { "useMaxWidth": false },
+  "er": { "useMaxWidth": false },
+  "class": { "useMaxWidth": false },
+  "state": { "useMaxWidth": false }
+}
