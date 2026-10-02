@@ -8,8 +8,9 @@
 
 'use strict';
 
-const request = require('supertest');
+const { useServer } = require('../helpers/server');
 const app = require('../../src/server');
+const request = useServer(app);   // one listener per file (tests/helpers/server.js)
 const { logRouteError } = require('../../src/middleware/log-error');
 
 const LEAKS = [/\bat\s+\S+\s+\(/, /\/Users\//, /node_modules/, /<html|<pre/i, /SyntaxError/, /Unexpected token/];
@@ -23,7 +24,7 @@ describe('malformed JSON bodies', () => {
             it(`${route} in ${mode}: JSON 400, no stack or path`, async () => {
                 app.set('env', mode);
                 const errors = jest.spyOn(console, 'error').mockImplementation(() => {});
-                const res = await request(app).post(route)
+                const res = await request().post(route)
                     .set('Content-Type', 'application/json').set('Sec-Fetch-Site', 'same-origin')
                     .send('{"q": "ai",');
                 errors.mockRestore();
@@ -74,11 +75,9 @@ describe('route error logs are scrubbed', () => {
     });
 
     it('a malformed JSON body with newlines is logged as ONE line', async () => {
-        const request = require('supertest');
-        const app = require('../../src/server');
         const errors = jest.spyOn(console, 'error').mockImplementation(() => {});
         try {
-            const res = await request(app).post('/api/query').set('Content-Type', 'application/json')
+            const res = await request().post('/api/query').set('Content-Type', 'application/json')
                 .send('{"q":\n[health] FORGED line\n');
             expect(res.status).toBe(400);
             const logged = errors.mock.calls.map(c => c.join(' '));

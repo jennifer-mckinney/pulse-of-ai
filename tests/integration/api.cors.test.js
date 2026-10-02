@@ -8,8 +8,9 @@
 
 'use strict';
 
-const request = require('supertest');
+const { useServer } = require('../helpers/server');
 const app     = require('../../src/server');
+const request = useServer(app);   // one listener per file (tests/helpers/server.js)
 const { _resetRateLimiter } = require('../../src/routes/refresh');
 
 beforeEach(() => {
@@ -20,12 +21,12 @@ const ORIGIN = 'https://evil.example';
 
 describe('CORS scoping (F2)', () => {
     it('serves Access-Control-Allow-Origin on read-only GET endpoints', async () => {
-        const res = await request(app).get('/api/health').set('Origin', ORIGIN);
+        const res = await request().get('/api/health').set('Origin', ORIGIN);
         expect(res.headers['access-control-allow-origin']).toBe('*');
     });
 
     it('serves Access-Control-Allow-Origin on the read-only POST /api/query', async () => {
-        const res = await request(app)
+        const res = await request()
             .post('/api/query')
             .set('Origin', ORIGIN)
             .send({ keywords: ['ai'] });
@@ -33,7 +34,7 @@ describe('CORS scoping (F2)', () => {
     });
 
     it('does NOT serve CORS headers on POST /api/refresh', async () => {
-        const res = await request(app).post('/api/refresh').set('Origin', ORIGIN);
+        const res = await request().post('/api/refresh').set('Origin', ORIGIN);
         // Rejected server-side by the cross-site guard (see
         // api.refresh.csrf.test.js) — and still no CORS headers.
         expect(res.status).toBe(403);
@@ -41,7 +42,7 @@ describe('CORS scoping (F2)', () => {
     });
 
     it('does NOT approve a cross-origin preflight for POST /api/refresh', async () => {
-        const res = await request(app)
+        const res = await request()
             .options('/api/refresh')
             .set('Origin', ORIGIN)
             .set('Access-Control-Request-Method', 'POST');

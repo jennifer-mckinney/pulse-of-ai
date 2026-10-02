@@ -8,8 +8,9 @@
 
 'use strict';
 
-const request = require('supertest');
+const { useServer, withServer } = require('../helpers/server');
 const app     = require('../../src/server');
+const request = useServer(app);   // one listener per file (tests/helpers/server.js)
 const { responseCache, _setTestBypass, _clear } = require('../../src/middleware/response-cache');
 const {
     insertSource, insertJob, insertMethodologyVersions, insertPostWithFullPipeline,
@@ -27,11 +28,11 @@ describe('response cache (F3)', () => {
     });
 
     it('serves the second identical GET from cache (miss then hit)', async () => {
-        const first = await request(app).get('/api/posts/aggregated-by-location');
+        const first = await request().get('/api/posts/aggregated-by-location');
         expect(first.status).toBe(200);
         expect(first.headers['x-response-cache']).toBe('miss');
 
-        const second = await request(app).get('/api/posts/aggregated-by-location');
+        const second = await request().get('/api/posts/aggregated-by-location');
         expect(second.status).toBe(200);
         expect(second.headers['x-response-cache']).toBe('hit');
         expect(second.body).toEqual(first.body);
@@ -42,29 +43,29 @@ describe('response cache (F3)', () => {
         const jobId    = await insertJob();
         const mvIds    = await insertMethodologyVersions();
 
-        const before = await request(app).get('/api/posts/aggregated-by-location');
+        const before = await request().get('/api/posts/aggregated-by-location');
         expect(before.headers['x-response-cache']).toBe('miss');
 
         await insertPostWithFullPipeline(sourceId, jobId, mvIds, { location: 'Berlin' });
 
         // Inside the TTL: cached body, new post invisible — the accepted
         // trade-off (10s staleness vs a 2-3 minute data cycle).
-        const cached = await request(app).get('/api/posts/aggregated-by-location');
+        const cached = await request().get('/api/posts/aggregated-by-location');
         expect(cached.headers['x-response-cache']).toBe('hit');
         expect(cached.body).toEqual(before.body);
 
         // After expiry (simulated via _clear): the write is visible.
         _clear();
-        const fresh = await request(app).get('/api/posts/aggregated-by-location');
+        const fresh = await request().get('/api/posts/aggregated-by-location');
         expect(fresh.headers['x-response-cache']).toBe('miss');
         expect(fresh.body.some((c) => c.city === 'Berlin')).toBe(true);
     });
 
     it('caches per query-string, not per path', async () => {
-        await request(app).get('/api/sources/timeseries?hours=2');
-        const other = await request(app).get('/api/sources/timeseries?hours=3');
+        await request().get('/api/sources/timeseries?hours=2');
+        const other = await request().get('/api/sources/timeseries?hours=3');
         expect(other.headers['x-response-cache']).toBe('miss');   // different key
-        const same = await request(app).get('/api/sources/timeseries?hours=3');
+        const same = await request().get('/api/sources/timeseries?hours=3');
         expect(same.headers['x-response-cache']).toBe('hit');
         expect(same.body[0].series).toHaveLength(3);
     });
@@ -77,25 +78,28 @@ describe('response cache (F3)', () => {
         let calls = 0;
         mini.get('/x', responseCache(50), (req, res) => res.json({ calls: ++calls }));
 
-        const a = await request(mini).get('/x');
-        const b = await request(mini).get('/x');
-        expect(a.body.calls).toBe(1);
-        expect(b.body.calls).toBe(1);              // cached
-        await new Promise((r) => setTimeout(r, 60));
-        const c = await request(mini).get('/x');
-        expect(c.body.calls).toBe(2);              // TTL expired → re-computed
+        // One listener for the three requests (tests/helpers/server.js).
+        await withServer(mini, async (miniRequest) => {
+            const a = await miniRequest().get('/x');
+            const b = await miniRequest().get('/x');
+            expect(a.body.calls).toBe(1);
+            expect(b.body.calls).toBe(1);              // cached
+            await new Promise((r) => setTimeout(r, 60));
+            const c = await miniRequest().get('/x');
+            expect(c.body.calls).toBe(2);              // TTL expired → re-computed
+        });
 
         // /api/themes carries the middleware too.
-        const t1 = await request(app).get('/api/themes');
-        const t2 = await request(app).get('/api/themes');
+        const t1 = await request().get('/api/themes');
+        const t2 = await request().get('/api/themes');
         expect(t1.headers['x-response-cache']).toBe('miss');
         expect(t2.headers['x-response-cache']).toBe('hit');
     });
 
     it('does not cache non-200 responses', async () => {
-        const bad = await request(app).get('/api/sources/timeseries?hours=nope');
+        const bad = await request().get('/api/sources/timeseries?hours=nope');
         expect(bad.status).toBe(400);
-        const again = await request(app).get('/api/sources/timeseries?hours=nope');
+        const again = await request().get('/api/sources/timeseries?hours=nope');
         expect(again.status).toBe(400);
         expect(again.headers['x-response-cache']).not.toBe('hit');
     });
@@ -112,25 +116,25 @@ describe('response cache (F3)', () => {
             expect(health.HEALTH_CACHE_TTL_MS).toBeLessThanOrEqual(10000);
             const ping = jest.fn(async () => 'PONG');
             health._setRedisClientForTests({ ping, get: async () => null });
-            const first = await request(app).get('/api/health');
+            const first = await request().get('/api/health');
             expect(first.headers['x-response-cache']).toBe('miss');
             const job = await insertJob('completed', { postsProcessed: 9 });
-            const second = await request(app).get('/api/health');
+            const second = await request().get('/api/health');
             expect(second.headers['x-response-cache']).toBe('hit');
             expect(second.body).toEqual(first.body);
             expect(second.body.last_job).toBeNull();          // the write inside the TTL is not visible
             expect(ping).toHaveBeenCalledTimes(1);
             _clear();
-            const third = await request(app).get('/api/health');
+            const third = await request().get('/api/health');
             expect(third.body.last_job.id).toBe(job);
         });
 
         it('a varying query string cannot bypass the cache', async () => {
             const ping = jest.fn(async () => 'PONG');
             health._setRedisClientForTests({ ping, get: async () => null });
-            await request(app).get('/api/health');
+            await request().get('/api/health');
             for (let i = 0; i < 5; i++) {
-                const r = await request(app).get(`/api/health?bust=${i}`);
+                const r = await request().get(`/api/health?bust=${i}`);
                 expect(r.headers['x-response-cache']).toBe('hit');
             }
             expect(ping).toHaveBeenCalledTimes(1);
@@ -141,10 +145,10 @@ describe('response cache (F3)', () => {
             const ping = jest.fn(async () => 'PONG');
             health._setRedisClientForTests({ ping, get: async () => null });
             try {
-                await request(app).get('/api/health');
+                await request().get('/api/health');
                 const t = realNow();
                 Date.now = () => t + health.HEALTH_CACHE_TTL_MS + 1;
-                const r = await request(app).get('/api/health');
+                const r = await request().get('/api/health');
                 expect(r.headers['x-response-cache']).toBe('miss');
                 expect(ping).toHaveBeenCalledTimes(2);
             } finally {

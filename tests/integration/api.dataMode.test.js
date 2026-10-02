@@ -8,8 +8,9 @@
 
 'use strict';
 
-const request = require('supertest');
+const { useServer } = require('../helpers/server');
 const app = require('../../src/server');
+const request = useServer(app);   // one listener per file (tests/helpers/server.js)
 const { dbRun } = require('../../src/db/connection');
 const { NARRATION_VERSION } = require('../../src/config/audit-narration');
 const {
@@ -49,7 +50,7 @@ describe('GET /api/health — data_mode', () => {
     it("reports 'none' with an empty trailing hour and counts only real sources", async () => {
         await insertSource('real-a', 'social');
         await insertDemoSource('demo_social', 'social');
-        const res = await request(app).get('/api/health');
+        const res = await request().get('/api/health');
         expect(res.status).toBe(200);
         expect(res.body).toMatchObject({
             data_mode: 'none',
@@ -61,23 +62,23 @@ describe('GET /api/health — data_mode', () => {
 
     it("reports 'demo' when every post in the hour is from a demo feed", async () => {
         await scenario({ demo: 3 });
-        const res = await request(app).get('/api/health');
+        const res = await request().get('/api/health');
         expect(res.body.data_mode).toBe('demo');
         expect(res.body.data_window).toMatchObject({ hours: 1, posts: 3, demo_posts: 3 });
     });
 
     it("reports 'live' for real-source posts and 'mixed' when both are present", async () => {
         await scenario({ live: 2 });
-        expect((await request(app).get('/api/health')).body.data_mode).toBe('live');
+        expect((await request().get('/api/health')).body.data_mode).toBe('live');
         const demoSrc = (await dbRun(`SELECT id FROM data_sources WHERE source_type = 'demo'`)).id;
         const mv = await insertMethodologyVersions();
         await insertPostWithFullPipeline(demoSrc, await insertJob(), mv, { externalId: 'demo-x' });
-        expect((await request(app).get('/api/health')).body.data_mode).toBe('mixed');
+        expect((await request().get('/api/health')).body.data_mode).toBe('mixed');
     });
 
     it('classifies only the trailing hour: older live posts do not make demo data "mixed"', async () => {
         await scenario({ live: 2, demo: 2, liveHoursAgo: 3 });
-        const res = await request(app).get('/api/health');
+        const res = await request().get('/api/health');
         expect(res.body.data_mode).toBe('demo');
         expect(res.body.data_window).toMatchObject({ hours: 1, posts: 2, demo_posts: 2 });
     });
@@ -95,7 +96,7 @@ describe('GET /api/health — data_mode', () => {
         // …and a demo post at a registry city that has no sentiment result yet.
         await insertPostWithRelevanceOnly(demoSrc, job, mv, { externalId: 'demo-unscored', location: 'London' });
 
-        const health = (await request(app).get('/api/health')).body;
+        const health = (await request().get('/api/health')).body;
         expect(health.data_mode).toBe('live');
         expect(health.data_window).toEqual({
             hours: 1, posts: 2, demo_posts: 0,          // what the globe shows
@@ -105,7 +106,7 @@ describe('GET /api/health — data_mode', () => {
 
         // Same answer as the aggregated rows the globe renders (placed rows only).
         const from = new Date(Date.now() - 3600e3).toISOString();
-        const rows = (await request(app).get(`/api/posts/aggregated-by-location?from=${encodeURIComponent(from)}`)).body;
+        const rows = (await request().get(`/api/posts/aggregated-by-location?from=${encodeURIComponent(from)}`)).body;
         const placed = rows.filter(r => r.lat !== null);
         const total = placed.reduce((n, r) => n + r.total, 0);
         const demo = placed.reduce((n, r) => n + r.demo_posts, 0);
@@ -116,7 +117,7 @@ describe('GET /api/health — data_mode', () => {
 describe('GET /api/posts/aggregated-by-location — per-row data origin', () => {
     it('carries demo_posts and data_mode on every row, still a plain array', async () => {
         await scenario({ live: 1, demo: 2 });
-        const res = await request(app).get('/api/posts/aggregated-by-location');
+        const res = await request().get('/api/posts/aggregated-by-location');
         expect(res.status).toBe(200);
         expect(Array.isArray(res.body)).toBe(true);
         const london = res.body.find(r => r.city === 'London');
@@ -125,9 +126,9 @@ describe('GET /api/posts/aggregated-by-location — per-row data origin', () => 
 
     it("an all-demo row is 'demo'; an all-live row is 'live' with demo_posts 0", async () => {
         await scenario({ demo: 2 });
-        let rows = (await request(app).get('/api/posts/aggregated-by-location?platform=news')).body;
+        let rows = (await request().get('/api/posts/aggregated-by-location?platform=news')).body;
         expect(rows[0]).toMatchObject({ total: 2, demo_posts: 2, data_mode: 'demo' });
-        rows = (await request(app).get('/api/posts/aggregated-by-location?platform=social')).body;
+        rows = (await request().get('/api/posts/aggregated-by-location?platform=social')).body;
         expect(rows).toEqual([]);
     });
 });
@@ -137,7 +138,7 @@ describe('GET /api/audit/:post_id — demo ingestion wording (audit_narration 1.
         await insertIngestMethodology();
         const ids = await scenario({ live: 1, demo: 1 });
 
-        const demo = (await request(app).get(`/api/audit/${ids.demo[0]}`)).body;
+        const demo = (await request().get(`/api/audit/${ids.demo[0]}`)).body;
         expect(demo.narration.version).toBe(NARRATION_VERSION);
         expect(NARRATION_VERSION).toBe('1.5.0');
         expect(demo.post.data_origin).toBe('demo');
@@ -149,7 +150,7 @@ describe('GET /api/audit/:post_id — demo ingestion wording (audit_narration 1.
         expect(demo.ingest.audiences.public).not.toMatch(/came from a public source/);
         expect(demo.ingest.audiences.config).toMatchObject({ content_origin: 'demo_feed', fictional: true });
 
-        const live = (await request(app).get(`/api/audit/${ids.live[0]}`)).body;
+        const live = (await request().get(`/api/audit/${ids.live[0]}`)).body;
         expect(live.post.data_origin).toBe('live');
         expect(live.ingest.audiences.public).toMatch(/^This post came from a public source\./);
     });

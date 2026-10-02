@@ -13,6 +13,9 @@ const { seedSources, seedMethodology } = require('../../scripts/seed');
 const { main: replayMain } = require('../../scripts/replay');
 const { CURRENT_VERSIONS } = require('../../src/config/methodology-registry');
 const { fixtureTransport, RECORDED_AT, TEST_ENV } = require('../helpers/fixtureTransport');
+const { useServer } = require('../helpers/server');
+
+const request = useServer(require('../../src/server'));   // one listener per file (tests/helpers/server.js)
 
 const NOW = () => Date.parse(RECORDED_AT);
 const ROUTES = [
@@ -76,8 +79,7 @@ describe('runCollection', () => {
             LEFT JOIN methodology_versions mv ON mv.id = rp.admission_mv_id`);
         expect(rows.length).toBeGreaterThan(0);
         for (const r of rows) expect([r.component, r.version]).toEqual(['admission_filter', '1.0.0']);
-        const request = require('supertest');
-        const res = await request(require('../../src/server')).get(`/api/audit/${rows[0].id}`);
+        const res = await request().get(`/api/audit/${rows[0].id}`);
         expect(res.body.provenance.admission).toEqual({ component: 'admission_filter', version: '1.0.0', lineage: 'recorded' });
     });
 

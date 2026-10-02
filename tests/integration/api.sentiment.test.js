@@ -4,13 +4,14 @@
 
 'use strict';
 
-const request = require('supertest');
+const { useServer } = require('../helpers/server');
 const app     = require('../../src/server');
+const request = useServer(app);   // one listener per file (tests/helpers/server.js)
 const { insertSource, insertJob, insertMethodologyVersions, insertPostWithFullPipeline } = require('./helpers');
 
 describe('GET /api/sentiment/latest', () => {
     it('returns 200 with correct top-level shape', async () => {
-        const res = await request(app).get('/api/sentiment/latest');
+        const res = await request().get('/api/sentiment/latest');
 
         expect(res.status).toBe(200);
         expect(res.body).toMatchObject({
@@ -21,7 +22,7 @@ describe('GET /api/sentiment/latest', () => {
     });
 
     it('returns zeroed summary when no posts exist', async () => {
-        const res = await request(app).get('/api/sentiment/latest');
+        const res = await request().get('/api/sentiment/latest');
 
         expect(res.body.summary).toMatchObject({
             total:    0,
@@ -43,7 +44,7 @@ describe('GET /api/sentiment/latest', () => {
         await insertPostWithFullPipeline(srcId, jobId, mvIds, { indicator: 'neutral',  externalId: 'sl-n1' });
         await insertPostWithFullPipeline(srcId, jobId, mvIds, { indicator: 'negative', externalId: 'sl-ng1' });
 
-        const res = await request(app).get('/api/sentiment/latest');
+        const res = await request().get('/api/sentiment/latest');
 
         expect(res.body.summary.total).toBe(4);
         expect(res.body.summary.positive).toBe(2);
@@ -60,7 +61,7 @@ describe('GET /api/sentiment/latest', () => {
             location: 'Seoul', indicator: 'positive', externalId: 'sl2-1',
         });
 
-        const res = await request(app).get('/api/sentiment/latest');
+        const res = await request().get('/api/sentiment/latest');
 
         expect(res.body.recent_posts).toHaveLength(1);
         expect(res.body.recent_posts[0]).toMatchObject({
@@ -84,7 +85,7 @@ describe('GET /api/sentiment/latest', () => {
             await insertPostWithFullPipeline(srcId, jobId, mvIds, { externalId: `sl3-${i}` });
         }
 
-        const res = await request(app).get('/api/sentiment/latest?limit=3');
+        const res = await request().get('/api/sentiment/latest?limit=3');
         expect(res.body.recent_posts).toHaveLength(3);
     });
 
@@ -98,11 +99,11 @@ describe('GET /api/sentiment/latest', () => {
             await insertPostWithFullPipeline(srcId, jobId, mvIds, { externalId: `sl4-${i}` });
         }
 
-        const defaultRes = await request(app).get('/api/sentiment/latest');
+        const defaultRes = await request().get('/api/sentiment/latest');
         expect(defaultRes.body.recent_posts.length).toBeLessThanOrEqual(20);
 
         // ?limit=200 should be capped at 100
-        const capRes = await request(app).get('/api/sentiment/latest?limit=200');
+        const capRes = await request().get('/api/sentiment/latest?limit=200');
         expect(capRes.body.recent_posts.length).toBeLessThanOrEqual(100);
     });
 
@@ -115,7 +116,7 @@ describe('GET /api/sentiment/latest', () => {
             comparative: 0.4, externalId: 'sl5-1',
         });
 
-        const res = await request(app).get('/api/sentiment/latest');
+        const res = await request().get('/api/sentiment/latest');
         expect(typeof res.body.summary.avg_comparative).toBe('number');
         expect(isFinite(res.body.summary.avg_comparative)).toBe(true);
     });
