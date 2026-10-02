@@ -21,19 +21,18 @@ const { DEMO_SOURCE_TYPE } = require('../config/data-mode');
 const { latestPerLabeller } = require('./agreement');
 const { scriptOf, scopeOf, decisionOf, SAMPLER_VERSION } = require('./sampler');
 
-const { MIN_KEY_LENGTH, MIN_KEY_ENTROPY_BITS, isStrongKey } = require('../config/key-strength');
+const { MIN_KEY_LENGTH, isStrongKey } = require('../config/key-strength');
 
 /** The hash key (GOLD_HASH_KEY, else AUDIT_HASH_KEY); throws when neither is set or it is too weak. */
 function hashKey(env = process.env) {
-    const valid = isStrongKey;
     // An explicitly configured GOLD_HASH_KEY is never silently replaced: a typo must fail, not
     // fingerprint a sample under the audit key (fixing the typo later would orphan every item).
     const gold = env.GOLD_HASH_KEY;
     if (typeof gold === 'string' && gold !== '') {
-        if (valid(gold)) return gold;
+        if (isStrongKey(gold)) return gold;
         throw new Error(`GOLD_HASH_KEY is set but invalid: it needs at least ${MIN_KEY_LENGTH} characters, enough character variety (generate one with openssl rand -hex 32) and not a template value (unset it to use AUDIT_HASH_KEY)`);
     }
-    if (valid(env.AUDIT_HASH_KEY)) return env.AUDIT_HASH_KEY;
+    if (isStrongKey(env.AUDIT_HASH_KEY)) return env.AUDIT_HASH_KEY;
     throw new Error(`gold tools need GOLD_HASH_KEY (or AUDIT_HASH_KEY), at least ${MIN_KEY_LENGTH} characters, enough character variety (generate one with openssl rand -hex 32) and not a template value, to fingerprint post text`);
 }
 

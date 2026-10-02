@@ -12,7 +12,7 @@ const { seedSources } = require('../../scripts/seed');
 const retention = require('../../src/collectors/retention');
 const { insertJob, insertMethodologyVersions, insertPostWithFullPipeline } = require('./helpers');
 
-process.env.GOLD_HASH_KEY = process.env.GOLD_HASH_KEY || 'integration-test-gold-hash-key-0123456789';
+process.env.GOLD_HASH_KEY = 'k7Qz-4mXv9-Rb2Tn-eL8s-Wp3Yd-0cHj-5uGa';   // fixed: independent of the environment
 process.env.POSTGRES_HOST = process.env.POSTGRES_HOST || 'localhost';
 const TEST_PORT = String(process.env.POSTGRES_TEST_PORT || '5433');
 if (!['5433', '5434'].includes(TEST_PORT)) process.env.GOLD_ALLOW_DB_PORT = TEST_PORT;
@@ -92,13 +92,17 @@ describe('gold-erase --post --remove-text (erasure request)', () => {
         expect(out.join('\n')).toMatch(/already gone/);
         expect(r.erased).toBe(0);   // retention already erased the gold rows with the text
         expect((await db.dbGet('SELECT COUNT(*)::int AS n FROM post_embeddings WHERE raw_post_id = $1', [post])).n).toBe(0);
-        expect((await db.dbGet('SELECT content FROM raw_posts WHERE id = $1', [post])).content).toBe(retention.ERASURE_NOTICE);
+        const gone = await db.dbGet('SELECT content, text_removed_reason FROM raw_posts WHERE id = $1', [post]);
+        expect(gone.content).toBe(retention.ERASURE_NOTICE);
+        expect(gone.text_removed_reason).toBe('erasure request');   // the receipt must not still say retention removed it
         expect(await hashState(post)).toEqual(before);
         const log = await db.dbGet(`SELECT reason FROM data_retention_log ORDER BY performed_at DESC LIMIT 1`);
         expect(JSON.parse(log.reason)).toMatchObject({ rule: 'erasure request', embeddings_deleted: 1, url_and_notice_scrubbed: true });
         const logs = (await db.dbGet('SELECT COUNT(*)::int AS n FROM data_retention_log')).n;
-        await goldErase.main(['--post', post, '--remove-text'], { env: LOCAL, out: quiet });
+        const out2 = [];
+        await goldErase.main(['--post', post, '--remove-text'], { env: LOCAL, out: l => out2.push(l) });
         expect((await db.dbGet('SELECT COUNT(*)::int AS n FROM data_retention_log')).n).toBe(logs);   // nothing left to do: no new row
+        expect(out2.join('\n')).toMatch(/nothing left to erase/);
     });
 
     it('a live gold item of a post whose text is already gone is erased and counted once', async () => {
@@ -130,6 +134,8 @@ describe('gold-erase --post --remove-text (erasure request)', () => {
         const p = await db.dbGet('SELECT content, raw_payload FROM raw_posts WHERE id = $1', [post]);
         expect(p.content).toBe(retention.ERASURE_NOTICE);
         expect(p.raw_payload).not.toHaveProperty('url');
+        const rlog = await db.dbGet(`SELECT action FROM data_retention_log ORDER BY performed_at DESC LIMIT 1`);
+        expect(rlog.action).toBe(retention.BLANK_ACTION);   // a platform-terms post logs like the main path
     });
 
     it('a demo post is skipped: nothing changes and the tool says so', async () => {

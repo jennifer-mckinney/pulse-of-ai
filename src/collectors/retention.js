@@ -95,8 +95,8 @@ function removalNoticeFor(slug) {
  * @param {string} slug  data_sources.name
  * @param {string[]} postIds
  * @param {{ reason: string, rule: string, performedBy: string, platform: boolean,
- *          deleteEmbeddings?: boolean, legalBasis?: string }} o   deleteEmbeddings defaults to `platform`; an erasure request sets it
- *          for any source
+ *          deleteEmbeddings?: boolean, legalBasis?: string, erasure?: boolean }} o   deleteEmbeddings defaults to `platform`; an erasure
+ *          request sets it for any source, and `erasure` makes the stored notice say so and keeps no url (no Reddit permalink)
  * @returns {Promise<string[]>} ids changed
  */
 async function removeTextBatch(client, slug, postIds, { reason, rule, performedBy, platform, deleteEmbeddings = platform, legalBasis = null, erasure = false }) {
@@ -185,9 +185,9 @@ const ERASURE_RETAINED_NOTE = 'Scores, audit rows, the content hash and the prov
  * a log row when something changed): the request is never a silent no-op.
  * @param {string} postId
  * @param {{ performedBy?: string }} [o]
- * @returns {Promise<{ removed: boolean, source: string|null, goldErased: number, skipped?: 'demo' }>}
+ * @returns {Promise<{ removed: boolean, source: string|null, goldErased: number, skipped?: 'demo', nothingLeft?: true }>}
  *          removed=false when it had no text left; skipped='demo' for a demo post (purged whole by compaction, never
- *          touched here); goldErased counts the gold items erased by this call
+ *          touched here; nothingLeft=true when a repeat request found nothing more to erase (no log row); goldErased counts the gold items erased by this call
  */
 async function removeTextOnRequest(postId, { performedBy = 'scripts/gold-erase.js' } = {}) {
     return dbTransaction(async (client) => {
@@ -204,22 +204,25 @@ async function removeTextOnRequest(postId, { performedBy = 'scripts/gold-erase.j
             reason: 'erasure request', rule: 'erasure request', performedBy,
             platform: !!(src && src.retention), deleteEmbeddings: true, legalBasis: ERASURE_LEGAL_BASIS, erasure: true,
         });
+        let nothingLeft = false;
         if (!ids.length) {
             // The text was already removed (retention, upstream deletion): finish what that left behind. A Reddit post keeps
             // its slug-less permalink and the platform notice after retention; an erasure request removes both.
             const scrubbed = (await client.query(
                 `UPDATE raw_posts
                  SET content = $2,
-                     raw_payload = COALESCE(raw_payload, '{}'::jsonb) - $3::text[] - 'url'
+                     raw_payload = COALESCE(raw_payload, '{}'::jsonb) - $3::text[] - 'url',
+                     text_removed_reason = 'erasure request'
                  WHERE id = $1::uuid AND (content <> $2 OR raw_payload->>'url' IS NOT NULL)`,
                 [postId, ERASURE_NOTICE, [...PAYLOAD_TEXT_KEYS]])).rowCount;
             const embeddingsDeleted = (await client.query('DELETE FROM post_embeddings WHERE raw_post_id = $1::uuid', [postId])).rowCount;
             await client.query('SELECT gold_erase_post($1::uuid)', [postId]);
-            if (scrubbed + embeddingsDeleted + goldErased > 0) {
+            nothingLeft = scrubbed + embeddingsDeleted + goldErased === 0;
+            if (!nothingLeft) {
                 await client.query(
                     `INSERT INTO data_retention_log (raw_post_id, action, reason, legal_basis, performed_by)
                      VALUES (NULL, $1, $2, $3, $4)`,
-                    [DETAIL_ACTION, JSON.stringify({
+                    [src && src.retention ? BLANK_ACTION : DETAIL_ACTION, JSON.stringify({
                         summary: `Erasure request for a ${row.name} post whose text was already removed: remaining derived data erased.`,
                         source: row.name, rule: 'erasure request', reason: 'erasure request', post_ids: [postId],
                         retained: ERASURE_RETAINED_NOTE, embeddings_deleted: embeddingsDeleted, gold_items_erased: goldErased,
@@ -227,7 +230,7 @@ async function removeTextOnRequest(postId, { performedBy = 'scripts/gold-erase.j
                     }), ERASURE_LEGAL_BASIS, performedBy]);
             }
         }
-        return { removed: ids.length === 1, source: row.name, goldErased };
+        return { removed: ids.length === 1, source: row.name, goldErased, ...(nothingLeft ? { nothingLeft: true } : {}) };
     });
 }
 

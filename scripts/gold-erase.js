@@ -67,6 +67,7 @@ async function main(argv, { env = process.env, out = l => process.stdout.write(l
         // transaction; the count is what that transaction erased (never a separate, racy read).
         const r = await require('../src/collectors/retention').removeTextOnRequest(opts.post.toLowerCase());
         out(r.skipped === 'demo' ? `gold erase: demo post (${r.source}): not erasable here, demo posts are purged whole by compaction`
+            : r.nothingLeft ? `gold erase: nothing left to erase for this post (${r.source}); the text was already removed`
             : r.source ? `gold erase: text of the post ${r.removed ? 'removed' : 'was already gone (derived data erased)'} (${r.source})` : 'gold erase: no such post');
         erased = r.goldErased;
     } else if (opts.post) {

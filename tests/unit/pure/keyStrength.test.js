@@ -1,4 +1,4 @@
-// tests/unit/pure/keyStrength.test.js — the HMAC-key strength rule shared by the gold tools and the erasure request.
+// tests/unit/pure/keyStrength.test.js — the minimum-variety rule for the gold tools' HMAC key.
 'use strict';
 
 const crypto = require('crypto');
