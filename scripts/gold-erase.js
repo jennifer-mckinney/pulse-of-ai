@@ -13,7 +13,9 @@
 //                    removed by retention, or is empty (run it after the
 //                    retention job, before reporting any gold statistic)
 //
-// Local-only (assertLocalOnly). Prints counts only.
+// The retention job (src/collectors/retention.js) erases a post's gold rows in the
+// same transaction as its text; this tool serves erasure requests and catches up
+// posts whose text went another way. Local-only (assertLocalOnly). Counts only.
 
 'use strict';
 

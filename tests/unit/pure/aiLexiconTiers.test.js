@@ -466,3 +466,16 @@ describe('review fixes round 3: a cue disambiguates only its own sentence', () =
         expect(classifyTiered('Air India AI171 crash at Ahmedabad').ai).toBe(false);
     });
 });
+
+describe('review fixes round 4: masks scoped to the disambiguated occurrence; all-caps function words', () => {
+    it.each([
+        'Gemini horoscope news compares Google Gemini model capabilities',
+        'Artificial insemination (AI) and AI models improve cattle diagnostics',
+    ])('keeps the genuine mention in the same sentence: %s', (t) => {
+        expect(classifyTiered(t).ai).toBe(true);
+    });
+
+    it.each(['LA IA es el futuro', 'DIE KI ist da', 'UNE IA est utile', 'A IA vai mudar'])('all-caps function words: %s', (t) => {
+        expect(classifyTiered(t).ai).toBe(true);
+    });
+});

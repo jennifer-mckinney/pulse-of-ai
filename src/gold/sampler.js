@@ -23,6 +23,7 @@
 
 const crypto = require('crypto');
 const { getSource } = require('../config/source-registry');
+const { CATEGORY_SLUGS } = require('../config/categories');
 
 /** Version of this sampler (relevance_gold_items.sampler_version). */
 const SAMPLER_VERSION = '1.0.0';
@@ -31,7 +32,7 @@ const DIMENSIONS = Object.freeze(['category', 'scope', 'decision', 'script']);
 const SCOPES = Object.freeze(['filter', 'ai', 'unknown']);
 const DECISIONS = Object.freeze(['relevant', 'not_relevant', 'unscored']);
 const SCRIPTS = Object.freeze(['latin', 'cjk', 'cyrillic', 'arabic', 'other']);
-const ALLOWED = Object.freeze({ scope: SCOPES, decision: DECISIONS, script: SCRIPTS });
+const ALLOWED = Object.freeze({ category: CATEGORY_SLUGS, scope: SCOPES, decision: DECISIONS, script: SCRIPTS });
 
 const SCRIPT_RES = Object.freeze([
     ['latin', /\p{Script=Latin}/u],

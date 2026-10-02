@@ -196,7 +196,7 @@ describe('review fixes round 2: format characters, identifiers in notes, quoted 
 
     it('a note with an email, URL or @handle is refused; a plain note passes', async () => {
         const out = [];
-        const answers = ['c # mail me at a.b@example.com', 'c # see https://example.com', 'c # ping @someone', 'c # plain topic note'];
+        const answers = ['c # mail me at a.b@example.com', 'c # see https://example.com', 'c # ping @someone', 'c # contact (@alice) now', 'c # ping:@bob', 'c # plain topic note'];
         const recorded = [];
         const store = {
             pendingItems: async () => [{ id: 'i1', category: 'news', raw_post_id: 'p', input_hash: 'h' }],
@@ -205,7 +205,7 @@ describe('review fixes round 2: format characters, identifiers in notes, quoted 
             recordLabel: async (x) => { recorded.push(x); },
         };
         await l.runSession({ store, io: { print: (m) => out.push(m), ask: async () => answers.shift() }, labeller: 'ann', sampleId: 's' });
-        expect(out.filter(m => /may not contain an email/.test(m))).toHaveLength(3);
+        expect(out.filter(m => /may not contain an email/.test(m))).toHaveLength(5);
         expect(recorded).toHaveLength(1);
         expect(recorded[0].note).toBe('plain topic note');
         // The untrusted block is marked line by line: a post cannot fake the tool's own lines.

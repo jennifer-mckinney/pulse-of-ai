@@ -155,7 +155,11 @@ const NEGATIVE = freezeAll([
             /\b(?:EPS|SVG|PDF|PSD|CDR|DXF|PNG|JPE?G)\s*(?:,|\/|and|or|&)\s*AI\b/, /\bAI\s*(?:,|\/|and|or|&)\s*(?:EPS|SVG|PDF|PSD|CDR|DXF)\b/],
         when: /\b(?:Adobe|Illustrator|EPS|SVG|PSD|CorelDRAW|Inkscape|download|templates?|clip ?art|logos?|printable)\b/i },
     { id: 'artificial_insemination', target: 'ai_acronym',
-        mask: [/\bartificial[\s-]+insemination\b/i, AI_ACRONYM_RE], when: /\bartificial[\s-]+insemination\b/i },
+        // Only the insemination senses of "AI", not every AI in the sentence: the phrase, its
+        // parenthesised abbreviation, and AI + a husbandry noun ("AI technicians", "AI straws").
+        mask: [/\bartificial[\s-]+insemination\b/i, /\(AI\)/,
+            /\bAI\b(?=\s+(?:technicians?|straws?|semen|breeding|service|programs?|bulls?|cows?|heifers?|doses?|conception|success))/],
+        when: /\bartificial[\s-]+insemination\b/i },
     // Hardware cues only: "transformer models to forecast electricity demand on
     // the grid" is ML for power systems, so grid / electricity / utilities are
     // NOT cues, and `unless` lets any ML cue veto the mask.
@@ -164,7 +168,9 @@ const NEGATIVE = freezeAll([
         unless: /\b(?:attention|neural|LLMs?|BERT|GPT|machine learning|deep learning|training|fine-?tun\w*|pre-?trained|tokens?|forecast\w*|transformer[\s-]+(?:models?|architectures?|networks?|based))\b/i },
     { id: 'transformer_franchise', target: 'transformer', mask: [/\btransformers?\b/i],
         when: /\b(?:Optimus Prime|Bumblebee|Autobots?|Decepticons?|Hasbro|Michael Bay|box office)\b/i },
-    { id: 'gemini_astrology', target: 'gemini', mask: [/\bGemini\b/],
+    // `near`: mask only the occurrences within that many characters of a cue, so "Gemini
+    // horoscope news compares Google Gemini model capabilities" keeps its genuine second mention.
+    { id: 'gemini_astrology', target: 'gemini', mask: [/\bGemini\b/], near: 20,
         // Astrology cue words only: sign names are ordinary names and brands
         // ("Leo said Google Gemini ...", Libra), so they are not cues.
         when: /\b(?:horoscopes?|zodiac|astrolog\w*|star signs?|moon sign|rising sign)\b/i },
@@ -212,8 +218,8 @@ const R = '(?![\\p{L}\\p{N}])';    // right boundary (Unicode)
 const u = (src, flags = 'iu') => new RegExp(src, flags);
 // "IA" / "KI" must stay case-sensitive ("ia" is a Portuguese verb form), so the
 // function words around them are made case-insensitive one letter at a time:
-// caps('la|el') -> '[Ll]a|[Ee]l' (JS has no inline (?i:) groups).
-const caps = (words) => words.split('|').map(w => `[${w[0].toUpperCase()}${w[0].toLowerCase()}]${w.slice(1)}`).join('|');
+// caps('la|el') -> '[Ll][Aa]|[Ee][Ll]' (JS has no inline (?i:) groups), so LA IA and La IA both match.
+const caps = (words) => words.split('|').map(w => [...w].map(c => (c.toUpperCase() !== c.toLowerCase() ? `[${c.toUpperCase()}${c.toLowerCase()}]` : c)).join('')).join('|');
 // A sentence start (start of text, or after . ! ? and Spanish inverted marks).
 const SENT = '(?:^|[.!?\\u00A1\\u00BF]\\s*)';
 const cjk = (lang, terms) => terms.map(term => ({ id: `${lang}:${term}`, lang, kind: 'cjk', term: term.replace(/\s+/g, '') }));
@@ -259,7 +265,7 @@ const MULTILINGUAL = freezeAll([
         ['maschinelles Lernen', u(`${L}maschinell\\p{L}*\\s+Lern\\p{L}*`)],
         ['neuronales Netz', u(`${L}neuronal\\p{L}*\\s+Netz\\p{L}*`)],
         ['Sprachmodell', u(`Sprachmodell\\p{L}*`)],
-        ['KI', u(`${L}(?:${caps('die|der|den|dem|des|mit|durch|und|von|zur|zum|per|ohne|gegen')}|[Ff](?:ü|u|ue)r|(?:[Üü]|[Uu]e?)ber|[Ee]ine[mnrs]?)\\s+KI${R}|${SENT}KI\\s+(?:ist|kann|wird|hat|macht|und|ver[äa]ndert)${R}|${L}KI-\\p{L}|${L}generativ\\p{L}*\\s+KI${R}`, 'mu')],
+        ['KI', u(`${L}(?:${caps('die|der|den|dem|des|mit|durch|und|von|zur|zum|per|ohne|gegen')}|[Ff](?:[Üü]|[Uu][Ee]?)[Rr]|(?:[Üü]|[Uu][Ee]?)[Bb][Ee][Rr]|[Ee]ine[mnrs]?)\\s+KI${R}|${SENT}KI\\s+(?:ist|kann|wird|hat|macht|und|ver[äa]ndert)${R}|${L}KI-\\p{L}|${L}generativ\\p{L}*\\s+KI${R}`, 'mu')],
     ]),
     ...rx('ru', [
         ['искусственный интеллект', u(`${L}искусственн\\p{L}*\\s+интеллект\\p{L}*`)],
@@ -308,6 +314,19 @@ function normalizeText(text) {
 /** A fresh global copy of a regex (never mutates the shared object's lastIndex). */
 function globalOf(re) {
     return new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);
+}
+
+/** Blank only the matches of `re` within `near` characters of a cue span. */
+function blankNear(text, re, cues, near) {
+    let out = text;
+    for (const m of text.matchAll(globalOf(re))) {
+        const start = m.index;
+        const end = start + m[0].length;
+        if (cues.some(([cs, ce]) => start <= ce + near && end >= cs - near)) {
+            out = out.slice(0, start) + ' '.repeat(m[0].length) + out.slice(end);
+        }
+    }
+    return out;
 }
 
 function blank(text, re) {
@@ -368,8 +387,12 @@ function classifyTiered(text) {
             if (n.when && !n.when.test(seg)) continue;
             if (n.unless && n.unless.test(seg)) continue;
             let fired = false;
+            const cues = n.near ? [...seg.matchAll(globalOf(n.when))].map(c => [c.index, c.index + c[0].length]) : null;
             for (const re of n.mask) {
-                if (re.test(m)) { fired = true; m = blank(m, re); }
+                if (!re.test(m)) continue;
+                const before = m;
+                m = cues ? blankNear(m, re, cues, n.near) : blank(m, re);
+                if (m !== before) fired = true;
             }
             if (fired && !r.suppressed.includes(n.id)) r.suppressed.push(n.id);
         }

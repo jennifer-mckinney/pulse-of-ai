@@ -238,3 +238,10 @@ describe('review fixes: mixed-script posts and the streaming two-pass sampler', 
         expect(() => s.createSelector(plan, ' ')).toThrow(/seed/);
     });
 });
+
+describe('review fixes round 4: category weights are validated', () => {
+    it('rejects a category that is not a canonical slug, accepts one that is', () => {
+        expect(() => s.parseWeightSpecs(['category:newz=4'])).toThrow(/category must be one of/);
+        expect(s.parseWeightSpecs(['category:news=4']).get('category:news')).toBe(4);
+    });
+});

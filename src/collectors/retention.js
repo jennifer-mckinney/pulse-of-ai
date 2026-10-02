@@ -132,6 +132,10 @@ async function removeTextBatch(client, slug, postIds, { reason, rule, performedB
             'DELETE FROM post_embeddings WHERE raw_post_id = ANY($1::uuid[])', [ids])).rowCount;
     }
     if (ids.length) {
+        // Gold-set rows (migration 070) are append-only and keep the post id, a fingerprint of the
+        // text and labellers' notes: erase them in the SAME transaction as the text, so retention
+        // never leaves a permanent link to removed text (gold_erase_post; labels and strata stay).
+        await client.query('SELECT gold_erase_post(id) FROM unnest($1::uuid[]) AS id', [ids]);
         const name = src ? src.name : slug;
         const legal = platform ? `${src.retention.legalBasis} ${RETAINED_NOTE}` : DETAIL_LEGAL_BASIS;
         await client.query(

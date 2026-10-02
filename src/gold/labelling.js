@@ -46,7 +46,7 @@ const CONTROL_RE = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u2028\u2029]/g;
 // Invisible format characters (bidi overrides, zero-width marks, BOM) can reorder or hide text on screen.
 const FORMAT_RE = /\p{Cf}/gu;
 // An email, URL or @handle in a note would be a personal identifier in an immutable row.
-const NOTE_IDENTIFIER_RE = /[^\s@]+@[^\s@]+\.[^\s@]+|https?:\/\/|www\.|(?:^|\s)@\w{2,}/i;
+const NOTE_IDENTIFIER_RE = /[^\s@]+@[^\s@]+\.[^\s@]+|https?:\/\/|www\.|(?:^|[^\w.@])@\w{2,}/i;
 const LLM_PREFIX = 'llm:';
 // Bounds of an --import file (read by scripts/gold-label.js, checked again here).
 const IMPORT_MAX_BYTES = 10 * 1024 * 1024;
