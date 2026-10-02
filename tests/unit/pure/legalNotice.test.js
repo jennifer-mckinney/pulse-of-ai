@@ -132,6 +132,10 @@ describe('main.js — renders the notice through the DOM API only', () => {
         expect(main).toContain('cfg.NOTICE.length === 0');
         expect(main).toContain("typeof item.id === 'string'");
         expect(main).toContain("typeof item.text === 'string'");
+        // Complete set exactly once; linked notices need a non-empty href.
+        expect(main).toContain('REQUIRED_NOTICE_IDS');
+        expect(main).toContain('LINKED_NOTICE_IDS');
+        expect(main).toContain('new Set(ids).size !== ids.length');
         expect(main).toContain('if (isValidNoticeConfig(legalConfig)) {');
     });
 

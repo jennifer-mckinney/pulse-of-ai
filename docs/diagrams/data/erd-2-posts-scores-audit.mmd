@@ -1,5 +1,5 @@
 %% Title: Data model 2 of 4 · posts, scores, audit trail, bias
-%% Summary: The stored post (its ids and audit links never change; its text and payload are blanked when its retention window ends), its three per-post scores, the decision audit log that ties every score to a registered methodology version, the embedding, and the job-level bias assessments.
+%% Summary: The stored post (its audit links never change; its text and payload are blanked when its retention window ends; its source_id changes only in the manual, named-approval legacy-seed correction, logged as source_reattributed), its three per-post scores, the decision audit log that ties every score to a registered methodology version, the embedding, and the job-level bias assessments.
 %% Sources: src/db/migrations/001, 002, 003, 004, 006, 010, 012, 017, 022, 025, 042; src/pipeline/ingest.js (insert), src/collectors/retention.js (blanking), src/config/methodology-registry.js (components). The rolling-window bias tables (060) are in data model 4. Spec: TECHNICAL_SPEC.md sections 6 and 10 (the explainability chain). data_sources and processing_jobs are shown with their keys only (full columns in data model 1).
 erDiagram
 

@@ -79,6 +79,16 @@ for (const [label, body] of [
     ['an empty NOTICE list', 'window.PulseLegalConfig = { NOTICE: [] };'],
     ['a null entry', 'window.PulseLegalConfig = { NOTICE: [null] };'],
     ['an entry without text', 'window.PulseLegalConfig = { NOTICE: [{ id: "x" }] };'],
+    ['a partial list (one notice only)', 'window.PulseLegalConfig = { NOTICE: [{ id: "copyright", text: "x" }] };'],
+    ['a duplicated id', 'window.PulseLegalConfig = { NOTICE: ['
+        + '{ id: "copyright", text: "a" }, { id: "copyright", text: "b" },'
+        + '{ id: "attribution", text: "c", href: "https://e.test/a" }, { id: "license", text: "d", href: "https://e.test/l" },'
+        + '{ id: "terms", text: "e", href: "https://e.test/t" }, { id: "source", text: "f", href: "https://e.test/s" },'
+        + '{ id: "warranty", text: "g" }] };'],
+    ['an empty href on a linked notice', 'window.PulseLegalConfig = { NOTICE: ['
+        + '{ id: "copyright", text: "a" }, { id: "attribution", text: "c", href: "" },'
+        + '{ id: "license", text: "d", href: "https://e.test/l" }, { id: "terms", text: "e", href: "https://e.test/t" },'
+        + '{ id: "source", text: "f", href: "https://e.test/s" }, { id: "warranty", text: "g" }] };'],
 ] as const) {
     test(`legal notice: ${label} keeps the static, interactive notices and the page boots`, async ({ page }) => {
         await page.route('**/js/config/legal.config.js', (route) => route.fulfill({ contentType: 'application/javascript', body }));

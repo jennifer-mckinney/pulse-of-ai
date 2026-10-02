@@ -152,17 +152,28 @@
     // createElement/textContent; entries with an href become links. The
     // panel starts hidden and the "about" chip toggles it (Escape closes).
     // isValidNoticeConfig: the config replaces the static notices only when it
-    // is complete: a NON-EMPTY array whose every entry is an object with a
-    // non-empty string id and text (and a string href when present). Anything
-    // else (empty list, null entry, wrong types) takes the fallback path and
-    // leaves the static, interactive notices in place; nothing here throws,
-    // so initModules() always runs.
+    // is COMPLETE: a non-empty array whose every entry is an object with a
+    // non-empty string id and text (and a string href when present), that
+    // carries each REQUIRED id exactly once (a partial or duplicated list
+    // would silently drop or repeat the AGPL section 7(b) attribution), with
+    // a non-empty href on the notices that must link (attribution, licence,
+    // terms, source). Extra notices with other ids are allowed. Anything else
+    // takes the fallback path and leaves the static, interactive notices in
+    // place; nothing here throws, so initModules() always runs.
+    const REQUIRED_NOTICE_IDS = ['copyright', 'attribution', 'license', 'terms', 'source', 'warranty'];
+    const LINKED_NOTICE_IDS = ['attribution', 'license', 'terms', 'source'];
     function isValidNoticeConfig(cfg) {
         if (!cfg || !Array.isArray(cfg.NOTICE) || cfg.NOTICE.length === 0) return false;
-        return cfg.NOTICE.every((item) => !!item && typeof item === 'object'
+        const wellFormed = cfg.NOTICE.every((item) => !!item && typeof item === 'object'
             && typeof item.id === 'string' && item.id !== ''
             && typeof item.text === 'string' && item.text !== ''
             && (item.href === undefined || typeof item.href === 'string'));
+        if (!wellFormed) return false;
+        const ids = cfg.NOTICE.map((item) => item.id);
+        if (new Set(ids).size !== ids.length) return false;   // duplicate id
+        if (!REQUIRED_NOTICE_IDS.every((id) => ids.indexOf(id) !== -1)) return false;
+        return cfg.NOTICE.every((item) => LINKED_NOTICE_IDS.indexOf(item.id) === -1
+            || (typeof item.href === 'string' && item.href !== ''));
     }
 
     function renderLegalNotice() {
