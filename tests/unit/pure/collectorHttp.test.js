@@ -812,6 +812,25 @@ describe('rate limits are not refusals (diagnosis 2026-10-01)', () => {
         expect((await c.http.request('https://c.example/page')).body).toMatch(/datadome/);
     });
 
+    test('Copilot (7th): a persisted 5xx hold is a HELD server backoff on the next tick — http_5xx, never rate_limited — and nothing is sent', async () => {
+        const { classifyError } = require('../../../src/collectors/errors');
+        const t = at([[/a\.example\/page/, { status: 503, headers: { 'retry-after': '3600' }, body: '' }]]);
+        await t.http.request('https://a.example/page').catch(() => {});
+        const { http, transport } = at([[/a\.example\/page/, { body: 'ok' }]]);
+        Object.assign(http.holds, t.http.holds);
+        const err = await http.request('https://a.example/page').catch(e => e);
+        expect(err).not.toBeInstanceOf(RateLimitedError);
+        expect(err).toMatchObject({ held: true, host: 'a.example', status: 503 });
+        expect(classifyError(err)).toEqual({ error_kind: 'http_5xx', http_status: 503 });
+        expect(err.message).toMatch(/server error/);
+        expect(err.message).not.toMatch(/rate-limiting/);
+        expect(transport.calls).toHaveLength(0);
+        // A real rate limit hold is still a RateLimitedError.
+        const r = at([[/b\.example\/page/, { status: 429, headers: { 'retry-after': '600' }, body: '' }]]);
+        await r.http.request('https://b.example/page').catch(() => {});
+        expect(await r.http.request('https://b.example/page').catch(e => e)).toBeInstanceOf(RateLimitedError);
+    });
+
     test('Copilot (5th): a 5xx robots.txt with a long Retry-After holds the host (retry_after_5xx, also via a redirect) and stays a robots failure, not a rate limit', async () => {
         const { http } = at([
             ['https://a.example/robots.txt', { status: 503, headers: { 'retry-after': '3600' }, body: '' }],

@@ -248,6 +248,17 @@ class HttpClient {
     heldError(hostname, url) {
         const hold = rateLimit.heldUntil(this.holds, hostname, this.now());
         if (!hold) return null;
+        // Copilot review: a 5xx's Retry-After hold (retry_after_5xx) is honoured
+        // but is not a rate limit — it stays an http_5xx server failure (never
+        // the rate_limited kind), with `held: true` so callers still suppress
+        // the request.
+        if (hold.signal === 'retry_after_5xx') {
+            return new HttpError(`not requested: ${rateLimit.publicHostName(hostname)} is backing off after a server error (HTTP ${hold.http_status || '5xx'})`
+                + ` — backing off until ${new Date(hold.until).toISOString()}, honoured; not a rate limit`, {
+                held: true, host: hostname, url: redactUrl(url), retryAt: hold.until,
+                status: Number.isInteger(hold.http_status) && hold.http_status >= 500 ? hold.http_status : 503,
+            });
+        }
         return new RateLimitedError(`not requested: ${rateLimit.publicHostName(hostname)} is rate-limiting us (HTTP ${hold.http_status || '?'}`
             + `${hold.signal ? `, ${hold.signal}` : ''}) — backing off until ${new Date(hold.until).toISOString()}, honoured`, {
             held: true, host: hostname, url: redactUrl(url), retryAt: hold.until,

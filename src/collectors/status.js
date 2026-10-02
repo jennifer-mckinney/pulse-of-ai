@@ -74,6 +74,9 @@ function rateLimitView(src, row, openRouteIds, now) {
         ? row.rate_limited_routes : {};
     const routeMap = {};
     for (const r of src.routes) {
+        // Copilot review: a route killed after the worker saved this map is not
+        // published as rate-limited (it is disabled / closed already).
+        if (!openRouteIds.includes(r.id)) continue;
         const t = Date.parse(stored[r.id]);
         if (Number.isFinite(t) && t > now) routeMap[r.id] = new Date(t).toISOString();
     }

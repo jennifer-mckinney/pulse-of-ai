@@ -139,7 +139,7 @@ async function discoverSubreddits({ api, env = process.env, now = () => Date.now
                 // Grumpy #1: a rate limit (a 429, or a rate-limit 403) is not
                 // the subreddit being unavailable — stop the discovery, never
                 // ask for the next one.
-                if (err instanceof RateLimitedError) throw err;
+                if (err instanceof RateLimitedError || (err && err.held === true)) throw err;
                 // A private, banned or missing subreddit answers 403 / 404;
                 // any other failure leaves it out of today's ranking.
                 if (err && err.status === 403 && err instanceof AccessDeniedError && ++refused403 >= ABOUT_REFUSAL_AFTER) throw err;
@@ -154,7 +154,8 @@ async function discoverSubreddits({ api, env = process.env, now = () => Date.now
         }
         return { complete: true, ...base, ...rankSubreddits({ counts, abouts, minPosts, top: TOP_N }) };
     } catch (err) {
-        if (err instanceof BudgetExhaustedError || err instanceof RateLimitedError) {
+        const heldBackoff = !!(err && err.held === true);
+        if (err instanceof BudgetExhaustedError || err instanceof RateLimitedError || heldBackoff) {
             return { complete: false, ...base, ranking: [], exclusions: [], selected: [], qualifying: [], reason: err.message,
                 ...(err instanceof RateLimitedError ? { rateLimited: true } : {}) };
         }

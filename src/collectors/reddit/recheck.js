@@ -49,7 +49,7 @@ async function recheckDeletions({ api, slug = 'reddit', log = () => {} }) {
             if (err instanceof BudgetExhaustedError) { out.complete = false; break; }
             // Grumpy #1 (diagnosis 2026-10-01): Reddit asked us to wait — stop
             // here (retried next tick), never fire the next batch at it.
-            if (err instanceof RateLimitedError) {
+            if (err instanceof RateLimitedError || (err && err.held === true)) {
                 out.complete = false;
                 out.rateLimited = true;
                 log(`[reddit] deletion re-check paused: ${err.message}`);

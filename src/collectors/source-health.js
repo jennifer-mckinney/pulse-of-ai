@@ -50,19 +50,28 @@ const TYPES = Object.freeze(['source_stale', 'source_failing', 'source_refused',
  * The hosts whose streak reached the warning threshold, as they may be
  * published (security F3: a host the registry names, else "configured host").
  */
-function throttledHosts(row, src, now) {
-    const { routeAllowedHosts } = require('../config/source-registry');
+function throttledHosts(row, src, now, { env = null, routeKills = [] } = {}) {
+    const { routeAllowedHosts, openRoutes } = require('../config/source-registry');
     const registry = new Set(src.routes.flatMap(r => routeAllowedHosts(r, {})));
+    // Copilot review: only hosts of the routes that are open NOW (env, missing
+    // configuration, database route kills): a closed route's host can never
+    // answer successfully to resolve the warning.
+    const live = env ? new Set(openRoutes(src, env, { routeKills }).flatMap(r => routeAllowedHosts(r, env))) : null;
     // A throttled terms page is not the source being rate-limited.
-    const hit = Object.entries(sanitizeHolds(collectionHolds(src, row.rate_limited_hosts), now)).filter(([, h]) => h.count >= RATE_LIMITED_WARN_AFTER);
+    const hit = Object.entries(sanitizeHolds(collectionHolds(src, row.rate_limited_hosts), now))
+        .filter(([host, h]) => h.count >= RATE_LIMITED_WARN_AFTER && (!live || live.has(host)));
     return {
         hosts: [...new Set(hit.map(([host]) => (registry.has(host) ? host : CONFIGURED_HOST)))].sort(),
         max_count: hit.reduce((m, [, h]) => Math.max(m, h.count), 0),
     };
 }
 
-/** Pure: which conditions hold for one source row. */
-function conditionsFor(row, src, now = Date.now()) {
+/**
+ * Pure: which conditions hold for one source row.
+ * @param {{ env?: object, routeKills?: object[] }} [live]  the env and database route kills
+ *   (the open routes decide which throttled hosts count)
+ */
+function conditionsFor(row, src, now = Date.now(), live = {}) {
     const out = {};
     const hours = src.expectedNewWithinHours;
     // P0-2: a fixed anchor, never a time that moves with each run.
@@ -78,7 +87,7 @@ function conditionsFor(row, src, now = Date.now()) {
         out.source_failing = { severity: 'warning', consecutive_failures: row.consecutive_failures,
             last_error_kind: row.last_error_kind || null, last_http_status: row.last_http_status || null };
     }
-    const throttled = throttledHosts(row, src, now);
+    const throttled = throttledHosts(row, src, now, live);
     if (throttled.hosts.length) {
         out.source_rate_limited = { severity: 'warning', hosts: throttled.hosts, max_count: throttled.max_count };
     }
@@ -121,7 +130,7 @@ async function evaluateSourceHealth({ env = process.env, now = Date.now() } = {}
         // by the database route kill switch is not collecting either.
         const collecting = sourceStatus(src, env, { routeKills: routeKills.get(row.id) || [] }).status === 'collecting'
             && !row.collection_disabled_at;
-        const cond = collecting ? conditionsFor(row, src, now) : {};
+        const cond = collecting ? conditionsFor(row, src, now, { env, routeKills: routeKills.get(row.id) || [] }) : {};
         for (const type of TYPES) {
             const existing = openBy.get(`${type}:${row.id}`);
             if (cond[type] && !existing) {

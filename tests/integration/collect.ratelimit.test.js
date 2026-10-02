@@ -455,6 +455,17 @@ describe('a source whose every route is held is skipped, not failed', () => {
         expect(summary.sources[0].reason).not.toMatch(/backing off after a rate limit/);
     });
 
+    it('Copilot: a route killed AFTER the worker saved its rate-limit map is not published as rate-limited (stale map)', async () => {
+        const state = require('../../src/collectors/state');
+        await collect([[REPO_SEARCH, spent403(600)], [ISSUE_SEARCH, spent403(600)], BLOG_OK]);
+        expect((await rowOf('github')).rate_limited_routes).toEqual(expect.arrayContaining(['repo-search', 'issue-search']));
+        const id = (await dbGet("SELECT id FROM data_sources WHERE name = 'github'")).id;
+        await state.setRouteKillSwitch(id, 'issue-search', true, { reason: 'late takedown', by: 'Test Operator 2026-10-01' });
+        const row = await rowOf('github');
+        expect(row.disabled_routes).toContain('issue-search');
+        expect(row.rate_limited_routes).toEqual(['repo-search']);
+    });
+
     it('security F3: a contract-feed host never reaches GET /api/sources', async () => {
         await dbRun(`INSERT INTO source_collection_state (source_id, rate_limited_hosts, rate_limited_until, rate_limited_routes)
                      SELECT id, jsonb_build_object('acme-123.feeds.example', jsonb_build_object(

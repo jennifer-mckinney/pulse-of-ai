@@ -654,6 +654,17 @@ describe('security review L3-L6', () => {
         expect(l.reason).toMatch(/a rate limit/);
     });
 
+    test('Copilot: source health counts only throttled hosts of the routes open NOW (a killed route\'s host cannot resolve the warning)', () => {
+        const { conditionsFor, RATE_LIMITED_WARN_AFTER } = require('../../../src/collectors/source-health');
+        const src = getSource('github');
+        const hold = { until: iso(NOW + 600000), http_status: 429, signal: 'http_429', count: RATE_LIMITED_WARN_AFTER, weak: 0, at: iso(NOW) };
+        const row = { rate_limited_hosts: { 'api.github.com': hold } };
+        expect(conditionsFor(row, src, NOW).source_rate_limited).toBeDefined();
+        expect(conditionsFor(row, src, NOW, { env: TEST_ENV, routeKills: [] }).source_rate_limited).toBeDefined();
+        const kills = ['repo-search', 'issue-search'].map(route_id => ({ route_id, disabled_at: iso(NOW), reason: 'x', by: 'op' }));
+        expect(conditionsFor(row, src, NOW, { env: TEST_ENV, routeKills: kills }).source_rate_limited).toBeUndefined();
+    });
+
     test('L6: publicHostName names registry hosts only', () => {
         expect(rl.publicHostName('api.github.com')).toBe('api.github.com');
         expect(rl.publicHostName('API.GITHUB.COM')).toBe('API.GITHUB.COM');

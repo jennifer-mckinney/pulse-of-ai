@@ -413,6 +413,20 @@ describe('rate limits (grumpy #1, diagnosis 2026-10-01): Reddit asked us to wait
         expect(calls).toHaveLength(1);
     });
 
+    test('discovery: a HELD server backoff (5xx Retry-After hold) stops the discovery too — incomplete, never "unavailable"', async () => {
+        const [q1] = buildQueries();
+        const { HttpError } = require('../../../src/collectors/errors');
+        const calls = [];
+        const api = {
+            async listing(path, params) { return params.q === q1 && !params.after ? { children: Array.from({ length: 30 }, (_, i) => ({ kind: 't3', data: { name: `t3_h${i}`, subreddit: 'alpha', title: 'AI news', selftext: '', created_utc: 1790679600 } })), after: null } : { children: [], after: null }; },
+            async about(sub) { calls.push(sub); throw new HttpError('not requested: backing off after a server error', { held: true, status: 503 }); },
+        };
+        const d = await discoverSubreddits({ api, env: {}, now: () => NOW });
+        expect(d.complete).toBe(false);
+        expect(JSON.stringify(d.exclusions || [])).not.toMatch(/unavailable|HTTP 5/);
+        expect(calls).toHaveLength(1);
+    });
+
     test('discovery: a rate-limit 403 is not "subreddit unavailable (HTTP 403)"', async () => {
         const [q1] = buildQueries();
         const api = {
