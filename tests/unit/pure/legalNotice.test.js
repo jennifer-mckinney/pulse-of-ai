@@ -159,9 +159,18 @@ describe('main.js — renders the notice through the DOM API only', () => {
 
     test('reads PulseLegalConfig and fills #about-panel', () => {
         expect(main).toContain('window.PulseLegalConfig');
-        expect(main).toContain("getElementById('about-panel')");
+        // The literal id lives in one place (ABOUT_PANEL_ID), read by
+        // getElementById; main.js itself never hardcodes it a second time
+        // (K1 round-2 grumpy-developer fix: single source of truth, shared
+        // with ui.js via window.PulseMain).
+        expect(main).toContain("const ABOUT_PANEL_ID = 'about-panel'");
+        expect(main).toContain('getElementById(ABOUT_PANEL_ID)');
         expect(main).toContain('legalConfig.NOTICE.forEach');
         expect(main).toContain('renderLegalNotice();');
+    });
+
+    test('exposes the About ids on window.PulseMain for ui.js to share', () => {
+        expect(main).toContain('ABOUT_PANEL_ID, ABOUT_CHIP_ID');
     });
 
     test('a missing or malformed config keeps the static notices and warns; the chip is never hidden', () => {
@@ -193,6 +202,14 @@ describe('main.js — renders the notice through the DOM API only', () => {
     test('never uses innerHTML / outerHTML / insertAdjacentHTML', () => {
         // Code use only: the file's comments name innerHTML to forbid it.
         expect(main).not.toMatch(/\.(innerHTML|outerHTML)\s*[+]?=|insertAdjacentHTML\s*\(/);
+    });
+});
+
+describe('ui.js reads the About ids off window.PulseMain, not a second hardcoded copy', () => {
+    test('setDrawerOpen reads pm.ABOUT_PANEL_ID / pm.ABOUT_CHIP_ID with the same literal fallback', () => {
+        const ui = read('public/js/ui.js');
+        expect(ui).toContain("(pm && pm.ABOUT_PANEL_ID) || 'about-panel'");
+        expect(ui).toContain("(pm && pm.ABOUT_CHIP_ID) || 'about-chip'");
     });
 });
 

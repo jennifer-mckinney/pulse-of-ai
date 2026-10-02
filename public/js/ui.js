@@ -1832,8 +1832,15 @@
                 // A notice link inside the About panel is not a stable opener
                 // (the panel folds away when a drawer opens): return to the
                 // About chip instead.
-                const panel = document.getElementById('about-panel');
-                const aboutChip = document.getElementById('about-chip');
+                // Ids read off window.PulseMain (main.js's single source of
+                // truth), with a literal fallback for the pure unit tests
+                // that exercise this function without loading main.js —
+                // grumpy-developer review, K1 round 2: these were two
+                // independent hardcoded copies with no shared source, so an
+                // id rename in index.html could silently break this branch.
+                const pm = typeof window !== 'undefined' ? window.PulseMain : null;
+                const panel = document.getElementById((pm && pm.ABOUT_PANEL_ID) || 'about-panel');
+                const aboutChip = document.getElementById((pm && pm.ABOUT_CHIP_ID) || 'about-chip');
                 drawerOpeners.set(drawer, panel && aboutChip && panel.contains(active) ? aboutChip : active);
             }
             else drawerOpeners.delete(drawer);

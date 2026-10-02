@@ -11,6 +11,8 @@ import {
     consoleErrors, expectNoConsoleErrors, gotoAndWaitForData, enterExplore,
     scrollToBeat, stabilizeSnapshot, pickCity, evidence,
 } from './helpers';
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const legalConfig = require('../../public/js/config/legal.config');
 
 test('city post list: every excerpt shows its credit and a safe link back', async ({ page }) => {
     const errors = consoleErrors(page);
@@ -133,7 +135,10 @@ test('credits page scrolls to its footer notices at 320px', async ({ page }) => 
     const foot = page.locator('.credits-legal');
     await foot.scrollIntoViewIfNeeded();
     await expect(foot).toBeInViewport();
-    await expect(foot.locator('li')).toHaveCount(6);
+    // Tied to legal.config.js's NOTICE array, not a hardcoded count
+    // (grumpy-developer review, K1 round 2), so an added/removed notice
+    // fails this assertion instead of silently drifting from the config.
+    await expect(foot.locator('li')).toHaveCount(legalConfig.NOTICE.length);
 });
 
 test('credits page: notices, credited sources, safe links', async ({ page }) => {
