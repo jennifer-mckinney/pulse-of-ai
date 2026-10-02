@@ -332,6 +332,25 @@ class HttpClient {
     }
 
     /**
+     * Grumpy #7: a 5xx whose Retry-After is too long to wait in-run (withRetries)
+     * holds the host (signal retry_after_5xx — never a rate limit: no streak,
+     * 1 h cap) so the next poll, or a restarted worker, does not ask before the
+     * source's time either. Shared by request() and robots.txt (Copilot review).
+     * @param {string} hostname  the host that answered
+     * @param {{ status: number, headers: object }} res
+     * @param {string} firstHost the host first asked (a redirect's hold is also its)
+     * @returns {object|null} the hold entry, or null when the response names no long time
+     */
+    hold5xx(hostname, res, firstHost) {
+        const now = this.now();
+        const ra = rateLimit.parseRetryAfter(res.headers, now);
+        if (ra === null || ra <= MAX_IN_RUN_WAIT_MS) return null;
+        const { entry } = this.recordHold(hostname, { retryAt: now + ra, status: res.status, signal: 'retry_after_5xx', weak: false });
+        if (firstHost !== hostname) this.holdAlso(firstHost, entry);
+        return entry;
+    }
+
+    /**
      * Copilot review: a robots.txt response goes through the same response
      * state as any request — a RATE LIMIT holds the host (thrown, never
      * cached as "unreachable" or read as "allow all"), a BOT WALL is a
@@ -392,6 +411,10 @@ class HttpClient {
             } catch (err) {
                 throw aliasHold(err, current);
             }
+            // Copilot review: a 5xx robots.txt with a long Retry-After holds the
+            // host as a page's 5xx does (it stays a server failure: the policy
+            // reads it as unreachable, not as a rate limit).
+            if (res.status >= 500) this.hold5xx(new URL(current).hostname, res, firstHost);
             if (!REDIRECTS.includes(res.status) || !res.headers.location) return res;
             current = new URL(res.headers.location, current).toString();
         }
@@ -523,15 +546,8 @@ class HttpClient {
                 // in-run (withRetries) holds the host until then, so the
                 // next poll does not ask before the source's time either.
                 const extra = {};
-                if (res.status >= 500) {
-                    const now = this.now();
-                    const ra = rateLimit.parseRetryAfter(res.headers, now);
-                    if (ra !== null && ra > MAX_IN_RUN_WAIT_MS) {
-                        const { entry } = this.recordHold(u.hostname, { retryAt: now + ra, status: res.status, signal: 'retry_after_5xx', weak: false });
-                        if (firstHost !== u.hostname) this.holdAlso(firstHost, entry);
-                        Object.assign(extra, { host: u.hostname, retryAt: Date.parse(entry.until) });
-                    }
-                }
+                const entry = res.status >= 500 ? this.hold5xx(u.hostname, res, firstHost) : null;
+                if (entry) Object.assign(extra, { host: u.hostname, retryAt: Date.parse(entry.until) });
                 throw new HttpError(`HTTP ${res.status} from ${redactUrl(current)}`, { status: res.status, url: redactUrl(current), ...extra });
             }
             this.clearHold(u.hostname);

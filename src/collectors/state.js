@@ -399,7 +399,11 @@ async function loadHolds() {
  * access_denied_*) and opens no alert: a rate limit is a backoff.
  * @param {string} sourceId
  * @param {{ hosts: string[], changes?: Map, view?: object, routes?: object,
- *           limited?: boolean, headers?: object|null, src?: object, env?: object }} o
+ *           limited?: boolean, headers?: object|null, src?: object, env?: object,
+ *           routeKills?: object[] }} o
+ *   routeKills: the caller's database route kill switches — used only when they
+ *   cannot be read again here (they are refreshed at save time, so a takedown
+ *   issued mid-run keeps a disabled route out of rate_limited_routes)
  *   routes: the caller's route map — used only without `src`; with `src` the
  *   map is recomputed from the MERGED stored holds under the row lock (Copilot:
  *   a concurrent saver's newer hold must not leave the routes `{}` while
@@ -407,10 +411,18 @@ async function loadHolds() {
  *   src: the registry source — rate_limited_until then counts only its
  *   collection hosts (never its terms page's)
  */
-async function saveHolds(sourceId, { hosts, changes = new Map(), view = {}, routes = {}, limited = false, headers = null, src = null, env = process.env }) {
+async function saveHolds(sourceId, { hosts, changes = new Map(), view = {}, routes = {}, limited = false, headers = null, src = null, env = process.env, routeKills = [] }) {
     const rl = require('./rate-limit');
     const { dbTransaction } = require('../db/connection');
     const now = Date.now();
+    let kills = routeKills;
+    if (src) {
+        try {
+            kills = await routeKillSwitches(sourceId);
+        } catch {
+            // keep the caller's rows: the save must not be lost over a read
+        }
+    }
     const cleared = await dbTransaction(async (client) => {
         // A source skipped before its first claim has no state row yet.
         await client.query('INSERT INTO source_collection_state (source_id) VALUES ($1) ON CONFLICT (source_id) DO NOTHING', [sourceId]);
@@ -444,7 +456,7 @@ async function saveHolds(sourceId, { hosts, changes = new Map(), view = {}, rout
         // terms page (src given) is not the source being rate-limited.
         const active = Object.values(rl.activeHolds(src ? rl.collectionHolds(src, stored) : stored, now)).map(h => h.until).sort();
         const saved = headers && Object.keys(headers).length ? JSON.stringify(headers) : null;
-        const routeMap = src ? rl.holdGate(src, env, stored, now).routes : (routes || {});
+        const routeMap = src ? rl.holdGate(src, env, stored, now, { routeKills: kills }).routes : (routes || {});
         await client.query(
             `UPDATE source_collection_state
              SET rate_limited_hosts  = $2::jsonb,

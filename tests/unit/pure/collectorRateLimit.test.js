@@ -627,6 +627,14 @@ describe('security review L3-L6', () => {
         expect(rl.sanitizeHolds({ 'x.example': n }, NOW)['x.example'].strong403).toBe(rl.ESCALATE_STRONG_403_AFTER);
     });
 
+    test('Copilot: holdGate leaves a database-disabled route out (never held, never stored as rate-limited)', () => {
+        const src = getSource('github');
+        const hold = { 'api.github.com': { until: iso(NOW + 600000), http_status: 429, signal: 'http_429', count: 1, weak: 0, at: iso(NOW) } };
+        expect(Object.keys(rl.holdGate(src, TEST_ENV, hold, NOW).routes).sort()).toEqual(['issue-search', 'repo-search']);
+        const kill = { route_id: 'issue-search', disabled_at: new Date(NOW).toISOString(), reason: 'x', by: 'op' };
+        expect(Object.keys(rl.holdGate(src, TEST_ENV, hold, NOW, { routeKills: [kill] }).routes)).toEqual(['repo-search']);
+    });
+
     test('L6: publicHostName names registry hosts only', () => {
         expect(rl.publicHostName('api.github.com')).toBe('api.github.com');
         expect(rl.publicHostName('API.GITHUB.COM')).toBe('API.GITHUB.COM');

@@ -421,6 +421,21 @@ describe('a source whose every route is held is skipped, not failed', () => {
         expect(Object.keys(st.rate_limited_routes)).toEqual(expect.arrayContaining(['repo-search', 'issue-search']));
     });
 
+    it('Copilot: saveHolds reads the database route kill switches again — a disabled route is never stored as rate-limited', async () => {
+        const state = require('../../src/collectors/state');
+        const { getSource } = require('../../src/config/source-registry');
+        const src = getSource('github');
+        const id = (await dbGet("SELECT id FROM data_sources WHERE name = 'github'")).id;
+        await state.setRouteKillSwitch(id, 'issue-search', true, { reason: 'test takedown', by: 'Test Operator 2026-10-01' });
+        const hold = { until: new Date(Date.now() + 600000).toISOString(), http_status: 429, signal: 'http_429', count: 1, weak: 0, at: new Date().toISOString() };
+        await state.saveHolds(id, { hosts: ['api.github.com'], changes: new Map([['api.github.com', hold]]), view: { 'api.github.com': hold }, src, env: TEST_ENV });
+        const st = await stateOf('github');
+        expect(Object.keys(st.rate_limited_routes)).toEqual(['repo-search']);
+        const row = await rowOf('github');
+        expect(row.disabled_routes).toContain('issue-search');
+        expect(row.rate_limited_routes).not.toContain('issue-search');
+    });
+
     it('security F3: a contract-feed host never reaches GET /api/sources', async () => {
         await dbRun(`INSERT INTO source_collection_state (source_id, rate_limited_hosts, rate_limited_until, rate_limited_routes)
                      SELECT id, jsonb_build_object('acme-123.feeds.example', jsonb_build_object(

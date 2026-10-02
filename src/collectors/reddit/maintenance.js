@@ -110,48 +110,58 @@ async function runRedditMaintenance({ env = process.env, transport, log = () => 
         reserve: runAllowance(collectWindowMs(env)),
         requestOptions: extra => ({ minIntervalMs: src.rateLimit.minIntervalMs, robots: false, ...extra }),
     });
-    for (const [job, everyHours, run] of [
-        ['recheck', src.retention.recheckHours, async () => {
-            const r = await recheckDeletions({ api: client, log });
-            return { complete: r.complete, stats: r };
-        }],
-        ['discovery', DISCOVERY_EVERY_HOURS, async () => {
-            const d = await discoverSubreddits({ api: client, env });
-            if (!d.complete) return { complete: false, stats: d.stats };
-            const row = await saveSnapshot({
-                windowStart: d.windowStart, windowEnd: d.windowEnd, minPosts: d.minPosts, top: d.top,
-                selected: d.selected, ranking: d.ranking, exclusions: d.exclusions, stats: d.stats,
-            });
-            return { complete: true, stats: { ...d.stats, selected: d.selected, applied: row.applied } };
-        }],
-    ]) {
-        if (!(await claimJob(job, everyHours))) continue;
-        try {
-            const r = await run();
-            await finishJob(job, r);
-            out[job] = r;
-            log(`[reddit] ${job}: ${r.complete ? 'completed' : 'incomplete, retried next tick'}`);
-        } catch (err) {
-            const cls = classifyError(err);
-            await finishJob(job, { complete: false, errorKind: cls.error_kind });
-            out[job] = { error: cls.error_kind };
-            log(`[reddit] ${job} failed: ${scrub(err && err.message, env)}`);
-            // Grumpy N2: Reddit refused us (a 401/403/451, or the 5th
-            // body-only rate limit escalated by the HTTP client — fail
-            // closed): the refused state applies exactly as in a collection
-            // run, and no further job asks Reddit this tick.
-            if (err instanceof AccessDeniedError) {
-                const sourceId = (await state.sourceIdsBySlug([SLUG])).get(SLUG);
-                if (sourceId) {
-                    // The state row may not exist yet (never collected).
-                    await dbRun('INSERT INTO source_collection_state (source_id) VALUES ($1) ON CONFLICT (source_id) DO NOTHING', [sourceId]);
-                    const r = await state.recordRefusal(sourceId,
-                        { kind: cls.error_kind, status: cls.http_status, headers: err.headers || null }, SLUG);
-                    log(`[reddit] REFUSED by the source during ${job} — refusal ${r.refusal_count}, cooldown until ${new Date(r.refused_until).toISOString()}`);
+    // Copilot review: a step that REJECTS (finishJob, claimJob, the refusal
+    // write) after an earlier request established a hold must not lose that
+    // hold — a restarted worker would poll Reddit at once. The drained changes
+    // are saved (best effort) and the error continues, as the runner does for
+    // a failure in its route loop.
+    try {
+        for (const [job, everyHours, run] of [
+            ['recheck', src.retention.recheckHours, async () => {
+                const r = await recheckDeletions({ api: client, log });
+                return { complete: r.complete, stats: r };
+            }],
+            ['discovery', DISCOVERY_EVERY_HOURS, async () => {
+                const d = await discoverSubreddits({ api: client, env });
+                if (!d.complete) return { complete: false, stats: d.stats };
+                const row = await saveSnapshot({
+                    windowStart: d.windowStart, windowEnd: d.windowEnd, minPosts: d.minPosts, top: d.top,
+                    selected: d.selected, ranking: d.ranking, exclusions: d.exclusions, stats: d.stats,
+                });
+                return { complete: true, stats: { ...d.stats, selected: d.selected, applied: row.applied } };
+            }],
+        ]) {
+            if (!(await claimJob(job, everyHours))) continue;
+            try {
+                const r = await run();
+                await finishJob(job, r);
+                out[job] = r;
+                log(`[reddit] ${job}: ${r.complete ? 'completed' : 'incomplete, retried next tick'}`);
+            } catch (err) {
+                const cls = classifyError(err);
+                await finishJob(job, { complete: false, errorKind: cls.error_kind });
+                out[job] = { error: cls.error_kind };
+                log(`[reddit] ${job} failed: ${scrub(err && err.message, env)}`);
+                // Grumpy N2: Reddit refused us (a 401/403/451, or the 5th
+                // body-only rate limit escalated by the HTTP client — fail
+                // closed): the refused state applies exactly as in a collection
+                // run, and no further job asks Reddit this tick.
+                if (err instanceof AccessDeniedError) {
+                    const sourceId = (await state.sourceIdsBySlug([SLUG])).get(SLUG);
+                    if (sourceId) {
+                        // The state row may not exist yet (never collected).
+                        await dbRun('INSERT INTO source_collection_state (source_id) VALUES ($1) ON CONFLICT (source_id) DO NOTHING', [sourceId]);
+                        const r = await state.recordRefusal(sourceId,
+                            { kind: cls.error_kind, status: cls.http_status, headers: err.headers || null }, SLUG);
+                        log(`[reddit] REFUSED by the source during ${job} — refusal ${r.refusal_count}, cooldown until ${new Date(r.refused_until).toISOString()}`);
+                    }
+                    break;
                 }
-                break;
             }
         }
+    } catch (err) {
+        if (http) await state.saveHoldChanges(http.drainHoldChanges(), http.holds, { env }).catch(() => {});
+        throw err;
     }
     // Grumpy #1 / N2: the hold changes of this run are saved, so the
     // collector (and the next maintenance tick) honours them.

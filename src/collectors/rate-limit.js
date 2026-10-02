@@ -439,9 +439,12 @@ function holdReason(state, routes, until) {
  *             routes: { [routeId]: string }, reason: string|null }}
  *   until: when the LAST held route frees (ISO); next: the FIRST
  */
-function holdGate(src, env, holds, now = Date.now()) {
+function holdGate(src, env, holds, now = Date.now(), { routeKills = [] } = {}) {
     const { openRoutes } = require('../config/source-registry');
-    const routes = openRoutes(src, env);
+    // Copilot review: a route the database kill switch disabled never runs, so it
+    // is never held (nor stored as rate-limited) — `routeKills` are the source's
+    // state.routeKillSwitches rows.
+    const routes = openRoutes(src, env, { routeKills });
     const held = {};
     for (const r of routes) {
         const t = routeHeldUntil(r, env, holds, now);

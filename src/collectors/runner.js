@@ -250,12 +250,12 @@ async function runCollection(o = {}) {
             // source is skipped before its claim, no request.
             rateLimit.mergeHolds(runHolds, await state.loadHolds(), Date.now());
             const myHosts = rateLimit.sourceHosts(src, env);
-            const held = rateLimit.holdGate(src, env, runHolds, Date.now());
+            const held = rateLimit.holdGate(src, env, runHolds, Date.now(), { routeKills });
             if (held.state === 'all') {
                 row.status = RATE_LIMITED;
                 row.reason = held.reason;
                 row.rateLimitedUntil = held.until;
-                await state.saveHolds(sourceId, { hosts: myHosts, view: runHolds, routes: held.routes, src, env });
+                await state.saveHolds(sourceId, { hosts: myHosts, view: runHolds, routes: held.routes, src, env, routeKills });
                 log(`[collect] ${slug}: skipped — ${held.reason}`);
                 continue;
             }
@@ -427,7 +427,7 @@ async function runCollection(o = {}) {
             } catch (loopErr) {
                 await state.saveHolds(sourceId, {
                     hosts: myHosts, changes: http.drainHoldChanges(), view: runHolds,
-                    routes: rateLimit.holdGate(src, env, runHolds, Date.now()).routes, src, env,
+                    routes: rateLimit.holdGate(src, env, runHolds, Date.now(), { routeKills }).routes, src, env, routeKills,
                 }).catch(serr => log(`[collect] ${slug}: could not save the rate-limit holds (${scrub(serr.message, env)})`));
                 throw loopErr;
             }
@@ -439,12 +439,12 @@ async function runCollection(o = {}) {
             const limitedErr = limitedIdx >= 0 ? routeErrors[limitedIdx].err : null;
             const rateLimitHeaders = limitedErr && limitedErr.headers && Object.keys(limitedErr.headers).length
                 ? limitedErr.headers : null;
-            const after = rateLimit.holdGate(src, env, runHolds, Date.now());
+            const after = rateLimit.holdGate(src, env, runHolds, Date.now(), { routeKills });
             // Grumpy #10: per host, merged under a row lock — never a blind
             // overwrite of another run's newer hold.
             await state.saveHolds(sourceId, {
                 hosts: myHosts, changes: http.drainHoldChanges(), view: runHolds, routes: after.routes,
-                limited: !!limitedErr, headers: rateLimitHeaders, src, env,
+                limited: !!limitedErr, headers: rateLimitHeaders, src, env, routeKills,
             });
             if (heldRoutes.length) log(`[collect] ${slug}: not requested (rate-limit backoff, honoured): ${[...new Set(heldRoutes)].join(', ')}`);
             if (okRoutes === 0 && routeErrors.length === 0 && heldRoutes.length > 0) {

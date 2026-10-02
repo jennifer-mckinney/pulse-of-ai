@@ -389,6 +389,29 @@ describe('maintenance: retention always, API jobs only behind the open gate', ()
         });
     });
 
+    it('Copilot: a maintenance step that REJECTS still saves the hold changes drained so far (the error continues)', async () => {
+        const { fixtureTransport } = require('../helpers/fixtureTransport');
+        const { clearTokenCache, TOKEN_URL } = require('../../src/collectors/reddit/api');
+        const state = require('../../src/collectors/state');
+        clearTokenCache();
+        await redditPost('t3_rejects1', 2);
+        const transport = fixtureTransport([[TOKEN_URL, 'reddit/token.json'],
+            [/oauth\.reddit\.com\/api\/info/, { status: 403, headers: { server: 'snooserv' }, body: '{"message":"Forbidden"}' }]]);
+        // The refused state's write fails after the 403 (a DB error mid-run).
+        const real = state.sourceIdsBySlug;
+        const failing = jest.spyOn(state, 'sourceIdsBySlug').mockImplementation((...args) => (
+            transport.calls.some(c => /api\/info/.test(c.url)) ? Promise.reject(new Error('db down')) : real(...args)));
+        const saved = jest.spyOn(state, 'saveHoldChanges');
+        try {
+            await expect(maintenance.runRedditMaintenance({ env: OPEN_ENV, transport })).rejects.toThrow('db down');
+            expect(saved).toHaveBeenCalledTimes(1);
+            expect(saved.mock.calls[0][2]).toEqual({ env: OPEN_ENV });
+        } finally {
+            failing.mockRestore();
+            saved.mockRestore();
+        }
+    });
+
     it('a snapshot that selects nothing is stored but keeps the previous selection', async () => {
         await selection.saveSnapshot({ windowStart: new Date(), windowEnd: new Date(), minPosts: 20, selected: [], ranking: [],
             exclusions: [{ subreddit: 'x', ai_posts_7d: 30, reason: 'no subscriber count returned' }], stats: {} });

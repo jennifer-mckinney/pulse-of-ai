@@ -797,6 +797,30 @@ describe('rate limits are not refusals (diagnosis 2026-10-01)', () => {
         expect((await c.http.request('https://c.example/page')).body).toMatch(/datadome/);
     });
 
+    test('Copilot (5th): a 5xx robots.txt with a long Retry-After holds the host (retry_after_5xx, also via a redirect) and stays a robots failure, not a rate limit', async () => {
+        const { http } = at([
+            ['https://a.example/robots.txt', { status: 503, headers: { 'retry-after': '3600' }, body: '' }],
+            [/a\.example\/page/, { body: 'ok' }],
+        ], { robotsCache: new Map() });
+        const err = await http.request('https://a.example/page', { robots: true }).catch(e => e);
+        expect(err).toBeInstanceOf(RobotsDisallowedError);
+        expect(err.kind).toBe('robots_unreachable');
+        expect(http.holds['a.example']).toMatchObject({ until: iso(NOW + 3600000), http_status: 503, signal: 'retry_after_5xx', count: 0 });
+        // Behind a redirect, the original host is held too.
+        const r = at([
+            ['https://c.example/robots.txt', { status: 301, headers: { location: 'https://d.example/robots.txt' } }],
+            ['https://d.example/robots.txt', { status: 503, headers: { 'retry-after': '1800' }, body: '' }],
+            [/c\.example\/page/, { body: 'ok' }],
+        ], { robotsCache: new Map() });
+        await r.http.request('https://c.example/page', { robots: true }).catch(e => e);
+        expect(r.http.holds['d.example']).toMatchObject({ signal: 'retry_after_5xx' });
+        expect(r.http.holds['c.example']).toMatchObject({ signal: 'retry_after_5xx' });
+        // A short Retry-After is slept in-run, never held.
+        const short = at([['https://e.example/robots.txt', { status: 503, headers: { 'retry-after': '1' }, body: '' }]], { robotsCache: new Map() });
+        await short.http.request('https://e.example/page', { robots: true }).catch(e => e);
+        expect(short.http.holds['e.example']).toBeUndefined();
+    });
+
     test('Copilot (4th): a rate limit on a robots.txt REDIRECT target also holds the host robots.txt was asked of', async () => {
         const { http } = at([
             ['https://a.example/robots.txt', { status: 301, headers: { location: 'https://b.example/robots.txt' } }],
