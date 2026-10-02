@@ -553,7 +553,7 @@ describe('source health: persistent throttling is a WARNING (grumpy #5)', () => 
 // PR #44 + #45 merge: ONE hold store. PR #44 kept its Retry-After holds as
 // `retry-after:<host>` keys in a source's HTTP cache; legacyHolds folds any
 // such key into this store's records and strips it from the cache (the
-// runner, at claim; migration 077 moved the stored ones).
+// runner, at claim; migration 077 copied the stored ones).
 describe('legacyHolds: PR #44 HTTP-cache hold keys → the one hold store', () => {
     test('active keys become sanitised holds (429 → http_429 count 1; 503 → retry_after_5xx count 0); the cache keeps validators only', () => {
         const cache = {

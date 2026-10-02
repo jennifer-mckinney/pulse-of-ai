@@ -65,7 +65,7 @@
 // replica honours it. A 429 that names NO time holds at least
 // NO_TIME_429_HOLD_MS (PR #44's default: two cadence ticks). PR #44 kept its
 // holds as `retry-after:<host>` keys in http_cache; legacyHolds() folds any
-// such key into this store (migration 077 moved the stored ones).
+// such key into this store (migration 077 copied the stored ones).
 
 'use strict';
 
@@ -709,7 +709,7 @@ function publicHosts(src, holds, now = Date.now(), env = {}, { kind = 'rate_limi
  * a source's HTTP cache, as holds of this store — and the cache without
  * them. One hold store: the runner folds them in on claim (a worker of the
  * previous release may still write one during a rolling deploy; migration
- * 077 moved the stored ones). A key's host may carry a port (PR #44 keyed by
+ * 077 copied the stored ones). A key's host may carry a port (PR #44 keyed by
  * URL host): the hold is the hostname's. 429 → 'http_429' (count 1), 503 →
  * 'retry_after_5xx' (count 0 — not a rate limit, nextHold), recorded `at`
  * now. Expired keys are dropped from the cache and not kept.

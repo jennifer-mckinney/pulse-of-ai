@@ -384,7 +384,7 @@ async function loadHolds() {
     const { mergeHolds, legacyHolds, LEGACY_HOLD_PREFIX } = require('./rate-limit');
     // Copilot review: during a rolling deploy a previous-release worker can still
     // write a PR #44 `retry-after:<host>` key into http_cache AFTER migration 077
-    // moved the stored ones (and a row with such a key may have no new-store hold
+    // copied the stored ones (and a row with such a key may have no new-store hold
     // at all). Those keys are holds of the one store too: folded in here, for every
     // source, the terms fetch and Reddit maintenance — not only for the source
     // that wrote them, whenever it is next claimed.

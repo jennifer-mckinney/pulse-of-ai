@@ -333,3 +333,27 @@ describe('review round: false-positive walls, forged resets, escalation behind a
         expect(t.http.holds[t.final]).toMatchObject({ signal: 'retry_after_5xx' });
     });
 });
+
+describe('review round 2: vendor script tags on ordinary pages are not walls; the interstitials are', () => {
+    test.each([
+        ['Cloudflare jsd beacon /h/g/', '<html>Not found<script src="/cdn-cgi/challenge-platform/h/g/scripts/jsd/abc123/main.js"></script></html>'],
+        ['DataDome tag', '<html><script src="https://js.datadome.co/tags.js"></script><script src="https://ct.captcha-delivery.com/c.js"></script></html>'],
+        ['Imperva script tag', '<html><script src="/_Incapsula_Resource?SWJIYLWA=719d34d31c8e3a6e6fffd425f7e032f3"></script></html>'],
+    ])('%s on an ordinary 404 is a plain HttpError, never a bot wall', async (_n, body) => {
+        const t = build('page', { status: 404, headers: { 'content-type': 'text/html' }, body });
+        const err = await t.run().catch(e => e);
+        expect(err).toBeInstanceOf(HttpError);
+        expect(err.refusal).toBeUndefined();
+    });
+
+    test.each([
+        ['Cloudflare orchestration', '<html><script src="/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1"></script></html>'],
+        ['DataDome interstitial', '<html><iframe src="https://geo.captcha-delivery.com/captcha/?initialCid=x"></iframe></html>'],
+        ['Imperva block page', '<html>Request unsuccessful. Incapsula incident ID: 1-2</html>'],
+    ])('%s is a refusal at 403 and as a small 200 HTML page', async (_n, body) => {
+        for (const status of [403, 200]) {
+            const t = build('page', { status, headers: { 'content-type': 'text/html' }, body });
+            expect(await t.run().catch(e => e)).toMatchObject({ refusal: 'bot_wall' });
+        }
+    });
+});

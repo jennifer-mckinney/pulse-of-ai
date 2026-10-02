@@ -42,7 +42,7 @@ describe('refusals and retries', () => {
     });
 
     test('a bot-challenge page is a refusal even on another 4xx status', async () => {
-        const { http, transport } = client([['https://a.example/x', { status: 429, body: '<script src="/_Incapsula_Resource">' }]]);
+        const { http, transport } = client([['https://a.example/x', { status: 429, body: '<html>Request unsuccessful. Incapsula incident ID: 1234-5678</html>' }]]);
         await expect(http.request('https://a.example/x')).rejects.toBeInstanceOf(AccessDeniedError);
         expect(transport.calls).toHaveLength(1);
     });

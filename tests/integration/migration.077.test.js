@@ -1,5 +1,5 @@
 // tests/integration/migration.077.test.js
-// PR #44 + #45 merge: migration 077 moves PR #44's Retry-After holds
+// PR #44 + #45 merge: migration 077 copies PR #44's Retry-After holds
 // (`retry-after:<host>` keys in source_collection_state.http_cache) into the
 // one rate-limit hold store (rate_limited_hosts, migrations 075-076) and
 // strips every such key from the HTTP cache, which keeps validators only.

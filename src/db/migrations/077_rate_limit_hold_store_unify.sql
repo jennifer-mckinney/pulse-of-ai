@@ -34,7 +34,8 @@
 -- host is the key's text before any path, query, fragment or port, as the
 -- runner's hostOf() reads it.
 --
--- Additive data move, idempotent: a second run finds no `retry-after:` key.
+-- Additive data copy, idempotent up to a 503's NOW()-relative 1 h cap (the keys stay, so a second
+-- run re-reads them).
 
 -- A streak count as an integer; anything else reads as 0.
 CREATE OR REPLACE FUNCTION pg_temp.hold_count(v text) RETURNS integer AS $fn$

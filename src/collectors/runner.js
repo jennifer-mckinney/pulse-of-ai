@@ -279,7 +279,7 @@ async function runCollection(o = {}) {
             // ONE hold store (PR #44 unified into #45): a PR #44
             // `retry-after:<host>` key still in the HTTP cache (written by a
             // previous-release worker during a rolling deploy; migration 077
-            // moved the stored ones) is folded into the run's holds as a
+            // copied the stored ones) is folded into the run's holds as a
             // change of this source — persisted by saveHolds below, outside
             // the HTTP cache, so the G10-5 rollback can never drop it — and
             // removed from the cache, which holds validators only.
@@ -304,6 +304,13 @@ async function runCollection(o = {}) {
                 fail(err.message, err);
             }
             let storeFailed = false;
+            // Operator log (worker stdout only — never the API or mail): the holds this source's
+            // run set or cleared, with the real host.
+            const logHolds = (changes) => {
+                for (const [h, e] of changes) {
+                    log(`[collect] ${slug}: hold ${e ? `set on ${scrub(h, env)} until ${e.until} (${e.signal || 'unclassified'}, streak ${e.count})` : `cleared on ${scrub(h, env)} (a success)`}`);
+                }
+            };
             // Relevance-accuracy R1: the routes' dropped counters, summed
             // onto this run's source_runs row (counts only).
             const droppedByRoute = [];
@@ -454,8 +461,10 @@ async function runCollection(o = {}) {
                     }
                 }
             } catch (loopErr) {
+                const lostChanges = http.drainHoldChanges();
+                logHolds(lostChanges);
                 await state.saveHolds(sourceId, {
-                    hosts: myHosts, changes: http.drainHoldChanges(), view: runHolds,
+                    hosts: myHosts, changes: lostChanges, view: runHolds,
                     routes: rateLimit.holdGate(src, env, runHolds, Date.now(), { routeKills }).routes, src, env, routeKills,
                 }).catch(serr => log(`[collect] ${slug}: could not save the rate-limit holds (${scrub(serr.message, env)})`));
                 throw loopErr;
@@ -472,6 +481,7 @@ async function runCollection(o = {}) {
             // Grumpy #10: per host, merged under a row lock — never a blind
             // overwrite of another run's newer hold.
             const savedChanges = http.drainHoldChanges();
+            logHolds(savedChanges);
             await state.saveHolds(sourceId, {
                 hosts: myHosts, changes: savedChanges, view: runHolds, routes: after.routes,
                 limited: !!limitedErr, headers: rateLimitHeaders, src, env, routeKills,
@@ -490,11 +500,6 @@ async function runCollection(o = {}) {
                 row[after.kind === 'server' ? 'backoffUntil' : 'rateLimitedUntil'] = after.until;
                 await touch();
                 continue;
-            }
-            // Operator log (worker stdout only — never the API or mail): which holds this
-            // source's run set or cleared, with the real host.
-            for (const [h, e] of savedChanges) {
-                log(`[collect] ${slug}: hold ${e ? `set on ${scrub(h, env)} until ${e.until} (${e.signal || 'unclassified'}, streak ${e.count})` : `cleared on ${scrub(h, env)} (a success)`}`);
             }
             // F10-5: any refused route refuses the source (the source said no).
             const refused = refusalOf(classified);

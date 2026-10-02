@@ -16,8 +16,11 @@
 // A body that is a bot-wall challenge page, whatever the status code.
 // Security review: NOT the bare `challenge-platform` token — Cloudflare's JS-detections
 // beacon (/cdn-cgi/challenge-platform/scripts/jsd/main.js) is injected into ordinary pages
-// (404s and 5xx pages included); only the challenge's own orchestration path counts.
-const CHALLENGE_RE = /(cf-chl|_cf_chl_opt|\/cdn-cgi\/challenge-platform\/h\/|_Incapsula_Resource|datadome|captcha-delivery|px-captcha|_pxCaptcha|bm-verify|Attention Required! \| Cloudflare|Checking your browser before accessing)/i;
+// (404s and 5xx pages included, as /h/{b,g}/scripts/jsd/...); only the challenge's own orchestration
+// path counts. Likewise vendor script TAGS on ordinary pages (DataDome's tags.js and
+// ct.captcha-delivery.com, Imperva's _Incapsula_Resource script) are not walls: only the
+// challenge interstitials (geo.captcha-delivery.com, Imperva's block page) are.
+const CHALLENGE_RE = /(cf-chl|_cf_chl_opt|\/cdn-cgi\/challenge-platform\/h\/[a-z]\/orchestrate\b|geo\.captcha-delivery\.com|Incapsula incident ID|_Incapsula_Resource\?SWUDNSAI|px-captcha|_pxCaptcha|bm-verify|Attention Required! \| Cloudflare|Checking your browser before accessing)/i;
 
 /** Whether the headers carry Cloudflare's challenge marker (case-insensitive). */
 function challengeHeader(headers) {
