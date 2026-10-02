@@ -60,10 +60,16 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MMDC_VERSION="11.12.0"
+# The renderer toolchain is installed from docs/diagrams/tools/package.json
+# (exact versions) and package-lock.json (every transitive package pinned with
+# its integrity hash) by `npm ci`; there is no unpinned `npx -y` download.
+# Bumping MMDC_VERSION or MERMAID_VERSION means updating that package.json
+# and lockfile too (render_png fails if they disagree).
+TOOLS="$HERE/tools"
 # The ONE Mermaid version both artifacts use (Copilot review on PR #40): mmdc
 # is run with this exact mermaid installed beside it (mermaid-cli's own
-# dependency is the range ^11.0.2, so npx would otherwise resolve whatever
-# 11.x is newest), and every .html loads the same release from jsDelivr,
+# dependency is the range ^11.0.2, so an unpinned install would otherwise
+# resolve whatever 11.x is newest), and every .html loads the same release from jsDelivr,
 # pinned and checked with Subresource Integrity. MERMAID_SRI is the sha384
 # of mermaid@MERMAID_VERSION/dist/mermaid.min.js; recompute both together:
 #   curl -sL https://cdn.jsdelivr.net/npm/mermaid@<v>/dist/mermaid.min.js \
@@ -102,8 +108,17 @@ png_size() {
 # Write <name>.html for <name>.mmd.
 write_html() {
     python3 - "$1" "${1%.mmd}.html" "$MERMAID_VERSION" "$MERMAID_SRI" <<'PY'
-import html, sys
+import base64, hashlib, html, sys
 src, out, version, sri = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+# The one inline script, and the Content-Security-Policy that allows exactly
+# it plus the pinned Mermaid file (check_html recomputes both). Mermaid writes
+# inline <style> / style attributes into its SVG, so style-src needs
+# 'unsafe-inline'; scripts are limited to the pinned URL and the hash.
+INIT = "mermaid.initialize({ startOnLoad: true, theme: 'forest', securityLevel: 'strict', maxTextSize: 200000 });"
+init_hash = base64.b64encode(hashlib.sha256(INIT.encode("utf-8")).digest()).decode("ascii")
+csp = (f"default-src 'none'; script-src https://cdn.jsdelivr.net/npm/mermaid@{version}/dist/mermaid.min.js "
+       f"'sha256-{init_hash}'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; "
+       "base-uri 'none'; form-action 'none'")
 text = open(src, encoding="utf-8").read()
 lines = text.splitlines()
 title = lines[0].split("Title:", 1)[1].strip() if lines and "Title:" in lines[0] else src
@@ -122,6 +137,7 @@ page = f"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="{csp}">
 <title>Pulse of AI · {html.escape(title)}</title>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@{version}/dist/mermaid.min.js" integrity="{sri}" crossorigin="anonymous"></script>
 <style>
@@ -139,7 +155,7 @@ page = f"""<!DOCTYPE html>
 <p class="source">Canonical source: <code>{html.escape(name)}</code> · index: <code>docs/diagrams/README.md</code></p>
 <pre class="mermaid">
 {html.escape(text, quote=False)}</pre>
-<script>mermaid.initialize({{ startOnLoad: true, theme: 'forest', securityLevel: 'strict', maxTextSize: 200000 }});</script>
+<script>{INIT}</script>
 </body>
 </html>
 """
@@ -152,26 +168,54 @@ PY
 # external script.
 check_html() {
     python3 - "$1" "${1%.mmd}.html" "$MERMAID_VERSION" "$MERMAID_SRI" <<'PY'
-import html, re, sys
+import base64, hashlib, html, re, sys
 src, out, version, sri = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+INIT = "mermaid.initialize({ startOnLoad: true, theme: 'forest', securityLevel: 'strict', maxTextSize: 200000 });"
+init_hash = base64.b64encode(hashlib.sha256(INIT.encode("utf-8")).digest()).decode("ascii")
+csp = (f"default-src 'none'; script-src https://cdn.jsdelivr.net/npm/mermaid@{version}/dist/mermaid.min.js "
+       f"'sha256-{init_hash}'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; "
+       "base-uri 'none'; form-action 'none'")
 text = open(src, encoding="utf-8").read()
 page = open(out, encoding="utf-8").read()
 m = re.search(r'<pre class="mermaid">\n(.*?)</pre>', page, re.S)
 pinned = (f'<script src="https://cdn.jsdelivr.net/npm/mermaid@{version}/dist/mermaid.min.js" '
           f'integrity="{sri}" crossorigin="anonymous"></script>')
 scripts = re.findall(r'<script src="', page)
+# Exactly one CSP meta with the expected policy, and exactly one inline
+# script (the hashed initialiser): nothing else may execute.
+meta = f'<meta http-equiv="Content-Security-Policy" content="{csp}">'
+inline = re.findall(r'<script>(.*?)</script>', page, re.S)
 sys.exit(0 if m and html.unescape(m.group(1)) == text
-         and page.count(pinned) == 1 and len(scripts) == 1 else 1)
+         and page.count(pinned) == 1 and len(scripts) == 1
+         and page.count("Content-Security-Policy") == 1 and page.count(meta) == 1
+         and inline == [INIT] else 1)
 PY
 }
 
 # Render <name>.mmd to <name>.png. $2 overrides the output path (--check
 # re-renders into a temp dir); $3=quiet suppresses the size line.
+# ensure_toolchain: install the locked renderer once, then verify that the
+# installed versions are the ones this script pins.
+ensure_toolchain() {
+    if [[ ! -x "$TOOLS/node_modules/.bin/mmdc" ]]; then
+        npm ci --prefix "$TOOLS" --no-audit --no-fund >/dev/null \
+            || { echo "  npm ci failed in $TOOLS" >&2; return 1; }
+    fi
+    local cli mer
+    cli="$(node -p "require('$TOOLS/node_modules/@mermaid-js/mermaid-cli/package.json').version")"
+    mer="$(node -p "require('$TOOLS/node_modules/mermaid/package.json').version")"
+    if [[ "$cli" != "$MMDC_VERSION" || "$mer" != "$MERMAID_VERSION" ]]; then
+        echo "  toolchain mismatch: installed mermaid-cli $cli / mermaid $mer, pinned $MMDC_VERSION / $MERMAID_VERSION" >&2
+        return 1
+    fi
+}
+
 render_png() {
     local src="$1" png="${2:-${1%.mmd}.png}" quiet="${3:-}" scale w h
+    ensure_toolchain || return 1
     for scale in 2 1.5 1; do
         rm -f "$png"
-        if ! npx -y -p "@mermaid-js/mermaid-cli@${MMDC_VERSION}" -p "mermaid@${MERMAID_VERSION}" mmdc -q -i "$src" -o "$png" -t forest -b white -s "$scale" -c "$HERE/mmdc-config.json" >/dev/null \
+        if ! "$TOOLS/node_modules/.bin/mmdc" -q -i "$src" -o "$png" -t forest -b white -s "$scale" -c "$HERE/mmdc-config.json" >/dev/null \
             || [[ ! -f "$png" ]]; then
             echo "  mmdc failed for $src" >&2
             return 1

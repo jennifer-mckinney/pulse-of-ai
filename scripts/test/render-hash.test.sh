@@ -230,6 +230,12 @@ if mode == "floating":
     page = re.sub(r"mermaid@[0-9.]+/", "mermaid@11/", page)
 elif mode == "sri":
     page = re.sub(r'integrity="sha384-[^"]+"', 'integrity="sha384-AAAA"', page)
+elif mode == "no-csp":
+    page = re.sub(r'<meta http-equiv="Content-Security-Policy"[^>]*>\n', "", page)
+elif mode == "loose-csp":
+    page = page.replace("style-src 'unsafe-inline'", "script-src 'unsafe-inline'; style-src 'unsafe-inline'")
+elif mode == "inline-extra":
+    page = page.replace("</body>", "<script>alert(1)</script>\n</body>")
 elif mode == "extra":
     page = page.replace("</head>", '<script src="https://example.org/x.js"></script>\n</head>')
 open(path, "w", encoding="utf-8").write(page)
@@ -244,6 +250,9 @@ PY
 expect_html_fail "an HTML loading the floating mermaid@11 fails" floating
 expect_html_fail "an HTML whose SRI hash does not match the pin fails" sri
 expect_html_fail "an HTML that loads a second external script fails" extra
+expect_html_fail "an HTML without its Content-Security-Policy fails" no-csp
+expect_html_fail "an HTML with a loosened Content-Security-Policy fails" loose-csp
+expect_html_fail "an HTML with a second inline script fails" inline-extra
 mmd="$(copy_diagram html-pinned)"
 if grep -q 'mermaid@[0-9]*\.[0-9]*\.[0-9]*/dist/mermaid.min.js" integrity="sha384-' "${mmd%.mmd}.html"; then
     pass "the committed HTML loads an exact mermaid version with SRI"
