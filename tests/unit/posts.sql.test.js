@@ -9,19 +9,18 @@
 jest.mock('../../src/db/connection', () => ({ dbAll: jest.fn() }));
 
 const express = require('express');
-const request = require('supertest');
+const { useServer } = require('../helpers/server');
 const { dbAll } = require('../../src/db/connection');
 const { DEMO_SOURCE_TYPE } = require('../../src/config/data-mode');
 
 // NODE_ENV=test bypasses the route's 10 s response cache, so one app serves
-// every test with fresh SQL calls.
+// every test with fresh SQL calls, on one listener for the whole file
+// (tests/helpers/server.js).
 const router = require('../../src/routes/posts');
 
-function app() {
-    const a = express();
-    a.use('/api', router);
-    return a;
-}
+const app = express();
+app.use('/api', router);
+const request = useServer(app);
 
 beforeEach(() => {
     dbAll.mockReset();
@@ -33,7 +32,7 @@ describe('aggregated-by-location SQL (G9-7)', () => {
         ['no filters', ''],
         ['platform + from + to', '?platform=social&from=2026-01-01T00:00:00Z&to=2026-01-02T00:00:00Z'],
     ])('the demo source type is a bound parameter (%s)', async (_label, qs) => {
-        const res = await request(app()).get(`/api/posts/aggregated-by-location${qs}`);
+        const res = await request().get(`/api/posts/aggregated-by-location${qs}`);
         expect(res.status).toBe(200);
         const [sql, params] = dbAll.mock.calls[0];
         // No quoted literal of the demo type anywhere in the SQL text…
@@ -48,7 +47,7 @@ describe('aggregated-by-location SQL (G9-7)', () => {
     });
 
     test('the per-source breakdown query gets exactly the placeholders it uses', async () => {
-        await request(app()).get('/api/posts/aggregated-by-location?platform=social');
+        await request().get('/api/posts/aggregated-by-location?platform=social');
         const [sql, params] = dbAll.mock.calls[1];
         const refs = [...sql.matchAll(/\$(\d+)/g)].map(m => Number(m[1]));
         expect(Math.max(0, ...refs)).toBe(params.length);

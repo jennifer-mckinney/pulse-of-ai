@@ -7,8 +7,9 @@
 
 'use strict';
 
-const request = require('supertest');
+const { useServer } = require('../helpers/server');
 const app     = require('../../src/server');
+const request = useServer(app);   // one listener per file (tests/helpers/server.js)
 const { dbGet } = require('../../src/db/connection');
 const { _resetRateLimiter, _setEnqueue } = require('../../src/routes/refresh');
 const { dbRun } = require('../../src/db/connection');
@@ -31,7 +32,7 @@ async function jobCount() {
 }
 
 function post() {
-    return request(app).post('/api/refresh').set('Host', HOST);
+    return request().post('/api/refresh').set('Host', HOST);
 }
 
 describe('POST /api/refresh — cross-site request guard', () => {
@@ -131,7 +132,7 @@ describe('POST /api/refresh — cross-site request guard', () => {
 
 describe('OPTIONS /api/refresh — preflight is never approved', () => {
     it('serves no Access-Control-Allow-* headers for a cross-origin JSON preflight', async () => {
-        const res = await request(app)
+        const res = await request()
             .options('/api/refresh')
             .set('Origin', 'https://evil.example')
             .set('Access-Control-Request-Method', 'POST')

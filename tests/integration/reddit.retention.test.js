@@ -9,8 +9,9 @@
 
 'use strict';
 
-const request = require('supertest');
+const { useServer } = require('../helpers/server');
 const app = require('../../src/server');
+const request = useServer(app);   // one listener per file (tests/helpers/server.js)
 const db = require('../../src/db/connection');
 const { seedSources } = require('../../scripts/seed');
 const { main: replayMain } = require('../../scripts/replay');
@@ -231,7 +232,7 @@ describe('receipts and replay of a blanked Reddit post', () => {
         const old = await redditPost('t3_rcp1', 49);
         const fresh = await redditPost('t3_rcp2', 1);
         await retention.blankExpired();
-        const res = await request(app).get(`/api/audit/${old}`);
+        const res = await request().get(`/api/audit/${old}`);
         expect(res.status).toBe(200);
         expect(res.body.post.content_snippet).toBe(retention.REMOVAL_NOTICE);
         expect(res.body.provenance.permalink).toBe('https://www.reddit.com/r/OpenAI/comments/rcp1/');
@@ -240,12 +241,12 @@ describe('receipts and replay of a blanked Reddit post', () => {
             notice: expect.stringMatching(/Text removed per the Reddit Data API Terms.*after 48 hours or on deletion upstream.*Scores and audit rows retained by owner decision/),
         }));
         expect(res.body.decisions).toHaveLength(3);
-        const live = await request(app).get(`/api/audit/${fresh}`);
+        const live = await request().get(`/api/audit/${fresh}`);
         expect(live.body.provenance.retention).toEqual(expect.objectContaining({ status: 'live', removes_at: expect.any(String) }));
         expect(live.body.post.content_snippet).not.toBe(retention.REMOVAL_NOTICE);
         // Other sources carry no retention block.
         const hn = await insertPostWithFullPipeline(ids.hacker_news, jobId, mv, { externalId: 'hn:3' });
-        expect((await request(app).get(`/api/audit/${hn}`)).body.provenance.retention).toBeUndefined();
+        expect((await request().get(`/api/audit/${hn}`)).body.provenance.retention).toBeUndefined();
     });
 
     it('npm run replay reports NOT RE-RUNNABLE with the platform-terms reason (exit 3, never DIVERGENCE)', async () => {
@@ -365,7 +366,7 @@ describe('maintenance: retention always, API jobs only behind the open gate', ()
 
 describe('GET /api/sources: Reddit gate, terms citation, retention and selection', () => {
     it('serves the Reddit row awaiting approval with its selection (provisional) and retention', async () => {
-        const res = await request(app).get('/api/sources');
+        const res = await request().get('/api/sources');
         const reddit = res.body.find(s => s.slug === 'reddit');
         expect(reddit).toEqual(expect.objectContaining({
             rank: 52, category: 'forums', auth_kind: 'approval', terms_url: 'https://redditinc.com/policies/data-api-terms',
