@@ -12,6 +12,14 @@
 //             cooldown and reported 'blocked_by_source' (F10-5); a clean
 //             probe starts a 24 h probation during which a refusal keeps
 //             escalating the cooldown (ADR 0001 note 2026-09-30)
+//     rate limit — src/collectors/rate-limit.js (diagnosis 2026-10-01): a
+//             host that rate-limited us (429, or a 403 with positive
+//             evidence) is backed off until the source's time, for EVERY
+//             source (one holds map per run, merged from all rows); a
+//             route whose hosts are all held is skipped without a request,
+//             and the whole source ('rate_limited') when every route is.
+//             NOT a refusal: no refusal count, probation or critical alert
+//             (the 5th body-only rate limit in a row is one — fail closed)
 //     claim — state.claim(): the source's poll interval is honoured across
 //             processes (worker schedule + POST /api/refresh)
 //     fetch — one collector per open route (src/collectors), through the
@@ -53,7 +61,7 @@
 const { dbGet, dbAll, dbRun, dbTransaction } = require('../db/connection');
 const { SOURCES, getSource, sourceStatus, pollIntervalSec, collectWindowMs } = require('../config/source-registry');
 const { buildCollectors } = require('./index');
-const { HttpClient, withHolds } = require('./http');
+const { HttpClient } = require('./http');
 const state = require('./state');
 const { storeRawPost, scorePost } = require('../pipeline/ingest');
 const { resolveCurrentMethodology } = require('../pipeline/methodology');
@@ -63,7 +71,10 @@ const cycle = require('./cycle');
 const { scrub } = require('./redact');
 const { classifyError } = require('./errors');
 const { refusalGate, refusalOf, resetEnv, probationOver, BLOCKED_BY_SOURCE } = require('./refusal');
+const rateLimit = require('./rate-limit');
 const counters = require('./admission-counters');
+
+const { RATE_LIMITED } = rateLimit;
 
 /** Default queue hooks: lazily bind BullMQ (opening Redis only when needed). */
 function defaultQueues() {
@@ -166,6 +177,9 @@ async function runCollection(o = {}) {
         const mv = await resolveCurrentMethodology();
         const ids = await state.sourceIdsBySlug(slugs);
         let http = null;
+        // The run's ONE rate-limit holds map (hostname → hold), shared by
+        // the HTTP client (security F5).
+        const runHolds = Object.create(null);
 
         for (const slug of slugs) {
             const src = getSource(slug);
@@ -230,17 +244,48 @@ async function runCollection(o = {}) {
                 log(`[collect] ${slug}: refusal cleared by ${resetEnv(slug)} (approved by ${approvedBy})`);
             }
 
+            // Diagnosis 2026-10-01: rate-limit holds (per HOST, migrations
+            // 075-076). Every source's stored holds are merged into the
+            // run's ONE map (security F5: a host held for any source is held
+            // for all), shared with the HTTP client. Every route held → the
+            // source is skipped before its claim, no request.
+            // Security review P3: rebuilt from the database for EVERY source (in
+            // place — the HTTP client shares the object), so a hold another replica's
+            // success cleared since the last source never lingers in this run.
+            const stored = await state.loadHolds();
+            for (const k of Object.keys(runHolds)) delete runHolds[k];
+            rateLimit.mergeHolds(runHolds, stored, Date.now());
+            const myHosts = rateLimit.sourceHosts(src, env);
+            const held = rateLimit.holdGate(src, env, runHolds, Date.now(), { routeKills });
+            if (held.state === 'all') {
+                // A 5xx's Retry-After hold is honoured but is not a rate limit.
+                row.status = held.kind === 'server' ? 'backing_off' : RATE_LIMITED;
+                row.reason = held.reason;
+                // A server backoff is not a rate limit: its own field (grumpy 13).
+                row[held.kind === 'server' ? 'backoffUntil' : 'rateLimitedUntil'] = held.until;
+                await state.saveHolds(sourceId, { hosts: myHosts, view: runHolds, routes: held.routes, src, env, routeKills });
+                log(`[collect] ${slug}: skipped — ${held.reason}`);
+                continue;
+            }
+
             const claimed = await state.claim(sourceId, pollIntervalSec(src, env, { routeKills }), o.cycle ? o.cycle.windowMs : collectWindowMs(env));
             if (!claimed) { row.reason = 'collected within its poll interval (rate limit)'; continue; }
             queried++;
-            http = http || new HttpClient({ env, transport: o.transport, sleep: o.collectorCtx && o.collectorCtx.sleep, signal });
+            http = http || new HttpClient({ env, transport: o.transport, sleep: o.collectorCtx && o.collectorCtx.sleep, signal, holds: runHolds });
+            http.drainHoldChanges();   // only this source's changes are saved on its row
             const startedAt = new Date();
             const before = http.requests;
             const cursor = claimed.cursor || {};
-            const httpCache = claimed.http_cache || {};
-            // Copilot re-review #44: Retry-After holds of routes that pass no
-            // validator cache are persisted in this source's HTTP cache too.
-            http.holdStore = httpCache;
+            // ONE hold store (PR #44 unified into #45): a PR #44
+            // `retry-after:<host>` key still in the HTTP cache (written by a
+            // previous-release worker during a rolling deploy; migration 077
+            // copied the stored ones) is folded into the run's holds as a
+            // change of this source — persisted by saveHolds below, outside
+            // the HTTP cache, so the G10-5 rollback can never drop it — and
+            // removed from the cache, which holds validators only.
+            const legacy = rateLimit.legacyHolds(claimed.http_cache || {}, Date.now());
+            const httpCache = legacy.cache;
+            for (const [host, hold] of Object.entries(legacy.holds)) http.holdAlso(host, hold);
             // { text, err } per failure; the first one classifies the run.
             const routeErrors = [];
             const fail = (text, err) => {
@@ -250,12 +295,22 @@ async function runCollection(o = {}) {
             let okRoutes = 0;
             let queueFailed = false;
             let collectors = [];
+            // Routes (or feeds) not requested because their host is still
+            // backing off: skipped, never a failure.
+            const heldRoutes = [];
             try {
                 collectors = buildCollectors(src, { env, http, cursor, httpCache, now: o.now, ...(o.collectorCtx || {}), routeKills });
             } catch (err) {
                 fail(err.message, err);
             }
             let storeFailed = false;
+            // Operator log (worker stdout only — never the API or mail): the holds this source's
+            // run set or cleared, with the real host.
+            const logHolds = (changes) => {
+                for (const [h, e] of changes) {
+                    log(`[collect] ${slug}: hold ${e ? `set on ${scrub(h, env)} until ${e.until} (${e.signal || 'unclassified'}, streak ${e.count})` : `cleared on ${scrub(h, env)} (a success)`}`);
+                }
+            };
             // Relevance-accuracy R1: the routes' dropped counters, summed
             // onto this run's source_runs row (counts only).
             const droppedByRoute = [];
@@ -278,118 +333,173 @@ async function runCollection(o = {}) {
                 }
             };
             let gated = false;
-            for (const c of collectors) {
-                if (gated) {
-                    const why = await stillOpen(c.route.id);
-                    if (why) {
-                        (row.skippedRoutes = row.skippedRoutes || []).push({ route: c.route.id, reason: why });
-                        log(`[collect] ${slug}/${c.route.id}: skipped — ${why}`);
-                        continue;
-                    }
-                }
-                gated = true;
-                // G10-5: the route's cursor and HTTP validators as they were
-                // before it ran. If any of its items fails to store, they are
-                // restored, so the next run fetches those items again (a
-                // moved since-id or an ETag / 304 would otherwise skip them
-                // for good; a bulk file would be marked seen unstored).
-                const snapshot = JSON.stringify({ cursor, httpCache });
-                let routeStoreFailed = false;
-                let result;
-                try {
-                    result = await c.collect();
-                    okRoutes++;
-                } catch (err) {
-                    fail(`${c.route.id}: ${err.message}`, err);
-                    continue;
-                }
-                // G10-6: problems that did not stop the route (a broken or
-                // refused feed of a multi-feed source, a skipped message) are
-                // part of the run's errors, last_error and classification.
-                for (const w of result.warnings || []) fail(`${c.route.id}: ${w.text}`, w.err);
-                row.fetched += result.fetched;
-                row.kept += result.payloads.length;
-                // Only a route that fetched items evaluated any: a route that
-                // returned nothing contributes no dropped counts (NULL, not 0).
-                if (result.fetched > 0) droppedByRoute.push(result.dropped);
-                for (const payload of result.payloads) {
-                    let stored;
-                    try {
-                        stored = await storeRawPost(payload, sourceId, { ingestMvId: mv.ingestMvId, admissionMvId: mv.admissionMvId });
-                    } catch (err) {
-                        routeStoreFailed = true;
-                        fail(`${c.route.id}: store failed: ${err.message}`, Object.assign(new Error('store'), { kind: 'store' }));
-                        continue;
-                    }
-                    if (!stored.isNew) continue;
-                    row.new++;
-                    await ensureJob();
-                    if (scoreVia === 'queue') {
-                        // The slot is reserved BEFORE the enqueue, so the
-                        // cycle cannot close between the two (G10-2).
-                        await cycle.reserveRetry(jobId);
-                        try {
-                            await queues.enqueueIngest({ rawPostId: stored.postId, sourceId, jobId, reserved: true });
-                            queuedForScoring++;
-                        } catch (qerr) {
-                            await cycle.releaseRetry(jobId).catch(() => {});
-                            // G10-4: never swallowed; the sweep re-queues it.
-                            queueFailed = true;
-                            fail(`${c.route.id}: the scoring job could not be queued (${qerr.message})`,
-                                Object.assign(new Error('queue'), { kind: 'queue' }));
-                        }
-                        continue;
-                    }
-                    try {
-                        await scorePost(stored.postId, jobId, mv);
-                        newPostIds.push(stored.postId);
-                    } catch (err) {
-                        summary.scoringRetries++;
-                        // The retry holds a slot on this job until it has
-                        // scored, so the job's bias checks wait for it.
-                        await cycle.reserveRetry(jobId);
-                        try {
-                            await queues.enqueueIngestRetry({ rawPostId: stored.postId, sourceId, jobId, reserved: true });
-                            log(`[collect] ${slug}: scoring failed for ${stored.postId} (${err.message}) — queued for retry`);
-                        } catch (qerr) {
-                            await cycle.releaseRetry(jobId).catch(() => {});
-                            // G10-4: never swallowed. The run is an error; the
-                            // unscored post is re-queued by the sweep
-                            // (src/collectors/sweep.js) within 24 h.
-                            queueFailed = true;
-                            fail(`${c.route.id}: scoring failed and the retry could not be queued (${qerr.message})`,
-                                Object.assign(new Error('queue'), { kind: 'queue' }));
+            // Security review M1: a throw anywhere in the route loop (a DB
+            // error while storing, a queue failure that escapes) must not lose
+            // a rate-limit hold learned earlier in the loop — the restart would
+            // re-poll a host that just limited us. The hold is saved, then the
+            // error continues unchanged.
+            try {
+                for (const c of collectors) {
+                    if (gated) {
+                        const why = await stillOpen(c.route.id);
+                        if (why) {
+                            (row.skippedRoutes = row.skippedRoutes || []).push({ route: c.route.id, reason: why });
+                            log(`[collect] ${slug}/${c.route.id}: skipped — ${why}`);
+                            continue;
                         }
                     }
-                }
-                // R1: this route's admission rule counts for today (UTC), under
-                // the admission_filter version that ran. Counts only. Written
-                // only when every item stored: a route whose store failed is
-                // fetched and evaluated again by the next run (G10-5), which
-                // would count the same items twice. A failed write is a run
-                // warning (G10-6): it never costs a post.
-                if (!routeStoreFailed) {
+                    gated = true;
+                    // G10-5: the route's cursor and HTTP validators as they were
+                    // before it ran. If any of its items fails to store, they are
+                    // restored, so the next run fetches those items again (a
+                    // moved since-id or an ETag / 304 would otherwise skip them
+                    // for good; a bulk file would be marked seen unstored).
+                    const snapshot = JSON.stringify({ cursor, httpCache });
+                    let routeStoreFailed = false;
+                    let result;
+                    if (rateLimit.routeHeld(c.route, env, runHolds, Date.now())) {
+                        heldRoutes.push(c.route.id);
+                        continue;
+                    }
                     try {
-                        await counters.recordRuleHits({
-                            sourceId, source: src, route: c.route.id, admissionMvId: mv.admissionMvId, tally: result.ruleHits,
-                        });
+                        result = await c.collect();
+                        okRoutes++;
                     } catch (err) {
-                        fail(`${c.route.id}: admission counters not recorded: ${err.message}`, err);
+                        if (err && err.held === true) { heldRoutes.push(c.route.id); continue; }
+                        fail(`${c.route.id}: ${err.message}`, err);
+                        continue;
+                    }
+                    // G10-6: problems that did not stop the route (a broken or
+                    // refused feed of a multi-feed source, a skipped message) are
+                    // part of the run's errors, last_error and classification.
+                    // A feed not requested because its host is backing off is not.
+                    for (const w of result.warnings || []) {
+                        if (w.err && w.err.held === true) heldRoutes.push(c.route.id);
+                        else fail(`${c.route.id}: ${w.text}`, w.err);
+                    }
+                    row.fetched += result.fetched;
+                    row.kept += result.payloads.length;
+                    // Only a route that fetched items evaluated any: a route that
+                    // returned nothing contributes no dropped counts (NULL, not 0).
+                    if (result.fetched > 0) droppedByRoute.push(result.dropped);
+                    for (const payload of result.payloads) {
+                        let stored;
+                        try {
+                            stored = await storeRawPost(payload, sourceId, { ingestMvId: mv.ingestMvId, admissionMvId: mv.admissionMvId });
+                        } catch (err) {
+                            routeStoreFailed = true;
+                            fail(`${c.route.id}: store failed: ${err.message}`, Object.assign(new Error('store'), { kind: 'store' }));
+                            continue;
+                        }
+                        if (!stored.isNew) continue;
+                        row.new++;
+                        await ensureJob();
+                        if (scoreVia === 'queue') {
+                            // The slot is reserved BEFORE the enqueue, so the
+                            // cycle cannot close between the two (G10-2).
+                            await cycle.reserveRetry(jobId);
+                            try {
+                                await queues.enqueueIngest({ rawPostId: stored.postId, sourceId, jobId, reserved: true });
+                                queuedForScoring++;
+                            } catch (qerr) {
+                                await cycle.releaseRetry(jobId).catch(() => {});
+                                // G10-4: never swallowed; the sweep re-queues it.
+                                queueFailed = true;
+                                fail(`${c.route.id}: the scoring job could not be queued (${qerr.message})`,
+                                    Object.assign(new Error('queue'), { kind: 'queue' }));
+                            }
+                            continue;
+                        }
+                        try {
+                            await scorePost(stored.postId, jobId, mv);
+                            newPostIds.push(stored.postId);
+                        } catch (err) {
+                            summary.scoringRetries++;
+                            // The retry holds a slot on this job until it has
+                            // scored, so the job's bias checks wait for it.
+                            await cycle.reserveRetry(jobId);
+                            try {
+                                await queues.enqueueIngestRetry({ rawPostId: stored.postId, sourceId, jobId, reserved: true });
+                                log(`[collect] ${slug}: scoring failed for ${stored.postId} (${err.message}) — queued for retry`);
+                            } catch (qerr) {
+                                await cycle.releaseRetry(jobId).catch(() => {});
+                                // G10-4: never swallowed. The run is an error; the
+                                // unscored post is re-queued by the sweep
+                                // (src/collectors/sweep.js) within 24 h.
+                                queueFailed = true;
+                                fail(`${c.route.id}: scoring failed and the retry could not be queued (${qerr.message})`,
+                                    Object.assign(new Error('queue'), { kind: 'queue' }));
+                            }
+                        }
+                    }
+                    // R1: this route's admission rule counts for today (UTC), under
+                    // the admission_filter version that ran. Counts only. Written
+                    // only when every item stored: a route whose store failed is
+                    // fetched and evaluated again by the next run (G10-5), which
+                    // would count the same items twice. A failed write is a run
+                    // warning (G10-6): it never costs a post.
+                    if (!routeStoreFailed) {
+                        try {
+                            await counters.recordRuleHits({
+                                sourceId, source: src, route: c.route.id, admissionMvId: mv.admissionMvId, tally: result.ruleHits,
+                            });
+                        } catch (err) {
+                            fail(`${c.route.id}: admission counters not recorded: ${err.message}`, err);
+                        }
+                    }
+                    if (routeStoreFailed) {
+                        storeFailed = true;
+                        const prev = JSON.parse(snapshot);
+                        for (const k of Object.keys(cursor)) delete cursor[k];
+                        Object.assign(cursor, prev.cursor);
+                        // Validators roll back. A rate-limit hold learned in this
+                        // route is NOT in the HTTP cache (it lives in the run's
+                        // holds, saved to rate_limited_hosts), so it is never
+                        // rolled back (PR #44 Copilot re-review).
+                        for (const k of Object.keys(httpCache)) delete httpCache[k];
+                        Object.assign(httpCache, prev.httpCache);
                     }
                 }
-                if (routeStoreFailed) {
-                    storeFailed = true;
-                    const prev = JSON.parse(snapshot);
-                    for (const k of Object.keys(cursor)) delete cursor[k];
-                    Object.assign(cursor, prev.cursor);
-                    // Validators roll back; a Retry-After hold learned in this
-                    // route is kept (Copilot re-review #44).
-                    const restored = withHolds(prev.httpCache, httpCache);
-                    for (const k of Object.keys(httpCache)) delete httpCache[k];
-                    Object.assign(httpCache, restored);
-                }
+            } catch (loopErr) {
+                const lostChanges = http.drainHoldChanges();
+                await state.saveHolds(sourceId, {
+                    hosts: myHosts, changes: lostChanges, view: runHolds,
+                    routes: rateLimit.holdGate(src, env, runHolds, Date.now(), { routeKills }).routes, src, env, routeKills,
+                }).then(() => logHolds(lostChanges), serr => log(`[collect] ${slug}: could not save the rate-limit holds (${scrub(serr.message, env)})`));
+                throw loopErr;
             }
             const classified = routeErrors.map(e => classifyError(e.err));
+            // Diagnosis 2026-10-01: the run's rate limit (if any). Its hold
+            // is already in the run's map (http.js); it is never passed to
+            // the refused state.
+            const limitedIdx = classified.findIndex(c => c.error_kind === RATE_LIMITED);
+            const limitedErr = limitedIdx >= 0 ? routeErrors[limitedIdx].err : null;
+            const rateLimitHeaders = limitedErr && limitedErr.headers && Object.keys(limitedErr.headers).length
+                ? limitedErr.headers : null;
+            const after = rateLimit.holdGate(src, env, runHolds, Date.now(), { routeKills });
+            // Grumpy #10: per host, merged under a row lock — never a blind
+            // overwrite of another run's newer hold.
+            const savedChanges = http.drainHoldChanges();
+            await state.saveHolds(sourceId, {
+                hosts: myHosts, changes: savedChanges, view: runHolds, routes: after.routes,
+                limited: !!limitedErr, headers: rateLimitHeaders, src, env, routeKills,
+            });
+            logHolds(savedChanges);
+            if (heldRoutes.length) log(`[collect] ${slug}: not requested (host backoff after a rate limit or a server error's Retry-After, honoured): ${[...new Set(heldRoutes)].join(', ')}`);
+            if (okRoutes === 0 && routeErrors.length === 0 && heldRoutes.length > 0) {
+                // Every route that would have run was held (e.g. a hold
+                // learned after the pre-claim gate): nothing was requested,
+                // so this is a skip — not a failure, not a run row. Grumpy
+                // #9: the progress heartbeat still beats, and a source that
+                // sent nothing is not counted as queried. (Its claim stands:
+                // it is next asked one poll interval after this attempt.)
+                if (http.requests === before) queried--;
+                row.status = after.kind === 'server' ? 'backing_off' : RATE_LIMITED;
+                row.reason = after.reason || 'every route is backing off after a rate limit';
+                row[after.kind === 'server' ? 'backoffUntil' : 'rateLimitedUntil'] = after.until;
+                await touch();
+                continue;
+            }
             // F10-5: any refused route refuses the source (the source said no).
             const refused = refusalOf(classified);
             // G10-5: a store failure makes the run an error too.
@@ -397,7 +507,10 @@ async function runCollection(o = {}) {
             row.outcome = ok ? 'ok' : 'error';
             row.error = routeErrors.length ? scrub(routeErrors.map(e => e.text).join('; '), env) : null;
             const refusedIdx = refused ? classified.findIndex(c => c.error_kind === refused.kind) : -1;
-            const cls = routeErrors.length ? classified[refusedIdx >= 0 ? refusedIdx : 0] : { error_kind: null, http_status: null };
+            // The run's classification: a refusal first, then a rate limit
+            // (grumpy #8: its headers are stored with it), else the first error.
+            const leadIdx = refusedIdx >= 0 ? refusedIdx : (limitedIdx >= 0 ? limitedIdx : 0);
+            const cls = routeErrors.length ? classified[leadIdx] : { error_kind: null, http_status: null };
             row.errorKind = cls.error_kind;
             row.httpStatus = cls.http_status;
             if (row.error) summary.errors.push(`${slug}: ${row.error}`);
@@ -413,6 +526,14 @@ async function runCollection(o = {}) {
             const refusedErr = refusedIdx >= 0 ? routeErrors[refusedIdx].err : null;
             const refusalHeaders = refusedErr && refusedErr.headers && Object.keys(refusedErr.headers).length
                 ? refusedErr.headers : null;
+            if (limitedErr) row.rateLimitedUntil = after.until;
+            if (limitedErr && !refused) {
+                // Grumpy #13: only when nothing was refused (the refusal
+                // line below says what happened otherwise).
+                if (after.state === 'all') row.status = RATE_LIMITED;
+                log(`[collect] ${slug}: RATE LIMITED (not a refusal) — ${limitedErr.host ? rateLimit.publicHostName(limitedErr.host) : 'host'}: ${after.reason || 'backing off'}`);
+                if (rateLimitHeaders) log(`[collect] ${slug}: rate-limit response headers ${JSON.stringify(rateLimitHeaders)}`);
+            }
             if (refused) {
                 const r = await state.recordRefusal(sourceId, { ...refused, headers: refusalHeaders }, slug);
                 row.status = BLOCKED_BY_SOURCE;
@@ -438,7 +559,9 @@ async function runCollection(o = {}) {
                 sourceId, jobId, gateStatus: st.status, outcome: row.outcome, itemsFetched: row.fetched,
                 postsNew: row.new, requests: http.requests - before, error: row.error,
                 errorKind: row.errorKind, httpStatus: row.httpStatus, startedAt,
-                responseHeaders: refused ? refusalHeaders : null,
+                // Migration 075: a rate-limited run keeps its headers too —
+                // only under its own error kind (grumpy #8).
+                responseHeaders: refused ? refusalHeaders : (cls.error_kind === RATE_LIMITED ? rateLimitHeaders : null),
                 // NULL when no item was evaluated (no route fetched anything): there is no 0 to record.
                 dropped: droppedByRoute.length ? counters.mergeDropped(droppedByRoute) : null,
             });

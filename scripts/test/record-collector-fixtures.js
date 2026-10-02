@@ -132,7 +132,19 @@ function killedTarget(key, env, gov) {
     return routeKillReasons(src, env, kills).get(routeId) || null;
 }
 
-async function main({ env = process.env, governance, http = new HttpClient(), dir = DIR, write = fs.writeFileSync,
+/**
+ * Security F7 (diagnosis 2026-10-01): the stored rate-limit holds (read
+ * only), or null when the database is unreachable.
+ */
+async function loadStoredHolds() {
+    try {
+        return await require('../../src/collectors/state').loadHolds();
+    } catch {
+        return null;
+    }
+}
+
+async function main({ env = process.env, governance, http = null, loadHolds = loadStoredHolds, dir = DIR, write = fs.writeFileSync,
     log = line => process.stdout.write(line + '\n') } = {}) {
     const readGov = governance || require('../collect').readGovernance;
     const govs = new Map();
@@ -141,6 +153,14 @@ async function main({ env = process.env, governance, http = new HttpClient(), di
     } catch (err) {
         log(`the database kill switches could not be read (${err.message}) — nothing was recorded`);
         return 2;
+    }
+    // Never ask a host the worker is backing off from (the stored rate-limit
+    // holds, read only). Without a reachable database the holds cannot be
+    // checked — said so, not hidden. An injected client (tests) is used as given.
+    if (!http) {
+        const holds = await loadHolds();
+        if (!holds) log('rate-limit holds NOT checked (database unreachable)');
+        http = new HttpClient({ env, holds: holds || {} });
     }
     // The manifest on disk: its file map, its overall clock and each fixture's
     // own clock. A fixture that is not re-recorded keeps the clock it was
@@ -209,7 +229,14 @@ async function main({ env = process.env, governance, http = new HttpClient(), di
 /* istanbul ignore next -- process entry point; main() is tested directly */
 if (require.main === module) {
     const db = require('../../src/db/connection');
-    main().then(async (code) => { await db.closePool(); process.exit(code); });
+    // Grumpy re-review: a failure is reported (never an unhandled rejection)
+    // and the database pool is always closed, so the script exits.
+    main()
+        .catch((err) => {
+            process.stderr.write(`record-collector-fixtures: FAILED — ${require('../../src/collectors/redact').scrub(String(err && err.message))}\n`);
+            return 1;
+        })
+        .then(async (code) => { await db.closePool().catch(() => {}); process.exit(code); });
 }
 
 module.exports = { main, killedTarget, TARGETS };

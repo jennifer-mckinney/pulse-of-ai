@@ -21,6 +21,11 @@
 //                        feeds answer 200. This never works around a wall: a
 //                        401/403 on the resource itself still stops the run
 //                        (AccessDeniedError in http.js).
+//                        Exceptions, decided by the owner 2026-10-02 and thrown
+//                        by http.js before the policy sees them: 401 and 451
+//                        are refusals; a 403 or 429 with rate-limit evidence is
+//                        a rate limit; a bot-wall challenge at any status is a
+//                        refusal.
 //   429 / 5xx / error    "unreachable" → complete disallow (§2.3.1.4)
 
 'use strict';
@@ -125,17 +130,27 @@ class RobotsPolicy {
 
     async policyFor(origin) {
         const hit = this.cache.get(origin);
-        if (hit && this.now() - hit.at < (hit.unreachable ? Math.min(UNREACHABLE_TTL_MS, this.ttlMs) : this.ttlMs)) return hit;
+        // A 403's "no rules" is soft too (security review): a transient WAF block must not
+        // pin "allow everything" for a day, so it is re-checked like an unreachable file.
+        if (hit && this.now() - hit.at < (hit.unreachable || hit.soft ? Math.min(UNREACHABLE_TTL_MS, this.ttlMs) : this.ttlMs)) return hit;
         let entry;
         try {
             const res = await this.fetchRobots(`${origin}/robots.txt`);
             if (res.status >= 200 && res.status < 300) entry = { groups: parseRobots(res.body) };
+            else if (res.status === 403) entry = { allowAll: true, soft: true };
             else if (res.status >= 400 && res.status < 500 && res.status !== 429) entry = { allowAll: true };
             else entry = { denyAll: true, unreachable: true, reason: `robots.txt unreachable (HTTP ${res.status}) — complete disallow` };
         } catch (err) {
             // The run's deadline is not an answer from the origin: nothing
             // is cached (G10-9).
             if (err && err.kind === 'deadline') throw err;
+            // Nor is a request we did not send because its host is backing
+            // off after a rate limit (diagnosis 2026-10-01, security F5): the
+            // route is held, and nothing is cached as "unreachable".
+            if (err && err.held === true) throw err;
+            // Nor is a rate limit robots.txt itself answered with (a new hold
+            // of the host), or the 5th body-only one escalated to a refusal.
+            if (err && (err.name === 'RateLimitedError' || err.name === 'AccessDeniedError')) throw err;
             entry = { denyAll: true, unreachable: true, reason: `robots.txt unreachable: ${err.message}` };
         }
         entry.at = this.now();

@@ -27,6 +27,7 @@
 const { SEARCH_TERMS, isAiRelated } = require('../ai-filter');
 const { pickAllowed, FULLNAME_RE, SUBREDDIT_RE } = require('./fields');
 const { BudgetExhaustedError } = require('./budget');
+const { RateLimitedError, AccessDeniedError } = require('../errors');
 const { TOP_N, WINDOW_DAYS, DENY_LIST, minAiPosts, rankSubreddits } = require('./selection');
 
 const MAX_PAGES_PER_QUERY = 10;
@@ -125,12 +126,20 @@ async function discoverSubreddits({ api, env = process.env, now = () => Date.now
                 abouts.set(q.name.toLowerCase(), about ? { about } : { about: null, unavailable: 'not a subreddit' });
             } catch (err) {
                 if (err instanceof BudgetExhaustedError) throw err;
-                // A private, banned or missing subreddit answers 403 / 404;
-                // any other failure leaves it out of today's ranking.
-                if (err && (err.status === 403 || err.status === 404)) {
-                    abouts.set(q.name.toLowerCase(), { about: null, unavailable: `HTTP ${err.status}` });
-                } else if (err && err.status === 401) {
-                    throw err;
+                // Grumpy #1: a rate limit (a 429, or a rate-limit 403) is not
+                // the subreddit being unavailable — stop the discovery, never
+                // ask for the next one.
+                if (err instanceof RateLimitedError || (err && err.held === true)) throw err;
+                // Reddit refusing us (grumpy 3 / security review F8): a 401 / 451, a bot
+                // wall at ANY status, the HTTP client's own fail-closed escalation
+                // (err.refusal), and — owner decision 2026-10-02 — the FIRST plain 403
+                // (the old ABOUT_REFUSAL_AFTER = 1) are never "a private subreddit":
+                // rethrown at once (the refused state), so they can never wipe the
+                // ranking with a snapshot of 'unavailable' rows.
+                if (err instanceof AccessDeniedError && (err.refusal || [401, 403, 451].includes(err.status))) throw err;
+                // A missing subreddit answers 404: unavailable, nothing more.
+                if (err && err.status === 404) {
+                    abouts.set(q.name.toLowerCase(), { about: null, unavailable: 'HTTP 404' });
                 } else {
                     abouts.set(q.name.toLowerCase(), { about: null, unavailable: 'lookup failed' });
                 }
@@ -138,8 +147,10 @@ async function discoverSubreddits({ api, env = process.env, now = () => Date.now
         }
         return { complete: true, ...base, ...rankSubreddits({ counts, abouts, minPosts, top: TOP_N }) };
     } catch (err) {
-        if (err instanceof BudgetExhaustedError) {
-            return { complete: false, ...base, ranking: [], exclusions: [], selected: [], qualifying: [], reason: err.message };
+        const heldBackoff = !!(err && err.held === true);
+        if (err instanceof BudgetExhaustedError || err instanceof RateLimitedError || heldBackoff) {
+            return { complete: false, ...base, ranking: [], exclusions: [], selected: [], qualifying: [], reason: err.message,
+                ...(err instanceof RateLimitedError ? { rateLimited: true } : {}) };
         }
         throw err;
     }
