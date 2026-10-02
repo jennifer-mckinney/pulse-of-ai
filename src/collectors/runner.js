@@ -255,7 +255,7 @@ async function runCollection(o = {}) {
                 row.status = RATE_LIMITED;
                 row.reason = held.reason;
                 row.rateLimitedUntil = held.until;
-                await state.saveHolds(sourceId, { hosts: myHosts, view: runHolds, routes: held.routes, src });
+                await state.saveHolds(sourceId, { hosts: myHosts, view: runHolds, routes: held.routes, src, env });
                 log(`[collect] ${slug}: skipped — ${held.reason}`);
                 continue;
             }
@@ -427,7 +427,7 @@ async function runCollection(o = {}) {
             } catch (loopErr) {
                 await state.saveHolds(sourceId, {
                     hosts: myHosts, changes: http.drainHoldChanges(), view: runHolds,
-                    routes: rateLimit.holdGate(src, env, runHolds, Date.now()).routes, src,
+                    routes: rateLimit.holdGate(src, env, runHolds, Date.now()).routes, src, env,
                 }).catch(serr => log(`[collect] ${slug}: could not save the rate-limit holds (${scrub(serr.message, env)})`));
                 throw loopErr;
             }
@@ -444,7 +444,7 @@ async function runCollection(o = {}) {
             // overwrite of another run's newer hold.
             await state.saveHolds(sourceId, {
                 hosts: myHosts, changes: http.drainHoldChanges(), view: runHolds, routes: after.routes,
-                limited: !!limitedErr, headers: rateLimitHeaders, src,
+                limited: !!limitedErr, headers: rateLimitHeaders, src, env,
             });
             if (heldRoutes.length) log(`[collect] ${slug}: not requested (rate-limit backoff, honoured): ${[...new Set(heldRoutes)].join(', ')}`);
             if (okRoutes === 0 && routeErrors.length === 0 && heldRoutes.length > 0) {
@@ -492,7 +492,7 @@ async function runCollection(o = {}) {
                 // Grumpy #13: only when nothing was refused (the refusal
                 // line below says what happened otherwise).
                 if (after.state === 'all') row.status = RATE_LIMITED;
-                log(`[collect] ${slug}: RATE LIMITED (not a refusal) — ${limitedErr.host || 'host'}: ${after.reason || 'backing off'}`);
+                log(`[collect] ${slug}: RATE LIMITED (not a refusal) — ${limitedErr.host ? rateLimit.publicHostName(limitedErr.host) : 'host'}: ${after.reason || 'backing off'}`);
                 if (rateLimitHeaders) log(`[collect] ${slug}: rate-limit response headers ${JSON.stringify(rateLimitHeaders)}`);
             }
             if (refused) {

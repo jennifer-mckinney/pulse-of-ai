@@ -1,12 +1,16 @@
 // tests/integration/collect.ratelimit.test.js
 // Diagnosis 2026-10-01 (GitHub): a RATE LIMIT is a backoff, never a refusal.
 // A response with positive rate-limit evidence (429; a 403 with
-// x-ratelimit-remaining 0, a Retry-After, or a JSON message naming a rate
-// limit) holds the HOST it came from until the source's own time (60 s
-// floor, 24 h cap — migration 075). It never touches the refused state
-// (refusal count, cooldown, probation) and never opens the critical
-// source_refused alert; persistent throttling reaches the source_failing
-// WARNING at most. A plain 403 with none of those signals stays a refusal.
+// x-ratelimit-remaining 0, or — from api.github.com only — a JSON message
+// naming a rate limit, which with a strictly parsed Retry-After is strong)
+// holds the HOST it came from until the source's own time (60 s floor
+// doubling per consecutive limit, 24 h cap — migration 075). Retry-After
+// alone never classifies a 403; it only lengthens a hold. A rate limit never
+// touches the refused state (refusal count, cooldown, probation) and never
+// opens the critical source_refused alert; persistent throttling opens the
+// source_rate_limited WARNING (3 in a row on a host), and the 5th weak
+// (body-only) limit in a row, or the 10th strong 403, is a refusal. A plain
+// 403 with none of those signals stays a refusal.
 
 'use strict';
 
@@ -388,6 +392,33 @@ describe('a source whose every route is held is skipped, not failed', () => {
         const hosts = (await stateOf('github')).rate_limited_hosts;
         expect(hosts['api.github.com']).toMatchObject({ http_status: 403, signal: 'ratelimit_remaining_zero', count: 1 });
         expect(Date.parse(hosts['api.github.com'].until)).toBeGreaterThan(Date.now());
+    });
+
+    it('Copilot: a partly held source lists only the routes that run now in open_routes (held ones are in rate_limited_routes)', async () => {
+        // The repo-search route hits api.github.com; the blog route is another host.
+        await collect([[REPO_SEARCH, spent403(600)], [ISSUE_SEARCH, spent403(600)], BLOG_OK]);
+        const row = await rowOf('github');
+        expect(row.rate_limited_routes).toEqual(expect.arrayContaining(['repo-search', 'issue-search']));
+        expect(row.open_routes).not.toContain('repo-search');
+        expect(row.open_routes).not.toContain('issue-search');
+        expect(row.open_routes).toContain('ai-ml-blog-rss');
+    });
+
+    it('Copilot: saveHolds recomputes rate_limited_routes from the MERGED stored holds under the lock (a saver that saw no hold keeps a concurrent one\'s routes)', async () => {
+        const state = require('../../src/collectors/state');
+        const rl = require('../../src/collectors/rate-limit');
+        const { getSource } = require('../../src/config/source-registry');
+        const src = getSource('github');
+        const id = (await dbGet("SELECT id FROM data_sources WHERE name = 'github'")).id;
+        const until = new Date(Date.now() + 600000).toISOString();
+        const hold = { until, http_status: 429, signal: 'http_429', count: 1, weak: 0, at: new Date().toISOString() };
+        // A concurrent saver stored a hold on api.github.com ...
+        await state.saveHolds(id, { hosts: ['api.github.com'], changes: new Map([['api.github.com', hold]]), view: { 'api.github.com': hold }, src, env: TEST_ENV });
+        // ... then a saver whose snapshot saw NO hold saves with routes {} and no change for the host.
+        await state.saveHolds(id, { hosts: rl.sourceHosts(src, TEST_ENV), changes: new Map(), view: {}, routes: {}, src, env: TEST_ENV });
+        const st = await stateOf('github');
+        expect(st.rate_limited_hosts['api.github.com']).toBeDefined();
+        expect(Object.keys(st.rate_limited_routes)).toEqual(expect.arrayContaining(['repo-search', 'issue-search']));
     });
 
     it('security F3: a contract-feed host never reaches GET /api/sources', async () => {

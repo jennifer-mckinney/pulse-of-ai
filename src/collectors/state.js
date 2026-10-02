@@ -399,11 +399,15 @@ async function loadHolds() {
  * access_denied_*) and opens no alert: a rate limit is a backoff.
  * @param {string} sourceId
  * @param {{ hosts: string[], changes?: Map, view?: object, routes?: object,
- *           limited?: boolean, headers?: object|null, src?: object }} o
+ *           limited?: boolean, headers?: object|null, src?: object, env?: object }} o
+ *   routes: the caller's route map — used only without `src`; with `src` the
+ *   map is recomputed from the MERGED stored holds under the row lock (Copilot:
+ *   a concurrent saver's newer hold must not leave the routes `{}` while
+ *   enforcement still blocks the source)
  *   src: the registry source — rate_limited_until then counts only its
  *   collection hosts (never its terms page's)
  */
-async function saveHolds(sourceId, { hosts, changes = new Map(), view = {}, routes = {}, limited = false, headers = null, src = null }) {
+async function saveHolds(sourceId, { hosts, changes = new Map(), view = {}, routes = {}, limited = false, headers = null, src = null, env = process.env }) {
     const rl = require('./rate-limit');
     const { dbTransaction } = require('../db/connection');
     const now = Date.now();
@@ -440,6 +444,7 @@ async function saveHolds(sourceId, { hosts, changes = new Map(), view = {}, rout
         // terms page (src given) is not the source being rate-limited.
         const active = Object.values(rl.activeHolds(src ? rl.collectionHolds(src, stored) : stored, now)).map(h => h.until).sort();
         const saved = headers && Object.keys(headers).length ? JSON.stringify(headers) : null;
+        const routeMap = src ? rl.holdGate(src, env, stored, now).routes : (routes || {});
         await client.query(
             `UPDATE source_collection_state
              SET rate_limited_hosts  = $2::jsonb,
@@ -449,7 +454,7 @@ async function saveHolds(sourceId, { hosts, changes = new Map(), view = {}, rout
                  rate_limit_headers  = CASE WHEN $5::boolean THEN $6::jsonb ELSE rate_limit_headers END,
                  updated_at = NOW()
              WHERE source_id = $1`,
-            [sourceId, JSON.stringify(stored), active.length ? active[active.length - 1] : null, JSON.stringify(routes || {}),
+            [sourceId, JSON.stringify(stored), active.length ? active[active.length - 1] : null, JSON.stringify(routeMap),
                 limited, saved],
         );
         return done;
@@ -498,7 +503,7 @@ async function saveHoldChanges(changes, view, { env = process.env } = {}) {
         const mine = [...changes.keys()].filter(h => hosts.has(h));
         const id = ids.get(src.slug);
         if (!mine.length || !id) continue;
-        await saveHolds(id, { hosts: mine, changes, view, routes: rl.holdGate(src, env, view, Date.now()).routes, src });
+        await saveHolds(id, { hosts: mine, changes, view, src, env });
     }
 }
 

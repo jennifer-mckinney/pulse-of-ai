@@ -124,7 +124,9 @@ function registryFields(row, env, now, routeKills = []) {
         // (sourceStatus already empties them for every other non-collecting
         // status), and a disabled route is never among them. A source
         // awaiting its post-cooldown probe keeps them: the probe runs them.
-        open_routes: dbKilled || cooling ? [] : st.openRoutes,
+        // Copilot review: a route held by a rate-limit backoff does not run
+        // now either (it is listed in rate_limited_routes instead).
+        open_routes: dbKilled || cooling ? [] : st.openRoutes.filter(id => !held.routeMap[id]),
         disabled_routes: st.disabledRoutes,
         routes: st.routes.map((r) => {
             if (r.status !== 'open') return r;

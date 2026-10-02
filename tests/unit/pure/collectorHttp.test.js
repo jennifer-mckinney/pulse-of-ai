@@ -780,6 +780,38 @@ describe('rate limits are not refusals (diagnosis 2026-10-01)', () => {
         expect(robotsCache.size).toBe(0);
     });
 
+    test('Copilot (4th): a bot-wall page on robots.txt is a REFUSAL even with a 2xx status (never parsed as allow-all)', async () => {
+        const robotsCache = new Map();
+        const { http, transport } = at([
+            ['https://a.example/robots.txt', { status: 200, headers: {}, body: '<html><div id="cf-chl-widget"></div></html>' }],
+            [/a\.example\/page/, { body: 'ok' }],
+        ], { robotsCache });
+        await expect(http.request('https://a.example/page', { robots: true })).rejects.toBeInstanceOf(AccessDeniedError);
+        expect(transport.calls.filter(c => c.url.includes('/page'))).toHaveLength(0);
+        expect(robotsCache.size).toBe(0);
+        // Cloudflare's explicit marker is a refusal at any status on a page request too.
+        const b = at([[/b\.example\/page/, { status: 200, headers: { 'cf-mitigated': 'challenge' }, body: 'x' }]]);
+        await expect(b.http.request('https://b.example/page')).rejects.toBeInstanceOf(AccessDeniedError);
+        // ...but a 2xx article that merely mentions a bot-wall vendor is still content.
+        const c = at([[/c\.example\/page/, { status: 200, body: 'We compared datadome and captcha-delivery vendors.' }]]);
+        expect((await c.http.request('https://c.example/page')).body).toMatch(/datadome/);
+    });
+
+    test('Copilot (4th): a rate limit on a robots.txt REDIRECT target also holds the host robots.txt was asked of', async () => {
+        const { http } = at([
+            ['https://a.example/robots.txt', { status: 301, headers: { location: 'https://b.example/robots.txt' } }],
+            ['https://b.example/robots.txt', { status: 429, headers: { 'retry-after': '600' }, body: '' }],
+            [/a\.example\/page/, { body: 'ok' }],
+        ], { robotsCache: new Map() });
+        const err = await http.request('https://a.example/page', { robots: true }).catch(e => e);
+        expect(err).toBeInstanceOf(RateLimitedError);
+        expect(http.holds['b.example']).toMatchObject({ until: iso(NOW + 600000) });
+        // The hold is also recorded for the original host, so it is saved and a
+        // restarted worker never asks the redirect again.
+        expect(http.holds['a.example']).toMatchObject({ until: iso(NOW + 600000) });
+        expect([...http.drainHoldChanges().keys()].sort()).toEqual(['a.example', 'b.example']);
+    });
+
     test('Copilot (3rd): an undecodable robots.txt is classified too (rate-limit headers → hold; a challenge header → refusal)', async () => {
         const undecodable = (status, headers) => () => { throw Object.assign(new Error('incorrect header check'), { decode: true, status, headers }); };
         const a = at([['https://a.example/robots.txt', undecodable(429, { 'retry-after': '600' })], [/a\.example\/page/, { body: 'ok' }]], { robotsCache: new Map() });

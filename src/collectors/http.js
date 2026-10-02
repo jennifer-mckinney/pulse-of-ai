@@ -345,8 +345,10 @@ class HttpClient {
             const limited = this.rateLimitError(url, res);
             if (limited) throw limited;
         }
-        if (res.status >= 400 && isChallenge(res)) {
-            throw new AccessDeniedError(`${host} refused access (HTTP ${res.status}, bot wall on robots.txt) — not retried, not worked around`,
+        // Copilot review: whatever the status — a 2xx bot-wall page is not a
+        // robots policy (parsing it as allow-all would then request the page).
+        if (isChallenge(res)) {
+            throw new AccessDeniedError(`${rateLimit.publicHostName(host)} refused access (HTTP ${res.status}, bot wall on robots.txt) — not retried, not worked around`,
                 { status: res.status, url: redactUrl(url), headers: refusalHeaders(res.headers, this.env) });
         }
         if (res.status >= 200 && res.status < 300) this.clearHold(host);
@@ -359,6 +361,16 @@ class HttpClient {
      */
     async fetchRobots(url) {
         let current = url;
+        const firstHost = new URL(url).hostname;
+        // Copilot review: a rate limit (or a hold) met on a redirect target
+        // also holds the host robots.txt was asked of, as request() does for
+        // a redirected page — the target need not be one of the source's
+        // hosts, so its hold alone would never be saved.
+        const aliasHold = (err, at) => {
+            const h = new URL(at).hostname;
+            if (err instanceof RateLimitedError && h !== firstHost && this.holds[h]) this.holdAlso(firstHost, this.holds[h]);
+            return err;
+        };
         for (let hop = 0; hop < 5; hop++) {
             checkUrl(current);
             let res;
@@ -367,11 +379,19 @@ class HttpClient {
             } catch (err) {
                 // Copilot review: an undecodable robots.txt is classified like
                 // any response from its headers (the body cannot be read).
-                if (!(err && err.decode && Number.isInteger(err.status))) throw err;
-                this.classifyRobots(current, { status: err.status, headers: err.headers || {}, body: '' });
+                if (!(err && err.decode && Number.isInteger(err.status))) throw aliasHold(err, current);
+                try {
+                    this.classifyRobots(current, { status: err.status, headers: err.headers || {}, body: '' });
+                } catch (cerr) {
+                    throw aliasHold(cerr, current);
+                }
                 throw err;
             }
-            this.classifyRobots(current, res);
+            try {
+                this.classifyRobots(current, res);
+            } catch (err) {
+                throw aliasHold(err, current);
+            }
             if (!REDIRECTS.includes(res.status) || !res.headers.location) return res;
             current = new URL(res.headers.location, current).toString();
         }
@@ -494,7 +514,7 @@ class HttpClient {
                 if (limited instanceof RateLimitedError && firstHost !== u.hostname) this.holdAlso(firstHost, this.holds[u.hostname]);
                 throw limited;
             }
-            if (REFUSAL_STATUSES.includes(res.status) || (res.status >= 400 && isChallenge(res))) {
+            if (REFUSAL_STATUSES.includes(res.status) || (res.status >= 400 && isChallenge(res)) || challengeHeader(res.headers)) {
                 throw new AccessDeniedError(`${new URL(current).host} refused access (HTTP ${res.status}) — not retried, not worked around`,
                     { status: res.status, url: redactUrl(current), headers: refusalHeaders(res.headers, this.env) });
             }
@@ -547,7 +567,7 @@ class HttpClient {
                 // source saying no — a refusal, never a parse error. So is
                 // any 4xx that Cloudflare marks as a challenge (F6).
                 if (err && err.decode && (REFUSAL_STATUSES.includes(err.status)
-                    || (err.status >= 400 && challengeHeader(err.headers)))) {
+                    || challengeHeader(err.headers))) {
                     throw new AccessDeniedError(`${new URL(url).host} refused access (HTTP ${err.status}; body undecodable) — not retried, not worked around`,
                         { status: err.status, url: redactUrl(url), headers: refusalHeaders(err.headers, this.env) });
                 }
