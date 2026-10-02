@@ -4,7 +4,7 @@
 - **Status:** v1 draft. The label set and the binary metric are decided. Seven edge cases are OPEN for Jennifer (section 5.1).
 - **Date:** 2026-09-30
 - **Owner:** Jennifer McKinney
-- **Research basis:** the AI-relevance state-of-the-art research of 2026-09-30 ("the research note" below; target path `docs/research/2026-10-01-ai-relevance-sota.md`).
+- **Research basis:** the AI-relevance state-of-the-art research of 2026-09-30 ("the research note" below; `docs/research/2026-10-01-ai-relevance-sota.md`).
 - **Scope:** Relevance-accuracy Stage 0. This codebook defines the gold set that every later relevance and admission method is measured against. Nothing in the production pipeline reads it yet.
 
 **Code that implements it:**

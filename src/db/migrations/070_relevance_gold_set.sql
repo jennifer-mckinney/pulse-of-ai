@@ -98,7 +98,9 @@ CREATE TABLE IF NOT EXISTS relevance_gold_labels (
     -- The model is recorded for LLM proposals, and only for them.
     CONSTRAINT relevance_gold_labels_model CHECK ((method = 'llm_proposed') = (model_id IS NOT NULL)),
     -- The "llm:" labeller namespace belongs to llm_proposed labels alone.
-    CONSTRAINT relevance_gold_labels_namespace CHECK ((method = 'llm_proposed') = (labeller LIKE 'llm:%')),
+    -- Case-insensitive, and tied to the model: the labeller of an llm_proposed label IS 'llm:' + model_id.
+    CONSTRAINT relevance_gold_labels_namespace CHECK ((method = 'llm_proposed') = (lower(labeller) LIKE 'llm:%')),
+    CONSTRAINT relevance_gold_labels_llm_labeller CHECK (method <> 'llm_proposed' OR labeller = 'llm:' || model_id),
     CONSTRAINT relevance_gold_labels_erasure CHECK (
         (erased_at IS NULL AND input_hash IS NOT NULL)
         OR (erased_at IS NOT NULL AND input_hash IS NULL AND note IS NULL))
@@ -195,6 +197,9 @@ CREATE OR REPLACE FUNCTION gold_erase_post(p_raw_post_id UUID) RETURNS INTEGER A
 DECLARE n INTEGER;
 BEGIN
     PERFORM set_config('pulse.gold_erasure', 'on', true);
+    -- Lock the items first: a concurrent label insert holds FOR SHARE on its item, so it either
+    -- commits before this runs (its label is erased below) or waits and then sees the item erased.
+    PERFORM 1 FROM relevance_gold_items WHERE raw_post_id = p_raw_post_id FOR UPDATE;
     UPDATE relevance_gold_labels
        SET input_hash = NULL, note = NULL, erased_at = NOW()
      WHERE erased_at IS NULL

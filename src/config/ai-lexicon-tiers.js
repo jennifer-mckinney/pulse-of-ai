@@ -314,6 +314,20 @@ function blank(text, re) {
     return text.replace(globalOf(re), m => ' '.repeat(m.length));
 }
 
+// Sentence-ish segments (split after . ! ? ; before whitespace, and at newlines); they concatenate back to the text.
+const BOUNDARY_RE = /[.!?;]+(?=\s|$)|\n/g;
+function segments(text) {
+    const out = [];
+    let from = 0;
+    for (const m of text.matchAll(BOUNDARY_RE)) {
+        const end = m.index + m[0].length;
+        out.push(text.slice(from, end));
+        from = end;
+    }
+    if (from < text.length) out.push(text.slice(from));
+    return out;
+}
+
 function emptyResult() {
     return {
         ai: false, label: 'NOT_AI', score: 0,
@@ -343,16 +357,23 @@ function classifyTiered(text) {
     const r = emptyResult();
     if (!t.trim()) return r;
 
-    // 1. Negative disambiguators: mask the target term's spans.
-    let masked = t;
-    for (const n of NEGATIVE) {
-        if (n.when && !n.when.test(t)) continue;
-        if (n.unless && n.unless.test(t)) continue;
-        let fired = false;
-        for (const re of n.mask) {
-            if (re.test(masked)) { fired = true; masked = blank(masked, re); }
+    // 1. Negative disambiguators: mask the target term's spans, SENTENCE by
+    // sentence: a cue ("horoscope", "insemination") only disambiguates the
+    // sentence it is in, so "Gemini horoscope news; Google Gemini model
+    // launches" keeps its second, genuine mention.
+    let masked = '';
+    for (const seg of segments(t)) {
+        let m = seg;
+        for (const n of NEGATIVE) {
+            if (n.when && !n.when.test(seg)) continue;
+            if (n.unless && n.unless.test(seg)) continue;
+            let fired = false;
+            for (const re of n.mask) {
+                if (re.test(m)) { fired = true; m = blank(m, re); }
+            }
+            if (fired && !r.suppressed.includes(n.id)) r.suppressed.push(n.id);
         }
-        if (fired) r.suppressed.push(n.id);
+        masked += m;
     }
 
     // 2. Strong (English) on the masked text.

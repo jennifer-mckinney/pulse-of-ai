@@ -107,6 +107,8 @@ describe('migration 070: relevance gold set', () => {
         ['hash of different text', { input_hash: H('c') }, /input_hash does not match/],
         ['llm label under a human-style name', { method: 'llm_proposed', model_id: 'm', labeller: 'ann' }, /check constraint/],
         ['human label in the llm: namespace', { labeller: 'llm:ann' }, /check constraint/],
+        ['human label in the LLM: namespace (case-insensitive)', { labeller: 'LLM:ann' }, /check constraint/],
+        ['llm label whose labeller is not llm:<model_id>', { method: 'llm_proposed', model_id: 'y', labeller: 'llm:x' }, /check constraint/],
         ['note over 200 characters', { note: 'x'.repeat(201) }, /check constraint/],
     ])('labels reject a bad %s', async (_, over, err) => {
         const item = await insertItem();

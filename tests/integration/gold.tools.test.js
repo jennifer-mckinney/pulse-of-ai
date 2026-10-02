@@ -457,3 +457,30 @@ describe('scripts/gold-sample.js two passes', () => {
         expect((await dbGet('SELECT COUNT(*)::int AS n FROM relevance_gold_items')).n).toBe(0);
     });
 });
+
+describe('review fixes round 3', () => {
+    it('a duplicate relevance_results row does not duplicate a post in the sample population or the eval', async () => {
+        const { ids, ctx } = await (async () => { const r = await seedPopulation(); return r; })();
+        const audit = (await dbRun(
+            `INSERT INTO decision_audit_log (raw_post_id, job_id, methodology_version_id, decision_type, model_name, input_hash, output)
+             VALUES ($1, $2, $3, 'relevance', 'keyword-relevance-v1', 'h', '{}'::jsonb) RETURNING id`,
+            [ids.llm, ctx.job, ctx.mv.relevanceMvId],
+        )).id;
+        await dbRun(`INSERT INTO relevance_results (raw_post_id, audit_id, score, matched_keywords, is_relevant) VALUES ($1, $2, 0.1, '{}', true)`, [ids.llm, audit]);
+        const sampled = await goldSample.main(['--total', '4', '--seed', 'dup', '--min-per-stratum', '1'], { out: quiet });
+        expect(sampled.population).toBe(6);
+        expect((await relevanceEval.main(['--json'], { out: quiet })).total.n).toBe(6);
+    });
+
+    it('the human queue is scoped to the codebook version: an older-version label does not block relabelling', async () => {
+        await seedPopulation();
+        await goldSample.main(['--total', '6', '--seed', 'cv', '--min-per-stratum', '1', '--sample-id', 'gold-cv', '--write'], { out: quiet });
+        const [item] = await dbAll(`SELECT id, input_hash FROM relevance_gold_items WHERE sample_id = 'gold-cv' ORDER BY draw_rank LIMIT 1`);
+        await dbRun(`INSERT INTO relevance_gold_labels (item_id, label, labeller, method, codebook_version, input_hash)
+                     VALUES ($1, 'NOT_AI', 'ann', 'human', '0.9.0', $2)`, [item.id, item.input_hash]);
+        const current = await store.pendingItems({ sampleId: 'gold-cv', labeller: 'ann', method: 'human', codebookVersion: '1.0.0' });
+        expect(current).toHaveLength(6);
+        const legacy = await store.pendingItems({ sampleId: 'gold-cv', labeller: 'ann', method: 'human', codebookVersion: '0.9.0' });
+        expect(legacy).toHaveLength(5);
+    });
+});

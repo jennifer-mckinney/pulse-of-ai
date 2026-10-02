@@ -202,7 +202,7 @@ describe('negative tier: disambiguators suppress one term, never other evidence'
         ['ai_file_format', 'Download the logo as an AI file or EPS for Illustrator'],
         ['ai_file_format', 'vector template in EPS, AI and SVG formats'],
         ['ai_file_format', 'open a .ai file without Adobe Illustrator'],
-        ['artificial_insemination', 'Artificial insemination (AI) improves dairy herd fertility; AI technicians trained'],
+        ['artificial_insemination', 'Artificial insemination (AI) improves dairy herd fertility, and AI technicians are trained'],
     ])('%s removes the "AI" acronym hit: %s', (negId, text) => {
         const r = classifyTiered(text);
         expect(r.suppressed).toContain(negId);
@@ -449,5 +449,20 @@ describe('review fixes round 2: German ASCII fallbacks and state codes', () => {
 
     it('a sentence-initial state code is not AI', () => {
         expect(classifyTiered('Cedar Rapids, IA. IA et al said it is cold').ai).toBe(false);
+    });
+});
+
+describe('review fixes round 3: a cue disambiguates only its own sentence', () => {
+    it.each([
+        'Artificial insemination is used in cattle; AI models improve diagnostics',
+        'Gemini horoscope news; Google Gemini model launches',
+        'Air India AI171 crashed near the airport. Separately, OpenAI released a model.',
+    ])('mixed-sense text keeps its genuine AI mention: %s', (t) => {
+        expect(classifyTiered(t).ai).toBe(true);
+    });
+
+    it('the same cue in the same sentence still masks', () => {
+        expect(classifyTiered('Gemini horoscope today').ai).toBe(false);
+        expect(classifyTiered('Air India AI171 crash at Ahmedabad').ai).toBe(false);
     });
 });

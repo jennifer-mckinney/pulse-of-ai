@@ -204,7 +204,7 @@ async function runSession({ store, io, labeller, sampleId, method = 'human', lim
         if (!one) throw new Error(`item ${itemId} is not a live item of sample ${sampleId}`);
         items = [one];
     } else {
-        items = await store.pendingItems({ sampleId, labeller: who, method });
+        items = await store.pendingItems({ sampleId, labeller: who, method, codebookVersion });
     }
     const summary = { labelled: 0, skipped: 0, unavailable: 0, quit: false };
     io.print(`${items.length} item(s) to label in sample ${sanitize(sampleId)} as ${sanitize(who)} (${method}, codebook ${codebookVersion}). "?" for help.`);

@@ -59,7 +59,8 @@ async function* streamCandidates({ since = null, until = null, batchSize = DEFAU
                     rr.is_relevant, dal.methodology_version_id AS relevance_mv_id
              FROM raw_posts rp
              JOIN data_sources ds ON ds.id = rp.source_id
-             LEFT JOIN relevance_results rr ON rr.raw_post_id = rp.id
+             LEFT JOIN LATERAL (SELECT r.is_relevant, r.audit_id FROM relevance_results r WHERE r.raw_post_id = rp.id
+                                ORDER BY r.created_at DESC NULLS LAST, r.id DESC LIMIT 1) rr ON TRUE
              LEFT JOIN decision_audit_log dal ON dal.id = rr.audit_id
              WHERE ds.source_type <> $1
                AND rp.text_removed_at IS NULL
@@ -145,7 +146,9 @@ async function labelRows({ sampleId = null, codebookVersion = null, methods = nu
 
 /**
  * Items still to label, in draw-rank order.
- *   human:       items this labeller has not labelled yet (any method).
+ *   human:       items this labeller has not labelled yet under this codebook
+ *                version (any method); a label from an older version does not
+ *                block relabelling under the new one.
  *   adjudicated: items where the latest human labels of two or more
  *                labellers disagree (label or flags) and no adjudicated
  *                label is newer than the newest of those human labels (a
@@ -157,9 +160,10 @@ async function pendingItems({ sampleId, labeller, method = 'human', codebookVers
             `SELECT ${ITEM_COLS} FROM relevance_gold_items i
              WHERE i.sample_id = $1
                AND i.erased_at IS NULL
-               AND NOT EXISTS (SELECT 1 FROM relevance_gold_labels l WHERE l.item_id = i.id AND l.labeller = $2)
+               AND NOT EXISTS (SELECT 1 FROM relevance_gold_labels l WHERE l.item_id = i.id AND l.labeller = $2
+                               AND ($3::text IS NULL OR l.codebook_version = $3))
              ORDER BY i.draw_rank`,
-            [sampleId, labeller],
+            [sampleId, labeller, codebookVersion],
         );
     }
     const human = await labelRows({ sampleId, codebookVersion, methods: ['human'] });
@@ -265,7 +269,8 @@ async function* streamEvalRows(client, { since = null, category = null, limit = 
             `SELECT rp.id, rp.content, ds.category, rr.is_relevant
              FROM raw_posts rp
              JOIN data_sources ds ON ds.id = rp.source_id
-             LEFT JOIN relevance_results rr ON rr.raw_post_id = rp.id
+             LEFT JOIN LATERAL (SELECT r.is_relevant FROM relevance_results r WHERE r.raw_post_id = rp.id
+                                ORDER BY r.created_at DESC NULLS LAST, r.id DESC LIMIT 1) rr ON TRUE
              WHERE ds.source_type <> $1
                AND rp.text_removed_at IS NULL
                AND rp.content <> ''
