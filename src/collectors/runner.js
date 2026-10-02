@@ -63,6 +63,7 @@ const cycle = require('./cycle');
 const { scrub } = require('./redact');
 const { classifyError } = require('./errors');
 const { refusalGate, refusalOf, resetEnv, probationOver, BLOCKED_BY_SOURCE } = require('./refusal');
+const counters = require('./admission-counters');
 
 /** Default queue hooks: lazily bind BullMQ (opening Redis only when needed). */
 function defaultQueues() {
@@ -255,6 +256,9 @@ async function runCollection(o = {}) {
                 fail(err.message, err);
             }
             let storeFailed = false;
+            // Relevance-accuracy R1: the routes' dropped counters, summed
+            // onto this run's source_runs row (counts only).
+            const droppedByRoute = [];
             // Security review F7: a takedown issued while this source's
             // earlier routes ran applies before its next route — both
             // database switches are read again before every route after the
@@ -305,6 +309,9 @@ async function runCollection(o = {}) {
                 for (const w of result.warnings || []) fail(`${c.route.id}: ${w.text}`, w.err);
                 row.fetched += result.fetched;
                 row.kept += result.payloads.length;
+                // Only a route that fetched items evaluated any: a route that
+                // returned nothing contributes no dropped counts (NULL, not 0).
+                if (result.fetched > 0) droppedByRoute.push(result.dropped);
                 for (const payload of result.payloads) {
                     let stored;
                     try {
@@ -353,6 +360,21 @@ async function runCollection(o = {}) {
                             fail(`${c.route.id}: scoring failed and the retry could not be queued (${qerr.message})`,
                                 Object.assign(new Error('queue'), { kind: 'queue' }));
                         }
+                    }
+                }
+                // R1: this route's admission rule counts for today (UTC), under
+                // the admission_filter version that ran. Counts only. Written
+                // only when every item stored: a route whose store failed is
+                // fetched and evaluated again by the next run (G10-5), which
+                // would count the same items twice. A failed write is a run
+                // warning (G10-6): it never costs a post.
+                if (!routeStoreFailed) {
+                    try {
+                        await counters.recordRuleHits({
+                            sourceId, source: src, route: c.route.id, admissionMvId: mv.admissionMvId, tally: result.ruleHits,
+                        });
+                    } catch (err) {
+                        fail(`${c.route.id}: admission counters not recorded: ${err.message}`, err);
                     }
                 }
                 if (routeStoreFailed) {
@@ -417,6 +439,8 @@ async function runCollection(o = {}) {
                 postsNew: row.new, requests: http.requests - before, error: row.error,
                 errorKind: row.errorKind, httpStatus: row.httpStatus, startedAt,
                 responseHeaders: refused ? refusalHeaders : null,
+                // NULL when no item was evaluated (no route fetched anything): there is no 0 to record.
+                dropped: droppedByRoute.length ? counters.mergeDropped(droppedByRoute) : null,
             });
             log(`[collect] ${slug}: ${row.outcome} fetched ${row.fetched}, kept ${row.kept}, new ${row.new}${row.error ? ` — ${row.error}` : ''}`);
             await touch();

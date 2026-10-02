@@ -335,7 +335,7 @@ describe('migration 017 ↔ methodology registry (ingest@1.3.0, decision D2)', (
         const { NARRATION_VERSION, VERIFY_PROVENANCE_COMMAND, PROVENANCE_VERIFIABLE } = require('../../../src/config/audit-narration');
         const reg = registry('audit_narration', '1.3.0');
         expect(latest('audit_narration').version).toBe(NARRATION_VERSION);
-        expect(NARRATION_VERSION).toBe('1.4.0');
+        expect(NARRATION_VERSION).toBe('1.5.0');
         expect(reg.config.verify_provenance_command).toBe(VERIFY_PROVENANCE_COMMAND);
         expect(reg.justification).toContain(PROVENANCE_VERIFIABLE);
     });
@@ -806,9 +806,10 @@ describe('migration 066 ↔ methodology registry (ingest@1.8.0 + audit_narration
         expect(Object.keys(reg.config).filter(k => !(k in prev.config)).sort()).toEqual(['changelog', 'content_hash']);
     });
 
-    test('audit_narration@1.4.0 is the renderer\'s version and registers its hash wording verbatim', () => {
-        expect(CURRENT_VERSIONS.audit_narration).toBe('1.4.0');
-        expect(narration.NARRATION_VERSION).toBe('1.4.0');
+    // audit_narration@1.4.0 was the renderer's version until migration 067
+    // registered 1.5.0 (relevance receipt wording); 1.5.0 keeps its hash note.
+    test('audit_narration@1.4.0 registers its hash wording verbatim (the renderer\'s note since)', () => {
+        expect(CURRENT_VERSIONS.audit_narration).toBe(narration.NARRATION_VERSION);
         const reg = registry('audit_narration', '1.4.0');
         const prev = registry('audit_narration', '1.3.0');
         expect(reg.model_name).toBe(prev.model_name);
@@ -816,5 +817,71 @@ describe('migration 066 ↔ methodology registry (ingest@1.8.0 + audit_narration
         expect(reg.config.ingest_hash_note).toBe(narration.INGEST_HASH_NOTE);
         expect(narration.INGEST_HASH_NOTE).toMatch(/not a join key/);
         expect(narration.INGEST_HASH_NOTE).not.toMatch(/immutable join key/);
+    });
+});
+
+// Relevance-accuracy Stage 0, P0 (Jennifer McKinney 2026-09-30, D1 "Count
+// only AI-relevant (Recommended)"): until the aggregation switch ships with
+// the Stage-1 lexicon, the relevance receipt must say what is true today —
+// every stored post counts toward the totals. audit_narration@1.5.0
+// (migration 067) registers that wording; every released audit_narration row
+// (1.1.0 to 1.4.0) gets an erratum and stays unedited.
+describe('migration 067 ↔ methodology registry (audit_narration@1.5.0, relevance receipt wording)', () => {
+    const { generate } = require('../../../scripts/generate-methodology-migration');
+    const { CURRENT_VERSIONS, METHODOLOGY_ERRATA } = require('../../../src/config/methodology-registry');
+    const narration = require('../../../src/config/audit-narration');
+    const SQL_067 = fs.readFileSync(
+        path.join(__dirname, '../../../src/db/migrations/067_relevance_receipt_wording.sql'), 'utf8');
+    const rows = [...SQL_067.matchAll(ROW_011_RE)].map(m => ({
+        component: m[1], version: m[2], model_name: m[3],
+        config: JSON.parse(m[4]), justification: m[5],
+    }));
+    const OLD_NARRATION = ['1.1.0', '1.2.0', '1.3.0', '1.4.0'];
+
+    test('067 ends with exactly the generated audit_narration@1.5.0 row, is additive and edits nothing', () => {
+        expect(SQL_067.endsWith(generate(['audit_narration@1.5.0']))).toBe(true);
+        expect(rows.map(r => `${r.component}@${r.version}`)).toEqual(['audit_narration@1.5.0']);
+        expect((SQL_067.match(/INSERT INTO methodology_versions/g) || []).length).toBe(1);
+        const body = SQL_067.split('\n').filter(l => !l.startsWith('--')).join('\n');
+        expect(body).not.toMatch(/DO UPDATE|UPDATE [a-z_]+ SET|DELETE FROM|DROP |TRUNCATE|ALTER TABLE|CREATE /);
+    });
+
+    test('audit_narration@1.5.0 agrees field for field', () => {
+        const reg = registry('audit_narration', '1.5.0');
+        expect(rows[0]).toEqual({
+            component: reg.component, version: reg.version, model_name: reg.model_name,
+            config: reg.config, justification: reg.justification,
+        });
+    });
+
+    test('audit_narration@1.5.0 is current, is 1.4.0 plus the relevance wording, and registers it verbatim', () => {
+        expect(CURRENT_VERSIONS.audit_narration).toBe('1.5.0');
+        expect(narration.NARRATION_VERSION).toBe('1.5.0');
+        expect(latest('audit_narration').version).toBe('1.5.0');
+        const reg = registry('audit_narration', '1.5.0');
+        const prev = registry('audit_narration', '1.4.0');
+        expect(reg.model_name).toBe(prev.model_name);
+        for (const k of Object.keys(prev.config)) if (k !== 'changelog') expect([k, reg.config[k]]).toEqual([k, prev.config[k]]);
+        expect(Object.keys(reg.config).filter(k => !(k in prev.config))).toEqual(['relevance_public']);
+        expect(reg.config.relevance_public).toEqual(narration.RELEVANCE_PUBLIC);
+        expect(reg.config.changelog).toEqual([expect.stringMatching(/^audit_narration@1\.5\.0 \(2026-09-30\): /)]);
+        expect(reg.justification).toMatch(/does not count toward AI-discourse totals/);
+        expect(reg.justification).toMatch(/every stored post counts toward the totals/);
+    });
+
+    test('067 carries one erratum per released audit_narration row, field for field', () => {
+        const errata = METHODOLOGY_ERRATA.filter(e => e.corrected_by === 'audit_narration@1.5.0');
+        expect(errata.map(e => `${e.component}@${e.version}`)).toEqual(OLD_NARRATION.map(v => `audit_narration@${v}`));
+        expect((SQL_067.match(/INSERT INTO methodology_errata/g) || []).length).toBe(OLD_NARRATION.length);
+        for (const e of errata) {
+            expect(SQL_067).toContain(`'${e.erratum_key}', '${e.corrected_by}', $err$${e.erratum}$err$`);
+            expect(SQL_067).toContain(`mv.component = '${e.component}' AND mv.version = '${e.version}'`);
+            expect(e.erratum_key).toBe(`audit_narration-${e.version}-relevance-totals-wording`);
+            expect(e.erratum).toMatch(/does not count toward AI-discourse totals/);
+            expect(e.erratum).toMatch(/counted toward every total/);
+            expect(e.erratum).toContain(`The audit_narration@${e.version} row is kept unedited`);
+            expect(e.erratum).not.toMatch(/\$err\$/);
+        }
+        expect(new Set(METHODOLOGY_ERRATA.map(e => e.erratum_key)).size).toBe(METHODOLOGY_ERRATA.length);
     });
 });
