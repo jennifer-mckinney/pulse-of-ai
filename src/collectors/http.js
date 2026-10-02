@@ -398,7 +398,7 @@ class HttpClient {
         // hosts, so its hold alone would never be saved.
         const aliasHold = (err, at) => {
             const h = new URL(at).hostname;
-            if (err instanceof RateLimitedError && h !== firstHost && this.holds[h]) this.holdAlso(firstHost, this.holds[h]);
+            if ((err instanceof RateLimitedError || (err && err.held === true)) && h !== firstHost && this.holds[h]) this.holdAlso(firstHost, this.holds[h]);
             return err;
         };
         for (let hop = 0; hop < 5; hop++) {
