@@ -85,7 +85,8 @@ CREATE INDEX IF NOT EXISTS idx_relevance_gold_items_post ON relevance_gold_items
 
 CREATE TABLE IF NOT EXISTS relevance_gold_labels (
     id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    seq               BIGSERIAL NOT NULL,
+    -- GENERATED ALWAYS: an INSERT cannot supply its own seq (latest-label and adjudication logic trusts it).
+    seq               BIGINT GENERATED ALWAYS AS IDENTITY,
     item_id           UUID NOT NULL REFERENCES relevance_gold_items(id),
     label             TEXT NOT NULL CHECK (label IN ('AI_CENTRAL', 'AI_INCIDENTAL', 'NOT_AI')),
     flags             TEXT[] NOT NULL DEFAULT '{}' CHECK (flags <@ ARRAY['SPAM', 'BOT_GENERATED', 'LANG']::TEXT[]),

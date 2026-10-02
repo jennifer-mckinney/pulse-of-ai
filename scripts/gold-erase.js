@@ -8,7 +8,10 @@
 // and stamps erased_at. Labels, flags, strata and weights stay (statistics
 // about the sample, no text). An erased item can no longer be labelled.
 //
-//   --post POST_ID   erase the gold rows of one post (an erasure request)
+//   --post POST_ID   erase the gold rows of one post whose text is already gone (an
+//                    erasure request goes through the post's text removal first: erasing
+//                    only the gold rows of a post that still has text would let a later
+//                    sample draw it again; retention does both in one transaction)
 //   --removed        erase every item whose post is gone, has had its text
 //                    removed by retention, or is empty (run it after the
 //                    retention job, before reporting any gold statistic)
@@ -48,6 +51,10 @@ async function main(argv, { env = process.env, out = l => process.stdout.write(l
     const opts = parseArgs(argv);
     require('../src/gold/labelling').assertLocalOnly(env);
     const store = require('../src/gold/store');
+    if (opts.post && !(await store.postTextGone(opts.post.toLowerCase()))) {
+        throw new Error('that post still has text: remove its text first (retention), which erases its gold rows too; '
+            + 'erasing only the gold rows would let a later sample draw the post again');
+    }
     const erased = opts.post ? await store.erasePost(opts.post.toLowerCase()) : await store.eraseRemoved();
     out(`gold erase: ${erased} item(s) erased${opts.post ? '' : ' (posts whose text is gone)'}`);
     return { erased };

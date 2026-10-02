@@ -103,6 +103,19 @@ async function insertItems(items, { sampleId, seed }) {
         await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`relevance_gold_sample:${sampleId}`]);
         const exists = await client.query('SELECT 1 FROM relevance_gold_items WHERE sample_id = $1 LIMIT 1', [sampleId]);
         if (exists.rows.length) throw new Error(`sample "${sampleId}" already exists; choose a new --sample-id`);
+        // Lock and re-check every selected post: retention's text removal needs the row lock, so
+        // it either committed before this (the post is refused here) or waits until this commits
+        // (and then erases the new item). Never store the id and fingerprint of removed text.
+        const ids = items.map(it => it.rawPostId);
+        const locked = await client.query(
+            'SELECT id, content, text_removed_at FROM raw_posts WHERE id = ANY($1::uuid[]) ORDER BY id FOR SHARE', [ids]);
+        const byId = new Map(locked.rows.map(r => [r.id, r]));
+        for (const it of items) {
+            const row = byId.get(it.rawPostId);
+            if (!row || row.text_removed_at || !row.content || inputHash(row.content) !== it.inputHash) {
+                throw new Error('a sampled post lost or changed its text during sampling; nothing written, run again');
+            }
+        }
         for (const it of items) {
             await client.query(
                 `INSERT INTO relevance_gold_items
@@ -290,6 +303,12 @@ async function* streamEvalRows(client, { since = null, category = null, limit = 
     }
 }
 
+/** True when the post's text is gone (post deleted, text removed by retention, or empty). */
+async function postTextGone(rawPostId) {
+    const row = await dbGet('SELECT content, text_removed_at FROM raw_posts WHERE id = $1', [rawPostId]);
+    return !row || Boolean(row.text_removed_at) || !row.content;
+}
+
 /** Erase one post's gold rows (migration 070's gold_erase_post); returns the number of items erased. */
 async function erasePost(rawPostId) {
     return (await dbGet('SELECT gold_erase_post($1::uuid) AS n', [rawPostId])).n;
@@ -315,5 +334,5 @@ async function eraseRemoved() {
 module.exports = {
     readOnly, streamEvalRows, hashKey, inputHash,
     streamCandidates, sampleExists, insertItems, labelRows, pendingItems, getItem, itemText, labelsFor,
-    recordLabel, recordLabels, erasePost, eraseRemoved,
+    recordLabel, recordLabels, erasePost, eraseRemoved, postTextGone,
 };
