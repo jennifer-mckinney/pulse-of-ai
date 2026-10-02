@@ -4,8 +4,9 @@
 
 'use strict';
 
-const request = require('supertest');
+const { useServer } = require('../helpers/server');
 const app = require('../../src/server');
+const request = useServer(app);   // one listener per file (tests/helpers/server.js)
 const { dbRun, dbGet } = require('../../src/db/connection');
 const { storeRawPost } = require('../../src/pipeline/ingest');
 const { runCollection } = require('../../src/collectors/runner');
@@ -33,7 +34,7 @@ async function postAt(sourceId, ext, collectedAt, ingestMvId = null) {
     await dbRun('UPDATE raw_posts SET collected_at = $2 WHERE id = $1', [postId, collectedAt]);
     return postId;
 }
-const receipt = async id => (await request(app).get(`/api/audit/${id}`)).body.ingest;
+const receipt = async id => (await request().get(`/api/audit/${id}`)).body.ingest;
 
 describe('ingest version per post (G10-11)', () => {
     it('recorded: a post stored under 1.1.0 shows 1.1.0 (and its wording), not the latest', async () => {

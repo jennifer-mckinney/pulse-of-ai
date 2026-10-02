@@ -17,7 +17,15 @@
 //                                             // awaiting_approval | awaiting_licence |
 //                                             // blocked | disabled
 //           status_reason, missing_env,       // env var NAMES only, never values
-//           open_routes, licence_refs_on_file, kill_switch_env,
+//           open_routes,                      // routes that run now ([] unless
+//                                             // collecting, or blocked_by_source
+//                                             // awaiting its probe; never a
+//                                             // disabled route)
+//           disabled_routes,                  // route ids off by a route kill
+//                                             // switch (migration 073)
+//           routes: [ { id, status,           // open | disabled | closed
+//                       reason } ],
+//           licence_refs_on_file, kill_switch_env,
 //           online,                           // collecting + success in the last hour
 //           last_attempt_at, last_success_at, last_item_count,
 //           last_error_kind, last_http_status, last_error_at,
@@ -27,6 +35,15 @@
 //           terms_url, terms_note, attribution, license, blocked, ruling,
 //           retention,                        // { max_age_hours, recheck_hours,
 //                                             //   notice } or null (Reddit)
+//           admission,                        // relevance-accuracy R1 (migration
+//                                             // 068): the last 7 UTC days, counts
+//                                             // only — { window_days, evaluated,
+//                                             //   admitted, admitted_without_pattern,
+//                                             //   rejected: { total, out_of_scope,
+//                                             //   old, invalid, duplicate } } or null
+//                                             // (no counts in the window). Counted
+//                                             // per evaluation: an item a feed
+//                                             // serves again is counted again.
 //           selection } ]                     // Reddit only: the subreddit
 //                                             // selection rule, the current
 //                                             // list (basis 'provisional' |
@@ -72,7 +89,7 @@ const router = Router();
 
 router.get('/sources', async (req, res) => {
     try {
-        const rows = await sourceRows({ includeInactive: req.query.include_inactive === 'true' });
+        const rows = await sourceRows({ includeInactive: req.query.include_inactive === 'true', admission: true });
         return res.json(rows);
     /* istanbul ignore start -- Database failure; requires error injection testing infrastructure */
     } catch (err) {

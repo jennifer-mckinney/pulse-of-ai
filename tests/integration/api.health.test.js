@@ -4,13 +4,14 @@
 
 'use strict';
 
-const request = require('supertest');
+const { useServer } = require('../helpers/server');
 const app     = require('../../src/server');
+const request = useServer(app);   // one listener per file (tests/helpers/server.js)
 const { insertJob, insertAlert } = require('./helpers');
 
 describe('GET /api/health', () => {
     it('returns 200 with correct shape', async () => {
-        const res = await request(app).get('/api/health');
+        const res = await request().get('/api/health');
 
         expect(res.status).toBe(200);
         expect(res.body).toMatchObject({
@@ -23,13 +24,13 @@ describe('GET /api/health', () => {
     });
 
     it('reports db_connected as true when database is reachable', async () => {
-        const res = await request(app).get('/api/health');
+        const res = await request().get('/api/health');
         expect(res.body.db_connected).toBe(true);
         expect(res.body.status).toBe('healthy');
     });
 
     it('returns last_job as null when no jobs exist', async () => {
-        const res = await request(app).get('/api/health');
+        const res = await request().get('/api/health');
         expect(res.body.last_job).toBeNull();
     });
 
@@ -37,7 +38,7 @@ describe('GET /api/health', () => {
         await insertJob('completed', { postsProcessed: 12 });
         const jobId = await insertJob('completed', { postsProcessed: 42 });  // most recent
 
-        const res = await request(app).get('/api/health');
+        const res = await request().get('/api/health');
 
         expect(res.body.last_job).toMatchObject({
             id:              jobId,
@@ -47,14 +48,14 @@ describe('GET /api/health', () => {
     });
 
     it('returns empty active_alerts when no unresolved alerts exist', async () => {
-        const res = await request(app).get('/api/health');
+        const res = await request().get('/api/health');
         expect(res.body.active_alerts).toEqual([]);
     });
 
     it('returns unresolved alerts in active_alerts', async () => {
         await insertAlert({ alertType: 'location_concentration', severity: 'warning' });
 
-        const res = await request(app).get('/api/health');
+        const res = await request().get('/api/health');
 
         expect(res.body.active_alerts).toHaveLength(1);
         expect(res.body.active_alerts[0]).toMatchObject({
@@ -73,7 +74,7 @@ describe('GET /api/health', () => {
             [alertId],
         );
 
-        const res = await request(app).get('/api/health');
+        const res = await request().get('/api/health');
         expect(res.body.active_alerts).toHaveLength(0);
     });
 
@@ -81,7 +82,7 @@ describe('GET /api/health', () => {
         await insertAlert({ alertType: 'location_concentration', severity: 'warning' });
         await insertAlert({ alertType: 'bias_violation', severity: 'critical' });
 
-        const res = await request(app).get('/api/health');
+        const res = await request().get('/api/health');
         
         expect(res.body.active_alerts.length).toBeGreaterThanOrEqual(2);
 
@@ -97,11 +98,11 @@ describe('GET /api/health', () => {
         const { healthState } = require('../../public/js/utils');
 
         await insertAlert({ alertType: 'location_concentration', severity: 'warning' });
-        let res = await request(app).get('/api/health');
+        let res = await request().get('/api/health');
         expect(healthState(res.body).state).toBe('yellow');
 
         await insertAlert({ alertType: 'bias_violation', severity: 'critical' });
-        res = await request(app).get('/api/health');
+        res = await request().get('/api/health');
         expect(res.body.active_alerts.map(a => a.severity).sort())
             .toEqual(['critical', 'warning']);
         expect(healthState(res.body)).toMatchObject({ state: 'red', critical: 1, alerts: 2 });
@@ -109,7 +110,7 @@ describe('GET /api/health', () => {
 
     it('maps a clean healthy payload to green (FR-24)', async () => {
         const { healthState } = require('../../public/js/utils');
-        const res = await request(app).get('/api/health');
+        const res = await request().get('/api/health');
         expect(healthState(res.body).state).toBe('green');
     });
 });
@@ -127,7 +128,7 @@ describe('GET /api/health — redis and worker (P9-7)', () => {
         const at = new Date().toISOString();
         const get = jest.fn(async () => at);
         health._setRedisClientForTests({ ping: async () => 'PONG', get });
-        const res = await request(app).get('/api/health');
+        const res = await request().get('/api/health');
         expect(res.body.redis).toEqual({ reachable: true });
         expect(res.body.worker).toMatchObject({ alive: true, last_heartbeat: at });
         expect(get).toHaveBeenCalledWith(HEARTBEAT_KEY);
@@ -135,19 +136,19 @@ describe('GET /api/health — redis and worker (P9-7)', () => {
 
     it('reports a dead worker when no heartbeat is stored', async () => {
         health._setRedisClientForTests({ ping: async () => 'PONG', get: async () => null });
-        const res = await request(app).get('/api/health');
+        const res = await request().get('/api/health');
         expect(res.body.worker).toMatchObject({ alive: false, last_heartbeat: null });
     });
 
     it('P10-8: serves the queue depth of every queue next to the heartbeat; null (never a fake zero) when unreadable', async () => {
         health._setRedisClientForTests({ ping: async () => 'PONG', get: async () => new Date().toISOString() });
         health._setQueueCountsForTests(async () => ({ ingest: { waiting: 7, active: 2, delayed: 0, failed: 1 }, maintenance: { waiting: 1 } }));
-        let res = await request(app).get('/api/health');
+        let res = await request().get('/api/health');
         expect(Object.keys(res.body.worker.queues)).toEqual(health.QUEUE_NAMES);
         expect(res.body.worker.queues.ingest).toEqual({ waiting: 7, active: 2, delayed: 0, failed: 1 });
         expect(res.body.worker.queues.maintenance).toEqual({ waiting: 1, active: 0, delayed: 0, failed: 0 });
         health._setQueueCountsForTests(async () => { throw new Error('NOAUTH'); });
-        res = await request(app).get('/api/health');
+        res = await request().get('/api/health');
         expect(res.body.worker.queues).toBeNull();
         expect(res.body.worker.alive).toBe(true);
     });
@@ -157,7 +158,7 @@ describe('GET /api/health — redis and worker (P9-7)', () => {
             ping: async () => { throw new Error('ECONNREFUSED'); },
             get: async () => { throw new Error('ECONNREFUSED'); },
         });
-        const res = await request(app).get('/api/health');
+        const res = await request().get('/api/health');
         expect(res.status).toBe(200);
         expect(res.body.db_connected).toBe(true);
         expect(res.body.redis).toEqual({ reachable: false });
@@ -167,7 +168,7 @@ describe('GET /api/health — redis and worker (P9-7)', () => {
     it('a hanging Redis times out instead of hanging the endpoint', async () => {
         health._setRedisClientForTests({ ping: () => new Promise(() => {}), get: () => new Promise(() => {}) });
         const t0 = Date.now();
-        const res = await request(app).get('/api/health');
+        const res = await request().get('/api/health');
         expect(Date.now() - t0).toBeLessThan(5000);
         expect(res.body.redis).toEqual({ reachable: false });
     });
@@ -178,7 +179,7 @@ describe('GET /api/health — correlation DPIA gate (spec §20)', () => {
         const prior = { ...process.env };
         delete process.env.CORRELATION_DPIA_REF;
         try {
-            const res = await request(app).get('/api/health');
+            const res = await request().get('/api/health');
             expect(res.body.correlation).toEqual({
                 enabled: false, status: 'awaiting_dpia', reason: expect.stringMatching(/DPIA/), checked_by: 'web', checked_at: null,
             });
@@ -219,7 +220,7 @@ describe('GET /api/health — correlation without the salt on web (security L1)'
         const published = JSON.stringify({ enabled: true, status: 'enabled', reason: 'enabled under DPIA DPIA-2026-07', checked_at: '2026-09-29T10:00:00.000Z' });
         const get = jest.fn(async k => (k === CORRELATION_KEY ? published : new Date().toISOString()));
         health._setRedisClientForTests({ ping: async () => 'PONG', get });
-        const res = await request(app).get('/api/health');
+        const res = await request().get('/api/health');
         expect(res.body.correlation).toEqual({
             enabled: true, status: 'enabled', reason: 'enabled under DPIA DPIA-2026-07', checked_by: 'worker', checked_at: '2026-09-29T10:00:00.000Z',
         });
@@ -229,7 +230,7 @@ describe('GET /api/health — correlation without the salt on web (security L1)'
     it('without a published status: a salt set for the worker only is "unverified" (never enabled)', async () => {
         open({ CORRELATION_SALT_SET: 'set' });
         health._setRedisClientForTests({ ping: async () => 'PONG', get: async () => null });
-        const res = await request(app).get('/api/health');
+        const res = await request().get('/api/health');
         expect(res.body.correlation).toMatchObject({ enabled: false, status: 'unverified', checked_by: 'web' });
         expect(res.body.correlation.reason).toMatch(/worker only/);
     });
@@ -237,14 +238,14 @@ describe('GET /api/health — correlation without the salt on web (security L1)'
     it('without a published status and no salt flag: misconfigured', async () => {
         open({});
         health._setRedisClientForTests({ ping: async () => { throw new Error('down'); }, get: async () => null });
-        const res = await request(app).get('/api/health');
+        const res = await request().get('/api/health');
         expect(res.body.correlation).toMatchObject({ enabled: false, status: 'misconfigured', checked_by: 'web' });
     });
 
     it('a malformed published value is ignored (web-side report)', async () => {
         open({ CORRELATION_SALT_SET: 'set' });
         health._setRedisClientForTests({ ping: async () => 'PONG', get: async k => (k === CORRELATION_KEY ? '{"status":1}' : null) });
-        const res = await request(app).get('/api/health');
+        const res = await request().get('/api/health');
         expect(res.body.correlation).toMatchObject({ status: 'unverified', checked_by: 'web' });
     });
 });

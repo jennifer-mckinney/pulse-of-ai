@@ -1,0 +1,43 @@
+%% Title: Sequence · the "why?" audit receipt
+%% Summary: What happens when a reader opens a post's receipt: the drawer request, the queries behind GET /api/audit/:post_id, the provenance and lineage it adds, and the four audience views the drawer switches between.
+%% Sources: public/js/ui.js (openAudit, mapAuditResponse, AUDIENCES), src/routes/audit.js, src/config/{audit-narration,bias-lineage,bias-vocabulary,source-registry,data-mode}.js, src/collectors/retention.js (retentionStatus), src/db/migrations/042_admission_filter.sql. Updated 2026-10-01. Spec: TECHNICAL_SPEC.md sections 7 (GET /api/audit/:post_id), 8 (provenance), 10 (explainability chain, audiences).
+sequenceDiagram
+  autonumber
+  actor Reader
+  participant UI as ui.js PulseUI
+  participant Main as main.js PulseMain
+  participant API as web · GET /api/audit/:post_id
+  participant DB as PostgreSQL
+
+  Reader->>UI: click "why?" on a post (city detail or featured post)
+  UI->>Main: freezeInsightTimer() (first receipt)
+  UI->>UI: open the audit drawer, loading state
+  alt bundled fallback data (the API failed or holds no posts), or the post id is not a UUID
+    UI->>UI: build the receipt locally (fictional, nothing stored), never call the API
+  else a stored post, live or a demo-feed post from the database (isDemo false)
+    UI->>API: GET /api/audit/{post_id}
+    API->>API: validate UUID, else 400
+    API->>DB: raw_posts JOIN data_sources (content, location, external_id,<br/>provenance_fingerprint, ingest_mv_id, admission_mv_id,<br/>text_removed_at / _reason, permalink)
+    alt no such post
+      API-->>UI: 404 Post not found
+    end
+    API->>DB: decision_audit_log JOIN methodology_versions for the post
+    API->>API: per decision: status, score, 4 audiences rendered from stored<br/>output + config (audit_narration@1.5.0), input_hash as<br/>HMAC-SHA256(AUDIT_HASH_KEY, stored hash), omitted without a key
+    API->>DB: bias_assessments of the job that scored the post
+    API->>DB: bias methodology versions
+    API->>API: bias lineage: recorded (methodology_version_id),<br/>inferred (effective_from), or current, layers from that version's config
+    API->>DB: ingest methodology: raw_posts.ingest_mv_id (recorded),<br/>else the version effective at collected_at (inferred)
+    API->>API: provenance: source, published_at, permalink unless an identity link,<br/>external_id, fingerprint, how to verify (npm run verify-provenance),<br/>retention: text_removed (any source) or, on a platform-terms source<br/>(Reddit, YouTube, TikTok), live with removes_at
+    API->>DB: admission filter version of raw_posts.admission_mv_id
+    API->>API: provenance.admission: admission_filter@version (recorded),<br/>else not recorded (before migration 042) or not applicable (demo)
+    API-->>UI: 200 provenance, post (attribution, data_origin), narration,<br/>ingest (with lineage), decisions, bias
+    UI->>UI: mapAuditResponse() → steps
+  end
+  UI-->>Reader: receipt: ingestion step, sentiment, relevance, discourse, bias layers
+
+  Reader->>UI: pick an audience
+  Note over UI: Public → public · Journalist → plain ·<br/>Regulator → config · Researcher → researcher<br/>(a stored post's researcher view names npm run replay -- --post id,<br/>the bundled fallback receipt says it has no hash and nothing to replay)
+  UI-->>Reader: the same steps in that audience's words
+  opt API or network failure on a stored post
+    UI-->>Reader: an error state, a live receipt is never fabricated
+  end

@@ -5,6 +5,8 @@
 //     gate  — sourceStatus(): only 'collecting' sources run (kill switches,
 //             missing credentials, blocked: never fetched), then the
 //             database kill switch (data_sources.collection_disabled_at, F10-10)
+//             and the per-route database kill switch (source_route_state,
+//             migration 073): a disabled route is never fetched
 //     refusal — src/collectors/refusal.js: a source that refused access
 //             (401/403/451, bot wall, robots) is skipped through its
 //             cooldown and reported 'blocked_by_source' (F10-5); a clean
@@ -61,6 +63,7 @@ const cycle = require('./cycle');
 const { scrub } = require('./redact');
 const { classifyError } = require('./errors');
 const { refusalGate, refusalOf, resetEnv, probationOver, BLOCKED_BY_SOURCE } = require('./refusal');
+const counters = require('./admission-counters');
 
 /** Default queue hooks: lazily bind BullMQ (opening Redis only when needed). */
 function defaultQueues() {
@@ -170,6 +173,9 @@ async function runCollection(o = {}) {
             const st = sourceStatus(src, env);
             const row = { slug, category: src.category, status: st.status, outcome: 'skipped', fetched: 0, kept: 0, new: 0, error: null };
             summary.sources.push(row);
+            // Migration 073 (grumpy #7): routes switched off by env are named
+            // in the summary too; the database check below adds its own.
+            if (st.disabledRoutes.length) row.disabledRoutes = st.disabledRoutes;
             if (st.status !== 'collecting') { row.reason = st.reason; continue; }
             if (!(await touch())) {
                 row.reason = 'the job was closed as stale before this source started';
@@ -190,6 +196,16 @@ async function runCollection(o = {}) {
                 row.status = 'disabled';
                 row.reason = `kill switch (database): disabled${killed.by ? ` by ${killed.by}` : ''}${killed.reason ? ` — ${killed.reason}` : ''}`;
                 continue;
+            }
+            // Migration 073: the per-route database kill switch, read before
+            // every run like the source switch. A disabled route is never
+            // built (no request); when every route that would run is
+            // disabled, the source is skipped as 'disabled'.
+            const routeKills = await state.routeKillSwitches(sourceId);
+            if (routeKills.length) {
+                const rst = sourceStatus(src, env, { routeKills });
+                row.disabledRoutes = rst.disabledRoutes;
+                if (rst.status !== 'collecting') { row.status = rst.status; row.reason = rst.reason; continue; }
             }
             // F10-5: a source that refused us is not asked again until its
             // cooldown ends (then one probe) or an operator resets it.
@@ -214,7 +230,7 @@ async function runCollection(o = {}) {
                 log(`[collect] ${slug}: refusal cleared by ${resetEnv(slug)} (approved by ${approvedBy})`);
             }
 
-            const claimed = await state.claim(sourceId, pollIntervalSec(src, env), o.cycle ? o.cycle.windowMs : collectWindowMs(env));
+            const claimed = await state.claim(sourceId, pollIntervalSec(src, env, { routeKills }), o.cycle ? o.cycle.windowMs : collectWindowMs(env));
             if (!claimed) { row.reason = 'collected within its poll interval (rate limit)'; continue; }
             queried++;
             http = http || new HttpClient({ env, transport: o.transport, sleep: o.collectorCtx && o.collectorCtx.sleep, signal });
@@ -235,12 +251,43 @@ async function runCollection(o = {}) {
             let queueFailed = false;
             let collectors = [];
             try {
-                collectors = buildCollectors(src, { env, http, cursor, httpCache, now: o.now, ...(o.collectorCtx || {}) });
+                collectors = buildCollectors(src, { env, http, cursor, httpCache, now: o.now, ...(o.collectorCtx || {}), routeKills });
             } catch (err) {
                 fail(err.message, err);
             }
             let storeFailed = false;
+            // Relevance-accuracy R1: the routes' dropped counters, summed
+            // onto this run's source_runs row (counts only).
+            const droppedByRoute = [];
+            // Security review F7: a takedown issued while this source's
+            // earlier routes ran applies before its next route — both
+            // database switches are read again before every route after the
+            // first (the first was gated just above). A failed read skips the
+            // route: a takedown never fails open.
+            const stillOpen = async (routeId) => {
+                try {
+                    if (await state.dbKillSwitch(sourceId)) return 'kill switch (database): the source was disabled during this run';
+                    const now = await state.routeKillSwitches(sourceId);
+                    const rst = sourceStatus(src, env, { routeKills: now });
+                    if (rst.status !== 'collecting' || !rst.openRoutes.includes(routeId)) {
+                        return 'kill switch (database): the route was disabled during this run';
+                    }
+                    return null;
+                } catch (err) {
+                    return `the kill switches could not be read again (${err.message}); the route is not fetched`;
+                }
+            };
+            let gated = false;
             for (const c of collectors) {
+                if (gated) {
+                    const why = await stillOpen(c.route.id);
+                    if (why) {
+                        (row.skippedRoutes = row.skippedRoutes || []).push({ route: c.route.id, reason: why });
+                        log(`[collect] ${slug}/${c.route.id}: skipped — ${why}`);
+                        continue;
+                    }
+                }
+                gated = true;
                 // G10-5: the route's cursor and HTTP validators as they were
                 // before it ran. If any of its items fails to store, they are
                 // restored, so the next run fetches those items again (a
@@ -262,6 +309,9 @@ async function runCollection(o = {}) {
                 for (const w of result.warnings || []) fail(`${c.route.id}: ${w.text}`, w.err);
                 row.fetched += result.fetched;
                 row.kept += result.payloads.length;
+                // Only a route that fetched items evaluated any: a route that
+                // returned nothing contributes no dropped counts (NULL, not 0).
+                if (result.fetched > 0) droppedByRoute.push(result.dropped);
                 for (const payload of result.payloads) {
                     let stored;
                     try {
@@ -310,6 +360,21 @@ async function runCollection(o = {}) {
                             fail(`${c.route.id}: scoring failed and the retry could not be queued (${qerr.message})`,
                                 Object.assign(new Error('queue'), { kind: 'queue' }));
                         }
+                    }
+                }
+                // R1: this route's admission rule counts for today (UTC), under
+                // the admission_filter version that ran. Counts only. Written
+                // only when every item stored: a route whose store failed is
+                // fetched and evaluated again by the next run (G10-5), which
+                // would count the same items twice. A failed write is a run
+                // warning (G10-6): it never costs a post.
+                if (!routeStoreFailed) {
+                    try {
+                        await counters.recordRuleHits({
+                            sourceId, source: src, route: c.route.id, admissionMvId: mv.admissionMvId, tally: result.ruleHits,
+                        });
+                    } catch (err) {
+                        fail(`${c.route.id}: admission counters not recorded: ${err.message}`, err);
                     }
                 }
                 if (routeStoreFailed) {
@@ -374,6 +439,8 @@ async function runCollection(o = {}) {
                 postsNew: row.new, requests: http.requests - before, error: row.error,
                 errorKind: row.errorKind, httpStatus: row.httpStatus, startedAt,
                 responseHeaders: refused ? refusalHeaders : null,
+                // NULL when no item was evaluated (no route fetched anything): there is no 0 to record.
+                dropped: droppedByRoute.length ? counters.mergeDropped(droppedByRoute) : null,
             });
             log(`[collect] ${slug}: ${row.outcome} fetched ${row.fetched}, kept ${row.kept}, new ${row.new}${row.error ? ` — ${row.error}` : ''}`);
             await touch();

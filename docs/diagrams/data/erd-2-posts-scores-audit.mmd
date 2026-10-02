@@ -1,0 +1,128 @@
+%% Title: Data model 2 of 4 · posts, scores, audit trail, bias
+%% Summary: The stored post (its audit links never change; its text and payload are blanked when its retention window ends; its source_id changes only in the manual, named-approval legacy-seed correction, logged as source_reattributed), its three per-post scores, the decision audit log that ties every score to a registered methodology version, the embedding, and the job-level bias assessments.
+%% Sources: src/db/migrations/001, 002, 003, 004, 006, 010, 012, 017, 022, 025, 042; src/pipeline/ingest.js (insert), src/collectors/retention.js (blanking), src/config/methodology-registry.js (components). The rolling-window bias tables (060) are in data model 4. Spec: TECHNICAL_SPEC.md sections 6 and 10 (the explainability chain). data_sources and processing_jobs are shown with their keys only (full columns in data model 1).
+erDiagram
+
+  raw_posts {
+    uuid id PK
+    uuid source_id FK
+    text external_id "UNIQUE with source_id; route:id, route:fp:HMAC, or route:SHA-256 when neither PROVENANCE_KEY nor AUDIT_HASH_KEY is set"
+    text content "redacted text; NOT NULL; retention blanks it to a removal notice, never NULL"
+    jsonb raw_payload "allowlisted fields, PII fields removed"
+    text content_hash "SHA-256 of stored text; integrity hash, not a join key"
+    text location "city level or empty"
+    text language
+    timestamptz collected_at
+    uuid pseudo_user_id FK "nullable, 006"
+    text provenance_fingerprint "017: HMAC-SHA256; NULL when neither key is set"
+    uuid ingest_mv_id FK "022: ingest version stored under"
+    timestamptz text_removed_at "025: set when retention blanks the text"
+    text text_removed_reason "025"
+    uuid admission_mv_id FK "042: admission_filter version that admitted it"
+  }
+
+  decision_audit_log {
+    uuid id PK
+    uuid raw_post_id FK
+    uuid job_id FK
+    uuid methodology_version_id FK
+    text decision_type "sentiment | relevance | discourse"
+    text model_name
+    text input_hash "SHA-256 of the input; API serves HMAC"
+    jsonb output
+    real confidence
+    timestamptz created_at
+  }
+
+  methodology_versions {
+    uuid id PK
+    text component "sentiment | relevance | discourse | bias | ingest | audit_narration | embedding | admission_filter"
+    text version "UNIQUE with component"
+    text model_name
+    jsonb config
+    text justification
+    timestamptz effective_from
+    timestamptz deprecated_at
+  }
+
+  sentiment_results {
+    uuid id PK
+    uuid raw_post_id FK
+    uuid audit_id FK
+    real score
+    real comparative
+    text indicator "positive | neutral | negative"
+    text_array positive_words
+    text_array negative_words
+    int token_count
+    timestamptz created_at
+  }
+
+  relevance_results {
+    uuid id PK
+    uuid raw_post_id FK
+    uuid audit_id FK
+    real score
+    text_array matched_keywords
+    boolean is_relevant
+    timestamptz created_at
+  }
+
+  discourse_results {
+    uuid id PK
+    uuid raw_post_id FK
+    uuid audit_id FK
+    real dqi_total
+    jsonb dimensions
+    text argument_cluster_id
+    real novelty_score
+    timestamptz created_at
+  }
+
+  post_embeddings {
+    uuid id PK
+    uuid raw_post_id FK "UNIQUE"
+    vector384 embedding "VECTOR(384), HNSW cosine index"
+    text model_name
+    text methodology_version "012"
+    timestamptz created_at
+  }
+
+  bias_assessments {
+    uuid id PK
+    uuid job_id FK
+    text assessment_type
+    text group_field
+    text group_value
+    text metric_name
+    real metric_value
+    real threshold
+    boolean is_violation
+    text severity
+    jsonb evidence
+    uuid methodology_version_id FK "010: lineage"
+    timestamptz created_at
+  }
+
+  data_sources {
+    uuid id PK
+  }
+
+  processing_jobs {
+    uuid id PK
+  }
+
+  data_sources ||--o{ raw_posts : "source_id"
+  methodology_versions |o--o{ raw_posts : "ingest_mv_id, admission_mv_id"
+  raw_posts ||--o{ decision_audit_log : "raw_post_id"
+  processing_jobs ||--o{ decision_audit_log : "job_id"
+  methodology_versions ||--o{ decision_audit_log : "methodology_version_id"
+  raw_posts ||--o{ sentiment_results : "raw_post_id"
+  raw_posts ||--o{ relevance_results : "raw_post_id"
+  raw_posts ||--o{ discourse_results : "raw_post_id"
+  decision_audit_log ||--o{ sentiment_results : "audit_id"
+  decision_audit_log ||--o{ relevance_results : "audit_id"
+  decision_audit_log ||--o{ discourse_results : "audit_id"
+  raw_posts ||--o| post_embeddings : "raw_post_id"
+  processing_jobs ||--o{ bias_assessments : "job_id"
+  methodology_versions |o--o{ bias_assessments : "methodology_version_id"

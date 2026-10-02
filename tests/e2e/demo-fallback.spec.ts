@@ -82,7 +82,42 @@ test('demo fallback: /api/** blocked → 30-city demo, DEMO badges, local receip
     await expect(drawer.locator('.drawer-kicker')).toContainText('DEMO DATA');
     expect(await drawer.locator('.steps .step').count()).toBeGreaterThanOrEqual(4);
     await expect(drawer.locator('.drawer-foot')).toContainText('fictional demo data');
+    // audit_narration@1.5.0: the local demo receipt carries the corrected
+    // relevance sentence (stated conditionally, like the ingestion step: the
+    // demo post is never stored), never the superseded "because it's clearly
+    // talking about AI".
+    await expect(drawer.locator('.steps')).toContainText('this demo post was never stored, so it counts toward nothing');
+    await expect(drawer.locator('.steps')).not.toContainText('clearly talking about AI');
     await evidence(page, '09-demo-fallback-receipt');
+
+    // The demo ingestion step describes the REAL system: dedupe is
+    // UNIQUE(source_id, external_id) (Regulator view) and the content hash
+    // is an integrity check, not a join key (Researcher view,
+    // audit_narration@1.4.0 wording). No simhash anywhere.
+    const tabs = drawer.locator('.drawer-seg .seg-btn');
+    const ingestStep = drawer.locator('.steps .step').first();
+    // All four audience views describe the same fictional, never-stored post.
+    await tabs.nth(0).click();
+    await expect(ingestStep).toContainText('fictional example post');
+    await expect(ingestStep).not.toContainText('came from a public source');
+    await tabs.nth(1).click();
+    await expect(ingestStep).toContainText('not collected from any source');
+    await expect(ingestStep).not.toContainText('public API');
+    await tabs.nth(2).click();
+    await expect(ingestStep.locator('.kv')).toContainText('not applicable: fictional demo data');
+    await expect(ingestStep.locator('.kv')).not.toContainText('legitimate_interest');
+    await tabs.nth(2).click();
+    await expect(ingestStep.locator('.kv')).toContainText('dedup_strategy');
+    await expect(ingestStep.locator('.kv')).toContainText('UNIQUE(source_id, external_id)');
+    await tabs.nth(3).click();
+    await expect(ingestStep).toContainText('It is an integrity check, not a join key.');
+    // The live-system rule is conditional; this demo receipt has no hash.
+    await expect(ingestStep).toContainText('never stored, so this receipt has no hash and nothing to replay');
+    await expect(ingestStep).not.toContainText('this receipt serves');
+    expect(await drawer.locator('.steps').innerText()).not.toMatch(/simhash|immutable join key/i);
+    await evidence(page, '09b-demo-fallback-receipt-researcher');
+    // Restore the default audience so later drawers open on Public.
+    await tabs.nth(0).click();
     await drawer.locator('.drawer-x').click();
 
     // Health drawer in demo mode: outage banner + labeled demo content.

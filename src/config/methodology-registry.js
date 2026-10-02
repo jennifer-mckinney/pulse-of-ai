@@ -15,6 +15,8 @@
 //     embedding@1.1.0 (sentence-transformers 6.1.0, same model and revision);
 //   - src/db/migrations/066_content_hash_wording.sql inserts ingest@1.8.0 and
 //     audit_narration@1.4.0 (content-hash wording) and the ingest errata;
+//   - src/db/migrations/067_relevance_receipt_wording.sql inserts
+//     audit_narration@1.5.0 (relevance receipt wording) and its errata;
 //   - tests/integration/helpers.js registers the real bias/ingest rows.
 // A component may list several versions (history is kept); the renderer's
 // current version is the LAST entry for its component.
@@ -884,6 +886,51 @@ const CONTENT_HASH_DESCRIPTION = 'SHA-256 of the stored post text (after normali
     });
 })();
 
+// audit_narration@1.5.0 — relevance-accuracy Stage 0, P0 (Jennifer McKinney
+// 2026-09-30, D1 "Count only AI-relevant (Recommended)"; migration 067).
+// Every earlier narration told the public that a post with no AI term "does
+// not count toward AI-discourse totals"; every stored post counts toward the
+// totals today (no aggregate query filters on relevance_results; the score
+// gates only embedding). Totals switch to AI-relevant posts only with the
+// next relevance version, after its gold-set gate (the relevance-accuracy
+// design review found about 36% of AI-feed posts scoring 0 under
+// relevance@1.2.0, so switching now would drop real AI posts).
+// Wording only. Pushed LAST for its component, so it is CURRENT_VERSIONS and
+// the receipt reports it. Released rows keep their text; an erratum on each
+// audit_narration row (1.1.0 to 1.4.0) points here.
+(() => {
+    const prev = METHODOLOGY_VERSIONS.find(m => m.component === 'audit_narration' && m.version === '1.4.0');
+    const { RELEVANCE_PUBLIC } = require('./audit-narration');
+    METHODOLOGY_VERSIONS.push({
+        component: 'audit_narration',
+        version: '1.5.0',
+        model_name: prev.model_name,
+        config: {
+            ...prev.config,
+            // Must equal src/config/audit-narration.js RELEVANCE_PUBLIC
+            relevance_public: { ...RELEVANCE_PUBLIC },
+            changelog: [
+                'audit_narration@1.5.0 (2026-09-30): wording-only correction of the relevance step\'s public view; '
+                    + 'every stored post counts toward the AI-discourse totals today, whatever its relevance score',
+            ],
+        },
+        justification: 'The audit endpoint serves four audience representations (public, journalist, regulator, researcher) '
+            + 'of every decision step. The wording is part of the auditable surface, so the template set is registered here '
+            + 'and version-bumped on any change. 1.5.0 corrects wording only, in the public view of the relevance step. '
+            + 'Every earlier version said that a post which matched no AI topic term "does not count toward AI-discourse '
+            + 'totals", and that a post which matched counts "because it\'s clearly talking about AI". Neither was true: '
+            + 'every stored post counts toward the totals (the map, the time series and the category shares) whatever its '
+            + 'relevance score; the score decides only whether the post is embedded (the matched terms also name the topic '
+            + 'themes). The public view now says that a '
+            + 'post matched the AI topic list and counts toward the AI-discourse totals, or that it did not match and today '
+            + 'still counts, and that from the next relevance version only AI-relevant posts will count (decision D1, '
+            + 'Jennifer McKinney 2026-09-30: "Count only AI-relevant"). That switch waits for the next relevance version '
+            + 'and its gold-set check, because many posts from AI-specific feeds match no term under '
+            + 'relevance@1.2.0 and would be dropped. No stored data, score or rule changes. Every other sentence of every step is unchanged '
+            + 'from 1.4.0; an erratum on each earlier audit_narration version records this correction.',
+    });
+})();
+
 // ─── Errata (P10-16) ─────────────────────────────────────────────────────────
 // A released methodology row is never edited, even when it turns out not to
 // describe the code that ran. An erratum is a NEW row in
@@ -932,6 +979,22 @@ const METHODOLOGY_ERRATA = [
             + 'the decision audit log, which `npm run replay` re-checks against the stored text. ingest@1.8.0 registers the '
             + `corrected wording. The ingest@${version} row is kept unedited as it was registered, and posts stored under `
             + 'it keep their version. Found by the documentation audit; recorded 2026-09-30.',
+    })),
+    // Relevance receipt wording (2026-09-30), corrected by audit_narration@1.5.0
+    // (migration 067, relevance-accuracy Stage 0 P0).
+    ...['1.1.0', '1.2.0', '1.3.0', '1.4.0'].map(version => ({
+        component: 'audit_narration',
+        version,
+        erratum_key: `audit_narration-${version}-relevance-totals-wording`,
+        corrected_by: 'audit_narration@1.5.0',
+        erratum: `audit_narration@${version} told the public, in the relevance step, that a post which matched no AI topic `
+            + 'term "does not count toward AI-discourse totals", and that a post which matched counts "because it\'s '
+            + 'clearly talking about AI". That was not true: every stored post counted toward every total (the map, the '
+            + 'time series and the category shares) whatever its relevance score; the score decided only whether the '
+            + 'post was embedded (the matched terms also name the topic themes). Read receipts rendered under this version with that in mind; no stored data or score '
+            + 'is affected. audit_narration@1.5.0 registers the corrected wording. Totals will count only AI-relevant '
+            + `posts from the next relevance version (decision D1, Jennifer McKinney 2026-09-30). The audit_narration@${version} `
+            + 'row is kept unedited as it was registered. Found by the relevance-accuracy review; recorded 2026-09-30.',
     })),
 ];
 

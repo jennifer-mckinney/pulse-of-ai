@@ -84,6 +84,17 @@ test('the contact URL and the permission-gated acknowledgement ship EMPTY (D1)',
     }
 });
 
+// Migration 073: the per-route kill switch is a setting like
+// COLLECTORS_DISABLED — catalogued, documented, shipped EMPTY and passed
+// through to every collecting role (applies on a container recreate).
+test('COLLECTORS_DISABLED_ROUTES is catalogued, ships empty and reaches the containers', () => {
+    expect(registryEnvVars()).toContain('COLLECTORS_DISABLED_ROUTES');
+    expect(envClass('COLLECTORS_DISABLED_ROUTES')).toBe('setting');
+    expect(exampleValue('COLLECTORS_DISABLED_ROUTES')).toBe('');
+    expect(example).toMatch(/^# e\.g\. COLLECTORS_DISABLED_ROUTES=hugging_face\/forum-latest$/m);
+    expect(settingsBlock).toContain('  COLLECTORS_DISABLED_ROUTES: ${COLLECTORS_DISABLED_ROUTES:-}\n');
+});
+
 test('the global switch has a working default', () => {
     expect(exampleValue('COLLECTORS_ENABLED')).toBe('true');
 });

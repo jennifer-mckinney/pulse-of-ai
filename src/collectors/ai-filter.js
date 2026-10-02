@@ -69,6 +69,22 @@ function isAiRelated(text) {
     return PATTERNS.some(re => re.test(text));
 }
 
+/**
+ * Relevance-accuracy Stage 0, R1 (rejection counters): the indices of EVERY
+ * pattern that matches, in PATTERNS order. Measurement only: admission is
+ * still isAiRelated (any pattern), so this changes no admission decision and
+ * needs no new admission_filter version. The collector counts these per rule
+ * (src/collectors/admission-counters.js); the text itself is never kept.
+ * @param {string} text  title + summary
+ * @returns {number[]}
+ */
+function matchingRules(text) {
+    if (typeof text !== 'string' || text === '') return [];
+    const hits = [];
+    PATTERNS.forEach((re, i) => { if (re.test(text)) hits.push(i); });
+    return hits;
+}
+
 /** The version of the admission filter this code implements (G6). */
 const ADMISSION_FILTER_VERSION = '1.0.0';
 
@@ -77,4 +93,4 @@ function patternDescriptions() {
     return PATTERNS.map(re => ({ source: re.source, flags: re.flags }));
 }
 
-module.exports = { isAiRelated, PATTERNS, SEARCH_TERMS, ADMISSION_FILTER_VERSION, patternDescriptions };
+module.exports = { isAiRelated, matchingRules, PATTERNS, SEARCH_TERMS, ADMISSION_FILTER_VERSION, patternDescriptions };

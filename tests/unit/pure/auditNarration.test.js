@@ -13,6 +13,7 @@ const {
     deriveStatus,
     renderIngestStep,
     INGEST_HASH_NOTE,
+    RELEVANCE_PUBLIC,
 } = require('../../../src/config/audit-narration');
 
 const POST_ID = '9b2f1f1e-2b1a-4c3d-8e4f-000000000001';
@@ -95,6 +96,29 @@ describe('audit-narration renderAudiences', () => {
         expect(views.plain).toContain('ai');
         expect(views.config).toMatchObject({ observed_score: 0.6, matched_terms: ['ai', 'llm'] });
         expect(views.researcher).toContain(`Reproduce: npm run replay -- --post ${POST_ID}`);
+    });
+
+    // 1.5.0 (migration 067, relevance-accuracy Stage 0 P0): totals count
+    // every stored post today, whatever its relevance score (no aggregate
+    // query filters on relevance_results). The public sentence no longer
+    // says a no-match post "does not count toward AI-discourse totals", nor
+    // that a matched post counts "because" it is about AI.
+    it('relevance public view states truthfully that every post counts today (1.5.0)', () => {
+        const render = matched => renderAudiences({
+            decision_type: 'relevance', model_name: 'keyword-relevance-v2', methodology_version: '1.2.0',
+            config: {}, output: { score: matched.length / 21, matchedKeywords: matched },
+        }, POST_ID).public;
+        const none = render([]);
+        const some = render(['AI']);
+        expect(none).toBe(RELEVANCE_PUBLIC.no_match);
+        expect(some).toBe(RELEVANCE_PUBLIC.matched);
+        expect(none).toBe('This post did not match the AI topic list. Today it still counts toward the AI-discourse '
+            + 'totals; from the next relevance version, only AI-relevant posts will count.');
+        expect(some).toBe('This post matched the AI topic list, and it counts toward the AI-discourse totals.');
+        for (const text of [none, some]) {
+            expect(text).not.toMatch(/does not count/);
+            expect(text).not.toMatch(/because/);
+        }
     });
 
     it('discourse: renders DQI total and dimensions', () => {
@@ -236,6 +260,6 @@ describe('audit-narration renderIngestStep', () => {
     it('narration version constants are exported for the API to report', () => {
         expect(NARRATION_COMPONENT).toBe('audit_narration');
         expect(NARRATION_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
-        expect(NARRATION_VERSION).toBe('1.4.0');
+        expect(NARRATION_VERSION).toBe('1.5.0');
     });
 });

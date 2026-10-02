@@ -21,7 +21,10 @@ async function collect() {
     return { summary, transport };
 }
 // PR #22 decision G5 / security L6: the actor is the named approval.
-const APPROVER = 'Tess Tester 2026-09-29';
+// Dated tomorrow (UTC): re-enabling needs an approval dated on or after the
+// takedown and at most a day ahead (security review F6), and a run that
+// crosses UTC midnight still passes.
+const APPROVER = `Tess Tester ${new Date(Date.now() + 86400000).toISOString().slice(0, 10)}`;
 const admin = async (argv, env = { GATE_APPROVED_BY: APPROVER }, extra = {}) => {
     const lines = [];
     const code = await adminMain(argv, { db, out: l => lines.push(l), err: l => lines.push(l), env, ...extra });
@@ -140,7 +143,7 @@ describe('supervised dry run honours the database gates (security M2)', () => {
         const { err, transport } = await supervised();
         expect(err).toBeInstanceOf(collectCli.UsageError);
         // G5: the kill switch records the named approval as its actor.
-        expect(err.message).toMatch(/disabled by the database kill switch \(by Tess Tester 2026-09-29\) — terms review/);
+        expect(err.message).toContain(`disabled by the database kill switch (by ${APPROVER}) — terms review`);
         expect(transport.calls).toHaveLength(0);
     });
 
