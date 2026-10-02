@@ -144,7 +144,7 @@ body {
    and sits under the header chips, above the rail (z-index 25) and below the
    tooltip (40) and the drawers (50). */
 .hdr-about { cursor: pointer; font-family: inherit; color: var(--ink); transition: border-color 0.15s; }
-.hdr-about:hover, .hdr-about[aria-expanded="true"] { border-color: rgba(59,220,178,0.45); }
+.hdr-about:hover:not([aria-disabled="true"]), .hdr-about[aria-expanded="true"] { border-color: rgba(59,220,178,0.45); }
 /* inert while a drawer is open (main.js sets aria-disabled) */
 .hdr-about[aria-disabled="true"] { opacity: 0.5; cursor: default; }
 .about-panel {
@@ -529,8 +529,8 @@ body {
    fit (the health chip opens the health drawer and must never be clipped by
    body overflow-x: hidden). At 375px the header wraps to three rows (brand,
    then the time-to-insight and credits chips, then the health and about
-   chips), about 100px tall; from about 480 to 640px it is two rows, about
-   78px. Above 640px it is one row. The explore filter column (116px) and the
+   chips), about 105-110px tall (the e2e asserts the clearances, not this
+   number); from about 480 to 640px it is two rows, about 78px. Above 640px it is one row. The explore filter column (116px) and the
    About panel (112px) start below the tallest case (e2e asserts the gap at
    every width, legal-notice.spec.ts). */
 @media (max-width: 640px) {
@@ -541,7 +541,7 @@ body {
   .hdr-right { gap: 6px; flex-wrap: wrap; }
   .hdr-chip { padding: 5px 9px; gap: 6px; }
   .exp-filters { margin-top: 116px; }
-  /* the wrapped header is at most about 100px tall: the About panel opens below it
+  /* the wrapped header is at most about 110px tall; the 112px offset leaves only a few pixels, so do not trim it without rerunning the e2e: the About panel opens below it
      (not over its own chip) and spans the viewport width less the gutters */
   .about-panel { top: 112px; left: 14px; right: 14px; max-width: none; max-height: calc(100% - 128px); }
 }

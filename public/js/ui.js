@@ -2215,6 +2215,7 @@
                         a.target = '_blank';
                         a.rel = 'noopener noreferrer';
                         a.title = src.reason;
+                        a.setAttribute('aria-label', 'Terms of ' + src.name + ' (opens in a new tab)');
                         line.appendChild(a);
                     }
                     list.appendChild(line);

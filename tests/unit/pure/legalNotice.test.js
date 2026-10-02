@@ -90,7 +90,7 @@ describe('index.html — mount points, script order, no-JS copy', () => {
         const noscript = html.slice(html.indexOf('<noscript>'), html.indexOf('</noscript>'));
         for (const n of legal.NOTICE) {
             expect(noscript).toContain(n.text);
-            if (n.href) expect(noscript).toContain(`<a href="${n.href}">${n.text}</a>`);
+            if (n.href) expect(noscript).toContain(`<a href="${n.href}" rel="noopener noreferrer">${n.text}</a>`);
         }
     });
 

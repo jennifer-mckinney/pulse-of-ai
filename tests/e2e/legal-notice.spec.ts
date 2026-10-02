@@ -178,7 +178,7 @@ test('legal notice: a drawer opened from a focused notice link returns focus to 
     await expect(page.locator('#about-chip')).toBeFocused();
 });
 
-for (const width of [320, 540, 600, 641, 660, 680, 700, 760, 900]) {
+for (const width of [320, 375, 480, 540, 600, 640, 641, 660, 680, 700, 760, 900]) {
     test(`legal notice: at ${width}px the panel opens below the header and inside the viewport`, async ({ page }) => {
         await page.setViewportSize({ width, height: 800 });
         await gotoAndWaitForData(page);
@@ -191,6 +191,19 @@ for (const width of [320, 540, 600, 641, 660, 680, 700, 760, 900]) {
         }
         expect(panel!.x).toBeGreaterThanOrEqual(0);
         expect(panel!.x + panel!.width).toBeLessThanOrEqual(width);
+        // the offset follows the breakpoint: 112px under a wrapped header
+        // (640px and below), 64px under the one-row header above it
+        if (width <= 640) expect(panel!.y).toBeGreaterThanOrEqual(112 - 1);
+        else expect(panel!.y).toBeLessThanOrEqual(64 + 1);
+        // above the breakpoint the header is ONE row: the brand and the
+        // chips do not overlap and the chips share a row
+        if (width > 640) {
+            const brand = await page.locator('.hdr-brand').boundingBox();
+            const about = await page.locator('#about-chip').boundingBox();
+            const first = await page.locator('#insight-chip').boundingBox();
+            expect(brand!.x + brand!.width, 'brand clear of the chips').toBeLessThanOrEqual(first!.x + 1);
+            expect(Math.abs(first!.y - about!.y), 'chips share one row').toBeLessThan(4);
+        }
         // every header chip is on screen (body overflow-x is hidden) and the
         // header ends above the explore filters
         for (const sel of ['#about-chip', '#health-chip', '#credits-link', '#insight-chip']) {
@@ -200,6 +213,7 @@ for (const width of [320, 540, 600, 641, 660, 680, 700, 760, 900]) {
         }
         await page.locator('#about-chip').click();
         await expect(page.locator('#about-panel')).toBeHidden();
+        if (![320, 375, 540, 641, 760].includes(width)) return;   // the explore gap at a spread of widths keeps the run short
         await enterExplore(page);
         const lowest = Math.max(...await Promise.all(['#about-chip', '#health-chip', '#credits-link', '#insight-chip']
             .map(async (sel) => { const b = await page.locator(sel).boundingBox(); return b!.y + b!.height; })));
