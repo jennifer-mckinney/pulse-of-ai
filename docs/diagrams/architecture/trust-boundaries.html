@@ -58,7 +58,7 @@ flowchart LR
     S4["politeness: contact User-Agent, robots.txt,&lt;br/&gt;per-host spacing; 401/403/451/challenge never retried,&lt;br/&gt;source enters the refused state"]:::done
     S5["secret scrubbing: every stored or logged error passes&lt;br/&gt;redactUrl + scrub (env secrets raw and URL-encoded)"]:::done
     S7["named approval: a gated route (key, approval, licence&lt;br/&gt;or permission) opens only with a valid GATE_APPROVED_BY&lt;br/&gt;(Name YYYY-MM-DD); gate changes recorded with approved_by&lt;br/&gt;in append-only source_gate_events"]:::done
-    S6["PII: allowlisted payload, PII_FIELDS removed,&lt;br/&gt;in-text redaction (ingest@1.8.0), city-level location,&lt;br/&gt;identity-bearing ids stored as keyed fingerprints&lt;br/&gt;(an unkeyed SHA-256 when no key is set)"]:::done
+    S6["PII: allowlisted payload, PII_FIELDS removed,&lt;br/&gt;in-text redaction (ingest@1.8.0), city-level location,&lt;br/&gt;identity-bearing ids stored as keyed fingerprints&lt;br/&gt;(an unkeyed SHA-256 when neither PROVENANCE_KEY&lt;br/&gt;nor AUDIT_HASH_KEY is set)"]:::done
   end
 
   subgraph HOSTB["Boundary 3 · containers to the host and network"]

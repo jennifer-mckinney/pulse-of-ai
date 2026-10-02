@@ -125,6 +125,16 @@ describe('main.js — renders the notice through the DOM API only', () => {
         expect(main).toContain("console.warn('legal notices: PulseLegalConfig missing");
     });
 
+    test('the config replaces the static notices only when complete and well-typed', () => {
+        // isValidNoticeConfig: non-empty array, every entry an object with
+        // string id and text (href a string when present); never throws.
+        expect(main).toContain('function isValidNoticeConfig(cfg)');
+        expect(main).toContain('cfg.NOTICE.length === 0');
+        expect(main).toContain("typeof item.id === 'string'");
+        expect(main).toContain("typeof item.text === 'string'");
+        expect(main).toContain('if (isValidNoticeConfig(legalConfig)) {');
+    });
+
     test('every drawer opening folds the panel away (observed, not one event)', () => {
         expect(main).toContain('MutationObserver');
         expect(main).toContain("['audit-drawer', 'health-drawer']");

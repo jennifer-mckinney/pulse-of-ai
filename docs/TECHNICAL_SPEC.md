@@ -450,7 +450,7 @@ CREATE TABLE raw_posts (                                     -- 001
     language        TEXT DEFAULT 'en',
     collected_at    TIMESTAMPTZ DEFAULT NOW(),
     pseudo_user_id  UUID REFERENCES pseudonymous_users(id),  -- FK added by 006; nullable
-    provenance_fingerprint TEXT,              -- 017: HMAC (§8); NULL when no key is set
+    provenance_fingerprint TEXT,              -- 017: HMAC (§8); NULL when neither PROVENANCE_KEY nor AUDIT_HASH_KEY is set
     ingest_mv_id    UUID REFERENCES methodology_versions(id), -- 022: ingest version the post was stored under
     text_removed_at     TIMESTAMPTZ,          -- 025: text retention (§19), every source since 031
     text_removed_reason TEXT,                 -- 025
@@ -2323,7 +2323,7 @@ Before shipping this feature:
 - `LICENSE` is the complete, unmodified GNU Affero General Public License v3.
 - The project is licensed **AGPL-3.0-or-later** (`package.json` and the `package-lock.json` root entry: `"license": "AGPL-3.0-or-later"`).
 - `ADDITIONAL-TERMS.md` adds exactly one term, under AGPL section 7(b): the author attribution 'Built on Pulse of AI by Jennifer McKinney', with a link to https://github.com/jennifer-mckinney/pulse-of-ai, must be preserved in the Appropriate Legal Notices of any covered work or modified version, including a user interface reached over a network. It places no other restriction.
-- AGPL section 13: whoever runs a modified version for users over a network must offer them its complete corresponding source; `SOURCE_URL` in `legal.config.js` (and the "Source code" link in the `<noscript>` block) must then point at that source. The attribution line stays as it is.
+- AGPL section 13: whoever runs a modified version for users over a network must offer them its complete corresponding source; `SOURCE_URL` in `legal.config.js` (and BOTH static "Source code" links in `public/index.html`: the `<noscript>` block and the About-panel fallback markup) must then point at that source. The attribution line stays as it is.
 - Third-party components keep their own licences; vendored frontend assets are listed in `public/vendor/README.md`.
 
 ### Legal-notices UI
@@ -2335,6 +2335,6 @@ Before shipping this feature:
   5. `Source code` → `SOURCE_URL`
   6. `No warranty: provided "as is", without warranty of any kind (AGPL sections 15 and 16).`
 - **Rendering:** `public/js/main.js` `renderLegalNotice` builds the header "about" panel (`#about-panel`, `role="region"`, hidden by default) with `createElement` + `textContent` only. The panel also ships the same notices as static markup in `public/index.html` (a unit test keeps it equal to the config): `renderLegalNotice` replaces it when `legal.config.js` loads, and if that file fails to load the static list stays and a warning is logged, so the attribution is never lost. The about chip toggles it and sets `aria-expanded`; Escape closes it, and opening the audit or health drawer folds it away (a `MutationObserver` on the drawers' `open` class, so every open path is covered). Closing it by Escape or by the chip returns focus to the chip when focus was inside the panel (or on the page body), so it never stays in the hidden subtree, including in Safari, where a click does not focus the button; focus elsewhere on the page is left where it is. The panel is bounded to the viewport below it and scrolls, so every notice stays reachable at a narrow or zoomed viewport (`public/styles/main.css`). Links carry `rel="noopener noreferrer"` and no `target`. All hrefs are static https constants; no API data reaches an href.
-- **No-JS:** `public/index.html` repeats the same six lines, texts and links inside `<noscript>`.
+- **No-JS and fallback:** `public/index.html` repeats the same six lines, texts and links inside `<noscript>` and, as the panel's static content, inside `#about-panel` (kept when the config is missing, empty or malformed: `isValidNoticeConfig` in `main.js` accepts only a non-empty array of entries with string `id` and `text`).
 - **CSP:** the config loads as an external `<script src>` before `main.js`; no inline script or style is added, and styling lives in `styles/main.css`.
 - **Tests:** `tests/unit/pure/legalNotice.test.js` pins the literal texts and URLs, the noscript copy, the absence of inline `style=` and of `innerHTML`-family writes, the `LICENSE` header, the package licence and the additional terms. `tests/e2e/legal-notice.spec.ts` asserts the rendered panel, its links, the Escape behaviour, focus return on a chip click that does not move focus, and a 320 × 240 viewport where the panel stays inside the viewport and scrolls to the last notice, with zero console errors.

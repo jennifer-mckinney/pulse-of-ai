@@ -6,7 +6,7 @@ erDiagram
   raw_posts {
     uuid id PK
     uuid source_id FK
-    text external_id "UNIQUE with source_id; route:id, route:fp:HMAC, or route:SHA-256 when no PROVENANCE_KEY"
+    text external_id "UNIQUE with source_id; route:id, route:fp:HMAC, or route:SHA-256 when neither PROVENANCE_KEY nor AUDIT_HASH_KEY is set"
     text content "redacted text; NOT NULL; retention blanks it to a removal notice, never NULL"
     jsonb raw_payload "allowlisted fields, PII fields removed"
     text content_hash "SHA-256 of stored text; integrity hash, not a join key"
@@ -14,7 +14,7 @@ erDiagram
     text language
     timestamptz collected_at
     uuid pseudo_user_id FK "nullable, 006"
-    text provenance_fingerprint "017: HMAC-SHA256; NULL when no key is set"
+    text provenance_fingerprint "017: HMAC-SHA256; NULL when neither key is set"
     uuid ingest_mv_id FK "022: ingest version stored under"
     timestamptz text_removed_at "025: set when retention blanks the text"
     text text_removed_reason "025"

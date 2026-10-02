@@ -73,6 +73,26 @@ test('legal notice: the static notices remain when legal.config.js fails to load
     await expect(panel.getByRole('link', { name: 'Built on Pulse of AI by Jennifer McKinney' })).toHaveAttribute('href', UPSTREAM);
 });
 
+// A malformed config must take the fallback path: an empty list would wipe
+// the static notices, and a null entry used to throw before initModules().
+for (const [label, body] of [
+    ['an empty NOTICE list', 'window.PulseLegalConfig = { NOTICE: [] };'],
+    ['a null entry', 'window.PulseLegalConfig = { NOTICE: [null] };'],
+    ['an entry without text', 'window.PulseLegalConfig = { NOTICE: [{ id: "x" }] };'],
+] as const) {
+    test(`legal notice: ${label} keeps the static, interactive notices and the page boots`, async ({ page }) => {
+        await page.route('**/js/config/legal.config.js', (route) => route.fulfill({ contentType: 'application/javascript', body }));
+        await gotoAndWaitForData(page);   // initModules() ran: the data loaded
+        const chip = page.locator('#about-chip');
+        await expect(chip).toBeVisible();
+        await chip.click();
+        const panel = page.locator('#about-panel');
+        await expect(panel).toBeVisible();
+        await expect(panel.locator('li.about-item')).toHaveCount(6);
+        await expect(panel.getByRole('link', { name: 'Built on Pulse of AI by Jennifer McKinney' })).toHaveAttribute('href', UPSTREAM);
+    });
+}
+
 test('legal notice: opening the receipt drawer folds the panel away', async ({ page }) => {
     await gotoAndWaitForData(page);
     const chip = page.locator('#about-chip');

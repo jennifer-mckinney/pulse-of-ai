@@ -151,6 +151,20 @@
     // One list item per legalConfig.NOTICE entry, built with
     // createElement/textContent; entries with an href become links. The
     // panel starts hidden and the "about" chip toggles it (Escape closes).
+    // isValidNoticeConfig: the config replaces the static notices only when it
+    // is complete: a NON-EMPTY array whose every entry is an object with a
+    // non-empty string id and text (and a string href when present). Anything
+    // else (empty list, null entry, wrong types) takes the fallback path and
+    // leaves the static, interactive notices in place; nothing here throws,
+    // so initModules() always runs.
+    function isValidNoticeConfig(cfg) {
+        if (!cfg || !Array.isArray(cfg.NOTICE) || cfg.NOTICE.length === 0) return false;
+        return cfg.NOTICE.every((item) => !!item && typeof item === 'object'
+            && typeof item.id === 'string' && item.id !== ''
+            && typeof item.text === 'string' && item.text !== ''
+            && (item.href === undefined || typeof item.href === 'string'));
+    }
+
     function renderLegalNotice() {
         const panel = document.getElementById('about-panel');
         const chip = document.getElementById('about-chip');
@@ -160,7 +174,7 @@
         // legal.config.js fails to load (404, CSP, load order). When the
         // config IS present its list replaces the static one; otherwise the
         // static list stays and a warning is logged.
-        if (legalConfig && Array.isArray(legalConfig.NOTICE)) {
+        if (isValidNoticeConfig(legalConfig)) {
             const list = document.createElement('ul');
             list.className = 'about-list';
             legalConfig.NOTICE.forEach((item) => {
