@@ -530,9 +530,10 @@ body {
    body overflow-x: hidden). At 375px the header wraps to three rows (brand,
    then the time-to-insight and credits chips, then the health and about
    chips), about 105-110px tall (the e2e asserts the clearances, not this
-   number); from about 480 to 640px it is two rows, about 78px. Above 640px it is one row. The explore filter column (116px) and the
-   About panel (112px) start below the tallest case (e2e asserts the gap at
-   every width, legal-notice.spec.ts). */
+   number); from about 480 to 640px it is two rows, about 78px. Above 640px
+   it is one row. The explore filter column (116px) and the About panel
+   (112px) start below the tallest case (legal-notice.spec.ts asserts the
+   gap at every width from 320 to 900px). */
 @media (max-width: 640px) {
   /* the brand takes the first row; the chips wrap beneath it */
   .hdr { padding: 12px 14px; flex-wrap: wrap; row-gap: 8px; }
@@ -541,8 +542,10 @@ body {
   .hdr-right { gap: 6px; flex-wrap: wrap; }
   .hdr-chip { padding: 5px 9px; gap: 6px; }
   .exp-filters { margin-top: 116px; }
-  /* the wrapped header is at most about 110px tall; the 112px offset leaves only a few pixels, so do not trim it without rerunning the e2e: the About panel opens below it
-     (not over its own chip) and spans the viewport width less the gutters */
+  /* the wrapped header is at most about 110px tall and the About panel opens
+     below it at 112px (a few pixels of clearance: rerun the e2e before
+     trimming it), not over its own chip, and spans the viewport width less
+     the gutters */
   .about-panel { top: 112px; left: 14px; right: 14px; max-width: none; max-height: calc(100% - 128px); }
 }
 

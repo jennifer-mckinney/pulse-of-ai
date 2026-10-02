@@ -213,7 +213,6 @@ for (const width of [320, 375, 480, 540, 600, 640, 641, 660, 680, 700, 760, 900]
         }
         await page.locator('#about-chip').click();
         await expect(page.locator('#about-panel')).toBeHidden();
-        if (![320, 375, 540, 641, 760].includes(width)) return;   // the explore gap at a spread of widths keeps the run short
         await enterExplore(page);
         const lowest = Math.max(...await Promise.all(['#about-chip', '#health-chip', '#credits-link', '#insight-chip']
             .map(async (sel) => { const b = await page.locator(sel).boundingBox(); return b!.y + b!.height; })));
