@@ -5,6 +5,11 @@
 // another returns items; a store failure must roll back the validators but
 // KEEP the newly learned hold, or a restarted worker / another replica would
 // ask the held feed again before the source's time.
+//
+// PR #45 merge: the hold lives in the ONE rate-limit store
+// (source_collection_state.rate_limited_hosts, saved by state.saveHolds),
+// never in the HTTP cache the rollback restores — so it cannot be rolled
+// back at all.
 
 'use strict';
 
@@ -40,8 +45,8 @@ const run = (transport) => runCollection({
 });
 const nextPoll = () => dbRun(`UPDATE source_collection_state SET last_attempt_at = NOW() - interval '1 day'
     WHERE source_id = (SELECT id FROM data_sources WHERE name = 'owid')`);
-const cacheOf = async () => (await dbGet(`SELECT s.http_cache FROM source_collection_state s
-    JOIN data_sources ds ON ds.id = s.source_id WHERE ds.name = 'owid'`)).http_cache;
+const stateOf = () => dbGet(`SELECT s.http_cache, s.rate_limited_hosts FROM source_collection_state s
+    JOIN data_sources ds ON ds.id = s.source_id WHERE ds.name = 'owid'`);
 
 beforeEach(async () => {
     await seedSources();
@@ -57,10 +62,11 @@ it('a store failure rolls back the validators but keeps a hold learned in the sa
         [HELD, { status: 429, headers: { 'retry-after': '3600' } }],
     ]));
     expect(s.sources[0]).toMatchObject({ outcome: 'error', kept: 1, new: 0 });
-    const cache = await cacheOf();
-    expect(cache[OPEN]).toBeUndefined();                    // validator rolled back: the item is fetched again
-    expect(cache['retry-after:ourworldindata.org']).toMatchObject({ status: 429 });
-    expect(Date.parse(cache['retry-after:ourworldindata.org'].until)).toBeGreaterThan(Date.now() + 3500 * 1000);
+    const st = await stateOf();
+    expect(st.http_cache[OPEN]).toBeUndefined();            // validator rolled back: the item is fetched again
+    expect(Object.keys(st.http_cache).filter(k => k.startsWith('retry-after:'))).toEqual([]);
+    expect(st.rate_limited_hosts['ourworldindata.org']).toMatchObject({ http_status: 429, signal: 'http_429' });
+    expect(Date.parse(st.rate_limited_hosts['ourworldindata.org'].until)).toBeGreaterThan(Date.now() + 3500 * 1000);
 
     // Run 2, a fresh client (restart / another replica): the persisted host
     // hold survived the rollback, so the source is not asked at all.
@@ -72,7 +78,8 @@ it('a store failure rolls back the validators but keeps a hold learned in the sa
     // Run 3, after the source's time: the item is fetched again WITHOUT the
     // rolled-back validator, and stored.
     await dbRun(`UPDATE source_collection_state
-        SET http_cache = jsonb_set(http_cache, ARRAY['retry-after:ourworldindata.org'], '{"until":"2000-01-01T00:00:00.000Z","status":429}'::jsonb)
+        SET rate_limited_hosts = jsonb_set(rate_limited_hosts, '{ourworldindata.org,until}', to_jsonb('2000-01-01T00:00:00.000Z'::text)),
+            rate_limited_until = NULL
         WHERE source_id = (SELECT id FROM data_sources WHERE name = 'owid')`);
     await nextPoll();
     const open = fixtureTransport([[OPEN, { body: RSS }], [HELD, { body: RSS }]]);

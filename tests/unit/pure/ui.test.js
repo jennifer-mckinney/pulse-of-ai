@@ -636,6 +636,9 @@ describe('healthBanner / sourcesStat / methodologyModel', () => {
         expect(P.sourceStatusLabel({ status: 'collecting', online: true })).toBe('online');
         expect(P.sourceStatusLabel({ status: 'collecting', online: false })).toBe('collecting');
         expect(P.sourceStatusLabel({ status: 'odd' })).toBe('odd');
+        // Diagnosis 2026-10-01: a rate limit is a backoff, never shown as a refusal.
+        expect(P.sourceStatusLabel({ status: 'rate_limited' })).toBe('rate limited: backing off');
+        expect(P.sourceStatusLabel({ status: 'blocked_by_source' })).toBe('blocked by source: refused access');
         expect(P.sourceStatusLabel(null)).toBe('unknown');
     });
     test('sourceListModel: canon category order, rank order, terms cited for non-collecting sources', () => {
@@ -920,6 +923,15 @@ describe('demoAuditModel — prototype buildAudit receipt', () => {
         expect(a.public).toMatch(/never stored, so it counts toward nothing/);
         expect(a.public).not.toMatch(/clearly talking about AI/);
         expect(a.plain).toMatch(/never stored, so it is in no totals/);
+        expect(a.researcher).toMatch(/only gates embedding/);
+        expect(a.researcher).toMatch(/never stored, so it counts toward nothing/);
+        expect(a.config.min_threshold).toBeUndefined();
+        // Drift guard: the live 1.5.0 sentence and the demo sentence share the
+        // same stable clause, so a wording change in one fails here.
+        const { RELEVANCE_PUBLIC } = require('../../../src/config/audit-narration');
+        const CLAUSE = 'counts toward the AI-discourse totals';
+        expect(RELEVANCE_PUBLIC.matched).toContain(CLAUSE);
+        expect(a.public).toContain(CLAUSE);
     });
 
     test('sentiment/relevance pills mirror the post scores', () => {

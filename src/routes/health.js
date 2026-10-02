@@ -21,6 +21,10 @@
 //                  runtime gate status + last successful run
 //                  (src/collectors/status.js). "Sources online" = online:
 //                  collecting AND succeeded within the last hour.
+//                  by_status.rate_limited / rate_limited: sources backing
+//                  off after a rate limit (every route / any route held) —
+//                  diagnosis 2026-10-01; never counted as blocked_by_source
+//                  (a refusal).
 //
 //   alerts_closed  { resolved, superseded } — closed alerts by kind (G1,
 //                  migration 036 alert_status view)

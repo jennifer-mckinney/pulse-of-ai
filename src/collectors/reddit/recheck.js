@@ -22,6 +22,7 @@
 const { deletionSignal, fullnameOf } = require('./fields');
 const { INFO_BATCH } = require('./api');
 const { BudgetExhaustedError } = require('./budget');
+const { RateLimitedError } = require('../errors');
 const { postsWithText, blankPosts } = require('../retention');
 
 /**
@@ -46,6 +47,17 @@ async function recheckDeletions({ api, slug = 'reddit', log = () => {} }) {
             things = await api.info(batch);
         } catch (err) {
             if (err instanceof BudgetExhaustedError) { out.complete = false; break; }
+            // Grumpy #1 (diagnosis 2026-10-01): Reddit asked us to wait — stop
+            // here (retried next tick), never fire the next batch at it.
+            if (err instanceof RateLimitedError || (err && err.held === true)) {
+                out.complete = false;
+                // Copilot review: only a genuine rate limit is reported as one — a held
+                // server backoff (a 5xx's Retry-After) pauses the re-check too.
+                if (err instanceof RateLimitedError) out.rateLimited = true;
+                else out.serverBackoff = true;
+                log(`[reddit] deletion re-check paused: ${err.message}`);
+                break;
+            }
             if (err && [401, 403, 451].includes(err.status)) throw err;
             out.failedBatches++;
             out.complete = false;

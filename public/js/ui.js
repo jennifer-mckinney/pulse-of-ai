@@ -711,6 +711,9 @@
         // F10-5: the source refused access (401/403/451, bot wall, robots);
         // not requested again until its cooldown ends or it is reset.
         blocked_by_source: 'blocked by source: refused access',
+        // Diagnosis 2026-10-01: every route is backing off after a rate
+        // limit (until the source's reset time) — not a refusal.
+        rate_limited: 'rate limited: backing off',
     };
 
     function sourceStatusLabel(row) {
@@ -1093,9 +1096,13 @@
                         + 'Fictional demo post: it was never stored, so it is in no totals.',
                     config: {
                         matched_terms: ['AI', 'model', 'automated'],
-                        min_threshold: 0.6,
+                        // The live relevance step only gates embedding (relevance@1.2.0
+                        // embed gate 1/21); it does not decide what counts.
+                        embed_gate_min_score: '1/21 (live system)',
                     },
-                    researcher: 'TF-weighted keyword match against versioned term list kw@2026.06.',
+                    researcher: 'TF-weighted keyword match against versioned term list kw@2026.06. '
+                        + 'In the live system the score only gates embedding (relevance@1.2.0). '
+                        + 'This fictional demo post was never stored, so it counts toward nothing and nothing re-runs.',
                 },
                 layers: null,
             },

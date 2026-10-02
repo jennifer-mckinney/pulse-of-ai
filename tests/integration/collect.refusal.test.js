@@ -204,6 +204,21 @@ describe('the refused state (F10-5)', () => {
         expect((await rowOf('bbc_news')).status).toBe('blocked_by_source');
     });
 
+    // Owner decision 2026-10-02 (ADR 0001 ruling 5 note): a 401 / 451 on robots.txt is the
+    // source saying no; a plain 403 there is "no robots.txt" again (as before PR #45).
+    it.each([401, 451])('a %i on robots.txt refuses the source (the feed is never asked)', async (status) => {
+        const { transport } = await collect([['https://feeds.bbci.co.uk/robots.txt', { status, body: 'no' }]], TEST_ENV, ['bbc_news']);
+        expect(await stateOf('bbc_news')).toMatchObject({ access_denied_status: status, refusal_count: 1 });
+        expect((await rowOf('bbc_news')).status).toBe('blocked_by_source');
+        expect(transport.calls.filter(c => !c.url.endsWith('/robots.txt'))).toHaveLength(0);
+    });
+
+    it('a plain 403 on robots.txt is "no rules": the source is not refused and the feed is asked', async () => {
+        const { transport } = await collect([['https://feeds.bbci.co.uk/robots.txt', { status: 403, body: 'denied' }]], TEST_ENV, ['bbc_news']);
+        expect(await stateOf('bbc_news')).toMatchObject({ access_denied_at: null, refusal_count: 0 });
+        expect(transport.calls.filter(c => !c.url.endsWith('/robots.txt')).length).toBeGreaterThan(0);
+    });
+
     it('an ordinary failure (HTTP 500) is not a refusal', async () => {
         await collect([[/hn\.algolia\.com/, { status: 500, body: 'oops' }]]);
         expect(await stateOf('hacker_news')).toMatchObject({ access_denied_at: null, refusal_count: 0 });

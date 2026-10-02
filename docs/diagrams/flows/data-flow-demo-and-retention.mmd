@@ -46,7 +46,7 @@ flowchart LR
     P4["remove any text still stored<br/>(the same blanking, never nulled)"]:::done
     P3["delete post_embeddings of the month"]:::done
     P5["one data_retention_log row compacted,<br/>one compaction_log row"]:::done
-    P6["same daily job: source_runs older than 30 days<br/>→ source_run_daily, then removed<br/>(rolled_up_source_runs); processing_jobs<br/>are never removed (G4); admission_rule_hits older<br/>than ADMISSION_RULE_HITS_DAYS (400) removed"]:::done
+    P6["same daily job: source_runs older than 30 days<br/>→ source_run_daily, then removed<br/>(rolled_up_source_runs); processing_jobs<br/>are never removed (G4); admission_rule_hits older<br/>than ADMISSION_RULE_HITS_DAYS (default 400) removed"]:::done
     P1 --> P2 --> P4 --> P3 --> P5
     P5 ~~~ P6
   end
