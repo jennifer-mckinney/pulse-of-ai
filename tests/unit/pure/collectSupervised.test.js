@@ -27,6 +27,21 @@ describe('--supervised argument rules', () => {
     });
 });
 
+describe('supervisedRun honours the stored rate-limit holds (security F7, diagnosis 2026-10-01)', () => {
+    it('a host the worker is backing off from is never asked: zero transport calls, the route says why', async () => {
+        const holds = { 'hn.algolia.com': { until: new Date(Date.now() + 600000).toISOString(), http_status: 429, signal: 'http_429', count: 1, weak: 0 } };
+        const transport = fixtureTransport(HN);
+        const out = [];
+        const r = await collect.supervisedRun({ slug: 'hacker_news', env: TEST_ENV, transport, out: l => out.push(l),
+            governance: async () => ({ ...(await OPEN()), holds }) });
+        expect(transport.calls).toHaveLength(0);
+        expect(r.routes[0]).toMatchObject({ route: 'algolia-search', error: expect.stringMatching(/not requested: hn\.algolia\.com is rate-limiting us/) });
+        expect(out.join('\n')).toMatch(/algolia-search: FAILED — not requested: hn\.algolia\.com is rate-limiting us/);
+        // Read-only: the dry run's client never mutates the stored map it was given.
+        expect(Object.keys(holds)).toEqual(['hn.algolia.com']);
+    });
+});
+
 describe('supervisedRun', () => {
     it('fetches, prints a redacted sample and stores nothing', async () => {
         const out = [];

@@ -15,6 +15,14 @@
 //                             200 with nothing new goes stale)
 //   source_failing  warning   FAILING_AFTER (3) or more consecutive failed
 //                             runs
+//   source_rate_limited  warning  a host of the source rate-limited it
+//                             RATE_LIMITED_WARN_AFTER (3) times in a row
+//                             (rate_limited_hosts streak, migration 075;
+//                             diagnosis 2026-10-01 — never critical, never
+//                             a refusal), or ONE rate limit that parks a host for 6 h or more;
+//                             resolved by the host's next success (or the hold's end). A server
+//                             backoff (5xx Retry-After) never opens it: a host that keeps
+//                             answering 5xx opens source_failing after 3 runs instead
 //   source_refused  critical  the source refused access (F10-5); normally
 //                             opened by state.recordRefusal — the evaluator
 //                             only makes sure it exists
@@ -34,10 +42,61 @@ const { getSource, sourceStatus } = require('../config/source-registry');
 const { DEMO_SOURCE_TYPE } = require('../config/data-mode');
 
 const FAILING_AFTER = 3;
-const TYPES = Object.freeze(['source_stale', 'source_failing', 'source_refused']);
+// Grumpy #5 (diagnosis 2026-10-01): a host of the source rate-limited this
+// many times in a row (rate-limit.js WARN_AFTER; the streak resets on its
+// first success). A run whose OTHER routes succeed is 'ok', so
+// consecutive_failures never sees persistent throttling of one host.
+const { WARN_AFTER: RATE_LIMITED_WARN_AFTER, sanitizeHolds, collectionHolds, CONFIGURED_HOST } = require('./rate-limit');
+const LONG_HOLD_MS = 6 * 60 * 60 * 1000;
+const TYPES = Object.freeze(['source_stale', 'source_failing', 'source_refused', 'source_rate_limited']);
 
-/** Pure: which conditions hold for one source row. */
-function conditionsFor(row, src, now = Date.now()) {
+/**
+ * The hosts whose streak reached the warning threshold, as they may be
+ * published (security F3: a host the registry names, else "configured host").
+ */
+function throttledHosts(row, src, now, { env = null, routeKills = [] } = {}) {
+    const { routeAllowedHosts, openRoutes } = require('../config/source-registry');
+    const registry = new Set(src.routes.flatMap(r => routeAllowedHosts(r, {})));
+    // Copilot review: only hosts of the routes that are open NOW (env, missing
+    // configuration, database route kills): a closed route's host can never
+    // answer successfully to resolve the warning.
+    const live = env ? new Set(openRoutes(src, env, { routeKills }).flatMap(r => routeAllowedHosts(r, env))) : null;
+    // A throttled terms page is not the source being rate-limited.
+    const hit = Object.entries(sanitizeHolds(collectionHolds(src, row.rate_limited_hosts, env || {}), now))
+        // Principal review: ONE rate limit that parks a host for LONG_HOLD_MS or more
+        // (a Retry-After of a day) is persistent throttling too.
+        .filter(([host, h]) => (h.count >= RATE_LIMITED_WARN_AFTER
+            || (h.signal !== 'retry_after_5xx' && Date.parse(h.until) - now >= LONG_HOLD_MS))
+            && (!live || live.has(host)));
+    return {
+        hosts: [...new Set(hit.map(([host]) => (registry.has(host) ? host : CONFIGURED_HOST)))].sort(),
+        max_count: hit.reduce((m, [, h]) => Math.max(m, h.count), 0),
+    };
+}
+
+/**
+ * Why an open alert of `type` is being resolved (the audited resolution text).
+ * Copilot review: a source_rate_limited alert whose throttled route simply
+ * CLOSED (disabled, unconfigured) was not cleared by a host answering — say so.
+ */
+function resolutionWhy(type, collecting, row, src, now = Date.now()) {
+    if (!collecting) return 'the source is no longer collecting (closed or switched off)';
+    if (type === 'source_stale') return 'a new post was stored';
+    if (type === 'source_failing') return 'a run succeeded';
+    if (type === 'source_rate_limited') {
+        return throttledHosts(row, src, now).hosts.length
+            ? 'the throttled host\'s route is no longer open (disabled or unconfigured); no host answered — the streak is unchanged'
+            : 'the rate-limited host answered successfully';
+    }
+    return 'the refusal cleared';
+}
+
+/**
+ * Pure: which conditions hold for one source row.
+ * @param {{ env?: object, routeKills?: object[] }} [live]  the env and database route kills
+ *   (the open routes decide which throttled hosts count)
+ */
+function conditionsFor(row, src, now = Date.now(), live = {}) {
     const out = {};
     const hours = src.expectedNewWithinHours;
     // P0-2: a fixed anchor, never a time that moves with each run.
@@ -52,6 +111,10 @@ function conditionsFor(row, src, now = Date.now()) {
     if ((row.consecutive_failures || 0) >= FAILING_AFTER) {
         out.source_failing = { severity: 'warning', consecutive_failures: row.consecutive_failures,
             last_error_kind: row.last_error_kind || null, last_http_status: row.last_http_status || null };
+    }
+    const throttled = throttledHosts(row, src, now, live);
+    if (throttled.hosts.length) {
+        out.source_rate_limited = { severity: 'warning', hosts: throttled.hosts, max_count: throttled.max_count };
     }
     if (row.access_denied_at) {
         out.source_refused = { severity: 'critical', error_kind: row.access_denied_kind || null,
@@ -70,7 +133,7 @@ async function evaluateSourceHealth({ env = process.env, now = Date.now() } = {}
         `SELECT ds.id, ds.name, ds.collection_disabled_at,
                 s.last_attempt_at, s.last_success_at, s.last_new_post_at, s.freshness_anchor_at, s.consecutive_failures,
                 s.last_error_kind, s.last_http_status, s.access_denied_at, s.access_denied_kind,
-                s.access_denied_status, s.refused_until, s.refusal_count
+                s.access_denied_status, s.refused_until, s.refusal_count, s.rate_limited_hosts
          FROM data_sources ds
          JOIN source_collection_state s ON s.source_id = ds.id
          WHERE ds.source_type <> $1`,
@@ -92,7 +155,7 @@ async function evaluateSourceHealth({ env = process.env, now = Date.now() } = {}
         // by the database route kill switch is not collecting either.
         const collecting = sourceStatus(src, env, { routeKills: routeKills.get(row.id) || [] }).status === 'collecting'
             && !row.collection_disabled_at;
-        const cond = collecting ? conditionsFor(row, src, now) : {};
+        const cond = collecting ? conditionsFor(row, src, now, { env, routeKills: routeKills.get(row.id) || [] }) : {};
         for (const type of TYPES) {
             const existing = openBy.get(`${type}:${row.id}`);
             if (cond[type] && !existing) {
@@ -101,8 +164,7 @@ async function evaluateSourceHealth({ env = process.env, now = Date.now() } = {}
                 // makes a concurrent second insert a no-op.
                 if (await openSourceAlert(type, severity, row.id, { slug: src.slug, ...details })) opened.push({ slug: src.slug, type });
             } else if (!cond[type] && existing) {
-                const why = !collecting ? 'the source is no longer collecting (closed or switched off)'
-                    : type === 'source_stale' ? 'a new post was stored' : type === 'source_failing' ? 'a run succeeded' : 'the refusal cleared';
+                const why = resolutionWhy(type, collecting, row, src, now);
                 // P1-6: the resolution is an audited alert_resolutions record.
                 await resolveSourceAlert(type, row.id, {
                     resolvedBy: 'source-health evaluator (src/collectors/source-health.js)',
@@ -117,4 +179,4 @@ async function evaluateSourceHealth({ env = process.env, now = Date.now() } = {}
     return { opened, resolved };
 }
 
-module.exports = { evaluateSourceHealth, conditionsFor, FAILING_AFTER, TYPES };
+module.exports = { evaluateSourceHealth, conditionsFor, resolutionWhy, FAILING_AFTER, RATE_LIMITED_WARN_AFTER, TYPES };

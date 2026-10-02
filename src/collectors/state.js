@@ -12,6 +12,9 @@
 //   getRefusal / recordRefusal / endCooldown / decayRefusal / clearRefusal
 //       the refused state and its probation (F10-5, migrations 018 and
 //       062; src/collectors/refusal.js has the rules)
+//   loadHolds / saveHolds
+//       per-host rate-limit holds — a backoff, never a refusal (diagnosis
+//       2026-10-01, migration 075; src/collectors/rate-limit.js has the rules)
 //   routeKillSwitches / allRouteKillSwitches / setRouteKillSwitch
 //       the per-route database kill switch (migration 073)
 
@@ -368,8 +371,201 @@ async function clearRefusal(sourceId, resolution, { client = null } = {}) {
     }, client);
 }
 
+/**
+ * Diagnosis 2026-10-01 / security F5: every stored rate-limit hold, merged
+ * per host across sources by rate-limit.js combineHold — the streaks and
+ * signal of the NEWEST record (`at`; never a fieldwise maximum, which would
+ * resurrect a reset weak streak), the hold until the LATEST until — so a host
+ * held for one source is held for every source — and the governance terms
+ * fetch — that contacts it.
+ * @returns {Promise<object>} { hostname: hold } (rate-limit.js sanitizeHolds)
+ */
+async function loadHolds() {
+    const { mergeHolds, legacyHolds, LEGACY_HOLD_PREFIX } = require('./rate-limit');
+    // Copilot review: during a rolling deploy a previous-release worker can still
+    // write a PR #44 `retry-after:<host>` key into http_cache AFTER migration 077
+    // copied the stored ones (and a row with such a key may have no new-store hold
+    // at all). Those keys are holds of the one store too: folded in here, for every
+    // source, the terms fetch and Reddit maintenance — not only for the source
+    // that wrote them, whenever it is next claimed.
+    const rows = await dbAll(
+        `SELECT rate_limited_hosts,
+                (SELECT COALESCE(jsonb_object_agg(e.key, e.value), '{}'::jsonb)
+                   FROM jsonb_each(http_cache) AS e WHERE e.key LIKE $1) AS legacy
+         FROM source_collection_state
+         WHERE rate_limited_hosts <> '{}'::jsonb
+            OR EXISTS (SELECT 1 FROM jsonb_object_keys(http_cache) AS k WHERE k LIKE $1)`,
+        [`${LEGACY_HOLD_PREFIX}%`]);
+    const out = Object.create(null);
+    for (const r of rows) {
+        mergeHolds(out, r.rate_limited_hosts);
+        mergeHolds(out, legacyHolds(r.legacy || {}).holds);
+    }
+    return out;
+}
+
+/**
+ * Store a source's rate-limit holds (src/collectors/rate-limit.js), per host
+ * (grumpy #10: never a blind overwrite of the whole map). Under a row lock:
+ *   - a host this run CHANGED takes the run's entry — unless the stored one
+ *     holds longer (a concurrent run's newer limit wins) — or is removed
+ *     when the run's success cleared it (null);
+ *   - a host of the source that this run did not change takes the shared
+ *     client view (`view`) when that holds longer (another source on the
+ *     same host was limited), else keeps what is stored;
+ *   - stale streaks are dropped (sanitizeHolds).
+ * rate_limited_until = when the LAST active hold passes (NULL when none);
+ * rate_limited_routes = the routes the worker found held ({ id: until },
+ * grumpy #2 — /api/sources reads it, never recomputing hosts from the web
+ * process's env). When this run hit a NEW rate limit (`limited`), its
+ * allow-listed, scrubbed response headers and the time are recorded too.
+ * Never touches the refused state (refusal count, probation,
+ * access_denied_*) and opens no alert: a rate limit is a backoff.
+ * @param {string} sourceId
+ * @param {{ hosts: string[], changes?: Map, view?: object, routes?: object,
+ *           limited?: boolean, headers?: object|null, src?: object, env?: object,
+ *           routeKills?: object[] }} o
+ *   routeKills: the caller's database route kill switches — used only when they
+ *   cannot be read again here (they are refreshed at save time, so a takedown
+ *   issued mid-run keeps a disabled route out of rate_limited_routes)
+ *   routes: the caller's route map — used only without `src`; with `src` the
+ *   map is recomputed from the MERGED stored holds under the row lock (Copilot:
+ *   a concurrent saver's newer hold must not leave the routes `{}` while
+ *   enforcement still blocks the source)
+ *   src: the registry source — rate_limited_until then counts only its
+ *   collection hosts (never its terms page's)
+ */
+async function saveHolds(sourceId, { hosts, changes = new Map(), view = {}, routes = {}, limited = false, headers = null, src = null, env = process.env, routeKills = [] }) {
+    const rl = require('./rate-limit');
+    const { dbTransaction } = require('../db/connection');
+    const now = Date.now();
+    let kills = routeKills;
+    if (src) {
+        try {
+            kills = await routeKillSwitches(sourceId);
+        } catch {
+            // keep the caller's rows: the save must not be lost over a read
+        }
+    }
+    // A hold may be recorded under a host's www. / bare twin (the allow-list
+    // ignores a leading "www." — rate-limit.js hostKeys): the source's own.
+    const hostSet = new Set(hosts.flatMap(h => rl.hostKeys(h)));
+    const cleared = await dbTransaction(async (client) => {
+        // A source skipped before its first claim has no state row yet.
+        await client.query('INSERT INTO source_collection_state (source_id) VALUES ($1) ON CONFLICT (source_id) DO NOTHING', [sourceId]);
+        const cur = await client.query(
+            'SELECT rate_limited_hosts, rate_limited_until, rate_limited_routes FROM source_collection_state WHERE source_id = $1 FOR UPDATE', [sourceId]);
+        if (!cur.rows.length) return [];
+        const stored = rl.sanitizeHolds(cur.rows[0].rate_limited_hosts, now);
+        const viewClean = rl.sanitizeHolds(view, now);
+        const done = [];
+        for (const host of hostSet) {
+            if (changes.has(host)) {
+                const next = changes.get(host);
+                if (next === null) {
+                    // Grumpy N5: a success clears the host — but never a newer
+                    // hold another process stored meanwhile (still in force).
+                    if (!stored[host] || Date.parse(stored[host].until) <= now) {
+                        delete stored[host];
+                        done.push(host);
+                    }
+                } else {
+                    // Grumpy re-review: ONE combine rule with mergeHolds —
+                    // the newest record's streaks, the latest until.
+                    const mine = rl.sanitizeHolds({ [host]: next }, now)[host];
+                    if (mine) stored[host] = rl.combineHold(stored[host], mine);
+                }
+            } else if (viewClean[host] && Date.parse(viewClean[host].until) > now) {
+                // Only an ACTIVE hold of the run's snapshot is imported: an expired entry
+                // would bring back a streak another process's success just cleared.
+                stored[host] = rl.combineHold(stored[host], viewClean[host]);
+            }
+        }
+        // Copilot review: the worker, which sees the real env, records which host
+        // is this source's terms page ONLY (no route requests it) — the web process
+        // cannot tell, so /api/sources, the warning and the 5xx backoff time read
+        // the verdict from the hold itself.
+        if (src) Object.assign(stored, rl.markTermsOnly(src, stored, env));
+        // rate_limited_until: the source's COLLECTION holds only — a held
+        // terms page (src given) is not the source being rate-limited.
+        // A 5xx hold (retry_after_5xx) is not a rate limit: never in rate_limited_until.
+        const active = Object.values(rl.activeHolds(rl.rateLimitHolds(src ? rl.collectionHolds(src, stored, env) : stored), now)).map(h => h.until).sort();
+        const saved = headers && Object.keys(headers).length ? JSON.stringify(headers) : null;
+        const routeMap = src ? rl.storedRouteMap(rl.holdGate(src, env, stored, now, { routeKills: kills })) : (routes || {});
+        // Nothing changed (the usual tick of a source whose routes are all held): no write.
+        const row0 = cur.rows[0];
+        const nextUntil = active.length ? new Date(active[active.length - 1]).getTime() : null;
+        const curUntil = row0.rate_limited_until ? new Date(row0.rate_limited_until).getTime() : null;
+        const sortedJson = v => JSON.stringify(v, (_k, x) => (x && typeof x === 'object' && !Array.isArray(x)
+            ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => a.localeCompare(b))) : x));
+        if (!limited && done.length === 0 && nextUntil === curUntil
+            && sortedJson(stored) === sortedJson(row0.rate_limited_hosts) && sortedJson(routeMap) === sortedJson(row0.rate_limited_routes)) {
+            return done;
+        }
+        await client.query(
+            `UPDATE source_collection_state
+             SET rate_limited_hosts  = $2::jsonb,
+                 rate_limited_until  = $3::timestamptz,
+                 rate_limited_routes = $4::jsonb,
+                 rate_limited_at     = CASE WHEN $5::boolean THEN NOW() ELSE rate_limited_at END,
+                 rate_limit_headers  = CASE WHEN $5::boolean THEN $6::jsonb ELSE rate_limit_headers END,
+                 updated_at = NOW()
+             WHERE source_id = $1`,
+            [sourceId, JSON.stringify(stored), active.length ? active[active.length - 1] : null, JSON.stringify(routeMap),
+                limited, saved],
+        );
+        return done;
+    });
+    // Copilot review: a host's streak is ONE streak — a success clears its
+    // EXPIRED copies on every other source's row too, or the next run's
+    // merge would bring the old streak back (an active copy is kept). After
+    // the commit, one row per statement, so it never holds two row locks
+    // (grumpy re-review: no lock-order deadlock between concurrent saves).
+    for (const host of cleared) {
+        const others = await dbAll(
+            `SELECT source_id, rate_limited_hosts -> $2::text AS hold FROM source_collection_state
+             WHERE source_id <> $1 AND rate_limited_hosts ? $2::text`,
+            [sourceId, host],
+        );
+        for (const o of others) {
+            const until = Date.parse(o.hold && o.hold.until);
+            if (Number.isFinite(until) && until > Date.now()) continue;
+            // Optimistic: only if that copy is still the one read here.
+            await dbRun(
+                `UPDATE source_collection_state SET rate_limited_hosts = rate_limited_hosts - $2::text, updated_at = NOW()
+                 WHERE source_id = $1 AND rate_limited_hosts -> $2::text = $3::jsonb`,
+                [o.source_id, host, JSON.stringify(o.hold)],
+            );
+        }
+    }
+}
+
+/**
+ * Grumpy N2: persist the hold changes of an HTTP client used OUTSIDE the
+ * runner (the governance terms fetch, Reddit maintenance) on every source
+ * whose hosts — its routes' hosts and its terms page's host — include a
+ * changed host, so the next run honours them (and a success clears them).
+ * @param {Map} changes  http.drainHoldChanges()
+ * @param {object} view  the client's holds map
+ */
+async function saveHoldChanges(changes, view, { env = process.env } = {}) {
+    if (!changes || !changes.size) return;
+    const rl = require('./rate-limit');
+    const { SOURCES } = require('../config/source-registry');
+    const ids = await sourceIdsBySlug(SOURCES.map(s => s.slug));
+    for (const src of SOURCES) {
+        const hosts = new Set(rl.sourceHosts(src, env).flatMap(h => rl.hostKeys(h)));
+        const terms = rl.hostOf(src.termsUrl);
+        if (terms) for (const k of rl.hostKeys(terms)) hosts.add(k);
+        const mine = [...changes.keys()].filter(h => hosts.has(h));
+        const id = ids.get(src.slug);
+        if (!mine.length || !id) continue;
+        await saveHolds(id, { hosts: mine, changes, view, src, env });
+    }
+}
+
 module.exports = {
     sourceIdsBySlug, claim, saveOutcome, recordRun, countUnchangedRun, getRefusal, recordRefusal, clearRefusal,
-    endCooldown, decayRefusal,
+    endCooldown, decayRefusal, loadHolds, saveHolds, saveHoldChanges,
     dbKillSwitch, setDbKillSwitch, routeKillSwitches, allRouteKillSwitches, setRouteKillSwitch, CLAIM_SLACK_SEC, CLAIM_SLACK_FRACTION, claimSlackSec,
 };

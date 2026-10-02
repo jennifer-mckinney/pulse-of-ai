@@ -359,6 +359,135 @@ describe('discovery (a-d) against a scripted API', () => {
     });
 });
 
+describe('rate limits (grumpy #1, diagnosis 2026-10-01): Reddit asked us to wait — we stop', () => {
+    const { RateLimitedError } = require('../../../src/collectors/errors');
+    const INFO = /oauth\.reddit\.com\/api\/info/;
+    const names = n => Array.from({ length: n }, (_, i) => `t3_r${i}`);
+    const apiOver = (routes, holds = {}) => {
+        const transport = fixtureTransport(routes);
+        const http = new HttpClient({ transport, env: ENV, sleep: noSleep, holds });
+        const bud = new budget.MemoryBudget({ now: () => NOW });
+        return { api: new RedditApi({ http, env: ENV, budget: bud, requestOptions: x => ({ robots: false, ...x }) }), http, transport, bud };
+    };
+
+    test('a 429 with Retry-After 600 on /api/info: one request, held; the next call sends nothing and spends no budget', async () => {
+        const { api, http, transport, bud } = apiOver([TOKEN, [INFO, { status: 429, headers: { 'retry-after': '600' }, body: '' }]]);
+        await expect(api.info(names(2))).rejects.toBeInstanceOf(RateLimitedError);
+        expect(transport.calls.filter(c => INFO.test(c.url))).toHaveLength(1);
+        expect(http.holds['oauth.reddit.com']).toMatchObject({ http_status: 429, signal: 'http_429' });
+        const used = bud.used;
+        await expect(api.info(names(2))).rejects.toMatchObject({ held: true, host: 'oauth.reddit.com' });
+        expect(transport.calls.filter(c => INFO.test(c.url))).toHaveLength(1);
+        expect(bud.used).toBe(used);
+    });
+
+    test('Copilot: a held TOKEN host holds the API too, even with a cached token (prerequisite hosts)', async () => {
+        const warm = apiOver([TOKEN, [INFO, { body: '{"kind":"Listing","data":{"children":[]}}' }]]);
+        await warm.api.info(names(1));                           // the token is now cached
+        const holds = { 'www.reddit.com': { until: new Date(Date.now() + 60000).toISOString(), http_status: 429, signal: 'http_429', count: 1, weak: 0 } };
+        const { api, transport } = apiOver([TOKEN, [INFO, { body: '{}' }]], holds);
+        await expect(api.info(names(1))).rejects.toMatchObject({ held: true, host: 'www.reddit.com' });
+        expect(transport.calls).toHaveLength(0);
+    });
+
+    test('a held API host: no token is fetched and no request sent', async () => {
+        const holds = { 'oauth.reddit.com': { until: new Date(Date.now() + 60000).toISOString(), http_status: 429, signal: 'http_429', count: 1, weak: 0 } };
+        const { api, transport } = apiOver([TOKEN, [INFO, { body: '{}' }]], holds);
+        await expect(api.info(names(1))).rejects.toMatchObject({ held: true });
+        expect(transport.calls).toHaveLength(0);
+    });
+
+    test('discovery: a rate-limited about() stops the discovery (incomplete) — the next subreddit is never asked, none is dropped as unavailable', async () => {
+        const [q1] = buildQueries();
+        const many = (sub, n) => Array.from({ length: n }, (_, i) => ({ kind: 't3', data: { name: `t3_${sub}${i}`, subreddit: sub, title: 'New AI model', selftext: '', created_utc: 1790679600 } }));
+        const calls = [];
+        const api = {
+            async listing(path, params) { return params.q === q1 && !params.after ? { children: [...many('alpha', 30), ...many('beta', 30)], after: null } : { children: [], after: null }; },
+            async about(sub) {
+                calls.push(sub);
+                throw new RateLimitedError('oauth.reddit.com rate-limited us', { status: 429, host: 'oauth.reddit.com' });
+            },
+        };
+        const d = await discoverSubreddits({ api, env: {}, now: () => NOW });
+        expect(d).toMatchObject({ complete: false, selected: [], rateLimited: true });
+        expect(calls).toHaveLength(1);
+    });
+
+    test('discovery: a HELD server backoff (5xx Retry-After hold) stops the discovery too — incomplete, never "unavailable"', async () => {
+        const [q1] = buildQueries();
+        const { HttpError } = require('../../../src/collectors/errors');
+        const calls = [];
+        const api = {
+            async listing(path, params) { return params.q === q1 && !params.after ? { children: Array.from({ length: 30 }, (_, i) => ({ kind: 't3', data: { name: `t3_h${i}`, subreddit: 'alpha', title: 'AI news', selftext: '', created_utc: 1790679600 } })), after: null } : { children: [], after: null }; },
+            async about(sub) { calls.push(sub); throw new HttpError('not requested: backing off after a server error', { held: true, status: 503 }); },
+        };
+        const d = await discoverSubreddits({ api, env: {}, now: () => NOW });
+        expect(d.complete).toBe(false);
+        expect(JSON.stringify(d.exclusions || [])).not.toMatch(/unavailable|HTTP 5/);
+        expect(calls).toHaveLength(1);
+    });
+
+    test('discovery: a rate-limit 403 is not "subreddit unavailable (HTTP 403)"', async () => {
+        const [q1] = buildQueries();
+        const api = {
+            async listing(path, params) { return params.q === q1 && !params.after ? { children: Array.from({ length: 30 }, (_, i) => ({ kind: 't3', data: { name: `t3_g${i}`, subreddit: 'gamma', title: 'AI news', selftext: '', created_utc: 1790679600 } })), after: null } : { children: [], after: null }; },
+            async about() { throw new RateLimitedError('rate-limited', { status: 403, host: 'oauth.reddit.com', signal: 'ratelimit_remaining_zero' }); },
+        };
+        const d = await discoverSubreddits({ api, env: {}, now: () => NOW });
+        expect(d.complete).toBe(false);
+        expect(JSON.stringify(d.exclusions || [])).not.toMatch(/HTTP 403/);
+    });
+});
+
+describe('discovery: plain 403s on /about (owner decision 2026-10-02)', () => {
+    const { AccessDeniedError } = require('../../../src/collectors/errors');
+    const [q1] = buildQueries();
+    const listing = names => async (path, params) => (params.q === q1 && !params.after
+        ? { children: names.flatMap(n => Array.from({ length: 30 }, (_, i) => ({ kind: 't3', data: { name: `t3_${n}${i}`, subreddit: n, title: 'AI news', selftext: '', created_utc: 1790679600 } }))), after: null }
+        : { children: [], after: null });
+    const denied = () => new AccessDeniedError('refused (HTTP 403)', { status: 403 });
+    const ok = () => ({ display_name: 'x', subscribers: 5000, subreddit_type: 'public' });
+
+    test('the FIRST plain 403 is Reddit refusing us: the AccessDeniedError is rethrown, no ranking is stored', async () => {
+        let calls = 0;
+        const api = { listing: listing(['alpha', 'beta', 'gamma']), async about() { calls++; if (calls === 1) throw denied(); return ok(); } };
+        await expect(discoverSubreddits({ api, env: {}, now: () => NOW })).rejects.toBeInstanceOf(AccessDeniedError);
+        expect(calls).toBe(1);   // nothing further is asked
+    });
+
+    test('a plain 403 after successful lookups is a refusal too', async () => {
+        const seq = ['ok', 'ok', '403'];
+        let i = 0;
+        const api = { listing: listing(['a1', 'b1', 'c1', 'd1']), async about() { if (seq[i++] === '403') throw denied(); return ok(); } };
+        await expect(discoverSubreddits({ api, env: {}, now: () => NOW })).rejects.toBeInstanceOf(AccessDeniedError);
+    });
+
+    test('a bot wall at any status, a 451 or an escalated refusal is rethrown at once — never a private subreddit (grumpy 3)', async () => {
+        for (const e of [
+            new AccessDeniedError('bot wall', { status: 200, refusal: 'bot_wall' }),
+            new AccessDeniedError('bot wall', { status: 302, refusal: 'bot_wall' }),
+            new AccessDeniedError('bot wall', { status: 403, refusal: 'bot_wall' }),
+            new AccessDeniedError('escalated', { status: 403, refusal: 'escalated' }),
+            new AccessDeniedError('refused', { status: 451 }),
+        ]) {
+            const api = { listing: listing(['alpha', 'beta']), async about() { throw e; } };
+            await expect(discoverSubreddits({ api, env: {}, now: () => NOW })).rejects.toBe(e);
+        }
+    });
+
+    test('a 404 is still just an unavailable subreddit (it neither refuses nor resets anything)', async () => {
+        const seq = ['404', 'ok', '404'];
+        let i = 0;
+        const api = { listing: listing(['a1', 'b1', 'c1']), async about() {
+            if (seq[i++] === '404') throw Object.assign(new Error('nf'), { status: 404 });
+            return ok();
+        } };
+        const d = await discoverSubreddits({ api, env: {}, now: () => NOW });
+        expect(d.complete).toBe(true);
+        expect(JSON.stringify(d.exclusions)).toMatch(/HTTP 404/);
+    });
+});
+
 describe('RedditApi guards', () => {
     test('rejects malformed paths and /api/info batches over 100', async () => {
         const api = new RedditApi({ http: {}, env: ENV, budget: new budget.MemoryBudget() });
