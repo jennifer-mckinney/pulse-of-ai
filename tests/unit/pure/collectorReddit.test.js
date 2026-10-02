@@ -439,7 +439,7 @@ describe('rate limits (grumpy #1, diagnosis 2026-10-01): Reddit asked us to wait
     });
 });
 
-describe('discovery: plain 403s on /about (Copilot review)', () => {
+describe('discovery: plain 403s on /about (owner decision 2026-10-02)', () => {
     const { AccessDeniedError } = require('../../../src/collectors/errors');
     const [q1] = buildQueries();
     const listing = names => async (path, params) => (params.q === q1 && !params.after
@@ -448,17 +448,21 @@ describe('discovery: plain 403s on /about (Copilot review)', () => {
     const denied = () => new AccessDeniedError('refused (HTTP 403)', { status: 403 });
     const ok = () => ({ display_name: 'x', subscribers: 5000, subreddit_type: 'public' });
 
-    test('one private subreddit (a lone 403) is "unavailable", not a refusal', async () => {
-        const answers = [denied, ok, ok];
-        let i = 0;
-        const api = { listing: listing(['alpha', 'beta', 'gamma']), async about() { const a = answers[i++]; if (a === denied) throw denied(); return ok(); } };
-        const d = await discoverSubreddits({ api, env: {}, now: () => NOW });
-        expect(d.complete).toBe(true);
-        expect(JSON.stringify(d.exclusions)).toMatch(/HTTP 403/);
+    test('ABOUT_REFUSAL_AFTER is 1 (owner decision 2026-10-02)', () => {
+        expect(require('../../../src/collectors/reddit/discovery').ABOUT_REFUSAL_AFTER).toBe(1);
     });
 
-    test('three 403s in a row (none succeeding between) are Reddit refusing us: the AccessDeniedError is rethrown', async () => {
-        const api = { listing: listing(['alpha', 'beta', 'gamma', 'delta']), async about() { throw denied(); } };
+    test('the FIRST plain 403 is Reddit refusing us: the AccessDeniedError is rethrown, no ranking is stored', async () => {
+        let calls = 0;
+        const api = { listing: listing(['alpha', 'beta', 'gamma']), async about() { calls++; if (calls === 1) throw denied(); return ok(); } };
+        await expect(discoverSubreddits({ api, env: {}, now: () => NOW })).rejects.toBeInstanceOf(AccessDeniedError);
+        expect(calls).toBe(1);   // nothing further is asked
+    });
+
+    test('a plain 403 after successful lookups is a refusal too', async () => {
+        const seq = ['ok', 'ok', '403'];
+        let i = 0;
+        const api = { listing: listing(['a1', 'b1', 'c1', 'd1']), async about() { if (seq[i++] === '403') throw denied(); return ok(); } };
         await expect(discoverSubreddits({ api, env: {}, now: () => NOW })).rejects.toBeInstanceOf(AccessDeniedError);
     });
 
@@ -475,24 +479,16 @@ describe('discovery: plain 403s on /about (Copilot review)', () => {
         }
     });
 
-    test('a 404 between 403s ends the run of 403s (security F8)', async () => {
-        const seq = ['403', '403', '404', '403', '403', 'ok'];
+    test('a 404 is still just an unavailable subreddit (it neither refuses nor resets anything)', async () => {
+        const seq = ['404', 'ok', '404'];
         let i = 0;
-        const api = { listing: listing(['a1', 'b1', 'c1', 'd1', 'e1', 'f1']), async about() {
-            const k = seq[i++];
-            if (k === '403') throw denied();
-            if (k === '404') throw Object.assign(new Error('nf'), { status: 404 });
+        const api = { listing: listing(['a1', 'b1', 'c1']), async about() {
+            if (seq[i++] === '404') throw Object.assign(new Error('nf'), { status: 404 });
             return ok();
         } };
-        expect((await discoverSubreddits({ api, env: {}, now: () => NOW })).complete).toBe(true);
-    });
-
-    test('a success between 403s resets the run', async () => {
-        const seq = [true, true, false, true, true, false];
-        let i = 0;
-        const api = { listing: listing(['a1', 'b1', 'c1', 'd1', 'e1', 'f1']), async about() { if (seq[i++]) throw denied(); return ok(); } };
         const d = await discoverSubreddits({ api, env: {}, now: () => NOW });
         expect(d.complete).toBe(true);
+        expect(JSON.stringify(d.exclusions)).toMatch(/HTTP 404/);
     });
 });
 

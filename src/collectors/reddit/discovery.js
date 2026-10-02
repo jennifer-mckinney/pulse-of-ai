@@ -32,9 +32,9 @@ const { TOP_N, WINDOW_DAYS, DENY_LIST, minAiPosts, rankSubreddits } = require('.
 
 const MAX_PAGES_PER_QUERY = 10;
 const MAX_ABOUT_LOOKUPS = 250;
-// Consecutive plain 403s on /about (no lookup succeeding between) that are read as
-// Reddit refusing us, not as private subreddits (Copilot review).
-const ABOUT_REFUSAL_AFTER = 3;
+// Plain 403s on /about that are read as Reddit refusing us rather than as a
+// private subreddit. Owner decision 2026-10-02: the FIRST one is a refusal.
+const ABOUT_REFUSAL_AFTER = 1;
 const MAX_QUERY_CHARS = 400;
 
 /** OR-join the shared AI terms into queries of at most MAX_QUERY_CHARS. */
@@ -115,11 +115,10 @@ async function discoverSubreddits({ api, env = process.env, now = () => Date.now
         stats.qualifying = qualifying.length;
         const abouts = new Map();
         let looked = 0;
-        // Copilot review: a private subreddit answers 403 on its own, so ONE plain
-        // 403 is "unavailable" — but Reddit refusing us would answer every lookup
-        // so. ABOUT_REFUSAL_AFTER 403s in a row (no lookup succeeding between)
-        // are the source saying no: the AccessDeniedError is rethrown (the
-        // refused state), never read as a ranking of unavailable subreddits.
+        // Owner decision 2026-10-02: the first plain 403 on /about puts Reddit
+        // into the refused state (the AccessDeniedError is rethrown), never a
+        // ranking of 'unavailable' subreddits. ABOUT_REFUSAL_AFTER counts the
+        // consecutive plain 403s that make it so (1: the first one).
         let refused403 = 0;
         for (const q of qualifying) {
             if (isDenied(q.name)) continue;   // excluded without a request
@@ -145,10 +144,8 @@ async function discoverSubreddits({ api, env = process.env, now = () => Date.now
                 // (err.refusal) is never "a private subreddit" — rethrown at once, so a
                 // wall can never wipe the ranking with a snapshot of 'unavailable' rows.
                 if (err instanceof AccessDeniedError && (err.refusal || err.status === 401 || err.status === 451)) throw err;
-                // A private, banned or missing subreddit answers a PLAIN 403 / 404 on its
-                // own: ONE 403 is "unavailable". ABOUT_REFUSAL_AFTER plain 403s in a row
-                // (any other outcome — a success, a 404, another failure — ends the run)
-                // are Reddit refusing every lookup: the AccessDeniedError is rethrown.
+                // A missing subreddit answers 404 (= "unavailable"). A plain 403 is Reddit
+                // saying no (owner decision 2026-10-02): rethrown from the first one.
                 if (err instanceof AccessDeniedError && err.status === 403) {
                     if (++refused403 >= ABOUT_REFUSAL_AFTER) throw err;
                 } else {

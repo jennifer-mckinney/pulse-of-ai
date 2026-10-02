@@ -263,7 +263,7 @@ Amends "Ruling 5" and the politeness bullet above; nothing is worked around.
 - **Backoff.** Per hostname, until the source's time, at least 60 s doubling per consecutive limit, at most 24 h; one store (`source_collection_state.rate_limited_hosts`, migrations 075-077). A rate limit never touches the refusal count, probation or the critical alert; persistent throttling opens the `source_rate_limited` warning.
 - **Escalation (fail closed).** The 5th consecutive body-only limit, the 5th consecutive strong 403, or the 14th consecutive rate limit of any kind with no success is a refusal (ruling 5); the host stays held.
 - **Server backoff.** A 5xx's long `Retry-After` holds the host at most 1 h as a separate server backoff (not a rate limit).
-- **Behaviour changes decided here.** A 401 / 403 / 451 on `robots.txt` is a refusal (ruling 5), no longer "no rules" (RFC 9309's permissive reading). A bot wall at any status (including a small HTML 2xx challenge page) is a refusal. Reddit discovery treats three consecutive plain 403s on `/about` as Reddit refusing us (one is a private or quarantined subreddit) — owner decision, Jennifer to confirm.
+- **Behaviour changes decided here.** A 401 / 451 on `robots.txt` is a refusal (ruling 5), no longer "no rules" (RFC 9309's permissive reading); a plain 403 on `robots.txt` stays "no rules" as before, unless it carries rate-limit evidence (a rate limit) or a bot-wall challenge (a refusal). A bot wall at any status (including a small HTML 2xx challenge page) is a refusal. Reddit discovery treats the first plain 403 on `/about` as Reddit refusing us (the refused state). Both decided by the owner, 2026-10-02.
 - Cell-by-cell behaviour: `docs/research/rate-limit-hold-matrix.md`.
 
 ### Merge order

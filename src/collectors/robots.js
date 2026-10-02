@@ -21,6 +21,11 @@
 //                        feeds answer 200. This never works around a wall: a
 //                        401/403 on the resource itself still stops the run
 //                        (AccessDeniedError in http.js).
+//                        Exceptions, decided by the owner 2026-10-02 and thrown
+//                        by http.js before the policy sees them: 401 and 451
+//                        are refusals; a 403 or 429 with rate-limit evidence is
+//                        a rate limit; a bot-wall challenge at any status is a
+//                        refusal.
 //   429 / 5xx / error    "unreachable" → complete disallow (§2.3.1.4)
 
 'use strict';

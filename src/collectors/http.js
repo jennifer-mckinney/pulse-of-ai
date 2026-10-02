@@ -30,7 +30,7 @@
 //     holds the requested URL's host as well (PR #44), so a fresh client
 //     sends nothing at all — not robots.txt, not the first hop. This is the
 //     ONE hold path: PR #44's TLDR Retry-After holds are a case of it;
-//   - 401 / 451, any other 403, and bot challenges (a challenge page or
+//   - 401 / 451, any other 403 (on a page; a plain 403 on robots.txt is "no rules"), and bot challenges (a challenge page or
 //     cf-mitigated: challenge — F6, src/collectors/challenge.js) → AccessDeniedError,
 //     never retried; it carries an ALLOW-LIST of the refusal's response
 //     headers (server, date, retry-after, x-ratelimit-*, cache / edge
@@ -204,6 +204,9 @@ function refusalHeaders(headers, env = process.env) {
 
 // The statuses that are the source refusing us (never retried).
 const REFUSAL_STATUSES = Object.freeze([401, 403, 451]);
+// ... and on robots.txt (owner decision 2026-10-02): a plain 403 there is "no
+// rules" (as before PR #45), so only 401 and 451 are refusals.
+const ROBOTS_REFUSAL_STATUSES = Object.freeze([401, 451]);
 
 /**
  * The wait before an in-run retry: the source's Retry-After WHOLE (never
@@ -432,10 +435,14 @@ class HttpClient {
             throw new AccessDeniedError(`${rateLimit.publicHostName(host)} refused access (HTTP ${res.status}, bot wall on robots.txt) — not retried, not worked around`,
                 { status: res.status, url: redactUrl(url), headers: refusalHeaders(res.headers, this.env), refusal: 'bot_wall' });
         }
-        // Security review P1 (ADR 0001 ruling 5): a 401 / 403 / 451 on robots.txt is
+        // Owner decision 2026-10-02 (ADR 0001 ruling 5): a 401 / 451 on robots.txt is
         // the source saying no — a refusal, never "no rules" (that would then ask
-        // for the page itself). A 404 / 410 still means "no robots.txt" (RFC 9309).
-        if (REFUSAL_STATUSES.includes(res.status)) {
+        // for the page itself). A 403 is "no rules" again, as before PR #45 (RFC 9309
+        // §2.3.1.3: any 4xx = unavailable) — EXCEPT a 403 with rate-limit evidence
+        // or a bot-wall challenge, which were classified above (rate limit / wall).
+        // A 404 / 410 still means "no robots.txt". The page itself keeps its 401 /
+        // 403 / 451 refusal either way.
+        if (ROBOTS_REFUSAL_STATUSES.includes(res.status)) {
             throw new AccessDeniedError(`${rateLimit.publicHostName(host)} refused access (HTTP ${res.status}, robots.txt) — not retried, not worked around`,
                 { status: res.status, url: redactUrl(url), headers: refusalHeaders(res.headers, this.env) });
         }

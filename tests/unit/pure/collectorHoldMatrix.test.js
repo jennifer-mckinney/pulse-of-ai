@@ -24,7 +24,9 @@ const CHALLENGE_BODY = '<html><div id="cf-chl-widget"></div></html>';
 //   kind 'limit'    RateLimitedError, the final host held (the first host too behind a redirect), never AccessDenied
 //   kind 'wall'     AccessDeniedError (a refusal), NO hold
 //   kind 'server'   a 5xx Retry-After hold: HttpError (never RateLimitedError), signal retry_after_5xx
-//   kind 'refusal'  a plain 403: AccessDeniedError (a page AND robots.txt — ADR 0001 ruling 5); NO hold
+//   kind 'refusal'  a 401 / 451: AccessDeniedError on a page AND on robots.txt (ADR 0001 ruling 5); NO hold
+//   kind 'plain403' a plain 403: AccessDeniedError on a page; on robots.txt it is "no rules" (owner decision
+//                   2026-10-02) and the page is then fetched; NO hold either way
 //   kind 'content'  a 2xx that is content (page) / a refusal (robots.txt)
 const SCENARIOS = {
     '429 + Retry-After': { res: { status: 429, headers: { 'retry-after': '600' }, body: '' }, kind: 'limit', signal: 'http_429' },
@@ -43,7 +45,9 @@ const SCENARIOS = {
     'bot wall: challenge page on a 503 with Retry-After': { res: { status: 503, headers: { 'retry-after': '3600' }, body: CHALLENGE_BODY }, kind: 'wall' },
     'bot wall: challenge page on a 200 text/html': { res: { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' }, body: CHALLENGE_BODY }, kind: 'wall' },
     '503 + Retry-After 3600': { res: { status: 503, headers: { 'retry-after': '3600' }, body: '' }, kind: 'server', signal: 'retry_after_5xx' },
-    'plain 403': { res: { status: 403, headers: { server: 'Varnish' }, body: '' }, kind: 'refusal' },
+    'plain 403': { res: { status: 403, headers: { server: 'Varnish' }, body: '' }, kind: 'plain403' },
+    '401': { res: { status: 401, headers: {}, body: '' }, kind: 'refusal' },
+    '451': { res: { status: 451, headers: {}, body: '' }, kind: 'refusal' },
 };
 
 // Where the scenario's response is served.
@@ -120,10 +124,19 @@ describe('matrix: HTTP path x response class (one test per cell)', () => {
                 expect(classifyError(err)).toEqual({ error_kind: 'http_5xx', http_status: 503 });
             }
         } else if (sc.kind === 'refusal') {
-            // ADR 0001 ruling 5: a plain 403 is the source saying no, on robots.txt too (never "no rules").
+            // ADR 0001 ruling 5: a 401 / 451 is the source saying no, on robots.txt too (never "no rules").
             expect(err).toBeInstanceOf(AccessDeniedError);
             expect(holds).toEqual([]);
             if (robots) expect(t.transport.calls.filter(c => c.url.includes('/page'))).toHaveLength(0);
+        } else if (sc.kind === 'plain403') {
+            expect(holds).toEqual([]);
+            if (robots) {
+                // Owner decision 2026-10-02: a plain 403 on robots.txt is "no rules" (as before PR #45).
+                expect(err).toBeNull();
+                expect(t.transport.calls.filter(c => c.url.includes('/page'))).toHaveLength(1);
+            } else {
+                expect(err).toBeInstanceOf(AccessDeniedError);
+            }
         }
     });
 });
@@ -157,6 +170,10 @@ describe('matrix: the held second call (heldError)', () => {
             expect(again).toMatchObject({ held: true, status: 503 });
             expect(classifyError(again).error_kind).toBe('http_5xx');
             expect(sent).toBe(0);
+        } else if (sc.kind === 'plain403' && (path === 'robots' || path === 'robotsRedirect')) {
+            // "No rules" is cached for the origin: the page is asked again and answers.
+            expect(sent).toBeGreaterThan(0);
+            expect(again).toBeNull();
         } else {
             // A refusal never creates a hold: the next call is sent (and refused again).
             expect(sent).toBeGreaterThan(0);
@@ -256,9 +273,9 @@ describe('matrix: held-host aliases and mid-flight holds', () => {
         expect(t.http.holds['a.example']).toMatchObject({ signal: 'retry_after_5xx' });
     });
 
-    test('a 403 on /robots.txt with a bare remaining: 0 is a refusal, never a rate limit (security F1 / P1)', async () => {
+    test('a 403 on /robots.txt with a bare remaining: 0 (no reset) is not rate-limit evidence: "no rules", never a hold (owner decision 2026-10-02)', async () => {
         const t = build('robots', { status: 403, headers: { 'x-ratelimit-remaining': '0' }, body: '' });
-        expect(await t.run().catch(e => e)).toBeInstanceOf(AccessDeniedError);
+        expect(await t.run().catch(e => e)).toMatchObject({ status: 200 });
         expect(t.http.holds).toEqual({});
     });
 });

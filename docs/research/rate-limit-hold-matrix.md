@@ -25,8 +25,8 @@ A 5xx Retry-After hold (`retry_after_5xx`) is a separate server backoff, not a r
 | `request()` first hop | hold, thrown | hold, thrown | refusal, no hold | `retry_after_5xx` hold, HttpError | refusal | clears host |
 | `request()` behind a redirect | hold on target and on the host first asked | same | refusal | same as 429 | refusal | clears both |
 | `request()` into an already-held host | the first host is held too | same | n/a | same | n/a | n/a |
-| `fetchRobots` direct | hold, thrown, nothing cached | same | refusal (any status) | hold, robots unreachable | refusal (ADR 0001 ruling 5; was "no rules") | clears host |
-| `fetchRobots` behind a redirect | target and first host held | same | refusal before the hop is followed | both held | refusal | clears both |
+| `fetchRobots` direct | hold, thrown, nothing cached | same | refusal (any status) | hold, robots unreachable | 401 / 451: refusal (ADR 0001 ruling 5; was "no rules"); a plain 403: "no rules" again (owner decision 2026-10-02) | clears host |
+| `fetchRobots` behind a redirect | target and first host held | same | refusal before the hop is followed | both held | 401 / 451: refusal; plain 403: "no rules" | clears both |
 | `heldError` (next call) | RateLimitedError `held`, nothing sent | same | no hold, sent again | HttpError `held` `http_5xx`, nothing sent | sent again | n/a |
 | mid-retry hold (`withRetries`) | thrown as the answer, not retried or wrapped | same | n/a | same | n/a | n/a |
 | governance terms fetch | refused unsent | same | recorded unreachable | same | unreachable | clears and saves |
@@ -47,8 +47,7 @@ process, the evaluator and the 5xx time all see the collection hold).
 
 - After migration 077, `rate_limited_routes` is recomputed by the worker's next save (it needs the registry and env, not SQL). Enforcement is
   immediate (`loadHolds` reads the hold map). `rate_limited_until` is informational only; `/api/sources` computes its time from the holds.
-- Reddit `about()`: a lone plain 403 is how Reddit answers a private or quarantined subreddit; a refusing Reddit answers every lookup, so 3 in a
-  row (`ABOUT_REFUSAL_AFTER`) are a refusal. A bot wall, 401, 451 or an escalated refusal is rethrown at once. Owner decision (Copilot suggested the first 403).
-- Behaviour change: a 401 / 403 / 451 on `robots.txt` is a refusal (ADR 0001 ruling 5), no longer "no rules".
+- Reddit `about()`: the first plain 403 puts Reddit into the refused state (`ABOUT_REFUSAL_AFTER = 1`; owner decision 2026-10-02). A 404 is an unavailable subreddit; a bot wall, 401, 451 or an escalated refusal is rethrown at once; a rate limit stops the discovery.
+- Behaviour change (owner decision 2026-10-02): a 401 / 451 on `robots.txt` is a refusal (ADR 0001 ruling 5), no longer "no rules". A plain 403 on `robots.txt` stays "no rules", as before this PR; a 403 with rate-limit evidence is still a rate limit and a bot-wall challenge at any status is still a refusal. The page itself keeps its 401 / 403 / 451 refusal.
 
 Diagrams (`docs/diagrams/states/source-gate-status`, `flows/collection-1-schedule-and-gates`) do not yet show the `rate_limited` state; they are updated under the diagram accuracy contract (independent row-by-row audit, PNG regenerated), tracked with the other diagram issues, not edited here.
