@@ -8,7 +8,9 @@
 --
 -- 1. source_runs.dropped_* — the collector's in-memory dropped counters
 --    (invalid, old, out of scope, in-batch duplicate), summed over the
---    source's routes, per run. NULL on rows written before this migration
+--    source's routes, per run. Like items_fetched they describe THAT run, so a
+--    route retried after a store failure appears in both runs (the per-rule
+--    admission_rule_hits counts, below, count it once). NULL on rows written before this migration
 --    (not recorded), never a fake 0.
 -- 2. source_run_daily.dropped_* — the same counts, rolled up with the run
 --    after SOURCE_RUNS_RAW_DAYS (src/collectors/run-retention.js); spec §19
@@ -46,9 +48,9 @@ CREATE TABLE IF NOT EXISTS admission_rule_hits (
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (day, source_id, route, admission_mv_id, rule_id)
 );
--- The API reads the last 7 days of every source (/api/sources, /api/health):
--- day first, so that is a range seek, not a scan of the whole retention window.
-CREATE INDEX IF NOT EXISTS idx_admission_rule_hits_day_source ON admission_rule_hits (day, source_id);
+-- The API reads the last 7 days (/api/sources, /api/health): the primary key
+-- starts with day, so that is a range seek. This index serves per-source history.
+CREATE INDEX IF NOT EXISTS idx_admission_rule_hits_source_day ON admission_rule_hits (source_id, day);
 
 COMMENT ON TABLE admission_rule_hits IS
     'Counts only (no text, no ids): per UTC day, source, route, admission_filter version and rule, how many fetched items were admitted or rejected. Counted per evaluation (a re-served item counts again). Kept ADMISSION_RULE_HITS_DAYS (default 400) days. Migration 068; src/collectors/admission-counters.js.';

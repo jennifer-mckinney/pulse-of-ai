@@ -140,7 +140,7 @@ describe('what is counted, and when', () => {
         const base = { sourceId: await bbcId(), jobId: null, gateStatus: 'collecting', itemsFetched: 0, postsNew: 0 };
         await recordRun({ ...base, outcome: 'skipped' });
         await recordRun({ ...base, outcome: 'ok', dropped: { invalid: 0, old: 2 } });
-        const rows = await dbAll('SELECT dropped_invalid, dropped_old, dropped_out_of_scope, dropped_duplicate FROM source_runs ORDER BY started_at, outcome DESC');
+        const rows = await dbAll('SELECT dropped_invalid, dropped_old, dropped_out_of_scope, dropped_duplicate FROM source_runs WHERE source_id = $1', [await bbcId()]);
         const byOld = Object.fromEntries(rows.map(r => [String(r.dropped_old), r]));
         expect(byOld.null).toEqual({ dropped_invalid: null, dropped_old: null, dropped_out_of_scope: null, dropped_duplicate: null });
         expect(byOld['2']).toEqual({ dropped_invalid: 0, dropped_old: 2, dropped_out_of_scope: 0, dropped_duplicate: 0 });
