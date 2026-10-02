@@ -7,9 +7,14 @@
 //   po = observed agreement, pe = chance agreement from the two labellers'
 //   own marginals (Cohen 1960). Undefined (null) with no shared items or
 //   when pe = 1 (both used one and the same category only).
-// The 95% interval uses the large-sample approximation
-//   SE = sqrt(po (1 - po) / (n (1 - pe)^2))
-// clamped to [-1, 1]; with small n it is indicative only.
+// The 95% interval uses the large-sample variance with the chance agreement
+// ESTIMATED from the marginals (Fleiss, Cohen & Everitt 1969):
+//   var = { sum_i p_ii [(1 - pe) - (p_i. + p_.i)(1 - po)]^2
+//           + (1 - po)^2 sum_{i != j} p_ij (p_.i + p_j.)^2
+//           - (po pe - 2 pe + po)^2 } / (n (1 - pe)^4),   SE = sqrt(var)
+// clamped to [-1, 1]. With small n it is indicative only; with perfect
+// agreement (or a zero variance) the approximation is invalid and no interval
+// is reported (ci95 is null).
 //
 // Reported per labeller pair: three-class kappa (AI_CENTRAL / AI_INCIDENTAL /
 // NOT_AI), binary kappa (the codebook metric: central + incidental = AI) and

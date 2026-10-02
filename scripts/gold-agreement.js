@@ -14,6 +14,7 @@
 'use strict';
 
 require('dotenv').config();
+const { hasControl, oneLine } = require('../src/gold/labelling');
 
 const USAGE = 'usage: npm run gold:agreement -- [--sample ID] [--a NAME --b NAME] [--codebook VERSION] [--json]';
 
@@ -35,6 +36,10 @@ function parseArgs(argv) {
             case '--json': out.json = true; break;
             default: throw new Error(`unknown argument ${a}\n${USAGE}`);
         }
+    }
+    // Identifiers are echoed in the report: no control or format characters.
+    for (const [flag, v] of [['--sample', out.sample], ['--a', out.a], ['--b', out.b], ['--codebook', out.codebook]]) {
+        if (v !== null && hasControl(v)) throw new Error(`${flag} may not contain control or format characters`);
     }
     if (Boolean(out.a) !== Boolean(out.b)) throw new Error('--a and --b go together');
     if (out.a && out.a === out.b) throw new Error('--a and --b must name two different labellers');
@@ -71,11 +76,11 @@ async function main(argv, { env = process.env, out = l => process.stdout.write(l
         out(JSON.stringify(result, null, 2));
         return result;
     }
-    out(`gold agreement${opts.sample ? ` for ${opts.sample}` : ''} (codebook ${opts.codebook}): ${rows.length} label row(s), `
+    out(`gold agreement${opts.sample ? ` for ${oneLine(opts.sample)}` : ''} (codebook ${oneLine(opts.codebook)}): ${rows.length} label row(s), `
         + `${report.labellers.length} labeller(s), ${result.pairs.length} pair(s) with shared items`);
     for (const p of result.pairs) {
         out('');
-        out(`${p.a} vs ${p.b}: ${p.n} shared item(s)${p.enough_items ? '' : ' (below 300: every reading is indicative only)'}`);
+        out(`${oneLine(p.a)} vs ${oneLine(p.b)}: ${p.n} shared item(s)${p.enough_items ? '' : ' (below 300: every reading is indicative only)'}`);
         const ci = (c) => (c ? ` [${fmt(c[0])}, ${fmt(c[1])}]` : '');
         out(`  three-class  kappa ${fmt(p.three_class.kappa)}${ci(p.three_class.ci95)}  agreement ${fmt(p.three_class.po)}  ${p.three_class.reading}`);
         out(`  binary       kappa ${fmt(p.binary.kappa)}${ci(p.binary.ci95)}  agreement ${fmt(p.binary.po)}  ${p.binary.reading}`);
@@ -84,7 +89,7 @@ async function main(argv, { env = process.env, out = l => process.stdout.write(l
         for (const [f, k] of Object.entries(p.flags)) out(`  flag ${f.padEnd(14)} kappa ${fmt(k.kappa)}  agreement ${fmt(k.po)}  ${k.reading}`);
         const cats = Object.keys(p.three_class.confusion);
         if (cats.length) {
-            out(`  confusion (rows ${p.a}, columns ${p.b}): ${cats.join(' / ')}`);
+            out(`  confusion (rows ${oneLine(p.a)}, columns ${oneLine(p.b)}): ${cats.join(' / ')}`);
             for (const r of cats) out(`    ${r.padEnd(14)} ${cats.map(c => String(p.three_class.confusion[r][c]).padStart(5)).join(' ')}`);
         }
     }

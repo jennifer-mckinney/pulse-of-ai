@@ -29,6 +29,7 @@
 'use strict';
 
 require('dotenv').config();
+const { hasControl, oneLine } = require('../src/gold/labelling');
 
 // A calendar date, optionally with a time (what Postgres and Date.parse agree on).
 const DATE_RE = /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
@@ -62,6 +63,7 @@ function parseArgs(argv) {
     }
     if (!Number.isInteger(out.total) || out.total <= 0) throw new Error(`--total must be a positive integer\n${USAGE}`);
     if (!out.seed || !out.seed.trim() || out.seed.length > 200) throw new Error(`--seed is required (1–200 characters)\n${USAGE}`);
+    if (hasControl(out.seed)) throw new Error('--seed may not contain control or format characters');
     if (!Number.isInteger(out.minPerStratum) || out.minPerStratum < 0) throw new Error('--min-per-stratum must be a non-negative integer');
     if (out.since !== null && !(DATE_RE.test(out.since) && !Number.isNaN(Date.parse(out.since)))) throw new Error(`--since must be a date, YYYY-MM-DD (got "${out.since}")`);
     if (out.write && !out.sampleId) throw new Error(`--write needs --sample-id\n${USAGE}`);

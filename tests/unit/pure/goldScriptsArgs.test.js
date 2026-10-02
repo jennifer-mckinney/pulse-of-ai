@@ -28,6 +28,8 @@ describe('gold-sample parseArgs', () => {
         [['--total', '10', '--seed', 's', '--since', 'yesterday-ish'], /--since/],
         [['--total', '10', '--seed', 's', '--write'], /--sample-id/],
         [['--total', '10', '--seed', 's', '--sample-id', 'Bad Id'], /--sample-id/],
+        [['--total', '10', '--seed', 's\u001b[2J\nx'], /--seed may not contain/],
+        [['--total', '10', '--seed', 'a\u200Bb'], /--seed may not contain/],
         [['--total', '10', '--seed', 's', '--bogus'], /unknown argument/],
         [['--total'], /needs a value/],
     ])('rejects %j', (argv, err) => {
@@ -75,6 +77,9 @@ describe('gold-agreement parseArgs', () => {
         [['--a', 'x'], /together/],
         [['--a', 'x', '--b', 'x'], /different/],
         [['--nope'], /unknown argument/],
+        [['--a', 'x\ny', '--b', 'z'], /--a may not contain/],
+        [['--sample', 'g\u001b[2J'], /--sample may not contain/],
+        [['--codebook', '1\n2'], /--codebook may not contain/],
     ])('rejects %j', (argv, err) => {
         expect(() => agreement.parseArgs(argv)).toThrow(err);
     });

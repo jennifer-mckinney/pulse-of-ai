@@ -9,7 +9,7 @@
 // label (except when ADJUDICATING a disagreement, which is the point).
 //
 // The text is read from raw_posts at labelling time and its sha256 must
-// equal the item's input_hash (the text the sampler saw). The gold tables
+// match the item's input_hash (a keyed HMAC-SHA256 fingerprint of the text the sampler saw). The gold tables
 // never copy post text, so text retention (src/collectors/retention.js)
 // still applies: an item whose text was removed or changed is skipped, not
 // labelled from memory.
@@ -128,6 +128,7 @@ function parseAnswer(input) {
     const hash = raw.indexOf('#');
     const body = (hash >= 0 ? raw.slice(0, hash) : raw).trim().toLowerCase();
     const note = hash >= 0 ? raw.slice(hash + 1).trim() || null : null;
+    if (note && hasControl(note)) return { action: 'invalid', reason: 'a note may not contain control or format characters' };
     if (note && note.length > NOTE_MAX) return { action: 'invalid', reason: `a note is at most ${NOTE_MAX} characters` };
     if (body === 'k') return { action: 'skip' };
     if (body === 'q') return { action: 'quit' };

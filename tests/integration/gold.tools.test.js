@@ -205,6 +205,18 @@ describe('scripts/gold-label.js', () => {
         expect(lines.join('\n')).not.toMatch(/\u001b|\u0007/);
     });
 
+    it('an adjudicated item re-opens when the coders later converge on a different label', async () => {
+        await goldLabel.main(['--sample', 'gold-lab', '--labeller', 'ann'], { env: LOCAL, io: fakeIo(Array(6).fill('c')).io });
+        await goldLabel.main(['--sample', 'gold-lab', '--labeller', 'bob'], { env: LOCAL, io: fakeIo(['n', 'c', 'c', 'c', 'c', 'c']).io });
+        const [dispute] = await store.pendingItems({ sampleId: 'gold-lab', labeller: 'jen', method: 'adjudicated' });
+        await goldLabel.main(['--sample', 'gold-lab', '--labeller', 'jen', '--method', 'adjudicated'], { env: LOCAL, io: fakeIo(['n']).io });
+        expect(await store.pendingItems({ sampleId: 'gold-lab', labeller: 'jen', method: 'adjudicated' })).toEqual([]);
+        // bob now agrees with ann: nobody disagrees, but the adjudicated ruling rested on a signature that changed.
+        await goldLabel.main(['--sample', 'gold-lab', '--labeller', 'bob', '--relabel', dispute.id], { env: LOCAL, io: fakeIo(['c']).io });
+        const reopened = await store.pendingItems({ sampleId: 'gold-lab', labeller: 'jen', method: 'adjudicated' });
+        expect(reopened.map(x => x.id)).toEqual([dispute.id]);
+    });
+
     it('relabel appends a correction (the latest row counts) and re-opens an adjudicated item', async () => {
         await goldLabel.main(['--sample', 'gold-lab', '--labeller', 'ann'], { env: LOCAL, io: fakeIo(Array(6).fill('c')).io });
         await goldLabel.main(['--sample', 'gold-lab', '--labeller', 'bob'], { env: LOCAL, io: fakeIo(['n', 'c', 'c', 'c', 'c', 'c']).io });

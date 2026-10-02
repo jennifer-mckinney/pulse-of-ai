@@ -169,8 +169,9 @@ async function labelRows({ sampleId = null, codebookVersion = null, methods = nu
  *                block relabelling under the new one.
  *   adjudicated: items where the latest human labels of two or more
  *                labellers disagree (label or flags) and no adjudicated
- *                label is newer than the newest of those human labels (a
- *                later human correction re-opens an adjudicated item).
+ *                label is newer than the newest of those human labels; an
+ *                already adjudicated item re-opens when any human label has
+ *                changed since (a later human correction re-opens it).
  */
 async function pendingItems({ sampleId, labeller, method = 'human', codebookVersion = null }) {
     if (method === 'human') {
@@ -208,13 +209,16 @@ async function pendingItems({ sampleId, labeller, method = 'human', codebookVers
     const now = signature(human);
     const disputed = [];
     for (const [id, sigs] of now) {
-        const distinct = new Set(sigs.map(x => x.slice(x.indexOf('=') + 1)));
-        if (distinct.size < 2) continue;
         if (adjudicatedSeq.has(id)) {
+            // Adjudicated: re-open on ANY change of a human signature since then (even when the
+            // coders now agree, the adjudicated label was decided on facts that no longer hold).
             const at = signature(human.filter(r => r.item_id === id && BigInt(String(r.seq)) < adjudicatedSeq.get(id))).get(id) || [];
-            if (at.join('|') === sigs.join('|')) continue;
+            if (at.join('|') !== sigs.join('|')) disputed.push(id);
+            continue;
         }
-        disputed.push(id);
+        // Never adjudicated: only a disagreement between labellers queues it.
+        const distinct = new Set(sigs.map(x => x.slice(x.indexOf('=') + 1)));
+        if (distinct.size >= 2) disputed.push(id);
     }
     if (!disputed.length) return [];
     return dbAll(

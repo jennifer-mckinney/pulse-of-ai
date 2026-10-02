@@ -192,6 +192,12 @@ describe('review fixes: import namespace, terminal safety, notes, local-only por
 });
 
 describe('review fixes round 5: single-line identifiers', () => {
+    it('a note with a control or zero-width character is refused (it could hide a quotation)', () => {
+        expect(l.parseAnswer('c # ok\u200Bnote')).toMatchObject({ action: 'invalid' });
+        expect(l.parseAnswer('c # tab\there')).toMatchObject({ action: 'invalid' });
+        expect(l.parseAnswer('c # plain note')).toMatchObject({ action: 'label', note: 'plain note' });
+    });
+
     it('oneLine turns the newline and tab sanitize() keeps into spaces', () => {
         expect(l.oneLine('a\nb\tc\u001b')).toBe('a b c\uFFFD');
         expect(l.hasControl('a\nb')).toBe(true);

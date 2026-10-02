@@ -189,7 +189,7 @@ const NEGATIVE = freezeAll([
     { id: 'nlp_neuro_linguistic', target: 'nlp', mask: [/\bNLP\b/i], when: /\bneuro-?linguistic\b/i },
 ]);
 
-// ─── SPAM SIGNATURES (force NOT_AI, propose SPAM) ────────────────────────────
+// ─── SPAM SIGNATURES (propose SPAM; the topic decision is unchanged) ────────────────────────────
 const PHONE_CANDIDATE = /\+?\d[\d\s().-]{8,}\d/g;
 // ISO dates and clock times are digit runs too ("2024-10-01 12:30:45"); blank them first.
 const DATE_OR_TIME = /\b\d{4}-\d{2}-\d{2}(?:[T\s]\d{1,2}:\d{2}(?::\d{2})?)?\b|\b\d{1,2}:\d{2}(?::\d{2})?\b/g;
