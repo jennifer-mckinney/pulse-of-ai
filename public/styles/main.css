@@ -502,15 +502,18 @@ body {
 
 /* K1: the header gained a "credits" chip; on a phone the chips must still all
    fit (the health chip opens the health drawer and must never be clipped by
-   body overflow-x: hidden). */
+   body overflow-x: hidden). At 375px the header wraps to three rows (brand,
+   then the time-to-insight and credits chips, then the health chip), about
+   96px tall, so the explore filter column starts below it (e2e asserts the
+   gap). */
 @media (max-width: 520px) {
-  /* the brand takes the first row, the three chips the second */
+  /* the brand takes the first row; the chips wrap beneath it */
   .hdr { padding: 12px 14px; flex-wrap: wrap; row-gap: 8px; }
   .hdr-brand { flex: 1 1 100%; min-width: 0; }
   .hdr-name { font-size: 12px; letter-spacing: 0.08em; white-space: nowrap; }
   .hdr-right { gap: 6px; flex-wrap: wrap; }
   .hdr-chip { padding: 5px 9px; gap: 6px; }
-  .exp-filters { margin-top: 100px; }
+  .exp-filters { margin-top: 116px; }
 }
 
 /* ── Reduced motion: disable decorative CSS loops (cue bob, header

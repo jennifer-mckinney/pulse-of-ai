@@ -48,10 +48,13 @@
 //   attribution   text that must be shown next to the source's content
 //   license       content licence when the source publishes one
 //   licenseUrl    https URL of that licence (K1: rendered as the licence link)
-//   linkHosts     K1: domains the source's PERMALINKS live on when they differ
-//                 from the hosts its routes call (feeds.bbci.co.uk -> bbc.co.uk).
+//   linkHosts     K1: domains the source's PERMALINKS live on, where the route's
+//                 own URLs (params.urls / params.baseUrl: feeds, Discourse forums)
+//                 do not name them: API-only routes (api.github.com -> github.com)
+//                 and feeds that link elsewhere (feeds.bbci.co.uk -> bbc.co.uk).
 //                 A link back is published only when its host is on, or under,
-//                 the registrable domain of a route host or one of these
+//                 the registrable domain of a route URL or one of these. API
+//                 hosts (googleapis.com, guardianapis.com, ...) are never added
 //   creditText    overrides the credit shown next to an excerpt (default:
 //                 `attribution`, else the name without a trailing "(...)")
 //   citeDate      true: the credit also shows the item's publication date (Pew)
@@ -328,6 +331,7 @@ const SOURCES = [
                 note: 'Paid tier: Article Search API under an NYT Licensing TDM licence (5 requests/min, 500/day)',
             },
         ],
+        linkHosts: ['nytimes.com'],
         termsUrl: 'https://help.nytimes.com/hc/en-us/articles/115014893428-Terms-of-Service',
         termsNote: 'ToS §4.1 bans use with ML/AI systems and automated collection without consent.',
         rateLimit: { minIntervalMs: 12000, note: 'API: 5 requests/minute, 500/day' },
@@ -367,6 +371,7 @@ const SOURCES = [
                 note: 'Paid tier: Content API with a COMMERCIAL key ("sentiment analysis where content is not reproduced")',
             },
         ],
+        linkHosts: ['theguardian.com'],
         termsUrl: 'https://www.theguardian.com/open-platform/terms-and-conditions',
         termsNote: 'Open Platform §6 bans analysis/mining and ML use on the free key; §5 requires deletion within 24 hours; site terms apply the same to RSS.',
         // GUARDIAN ruling (Jennifer McKinney, 2026-09-29), verbatim: "Use
@@ -519,6 +524,7 @@ const SOURCES = [
         licenseUrl: 'https://creativecommons.org/publicdomain/zero/1.0/',
         // K1: the acknowledgement arXiv's API page asks every product to show.
         notice: 'Thank you to arXiv for use of its open access interoperability.',
+        linkHosts: ['arxiv.org'],
         termsUrl: 'https://info.arxiv.org/help/api/tou.html',
         termsNote: 'At most one request every three seconds on a single connection; metadata is CC0; PDFs are never served.',
         rateLimit: { minIntervalMs: 3000, note: '1 request / 3 s' },
@@ -554,7 +560,7 @@ const SOURCES = [
             params: { query: AI_QUERY, show: 25 }, scope: 'ai',
             note: 'The key alone is self-service; the use-case approval reference is required too (ADR 0001)',
         }],
-        linkHosts: ['sciencedirect.com', 'elsevier.com'],
+        linkHosts: ['sciencedirect.com'],
         termsUrl: 'https://dev.elsevier.com/policy.html',
         termsNote: 'Only listed use cases are permitted; a public dashboard needs Elsevier\'s approval.',
         rateLimit: { minIntervalMs: 500, note: '2 requests/s, 20,000/week' },
@@ -614,6 +620,7 @@ const SOURCES = [
             quota: { requestsPerRun: 1, basis: 'set at key registration; not published', unpublished: true },
             params: { query: AI_QUERY, maxRecords: 25 }, scope: 'ai',
         }],
+        linkHosts: ['ieee.org'],
         termsUrl: 'https://developer.ieee.org/API_Terms_of_Use2',
         termsNote: 'Non-commercial licence; content per individual query, not bulk; no AI/ML training; limits set at registration.',
         rateLimit: { minIntervalMs: 1000, note: 'set at key registration' },
@@ -654,6 +661,7 @@ const SOURCES = [
             },
         ],
         license: 'Public domain (US federal works)',
+        linkHosts: ['govinfo.gov'],
         termsUrl: 'https://api.data.gov/docs/developer-manual/',
         termsNote: '1,000 requests/hour per key; federal works are public domain.',
         rateLimit: { minIntervalMs: 500, note: '1,000 requests/hour' },
@@ -749,6 +757,7 @@ const SOURCES = [
         // D.C. (date) URL: the credit names the city and the date is shown.
         creditText: 'Pew Research Center, Washington, D.C.',
         citeDate: true,
+        linkHosts: ['pewresearch.org'],
         termsUrl: 'https://www.pewresearch.org/about/terms-and-conditions/',
         termsNote: 'Content via "RSS feeds, APIs or other similar means" is licensed with attribution; no scraping or principal-part republishing.',
         rateLimit: { minIntervalMs: 1000, note: 'polite spacing' },
@@ -769,6 +778,7 @@ const SOURCES = [
         license: 'CC BY-SA 4.0',
         licenseUrl: 'https://creativecommons.org/licenses/by-sa/4.0/',
         attribution: 'Wikipedia (CC BY-SA 4.0)',
+        linkHosts: ['wikipedia.org'],
         termsUrl: 'https://www.mediawiki.org/wiki/Wikimedia_APIs/Rate_limits',
         termsNote: '200 requests/minute with a compliant User-Agent; at most 3 concurrent; honour Retry-After.',
         rateLimit: { minIntervalMs: 400, note: '200 requests/minute' },
@@ -834,6 +844,7 @@ const SOURCES = [
             { id: 'advanced-search', adapter: 'internet-archive', params: { subject: AI_QUERY, rows: 50, days: 3 }, scope: 'ai', homeCity: null },
             { id: 'blog-rss', adapter: 'rss', params: { urls: ['https://blog.archive.org/feed/'] }, scope: 'filter' },
         ],
+        linkHosts: ['archive.org'],
         termsUrl: 'https://archive.org/about/terms.php',
         termsNote: 'Documented public search API; no automated-access clause in the terms text.',
         rateLimit: { minIntervalMs: 1000, note: 'polite spacing' },
@@ -851,6 +862,7 @@ const SOURCES = [
             { id: 'issue-search', adapter: 'github-search', optional: ['GITHUB_TOKEN'], params: { kind: 'issues', q: 'AI in:title type:issue', sort: 'created', createdWithinHours: 24 }, scope: 'filter' },
             { id: 'ai-ml-blog-rss', adapter: 'rss', params: { urls: ['https://github.blog/ai-and-ml/feed/'] }, scope: 'ai', homeCity: 'San Francisco' },
         ],
+        linkHosts: ['github.com'],
         termsUrl: 'https://docs.github.com/en/site-policy/acceptable-use-policies/github-acceptable-use-policies',
         termsNote: 'Research use of public data only if resulting publications are open access; no excessive API use; profile location never read.',
         rateLimit: { minIntervalMs: 6500, note: 'search 10 requests/minute unauthenticated, 30 with a token' },
@@ -865,6 +877,7 @@ const SOURCES = [
             { id: 'topic-projects', adapter: 'gitlab-projects', optional: ['GITLAB_TOKEN'], params: { topic: 'artificial-intelligence', perPage: 20 }, scope: 'ai', quota: { perDay: 1440, requestsPerRun: 1, basis: 'gitlab.com: 60 requests/hour unauthenticated (5,000 with a token)' } },
             { id: 'forum-latest', adapter: 'discourse', params: { baseUrl: 'https://forum.gitlab.com' }, scope: 'filter' },
         ],
+        linkHosts: ['gitlab.com'],
         termsUrl: 'https://docs.gitlab.com/user/gitlab_com/rate_limits/',
         termsNote: 'Unauthenticated 60 requests/hour, 5,000/hour with a token; the website terms ban scraping, the API is the sanctioned route.',
         rateLimit: { minIntervalMs: 2000, note: '60 requests/hour unauthenticated' },
@@ -882,6 +895,7 @@ const SOURCES = [
             { id: 'blog-rss', adapter: 'rss', params: { urls: ['https://www.docker.com/feed/'] }, scope: 'filter' },
             { id: 'forum-latest', adapter: 'discourse', params: { baseUrl: 'https://forums.docker.com' }, scope: 'filter' },
         ],
+        linkHosts: ['docker.com'],
         termsUrl: 'https://www.docker.com/legal/docker-terms-service/',
         termsNote: 'Automated access only through documented APIs within published limits (the undocumented /v2/search is not used).',
         rateLimit: { minIntervalMs: 1000, note: 'polite spacing' },
@@ -897,6 +911,7 @@ const SOURCES = [
             { id: 'blog-rss', adapter: 'rss', params: { urls: ['https://huggingface.co/blog/feed.xml'] }, scope: 'ai', homeCity: 'New York' },
             { id: 'forum-latest', adapter: 'discourse', params: { baseUrl: 'https://discuss.huggingface.co' }, scope: 'ai' },
         ],
+        linkHosts: ['huggingface.co'],
         termsUrl: 'https://huggingface.co/docs/hub/rate-limits',
         termsNote: 'Anonymous 500 requests / 5 minutes; the undocumented /api/posts list is not used.',
         rateLimit: { minIntervalMs: 700, note: '500 requests / 5 minutes' },
@@ -967,6 +982,7 @@ const SOURCES = [
             note: 'Application-only OAuth (client_credentials) at www.reddit.com/api/v1/access_token, then '
                 + '/r/{sub}/new on oauth.reddit.com for the 7 selected subreddits; the AI filter every site-wide feed uses',
         }],
+        linkHosts: ['reddit.com'],
         termsUrl: 'https://redditinc.com/policies/data-api-terms',
         termsNote: 'Reddit Data API Terms and Developer Terms, Responsible Builder Policy: explicit approval before any API access; '
             + 'non-commercial, ad-free use; no model training; no inference of sensitive user traits; delete content removed '

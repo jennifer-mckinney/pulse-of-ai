@@ -6,26 +6,21 @@
 // Elements are built with createElement + textContent ONLY (never innerHTML);
 // links are set only after PulseAttribution.safeHttpUrl re-validates them.
 // Dual export guard: CommonJS for jest; browser script tag sets
-// window.PulseCredits (load js/config/design.config.js and js/attribution.js
-// BEFORE this file).
+// window.PulseCredits (load js/config/design.config.js, js/attribution.js and
+// js/utils.js BEFORE this file).
 (function (root, factory) {
     if (typeof module === 'object' && module.exports) {
-        module.exports = factory(require('./attribution'), require('./config/design.config'));   // Node / jest
+        module.exports = factory(require('./attribution'), require('./utils'));   // Node / jest
     } else {
         /* istanbul ignore next -- Browser UMD global; unreachable in Node tests */
-        root.PulseCredits = factory(root.PulseAttribution, root.PulseDesignConfig);   // browser global
+        root.PulseCredits = factory(root.PulseAttribution, root.PulseUtils);   // browser global
     }
-}(typeof self !== 'undefined' ? self : this, function (attribution, designConfig) {
+}(typeof self !== 'undefined' ? self : this, function (attribution, utils) {
     'use strict';
 
     const ENDPOINT = '/api/credits';
-    const CAT_LABELS = (designConfig && designConfig.CAT_LABELS) || {};
-
     // The same display label the main page uses ('nonprofit' -> 'Non-profit').
-    function catLabel(slug) {
-        const s = String(slug);
-        return Object.prototype.hasOwnProperty.call(CAT_LABELS, s) ? CAT_LABELS[s] : s.charAt(0).toUpperCase() + s.slice(1);
-    }
+    const catLabel = utils.catLabel;
 
     function node(doc, tag, className, text) {
         const n = doc.createElement(tag);

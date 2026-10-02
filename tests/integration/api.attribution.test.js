@@ -110,7 +110,10 @@ describe('K1 attribution: POST /api/query', () => {
         expect(row.credit.text).toBe('GitHub');
     });
 
-    it('a kill-switched / inactive source keeps its credit and link (design D4: stored excerpts are still credited)', async () => {
+    // Design D4: attribution deliberately does not read the kill switches (env
+    // SOURCE_<SLUG>_ENABLED, the database switch): a stored excerpt of a switched-off
+    // source is still credited. Marking the source inactive stands in for them here.
+    it('a source marked inactive (data_sources.active = FALSE) keeps its credit and link (D4)', async () => {
         await seed('bbc_news', 'news', { url: 'https://www.bbc.co.uk/news/articles/abc' });
         await dbRun(`UPDATE data_sources SET active = FALSE WHERE name = 'bbc_news'`);
         const row = (await request(app).post('/api/query').send({})).body.results[0];

@@ -80,6 +80,7 @@
             });
             u.search = kept.join('&');
         }
+        if (u.hostname !== host) u.hostname = host;     // serve the dotless host
         return u.href;
     }
 

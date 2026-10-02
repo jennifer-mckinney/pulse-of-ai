@@ -75,8 +75,9 @@ describe('safeSourceUrl: the base rule (no slug)', () => {
         expect(safeSourceUrl('HTTPS://Example.ORG')).toBe('https://example.org/');
     });
 
-    test('a trailing dot on a real host is accepted', () => {
-        expect(safeSourceUrl('https://example.org./x')).toBe('https://example.org./x');
+    test('a trailing dot on a real host is accepted and removed (the served host is the dotless name)', () => {
+        expect(safeSourceUrl('https://example.org./x')).toBe('https://example.org/x');
+        expect(safeSourceUrl('https://www.npr.org./story', 'npr')).toBe('https://www.npr.org/story');
     });
 
     test('tracking and credential query keys are removed, everything else is kept byte for byte', () => {
@@ -147,6 +148,41 @@ describe('safeSourceUrl: bound to the source', () => {
         for (const src of SOURCES) {
             expect([src.slug, linkDomains(src).size > 0]).toEqual([src.slug, true]);
         }
+    });
+
+    test('API-only parent domains are never link domains (they can serve user content or unrelated sites)', () => {
+        const dom = (slug) => [...linkDomains(SOURCES.find(s => s.slug === slug))];
+        expect(dom('youtube')).not.toContain('googleapis.com');
+        expect(dom('tiktok')).not.toContain('tiktokapis.com');
+        expect(dom('guardian')).not.toContain('guardianapis.com');
+        expect(dom('wsj')).toEqual(expect.arrayContaining(['wsj.com']));   // its RSS feed host (dowjones.io) is a route URL, so it stays
+        expect(dom('hacker_news')).not.toContain('algolia.com');
+        expect(dom('reuters')).not.toContain('thomsonreuters.com');
+        expect(dom('sciencedirect')).not.toContain('elsevier.com');
+        expect(dom('pubmed')).not.toContain('nih.gov');
+        expect(safeSourceUrl('https://storage.googleapis.com/evil/x', 'youtube')).toBeNull();
+    });
+
+    test('one permalink shape per adapter without a recorded fixture passes its own source rule', () => {
+        const samples = [
+            ['docker_hub', 'https://hub.docker.com/r/x/y'],
+            ['congress_gov', 'https://www.congress.gov/bill/118th-congress/house-bill/1'],
+            ['youtube', 'https://www.youtube.com/watch?v=x'],
+            ['x', 'https://x.com/i/web/status/1'],
+            ['springerlink', 'https://link.springer.com/article/10.1/x'],
+            ['ieee_xplore', 'https://ieeexplore.ieee.org/document/1'],
+            ['nyt', 'https://www.nytimes.com/2026/09/30/technology/x.html'],
+            ['guardian', 'https://www.theguardian.com/technology/2026/sep/30/x'],
+            ['jstor', 'https://www.jstor.org/stable/1'],
+            ['sciencedirect', 'https://www.sciencedirect.com/science/article/pii/S1'],
+            ['gitlab', 'https://gitlab.com/group/project'],
+            ['hugging_face', 'https://huggingface.co/papers/2601.00001'],
+            ['internet_archive', 'https://archive.org/details/x'],
+            ['wikipedia', 'https://en.wikipedia.org/wiki/Talk:Artificial_intelligence#c-1'],
+            ['pew', 'https://www.pewresearch.org/short-reads/2026/09/30/x/'],
+            ['reddit', 'https://www.reddit.com/comments/abc123'],
+        ];
+        for (const [slug, url] of samples) expect([slug, safeSourceUrl(url, slug)]).toEqual([slug, url]);
     });
 
     test('registrable() keeps three labels under a country second level', () => {
@@ -328,6 +364,12 @@ describe('postAttribution', () => {
         expect(at('')).toBeNull();
         expect(at('<img src=x onerror=1>')).toBeNull();
         expect(at('2026-09-29T10:00:00Z')).toBe('2026-09-29T10:00:00.000Z');
+    });
+
+    test('a missing source name never yields a link (it fails closed, not to the base rule)', () => {
+        expect(postAttribution({ sourceType: 'rss', url: 'https://example.org/x' }).source_url).toBeNull();
+        expect(postAttribution({ sourceType: 'rss', sourceName: null, url: 'https://example.org/x' }).source_url).toBeNull();
+        expect(postAttribution({ sourceType: 'rss', sourceName: 'npr', url: 'https://www.npr.org/x' }).source_url).toBe('https://www.npr.org/x');
     });
 
     test('a missing source type throws: a demo post can never be credited by omission', () => {

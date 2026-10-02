@@ -24,7 +24,7 @@
 
 'use strict';
 
-const { getSource, allowedHosts, SOURCES } = require('./source-registry');
+const { getSource, SOURCES } = require('./source-registry');
 const { DEMO_SOURCE_TYPE } = require('./data-mode');
 const { isIdentityUrl } = require('../collectors/identity');
 // Layering note (as in routes/posts.js): the URL base check is the browser
@@ -36,7 +36,7 @@ const MAX_DATE_LENGTH = 40;
 // Site-wide statements the credits page and the receipts show.
 const SITE_NOTICES = Object.freeze({
     excerpts: 'Excerpts are shortened to 120 characters and have identities redacted, so they may differ from the original. Follow the link to read the original.',
-    links: 'Every excerpt links to the original item on its source; a link is absent when the source supplied none, when its address could not be verified as belonging to the source, or when the text has been removed under its retention rule.',
+    links: 'Every excerpt links to the original item on its source; a link is absent when the source supplied none, when its address could not be verified as belonging to the source, or when the text was removed under a retention rule that also drops the link (Reddit keeps its link).',
     demo: 'Posts labelled demo are fictional and are not from any real source.',
 });
 
@@ -57,17 +57,24 @@ const linkDomainCache = new Map();
 
 /**
  * The domains a source's links may point at: the registrable domain of every
- * host the source's routes use (src/config/source-registry.js allowedHosts:
- * api.github.com -> github.com) plus the registry's explicit `linkHosts` where
- * the permalink lives elsewhere (feeds.bbci.co.uk -> bbc.co.uk). Env-supplied
- * contract hosts are not consulted: a licensed feed lists its own `linkHosts`.
+ * URL its routes read (params.urls: feeds; params.baseUrl: Discourse forums),
+ * whose items link to their own pages, plus the registry's explicit
+ * `linkHosts` for API-only routes and feeds that link elsewhere. API hosts
+ * (api.github.com, content.guardianapis.com, ...) are deliberately NOT derived:
+ * their parent domains can serve user-controlled content or unrelated sites.
  * @param {object} src registry entry
  * @returns {Set<string>}
  */
 function linkDomains(src) {
     let d = linkDomainCache.get(src.slug);
     if (!d) {
-        d = new Set(allowedHosts(src, {}).map(h => registrable(h.replace(/^www\./, ''))));
+        d = new Set();
+        for (const route of src.routes || []) {
+            const p = route.params || {};
+            for (const u of [...(p.urls || []), ...(p.baseUrl ? [p.baseUrl] : [])]) {
+                try { d.add(registrable(new URL(u).hostname.toLowerCase().replace(/^www\./, ''))); } catch { /* not a URL */ }
+            }
+        }
         for (const h of src.linkHosts || []) d.add(String(h).toLowerCase());
         linkDomainCache.set(src.slug, d);
     }
@@ -176,7 +183,7 @@ function postAttribution({ sourceName, sourceType, url, publishedAt } = {}) {
     return {
         data_origin: demo ? 'demo' : 'live',
         // a fictional demo post links to nothing; a link must belong to its source
-        source_url: demo ? null : safeSourceUrl(url, sourceName),
+        source_url: demo ? null : safeSourceUrl(url, typeof sourceName === 'string' ? sourceName : ''),
         published_at: demo ? null : safeIsoDate(publishedAt),
         // unchanged field: the credit text the registry says the terms require
         attribution: src && src.attribution ? src.attribution : null,

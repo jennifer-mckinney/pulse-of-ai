@@ -11,6 +11,7 @@ const path = require('path');
 const { HttpClient } = require('../../../src/collectors/http');
 const { ADAPTERS } = require('../../../src/collectors');
 const { getSource } = require('../../../src/config/source-registry');
+const { safeSourceUrl } = require('../../../src/config/attribution');
 const { GateClosedError, AccessDeniedError } = require('../../../src/collectors/errors');
 const { parseScholarAlert, affiliationCity } = require('../../../src/collectors/adapters/academic');
 const { stripSignatures } = require('../../../src/collectors/adapters/nonprofit');
@@ -20,6 +21,9 @@ const { fixtureTransport, readFixture, TEST_ENV, FIXTURE_ROOT } = require('../..
 const NOW = Date.parse('2026-09-28T12:00:00Z');
 const noSleep = () => Promise.resolve();
 const G = f => `gated/${f}`;
+// Sources whose gated fixtures carry the source's own permalinks (the licensed
+// feed fixtures use placeholder hosts, so they are not link-checked).
+const LINK_CHECKED = new Set(['x', 'ap', 'nyt', 'guardian', 'ieee_xplore', 'youtube', 'springerlink', 'sciencedirect', 'govinfo', 'congress_gov', 'tiktok']);
 
 // The Scholar collector loads mailparser (html-to-text, iconv, ...) lazily
 // on first use; cold, under a loaded machine, that module load alone took
@@ -36,6 +40,19 @@ function make(slug, routeId, routes, env = {}, extra = {}) {
     const http = new HttpClient({ transport, env: TEST_ENV, sleep: noSleep });
     const cursor = extra.cursor || {};
     const c = new ADAPTERS[route.adapter]({ source, route, env: { ...TEST_ENV, ...env }, http, cursor, httpCache: {}, now: () => NOW, ...extra });
+    if (LINK_CHECKED.has(slug)) {
+        // K1: every permalink these adapters emit must survive the link-back
+        // rule for its own source (src/config/attribution.js), or the source's
+        // excerpts would silently lose their link.
+        const collect = c.collect.bind(c);
+        c.collect = async (...a) => {
+            const r = await collect(...a);
+            for (const p of r.payloads || []) {
+                if (p.url) expect([slug, p.url, safeSourceUrl(p.url, slug) !== null]).toEqual([slug, p.url, true]);
+            }
+            return r;
+        };
+    }
     return { c, transport, cursor };
 }
 
@@ -151,6 +168,17 @@ describe('free-key and approval APIs', () => {
         expect(els.transport.calls[0].method).toBe('PUT');
         expect(els.transport.calls[0].headers['X-ELS-APIKey']).toBe('k');
         expect(e.payloads[0].title).toBe('Deep learning for crop yield forecasting');
+        expect(e.payloads[0].url).toBe('https://www.sciencedirect.com/science/article/pii/S0000000000000001');
+        // K1: the link is built from the PII even when the API's uri is its own resource URL
+        const apiUri = make('sciencedirect', 'search-api', [['https://api.elsevier.com/content/search/sciencedirect',
+            { body: JSON.stringify({ results: [{ pii: 'S1', title: 'T', publicationDate: '2026-09-27', uri: 'https://api.elsevier.com/content/article/pii/S1' }] }) }]],
+        { ELSEVIER_API_KEY: 'k', ELSEVIER_APPROVAL_REF: 'A' });
+        expect((await apiUri.c.collect()).payloads[0].url).toBe('https://www.sciencedirect.com/science/article/pii/S1');
+        // a PII that is not alphanumeric is not interpolated into a URL
+        const oddPii = make('sciencedirect', 'search-api', [['https://api.elsevier.com/content/search/sciencedirect',
+            { body: JSON.stringify({ results: [{ pii: 'S1/../x', title: 'T', publicationDate: '2026-09-27', uri: 'https://www.sciencedirect.com/science/article/pii/S2' }] }) }]],
+        { ELSEVIER_API_KEY: 'k', ELSEVIER_APPROVAL_REF: 'A' });
+        expect((await oddPii.c.collect()).payloads[0].url).toBe('https://www.sciencedirect.com/science/article/pii/S2');
         const gov = make('govinfo', 'search-api', [['https://api.govinfo.gov/search', G('govinfo-search.json')]], { GOVINFO_API_KEY: 'k' });
         expect((await gov.c.collect()).payloads[0]).toMatchObject({ location: 'Washington, D.C.' });
         const con = make('congress_gov', 'bill-api', [['https://api.congress.gov/v3/bill?format=json&sort=updateDate+desc&limit=250&fromDateTime=2026-09-25T12%3A00%3A00Z', G('congress-bills.json')]], { CONGRESS_API_KEY: 'k' });

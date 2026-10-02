@@ -120,7 +120,13 @@ class ElsevierCollector extends JsonApiCollector {
             body: JSON.stringify({ qs: this.params.query, display: { show: this.params.show || 25, sortBy: 'date' } }),
         }));
         return (res.data.results || []).map(r => ({
-            id: r.pii || r.doi, title: r.title, text: '', url: r.uri, publishedAt: r.publicationDate,
+            // K1: the link back is the reader-facing ScienceDirect article page
+            // built from the PII (its `uri` can be the API resource, which is
+            // not a page a reader can open); `uri` is the fallback.
+            id: r.pii || r.doi, title: r.title, text: '',
+            url: typeof r.pii === 'string' && /^[A-Za-z0-9]+$/.test(r.pii)
+                ? `https://www.sciencedirect.com/science/article/pii/${r.pii}` : r.uri,
+            publishedAt: r.publicationDate,
         }));
     }
 }

@@ -184,6 +184,12 @@ test.describe('phone width (375px)', () => {
         await evidence(page, '23-attribution-mobile-header');
         await page.locator('#health-chip').click();
         await expect(page.locator('#health-drawer')).toHaveClass(/open/);
+        await page.locator('#health-drawer .drawer-x').click();
+        // the wrapped header must not overlap the explore filter column
+        await enterExplore(page);
+        const health = await page.locator('#health-chip').boundingBox();
+        const filters = await page.locator('#exp-filters').boundingBox();
+        expect(health!.y + health!.height, 'header ends above the explore filters').toBeLessThanOrEqual(filters!.y);
         expectNoConsoleErrors(errors);
     });
 
