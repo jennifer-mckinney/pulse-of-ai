@@ -26,7 +26,9 @@
 //   KEEP  the row, the external id, the provenance fingerprint (anyone with
 //         the original URL can still prove the match: npm run
 //         verify-provenance), the content hash, and every score and
-//         decision_audit_log row.
+//         decision_audit_log row. This holds for an ERASURE REQUEST too (removeTextOnRequest): ADR 0001
+//         ruling 9 ("Blank text, keep audit rows") is non-negotiable, so the content hash and the audit
+//         rows are never rewritten.
 //   DROP  for a platform-terms source, the post's post_embeddings row, in
 //         the same transaction (PR #22 decision G3, Jennifer 2026-09-29:
 //         the embedding is derived from the text). The §19 detail window
@@ -92,14 +94,26 @@ function removalNoticeFor(slug) {
  * @param {import('pg').PoolClient} client
  * @param {string} slug  data_sources.name
  * @param {string[]} postIds
- * @param {{ reason: string, rule: string, performedBy: string, platform: boolean }} o
+ * @param {{ reason: string, rule: string, performedBy: string, platform: boolean,
+ *          deleteEmbeddings?: boolean, legalBasis?: string, erasure?: boolean }} o   deleteEmbeddings defaults to `platform`; an erasure
+ *          request sets it for any source, and `erasure` makes the stored notice say so and keeps no url (no Reddit permalink)
  * @returns {Promise<string[]>} ids changed
  */
-async function removeTextBatch(client, slug, postIds, { reason, rule, performedBy, platform }) {
+async function removeTextBatch(client, slug, postIds, { reason, rule, performedBy, platform, deleteEmbeddings = platform, legalBasis = null, erasure = false }) {
     if (!postIds.length) return [];
     const src = getSource(slug);
-    const notice = platform ? removalNoticeFor(slug) : DETAIL_NOTICE;
-    const keepUrl = platform && src && src.retention && src.retention.keepUrlPrefix ? src.retention.keepUrlPrefix : null;
+    // An erasure request says so in the stored notice and keeps no url at all (a Reddit permalink still identifies the post).
+    const notice = erasure ? ERASURE_NOTICE : (platform ? removalNoticeFor(slug) : DETAIL_NOTICE);
+    const keepUrl = !erasure && platform && src && src.retention && src.retention.keepUrlPrefix ? src.retention.keepUrlPrefix : null;
+    // Lock exactly the rows the UPDATE will touch, in id order first: the gold sampler locks posts in
+    // the same order (FOR SHARE, which FOR NO KEY UPDATE still conflicts with), so the two can never
+    // wait on each other in opposite orders. NO KEY UPDATE is enough (no key column changes) and
+    // does not block foreign-key child inserts.
+    await client.query(
+        `SELECT rp.id FROM raw_posts rp JOIN data_sources ds ON ds.id = rp.source_id
+         WHERE rp.id = ANY($1::uuid[]) AND ds.name = $2 AND ds.source_type <> $3 AND rp.text_removed_at IS NULL
+         ORDER BY rp.id FOR NO KEY UPDATE OF rp`,
+        [postIds, slug, DEMO_SOURCE_TYPE]);
     const res = await client.query(
         `UPDATE raw_posts rp
          SET content = $4,
@@ -127,26 +141,97 @@ async function removeTextBatch(client, slug, postIds, { reason, rule, performedB
     // embedding computed concurrently is either deleted here or never
     // written — src/pipeline/embeddings.js saveEmbeddingIfTextStored).
     let embeddingsDeleted = 0;
-    if (ids.length && platform) {
+    if (ids.length && deleteEmbeddings) {
         embeddingsDeleted = (await client.query(
             'DELETE FROM post_embeddings WHERE raw_post_id = ANY($1::uuid[])', [ids])).rowCount;
     }
     if (ids.length) {
+        // Gold-set rows (migration 070) are append-only and keep the post id, a fingerprint of the
+        // text and labellers' notes: erase them in the SAME transaction as the text, so retention
+        // never leaves a permanent link to removed text (gold_erase_post; labels and strata stay).
+        await client.query('SELECT gold_erase_post(id) FROM unnest($1::uuid[]) AS id', [ids]);
         const name = src ? src.name : slug;
-        const legal = platform ? `${src.retention.legalBasis} ${RETAINED_NOTE}` : DETAIL_LEGAL_BASIS;
+        const legal = legalBasis || (platform ? `${src.retention.legalBasis} ${RETAINED_NOTE}` : DETAIL_LEGAL_BASIS);
         await client.query(
             `INSERT INTO data_retention_log (raw_post_id, action, reason, legal_basis, performed_by)
              VALUES (NULL, $1, $2, $3, $4)`,
             [platform ? BLANK_ACTION : DETAIL_ACTION, JSON.stringify({
                 summary: `Text of ${ids.length} ${name} post(s) replaced by the removal notice.`,
                 source: slug, rule, reason, post_ids: ids,
-                retained: platform ? RETAINED_NOTE : 'Scores, audit rows and monthly rollups are retained (spec §19).',
-                ...(platform ? { embeddings_deleted: embeddingsDeleted } : {}),
+                retained: erasure ? ERASURE_RETAINED_NOTE : (platform ? RETAINED_NOTE : 'Scores, audit rows and monthly rollups are retained (spec §19).'),
+                ...(deleteEmbeddings ? { embeddings_deleted: embeddingsDeleted } : {}),
                 ...(platform && src.retention.byAnalogy ? { applied_by_analogy: src.retention.byAnalogy } : {}),
             }), legal, performedBy],
         );
     }
     return ids;
+}
+
+const ERASURE_NOTICE = '[removed: erasure request]';
+const ERASURE_LEGAL_BASIS = 'GDPR Article 17 - right to erasure: the post text was removed on request; '
+    + 'scores and audit rows are retained (they hold no post text).';
+const ERASURE_RETAINED_NOTE = 'Scores, audit rows, the content hash and the provenance fingerprint are retained by owner ruling '
+    + '(ADR 0001 ruling 9, "Blank text, keep audit rows"; an erasure request is no exception). The post embedding and gold-set rows are deleted with the text. '
+    + 'Residual risk, accepted by the owner: a guessed text can still be confirmed against the unkeyed content hash.';
+
+/**
+ * Remove ONE post's text on an erasure request (any real source, platform terms or not), in one
+ * transaction: the same scrub as retention (text, raw_payload text keys, url - no Reddit permalink kept,
+ * the stored notice says "erasure request"), the post's embedding deleted, its gold-set rows erased
+ * (gold_erase_post), and a data_retention_log row written. Nothing else changes: ADR 0001 ruling 9
+ * keeps the scores, every decision_audit_log row, the content hash and the provenance fingerprint, an
+ * erasure request included (residual risk accepted by the owner: a guessed text can be confirmed against the hash).
+ * A post whose text retention already removed still gets the rest (url and notice scrub, embedding, gold rows,
+ * a log row when something changed): the request is never a silent no-op.
+ * @param {string} postId
+ * @param {{ performedBy?: string }} [o]
+ * @returns {Promise<{ removed: boolean, source: string|null, goldErased: number, skipped?: 'demo', nothingLeft?: true }>}
+ *          removed=false when it had no text left; skipped='demo' for a demo post (purged whole by compaction, never
+ *          touched here; nothingLeft=true when a repeat request found nothing more to erase (no log row); goldErased counts the gold items erased by this call
+ */
+async function removeTextOnRequest(postId, { performedBy = 'scripts/gold-erase.js' } = {}) {
+    return dbTransaction(async (client) => {
+        const row = (await client.query(
+            `SELECT ds.name, ds.source_type FROM raw_posts rp JOIN data_sources ds ON ds.id = rp.source_id WHERE rp.id = $1::uuid`, [postId])).rows[0];
+        if (!row) return { removed: false, source: null, goldErased: 0 };
+        if (row.source_type === DEMO_SOURCE_TYPE) return { removed: false, source: row.name, goldErased: 0, skipped: 'demo' };
+        // Lock the post first (same mode and order as retention and the sampler), then count what is erased.
+        await client.query('SELECT id FROM raw_posts WHERE id = $1::uuid FOR NO KEY UPDATE', [postId]);
+        const goldErased = (await client.query(
+            'SELECT COUNT(*)::int AS n FROM relevance_gold_items WHERE raw_post_id = $1::uuid AND erased_at IS NULL', [postId])).rows[0].n;
+        const src = getSource(row.name);
+        const ids = await removeTextBatch(client, row.name, [postId], {
+            reason: 'erasure request', rule: 'erasure request', performedBy,
+            platform: !!(src && src.retention), deleteEmbeddings: true, legalBasis: ERASURE_LEGAL_BASIS, erasure: true,
+        });
+        let nothingLeft = false;
+        if (!ids.length) {
+            // The text was already removed (retention, upstream deletion): finish what that left behind. A Reddit post keeps
+            // its slug-less permalink and the platform notice after retention; an erasure request removes both.
+            const scrubbed = (await client.query(
+                `UPDATE raw_posts
+                 SET content = $2,
+                     raw_payload = COALESCE(raw_payload, '{}'::jsonb) - $3::text[] - 'url',
+                     text_removed_reason = 'erasure request'
+                 WHERE id = $1::uuid AND (content <> $2 OR raw_payload->>'url' IS NOT NULL)`,
+                [postId, ERASURE_NOTICE, [...PAYLOAD_TEXT_KEYS]])).rowCount;
+            const embeddingsDeleted = (await client.query('DELETE FROM post_embeddings WHERE raw_post_id = $1::uuid', [postId])).rowCount;
+            await client.query('SELECT gold_erase_post($1::uuid)', [postId]);
+            nothingLeft = scrubbed + embeddingsDeleted + goldErased === 0;
+            if (!nothingLeft) {
+                await client.query(
+                    `INSERT INTO data_retention_log (raw_post_id, action, reason, legal_basis, performed_by)
+                     VALUES (NULL, $1, $2, $3, $4)`,
+                    [src && src.retention ? BLANK_ACTION : DETAIL_ACTION, JSON.stringify({
+                        summary: `Erasure request for a ${row.name} post whose text was already removed: remaining derived data erased.`,
+                        source: row.name, rule: 'erasure request', reason: 'erasure request', post_ids: [postId],
+                        retained: ERASURE_RETAINED_NOTE, embeddings_deleted: embeddingsDeleted, gold_items_erased: goldErased,
+                        url_and_notice_scrubbed: scrubbed > 0,
+                    }), ERASURE_LEGAL_BASIS, performedBy]);
+            }
+        }
+        return { removed: ids.length === 1, source: row.name, goldErased, ...(nothingLeft ? { nothingLeft: true } : {}) };
+    });
 }
 
 /** Ruling-9 blanking of specific posts of a platform-terms source (kept name). */
@@ -268,6 +353,6 @@ function retentionStatus(slug, { collectedAt, textRemovedAt, textRemovedReason }
 
 module.exports = {
     BLANK_ACTION, DETAIL_ACTION, REMOVAL_NOTICE, DETAIL_NOTICE, RETAINED_NOTE, DETAIL_LEGAL_BASIS,
-    retentionSources, removalNoticeFor, removeTextBatch, blankPlatformPosts, blankPosts,
+    retentionSources, removalNoticeFor, removeTextBatch, removeTextOnRequest, ERASURE_NOTICE, blankPlatformPosts, blankPosts,
     blankExpired, postsWithText, retentionStatus,
 };

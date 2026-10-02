@@ -34,6 +34,11 @@
     "collect": "node scripts/collect.js",
     "terms:snapshot": "node scripts/terms-snapshot.js",
     "bias:window": "node scripts/bias-window.js",
+    "gold:sample": "node scripts/gold-sample.js",
+    "gold:label": "node scripts/gold-label.js",
+    "gold:agreement": "node scripts/gold-agreement.js",
+    "gold:erase": "node scripts/gold-erase.js",
+    "relevance:eval": "node scripts/relevance-eval.js",
     "test:diagrams": "bash scripts/test/render-hash.test.sh"
   },
   "keywords": [
@@ -74,6 +79,7 @@
   "devDependencies": {
     "@playwright/test": "^1.63.0",
     "jest": "^29.7.0",
+    "js-yaml": "^3.15.2",
     "smtp-server": "3.19.15",
     "supertest": "^6.3.4"
   },

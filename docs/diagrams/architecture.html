@@ -93,7 +93,7 @@ flowchart LR
 
   subgraph PG["⑦ postgres"]
     direction TB
-    D0["PostgreSQL 16 + pgvector&lt;br/&gt;54 migrations (001-074)"]:::done
+    D0["PostgreSQL 16 + pgvector&lt;br/&gt;55 migrations (001-074)"]:::done
     D1[("data_sources · source_collection_state&lt;br/&gt;source_runs · source_run_daily · processing_jobs&lt;br/&gt;admission_rule_hits (counts only)")]:::done
     D2[("raw_posts · decision_audit_log · methodology_versions&lt;br/&gt;sentiment / relevance / discourse_results")]:::done
     D3[("post_embeddings VECTOR(384) HNSW&lt;br/&gt;bias_assessments · bias_window_* · alert_events&lt;br/&gt;alert_resolutions")]:::done

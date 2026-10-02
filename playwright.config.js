@@ -6,10 +6,13 @@
 // Isolation: the suite runs against its OWN database, `pulse_of_ai_e2e`, on
 // the dev Postgres (compose project pulse-of-ai, port 5434), served by its
 // OWN server on port 3100. The globalSetup (tests/e2e/global-setup.js)
-// creates that database if missing, migrates it, runs `seed` + `seed:e2e`
-// (the deterministic fixture dataset) and freshens its timestamps. Nothing
-// the suite asserts can therefore be shadowed by whatever the dev database
-// happens to hold, and the suite never writes to the dev database.
+// drops and recreates that database (guarded: e2e names only, never the dev
+// or Jest test database — scripts/lib/fixture-db-guard.js), migrates it, runs
+// `seed` + `seed:e2e` (the deterministic fixture dataset) and freshens its
+// timestamps. Every run therefore starts from the same rows as a fresh CI
+// database: nothing the suite asserts can be shadowed by whatever the dev
+// database holds or by rows an older run seeded, and the suite never writes
+// to the dev database.
 //
 // NOTE: deliberately NOT wired into `npm run verify` — the verify gate's
 // runtime is kept stable; run E2E explicitly with `npm run test:e2e`.
