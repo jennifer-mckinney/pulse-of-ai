@@ -71,7 +71,7 @@ npm run teardown       # stop it (keeps volumes); `-- --purge` deletes volumes a
 ## Review & Release Governance
 - **CI/review readiness:** GitHub Copilot review may be unavailable (account credit limits); when it is, "ready to merge" = CI green on the exact pushed tip (check `headRefOid`, not a stale run) + fresh, independent security-engineer and grumpy-developer reviews of that tip at zero findings
 - **ADR 0001 ruling 9 is non-negotiable:** erasure never rewrites `content_hash`, `input_hash` or audit rows
-- **Gold tools are local-only:** `GOLD_HASH_KEY` is a separate production secret from `AUDIT_HASH_KEY` — production refuses to run gold tools if either is unset or the two are equal
+- **Gold tools are local-only:** `GOLD_HASH_KEY` is a separate production secret from `AUDIT_HASH_KEY` — gold CLIs already refuse to run under `NODE_ENV=production` outright; the key-equality/unset check in `src/gold/store.js` is defence-in-depth for non-CLI callers
 - **Migration number ownership (reserved blocks for parallel work):** each block is owned by a single PR/agent — 067–068 relevance receipt wording + admission counters, 070 relevance gold set, 073–074 per-route kill switch + hardening, 075–077 rate-limit backoff; the next free block starts at 078 — check `master` and open PRs before claiming a range
 
 ## Status
