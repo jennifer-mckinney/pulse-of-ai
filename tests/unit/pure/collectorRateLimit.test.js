@@ -665,6 +665,33 @@ describe('security review L3-L6', () => {
         expect(conditionsFor(row, src, NOW, { env: TEST_ENV, routeKills: kills }).source_rate_limited).toBeUndefined();
     });
 
+    test('Copilot: a merge keeps the expiry\'s CAUSE — a newer 1 h 5xx record never relabels a 24 h rate limit (streaks never from a 5xx record)', () => {
+        const limit = { until: iso(NOW + DAY), http_status: 429, signal: 'http_429', count: 4, weak: 0, at: iso(NOW - 5000) };
+        const five = { until: iso(NOW + HOUR), http_status: 503, signal: 'retry_after_5xx', count: 0, weak: 0, at: iso(NOW) };
+        for (const [a, b] of [[limit, five], [five, limit]]) {
+            expect(rl.combineHold(a, b)).toMatchObject({ signal: 'http_429', http_status: 429, until: limit.until, count: 4 });
+        }
+        // A longer 5xx hold over a shorter rate limit is the 5xx's (its expiry).
+        const shortLimit = { ...limit, until: iso(NOW + 60000) };
+        expect(rl.combineHold(shortLimit, five)).toMatchObject({ signal: 'retry_after_5xx', until: five.until });
+        // A tie goes to the rate-limit cause.
+        const tie = { ...five, until: limit.until };
+        expect(rl.combineHold(tie, limit)).toMatchObject({ signal: 'http_429' });
+        expect(rl.combineHold(limit, tie)).toMatchObject({ signal: 'http_429' });
+        // nextHold: a 5xx event under a longer rate-limit hold keeps that hold's cause.
+        const next = rl.nextHold(limit, { retryAt: NOW + 20 * HOUR, status: 503, signal: 'retry_after_5xx', weak: false }, NOW);
+        expect(next.entry).toMatchObject({ signal: 'http_429', http_status: 429, until: limit.until, count: 4 });
+    });
+
+    test('Copilot: holdGate reports the routes held only by a 5xx as serverRoutes and the stored map prefixes them', () => {
+        const src = getSource('hacker_news');
+        const five = { 'hn.algolia.com': { until: iso(NOW + 600000), http_status: 503, signal: 'retry_after_5xx', count: 0, weak: 0, at: iso(NOW) } };
+        const g = rl.holdGate(src, TEST_ENV, five, NOW);
+        expect(Object.keys(g.serverRoutes)).toEqual(['algolia-search']);
+        expect(g.limitedRoutes).toEqual({});
+        expect(rl.storedRouteMap(g)).toEqual({ [`${rl.SERVER_ROUTE_PREFIX}algolia-search`]: g.serverRoutes['algolia-search'] });
+    });
+
     test('L6: publicHostName names registry hosts only', () => {
         expect(rl.publicHostName('api.github.com')).toBe('api.github.com');
         expect(rl.publicHostName('API.GITHUB.COM')).toBe('API.GITHUB.COM');

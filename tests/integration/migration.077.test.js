@@ -76,6 +76,23 @@ describe('migration 077_rate_limit_hold_store_unify.sql', () => {
         expect(Date.parse(srv.until)).toBeGreaterThan(Date.parse(once.github.rate_limited_until));
     });
 
+    it('Copilot: the expiry keeps its cause — a later 429 over an existing 5xx entry becomes a rate limit; a later 503 over a rate limit does not relabel it', async () => {
+        const now = Date.now();
+        const tldr = await idOf('tldr');
+        const github = await idOf('github');
+        const five = { until: iso(now + 600 * 1000), http_status: 503, signal: 'retry_after_5xx', count: 0, weak: 0, at: iso(now - 1000) };
+        await dbRun(`INSERT INTO source_collection_state (source_id, http_cache, rate_limited_hosts) VALUES ($1, $2::jsonb, $3::jsonb)`, [tldr, JSON.stringify({
+            'retry-after:tldr.tech': { until: iso(now + 3600 * 1000), status: 429 },
+        }), JSON.stringify({ 'tldr.tech': five })]);
+        const limit = { until: iso(now + 20 * 3600 * 1000), http_status: 429, signal: 'http_429', count: 4, weak: 0, at: iso(now - 1000) };
+        await dbRun(`INSERT INTO source_collection_state (source_id, http_cache, rate_limited_hosts) VALUES ($1, $2::jsonb, $3::jsonb)`, [github, JSON.stringify({
+            'retry-after:api.github.com': { until: iso(now + 3600 * 1000), status: 503 },
+        }), JSON.stringify({ 'api.github.com': limit })]);
+        await dbTransaction(c => c.query(SQL_077));
+        expect((await stateOf('tldr')).rate_limited_hosts['tldr.tech']).toMatchObject({ signal: 'http_429', http_status: 429, count: 1, until: iso(now + 3600 * 1000) });
+        expect((await stateOf('github')).rate_limited_hosts['api.github.com']).toMatchObject({ signal: 'http_429', http_status: 429, count: 4, until: iso(now + 20 * 3600 * 1000) });
+    });
+
     it('security review L1/L2: an impossible timestamp never aborts the migration; a key with a path still names its host', async () => {
         const now = Date.now();
         const tldr = await idOf('tldr');

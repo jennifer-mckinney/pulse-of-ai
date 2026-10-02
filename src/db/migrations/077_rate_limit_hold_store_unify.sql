@@ -35,6 +35,11 @@
 --
 -- Additive data move, idempotent: a second run finds no `retry-after:` key.
 
+-- A streak count as an integer; anything else reads as 0.
+CREATE OR REPLACE FUNCTION pg_temp.hold_count(v text) RETURNS integer AS $fn$
+    SELECT CASE WHEN v ~ '^\d{1,6}$' THEN v::integer ELSE 0 END
+$fn$ LANGUAGE sql IMMUTABLE;
+
 CREATE OR REPLACE FUNCTION pg_temp.hold_ts(v text) RETURNS timestamptz AS $fn$
 BEGIN
     IF v IS NULL OR v !~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})$' THEN
@@ -67,9 +72,23 @@ entries AS (
     SELECT l.source_id,
            jsonb_object_agg(l.host, CASE
                WHEN s.rate_limited_hosts ? l.host THEN
+                   -- The expiry keeps its CAUSE (the runtime combineHold rule): the
+                   -- streaks stay the existing entry's; between a 5xx hold and a rate
+                   -- limit, signal and status come from the record with the later until
+                   -- (a tie goes to the rate limit); two of one class keep the existing.
                    (s.rate_limited_hosts -> l.host) || jsonb_build_object('until', to_char(
                        GREATEST(l.until, pg_temp.hold_ts(s.rate_limited_hosts -> l.host ->> 'until'))
                        AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'))
+                   || CASE WHEN ((s.rate_limited_hosts -> l.host ->> 'signal') = 'retry_after_5xx') <> (l.status = 503)
+                             AND (pg_temp.hold_ts(s.rate_limited_hosts -> l.host ->> 'until') IS NULL
+                                  OR l.until > pg_temp.hold_ts(s.rate_limited_hosts -> l.host ->> 'until')
+                                  OR (l.until = pg_temp.hold_ts(s.rate_limited_hosts -> l.host ->> 'until') AND l.status <> 503))
+                           THEN jsonb_build_object(
+                               'http_status', l.status,
+                               'signal', CASE WHEN l.status = 503 THEN 'retry_after_5xx' ELSE 'http_429' END,
+                               'count', CASE WHEN l.status = 503 THEN pg_temp.hold_count(s.rate_limited_hosts -> l.host ->> 'count')
+                                             ELSE GREATEST(pg_temp.hold_count(s.rate_limited_hosts -> l.host ->> 'count'), 1) END)
+                           ELSE '{}'::jsonb END
                ELSE jsonb_build_object(
                    'until', to_char(l.until AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
                    'http_status', l.status,
@@ -94,4 +113,5 @@ FROM (SELECT DISTINCT source_id FROM legacy) moved
 LEFT JOIN entries e ON e.source_id = moved.source_id
 WHERE s.source_id = moved.source_id;
 
+DROP FUNCTION IF EXISTS pg_temp.hold_count(text);
 DROP FUNCTION IF EXISTS pg_temp.hold_ts(text);

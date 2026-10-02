@@ -329,9 +329,16 @@ function nextHold(prev, { retryAt = null, status = null, signal = null, weak = f
     if (notLimit) until = Math.min(until, now + MAX_5XX_HOLD_MS);
     // A later hold already in force is never shortened.
     const prevUntil = prev ? Date.parse(prev.until) : NaN;
-    if (Number.isFinite(prevUntil) && prevUntil > until) until = prevUntil;
+    let outStatus = status;
+    let outSignal = SIGNALS.includes(signal) ? signal : null;
+    if (Number.isFinite(prevUntil) && prevUntil > until) {
+        until = prevUntil;
+        // Copilot review: the expiry keeps its CAUSE — a 5xx's (short) hold never
+        // takes over the cause of a longer rate-limit hold already in force.
+        if (notLimit && prev.signal !== 'retry_after_5xx') { outSignal = prev.signal; outStatus = prev.http_status; }
+    }
     return {
-        entry: { until: new Date(until).toISOString(), http_status: status, signal: SIGNALS.includes(signal) ? signal : null,
+        entry: { until: new Date(until).toISOString(), http_status: outStatus, signal: outSignal,
             count, weak: weakCount, ...(strong403 ? { strong403 } : {}), at: new Date(now).toISOString() },
         escalate: !notLimit && ((weak && weakCount >= ESCALATE_AFTER) || strong403 >= ESCALATE_STRONG_403_AFTER),
     };
@@ -361,8 +368,28 @@ function combineHold(a, b) {
     const ta = Date.parse(a.at);
     const newest = !Number.isFinite(ta) || Date.parse(b.at) > ta ? b : a;
     const ua = Date.parse(a.until);
-    const until = Math.max(Date.parse(b.until), Number.isFinite(ua) ? ua : -Infinity);
-    return { ...newest, until: new Date(until).toISOString() };
+    const ub = Date.parse(b.until);
+    const until = Math.max(ub, Number.isFinite(ua) ? ua : -Infinity);
+    // Copilot review: the expiry keeps its CAUSE. The newest record gives the
+    // streaks (and, between two records of one class, the signal); when one
+    // record is a 5xx's Retry-After hold and the other a rate limit, the signal
+    // and status come from the record that supplied the latest until (a tie
+    // goes to the rate-limit cause) — a concurrent 1 h 5xx hold must never
+    // relabel a 24 h rate limit.
+    const is5xx = r => r.signal === 'retry_after_5xx';
+    let cause = newest;
+    if (is5xx(a) !== is5xx(b)) {
+        if (Number.isFinite(ua) && ua !== ub) cause = ua > ub ? a : b;
+        else cause = is5xx(a) ? b : a;
+    }
+    // A 5xx hold carries no streak of its own (it leaves the host's streaks as its
+    // writer saw them): its streak fields never replace a rate limit's.
+    let streaks = newest;
+    if (is5xx(newest) && !is5xx(newest === a ? b : a)) streaks = newest === a ? b : a;
+    const merged = { ...newest, signal: cause.signal, http_status: cause.http_status, count: streaks.count, weak: streaks.weak, until: new Date(until).toISOString() };
+    if (streaks.strong403) merged.strong403 = streaks.strong403;
+    else delete merged.strong403;
+    return merged;
 }
 
 /** The active hold of a host (hostname), or null. @returns {{ until: number, http_status, signal }|null} */
@@ -447,6 +474,22 @@ function serverBackoffUntil(src, holds, now = Date.now()) {
     return times.length ? times[times.length - 1] : null;
 }
 
+/** The stored key of a route held by a 5xx's Retry-After (the same JSON map as rate-limited routes). */
+const SERVER_ROUTE_PREFIX = 'server:';
+
+/**
+ * The map the worker stores in source_collection_state.rate_limited_routes:
+ * the rate-limited routes as { id: until } and the routes held only by a 5xx's
+ * Retry-After as { 'server:<id>': until } — so the web process can keep both
+ * out of open_routes while only the first is a rate limit (Copilot review).
+ */
+function storedRouteMap(gate) {
+    return {
+        ...gate.limitedRoutes,
+        ...Object.fromEntries(Object.entries(gate.serverRoutes || {}).map(([id, t]) => [SERVER_ROUTE_PREFIX + id, t])),
+    };
+}
+
 /**
  * The holds that are RATE LIMITS: a hold from a 5xx's Retry-After
  * (retry_after_5xx) is enforced but is not one, so it never reads as
@@ -462,7 +505,8 @@ function rateLimitHolds(holds) {
  * stop (computed by the worker, which sees the real env).
  * @returns {{ state: 'none'|'partial'|'all', kind: 'rate_limit'|'server'|null, until: string|null,
  *             next: string|null, routes: { [routeId]: string },
- *             limitedRoutes: { [routeId]: string }, reason: string|null }}
+ *             limitedRoutes: { [routeId]: string }, serverRoutes: { [routeId]: string },
+ *             reason: string|null }}
  *   routes: every held route (enforcement); limitedRoutes: those held by a real
  *   rate limit (what /api/sources reports — a 5xx hold is `kind: 'server'`)
  *   until: when the LAST held route frees (ISO); next: the FIRST
@@ -484,12 +528,13 @@ function holdGate(src, env, holds, now = Date.now(), { routeKills = [] } = {}) {
         if (tl) limited[r.id] = tl;
     }
     const times = Object.values(held).sort();
-    if (!times.length) return { state: 'none', kind: null, until: null, next: null, routes: {}, limitedRoutes: {}, reason: null };
+    if (!times.length) return { state: 'none', kind: null, until: null, next: null, routes: {}, limitedRoutes: {}, serverRoutes: {}, reason: null };
     const state = times.length === routes.length ? 'all' : 'partial';
     const until = times[times.length - 1];
     // 'rate_limit' when any held route is held by a real rate limit, else 'server'.
     const kind = Object.keys(limited).length ? 'rate_limit' : 'server';
-    return { state, kind, until, next: times[0], routes: held, limitedRoutes: limited, reason: holdReason(state, held, until, kind) };
+    const server = Object.fromEntries(Object.entries(held).filter(([id]) => !limited[id]));
+    return { state, kind, until, next: times[0], routes: held, limitedRoutes: limited, serverRoutes: server, reason: holdReason(state, held, until, kind) };
 }
 
 /**
@@ -567,7 +612,7 @@ function legacyHolds(httpCache, now = Date.now()) {
 }
 
 module.exports = {
-    MIN_BACKOFF_MS, MAX_BACKOFF_MS, MAX_5XX_HOLD_MS, publicHostName, rateLimitHolds, serverBackoffUntil, MAX_IN_RUN_WAIT_MS, NO_TIME_429_HOLD_MS, LEGACY_HOLD_PREFIX, ESCALATE_AFTER, ESCALATE_STRONG_403_AFTER, WARN_AFTER, STALE_MS, RATE_LIMITED, SIGNALS,
+    MIN_BACKOFF_MS, MAX_BACKOFF_MS, MAX_5XX_HOLD_MS, publicHostName, rateLimitHolds, serverBackoffUntil, storedRouteMap, SERVER_ROUTE_PREFIX, MAX_IN_RUN_WAIT_MS, NO_TIME_429_HOLD_MS, LEGACY_HOLD_PREFIX, ESCALATE_AFTER, ESCALATE_STRONG_403_AFTER, WARN_AFTER, STALE_MS, RATE_LIMITED, SIGNALS,
     WEAK_SIGNALS, BODY_HOSTS, CONFIGURED_HOST, BODY_RE,
     parseRetryAfter, parseReset, bodyNamesRateLimit, rateLimitSignal, backoffUntil,
     sanitizeHolds, activeHolds, nextHold, mergeHolds, combineHold, collectionHolds, heldUntil, hostOf,

@@ -38,7 +38,7 @@ const { dbAll } = require('../db/connection');
 const { SOURCES, getSource, sourceStatus, killSwitchEnv, GATE_STATUSES } = require('../config/source-registry');
 const { DEMO_SOURCE_TYPE } = require('../config/data-mode');
 const { refusalGate, resetEnv, probationOver, BLOCKED_BY_SOURCE } = require('./refusal');
-const { activeHolds, collectionHolds, rateLimitHolds, serverBackoffUntil, publicHosts, holdReason, RATE_LIMITED } = require('./rate-limit');
+const { activeHolds, collectionHolds, rateLimitHolds, serverBackoffUntil, publicHosts, holdReason, SERVER_ROUTE_PREFIX, RATE_LIMITED } = require('./rate-limit');
 const { selectionStatus } = require('./reddit/selection');
 const { allRouteKillSwitches } = require('./state');
 
@@ -73,17 +73,21 @@ function rateLimitView(src, row, openRouteIds, now) {
     const stored = row.rate_limited_routes && typeof row.rate_limited_routes === 'object' && !Array.isArray(row.rate_limited_routes)
         ? row.rate_limited_routes : {};
     const routeMap = {};
+    const serverMap = {};
     for (const r of src.routes) {
         // Copilot review: a route killed after the worker saved this map is not
         // published as rate-limited (it is disabled / closed already).
         if (!openRouteIds.includes(r.id)) continue;
         const t = Date.parse(stored[r.id]);
         if (Number.isFinite(t) && t > now) routeMap[r.id] = new Date(t).toISOString();
+        // A route held only by a 5xx's Retry-After: not rate-limited, but not running either.
+        const ts = Date.parse(stored[SERVER_ROUTE_PREFIX + r.id]);
+        if (Number.isFinite(ts) && ts > now) serverMap[r.id] = new Date(ts).toISOString();
     }
     const hosts = publicHosts(src, row.rate_limited_hosts, now);
     const times = [...Object.values(routeMap), ...Object.values(activeHolds(rateLimitHolds(collectionHolds(src, row.rate_limited_hosts)), now)).map(h => h.until)].sort();
     const all = openRouteIds.length > 0 && openRouteIds.every(id => routeMap[id]);
-    return { routeMap, hosts, until: times.length ? times[times.length - 1] : null, all, serverUntil: serverBackoffUntil(src, row.rate_limited_hosts, now) };
+    return { routeMap, serverMap, hosts, until: times.length ? times[times.length - 1] : null, all, serverUntil: serverBackoffUntil(src, row.rate_limited_hosts, now) };
 }
 
 
@@ -129,7 +133,7 @@ function registryFields(row, env, now, routeKills = []) {
         // awaiting its post-cooldown probe keeps them: the probe runs them.
         // Copilot review: a route held by a rate-limit backoff does not run
         // now either (it is listed in rate_limited_routes instead).
-        open_routes: dbKilled || cooling ? [] : st.openRoutes.filter(id => !held.routeMap[id]),
+        open_routes: dbKilled || cooling ? [] : st.openRoutes.filter(id => !held.routeMap[id] && !held.serverMap[id]),
         disabled_routes: st.disabledRoutes,
         routes: st.routes.map((r) => {
             if (r.status !== 'open') return r;
@@ -158,6 +162,7 @@ function registryFields(row, env, now, routeKills = []) {
         // rate limit — it never sets the status or rate_limited_until; its own
         // time is here (the host list carries signal retry_after_5xx).
         server_backoff_until: held.serverUntil,
+        server_backoff_routes: Object.keys(held.serverMap),
         rate_limited_hosts: held.hosts,
         rate_limited_routes: Object.keys(held.routeMap),
         last_attempt_at: row.last_attempt_at || null,

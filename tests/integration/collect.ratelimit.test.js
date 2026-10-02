@@ -441,12 +441,16 @@ describe('a source whose every route is held is skipped, not failed', () => {
         const st = await stateOf('hacker_news');
         expect(st.rate_limited_hosts['hn.algolia.com']).toMatchObject({ signal: 'retry_after_5xx', count: 0 });
         expect(st.rate_limited_until).toBeNull();
-        expect(st.rate_limited_routes).toEqual({});
+        expect(st.rate_limited_routes).toEqual({ 'server:algolia-search': expect.any(String) });
         const row = await rowOf('hacker_news');
         expect(row.status).toBe('collecting');
         expect(row.rate_limited_until).toBeNull();
         expect(row.rate_limited_hosts).toEqual([expect.objectContaining({ host: 'hn.algolia.com', signal: 'retry_after_5xx' })]);
         expect(Date.parse(row.server_backoff_until)).toBeGreaterThan(Date.now());
+        // The held route does not run now: out of open_routes, in server_backoff_routes, never in rate_limited_routes.
+        expect(row.open_routes).toEqual([]);
+        expect(row.server_backoff_routes).toEqual(['algolia-search']);
+        expect(row.rate_limited_routes).toEqual([]);
         await nextPoll('hacker_news');
         const { summary, transport } = await collect([HN], ['hacker_news']);
         expect(transport.calls).toHaveLength(0);
