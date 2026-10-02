@@ -202,7 +202,7 @@
         if (m.url) {
             parts.push(externalLink(doc, 'credit-link', m.host + ' ↗', m.url,
                 'Read the original at ' + m.host
-                + (m.url.startsWith('http:') ? ' (not encrypted)' : '') + ' (opens in a new tab)'));
+                + (m.url.startsWith('http:') ? ' (not encrypted, opens in a new tab)' : ' (opens in a new tab)')));
         }
         if (m.license) {
             parts.push(m.licenseUrl

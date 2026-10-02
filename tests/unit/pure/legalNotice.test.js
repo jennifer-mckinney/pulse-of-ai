@@ -118,6 +118,20 @@ describe('index.html <noscript> parity (K1 review)', () => {
     });
 });
 
+describe('the three static "Source code" links equal SOURCE_URL (AGPL section 13)', () => {
+    test('index.html noscript, index.html About fallback and credits.html', () => {
+        const idx = read('public/index.html');
+        const cr = read('public/credits.html');
+        const noscript = idx.slice(idx.indexOf('<noscript>'), idx.indexOf('</noscript>'));
+        const panel = idx.slice(idx.indexOf('id="about-panel"'), idx.indexOf('</ul>', idx.indexOf('id="about-panel"')));
+        const re = new RegExp('<a href="([^"]+)"[^>]*>Source code</a>', 'g');
+        const hrefs = (t) => [...t.matchAll(re)].map((m) => m[1]);
+        expect(hrefs(noscript)).toEqual([legal.SOURCE_URL]);
+        expect(hrefs(panel)).toEqual([legal.SOURCE_URL]);
+        expect(hrefs(cr)).toEqual([legal.SOURCE_URL]);
+    });
+});
+
 describe('credits.html — the same notices as static markup (K1)', () => {
     // The credits page is a second page of the UI, so it carries the
     // Appropriate Legal Notices too; it is static (no config load) so it shows

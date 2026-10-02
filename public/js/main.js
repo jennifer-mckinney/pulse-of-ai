@@ -264,7 +264,14 @@
             // Only a drawer GAINING `open` folds the panel: another class
             // change on an already-open drawer must not close a panel the
             // user has just opened (attributeOldValue gives the old classes).
+            // While a drawer is open the chip is inert (see drawerOpen):
+            // say so to assistive technology instead of failing silently.
+            const syncChip = () => {
+                if (drawerOpen()) chip.setAttribute('aria-disabled', 'true');
+                else chip.removeAttribute('aria-disabled');
+            };
             const observer = new MutationObserver((records) => {
+                syncChip();
                 const opened = records.find((r) => r.target.classList.contains('open')
                     && !String(r.oldValue || '').split(/\s+/).includes('open'));
                 if (opened) foldAway(opened.target);

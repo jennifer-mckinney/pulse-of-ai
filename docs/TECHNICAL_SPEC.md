@@ -278,8 +278,8 @@ The diagram set in `docs/diagrams/` (entry point `docs/diagrams/architecture.*`)
 ┌─────────────────────────────────────────────────────────────────┐
 │  BROWSER (public/) — no build step, everything self-hosted      │
 │  UMD modules: config/*, attribution, utils, data, insights,     │
-│  chapters,                                                      │
-│  globe (Canvas-2D dot globe), story (11 beats), ui, main        │
+│  chapters, globe (Canvas-2D dot globe), story (11 beats), ui,   │
+│  main                                                           │
 │  Demo data always labelled; legal notices in the header panel;  │
 │  a credit and link back under every excerpt (credits.html)      │
 └─────────────────────────────────────────────────────────────────┘

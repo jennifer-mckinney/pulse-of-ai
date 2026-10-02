@@ -1814,7 +1814,14 @@
             // re-targets an already open drawer.
             drawerOpeners.set(drawer, control);
         } else if (open && !wasOpen) {
-            if (isElementOutside(active, drawer)) drawerOpeners.set(drawer, active);
+            if (isElementOutside(active, drawer)) {
+                // A notice link inside the About panel is not a stable opener
+                // (the panel folds away when a drawer opens): return to the
+                // About chip instead.
+                const panel = document.getElementById('about-panel');
+                const aboutChip = document.getElementById('about-chip');
+                drawerOpeners.set(drawer, panel && aboutChip && panel.contains(active) ? aboutChip : active);
+            }
             else drawerOpeners.delete(drawer);
         }
         drawer.classList.toggle('open', open);

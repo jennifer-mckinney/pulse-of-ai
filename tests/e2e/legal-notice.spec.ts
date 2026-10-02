@@ -131,6 +131,68 @@ test('legal notice: a drawer opening without moving focus takes it out of the fo
     await expect(page.locator('#health-drawer')).toBeFocused();
 });
 
+test('legal notice: a class change on an already-open drawer keeps the panel open', async ({ page }) => {
+    await gotoAndWaitForData(page);
+    await page.locator('#health-chip').click();
+    await expect(page.locator('#health-drawer')).toHaveClass(/open/);
+    // The chip is inert while the drawer is open (and says so), so open the
+    // panel directly, then change an unrelated class on the open drawer.
+    await expect(page.locator('#about-chip')).toHaveAttribute('aria-disabled', 'true');
+    await page.evaluate(() => {
+        const p = document.getElementById('about-panel');
+        p.hidden = false;
+        document.getElementById('about-chip').setAttribute('aria-expanded', 'true');
+        document.getElementById('health-drawer').classList.add('unrelated-state');
+    });
+    await page.waitForTimeout(100);
+    await expect(page.locator('#about-panel')).toBeVisible();
+    await expect(page.locator('#about-chip')).toHaveAttribute('aria-expanded', 'true');
+});
+
+test('legal notice: the about chip does nothing while a drawer is open, and is re-enabled after', async ({ page }) => {
+    await gotoAndWaitForData(page);
+    const chip = page.locator('#about-chip');
+    await page.locator('#health-chip').click();
+    await expect(page.locator('#health-drawer')).toHaveClass(/open/);
+    await expect(chip).toHaveAttribute('aria-disabled', 'true');
+    await chip.click({ force: true });
+    await expect(chip).toHaveAttribute('aria-expanded', 'false');
+    await expect(page.locator('#about-panel')).toBeHidden();
+    await page.locator('#health-drawer .drawer-x').click();
+    await expect(page.locator('#health-drawer')).not.toHaveClass(/open/);
+    await expect(chip).not.toHaveAttribute('aria-disabled', 'true');
+    await chip.click();
+    await expect(page.locator('#about-panel')).toBeVisible();
+});
+
+test('legal notice: a drawer opened from a focused notice link returns focus to the about chip', async ({ page }) => {
+    await gotoAndWaitForData(page);
+    await page.locator('#about-chip').click();
+    await page.locator('#about-panel a').first().focus();
+    // programmatic open with no control: the opener would be the notice link
+    await page.evaluate(() => (window as any).PulseUI.openHealth());
+    await expect(page.locator('#health-drawer')).toHaveClass(/open/);
+    await page.locator('#health-drawer .drawer-x').click();
+    await expect(page.locator('#health-drawer')).not.toHaveClass(/open/);
+    await expect(page.locator('#about-chip')).toBeFocused();
+});
+
+for (const width of [320, 600]) {
+    test(`legal notice: at ${width}px the panel opens below the header and inside the viewport`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 800 });
+        await gotoAndWaitForData(page);
+        await page.locator('#about-chip').click();
+        const panel = await page.locator('#about-panel').boundingBox();
+        expect(panel).not.toBeNull();
+        for (const sel of ['#about-chip', '#health-chip', '#credits-link', '#insight-chip']) {
+            const b = await page.locator(sel).boundingBox();
+            expect(panel!.y, sel + ' stays above the panel').toBeGreaterThanOrEqual(b!.y + b!.height - 1);
+        }
+        expect(panel!.x).toBeGreaterThanOrEqual(0);
+        expect(panel!.x + panel!.width).toBeLessThanOrEqual(width);
+    });
+}
+
 test('legal notice: a short viewport bounds the panel and scrolls to the last notice', async ({ page }) => {
     const errors = consoleErrors(page);
     await page.setViewportSize({ width: 320, height: 240 });
