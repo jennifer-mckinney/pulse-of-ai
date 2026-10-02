@@ -163,6 +163,13 @@ describe('creditModel', () => {
 });
 
 describe('buildCredit', () => {
+    test('an http (not encrypted) original says so in its accessible name', () => {
+        const doc = makeDoc();
+        const [a] = links(attribution.buildCredit(doc, live({ source_url: 'http://www.npr.org/story' })));
+        expect(a.href).toBe('http://www.npr.org/story');
+        expect(a.getAttribute('aria-label')).toBe('Read the original at npr.org (not encrypted) (opens in a new tab)');
+    });
+
     test('credit line: "via NPR" and a safe external link showing the host', () => {
         const doc = makeDoc();
         const line = attribution.buildCredit(doc, live());

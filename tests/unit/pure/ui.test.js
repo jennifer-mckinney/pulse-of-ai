@@ -650,6 +650,12 @@ describe('healthBanner / sourcesStat / methodologyModel', () => {
         expect(groups[1].sources.map(s => s.name)).toEqual(['Stack Overflow', 'Hacker News']);
         expect(groups[0].sources[0]).toMatchObject({ statusLabel: 'blocked: no compliant access', termsUrl: 'https://weixin.qq.com/agreement' });
         expect(groups[0].sources[1].termsUrl).toBeNull();      // non-https never linked
+        // K1 review: the shared validator also refuses credentials and private hosts
+        const odd = P.sourceListModel([
+            { registry: true, category: 'social', rank: 1, display_name: 'A', status: 'blocked', terms_url: 'https://u:p@example.com/t' },
+            { registry: true, category: 'social', rank: 2, display_name: 'B', status: 'blocked', terms_url: 'https://localhost/t' },
+        ]);
+        expect(odd[0].sources.map(s => s.termsUrl)).toEqual([null, null]);
         expect(groups[1].sources[1].termsUrl).toBeNull();      // collecting: no citation needed
     });
     test('methodologyModel: latest row per component, model@version keys', () => {

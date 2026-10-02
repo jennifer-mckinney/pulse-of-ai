@@ -228,8 +228,12 @@
             setOpen(false);
             if (returnFocus) chip.focus();
         };
+        // A drawer (z-index 50) covers the panel (30): opening the panel
+        // behind an open drawer would set aria-expanded on something nobody
+        // can see, so the chip does nothing while a drawer is open.
+        const drawerOpen = () => !!document.querySelector('#audit-drawer.open, #health-drawer.open');
         chip.addEventListener('click', () => {
-            if (panel.hidden) setOpen(true);
+            if (panel.hidden) { if (!drawerOpen()) setOpen(true); }
             else close();
         });
         document.addEventListener('keydown', (e) => {
@@ -257,13 +261,17 @@
             }
         };
         if (typeof MutationObserver !== 'undefined') {
+            // Only a drawer GAINING `open` folds the panel: another class
+            // change on an already-open drawer must not close a panel the
+            // user has just opened (attributeOldValue gives the old classes).
             const observer = new MutationObserver((records) => {
-                const opened = records.find((r) => r.target.classList.contains('open'));
+                const opened = records.find((r) => r.target.classList.contains('open')
+                    && !String(r.oldValue || '').split(/\s+/).includes('open'));
                 if (opened) foldAway(opened.target);
             });
             ['audit-drawer', 'health-drawer'].forEach((id) => {
                 const d = document.getElementById(id);
-                if (d) observer.observe(d, { attributes: true, attributeFilter: ['class'] });
+                if (d) observer.observe(d, { attributes: true, attributeFilter: ['class'], attributeOldValue: true });
             });
         }
     }

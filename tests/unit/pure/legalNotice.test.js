@@ -110,12 +110,20 @@ describe('index.html — mount points, script order, no-JS copy', () => {
     });
 });
 
+describe('index.html <noscript> parity (K1 review)', () => {
+    test('the no-JS copy carries every notice text', () => {
+        const html = read('public/index.html');
+        const noscript = html.slice(html.indexOf('<noscript>'), html.indexOf('</noscript>'));
+        for (const n of legal.NOTICE) expect(noscript).toContain(n.text);
+    });
+});
+
 describe('credits.html — the same notices as static markup (K1)', () => {
     // The credits page is a second page of the UI, so it carries the
     // Appropriate Legal Notices too; it is static (no config load) so it shows
     // without JavaScript. Kept equal to the config like the About panel.
     const html = read('public/credits.html');
-    const foot = html.slice(html.indexOf('<footer class="credits-legal"'), html.indexOf('</footer>'));
+    const foot = html.slice(html.indexOf('<section class="credits-legal"'), html.lastIndexOf('</section>'));
 
     test('repeats every notice line and link, once each', () => {
         for (const n of legal.NOTICE) {

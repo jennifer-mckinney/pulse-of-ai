@@ -737,8 +737,9 @@
                     status: r.status,
                     statusLabel: sourceStatusLabel(r),
                     online: r.online === true,
-                    termsUrl: r.status !== 'collecting' && typeof r.terms_url === 'string'
-                        && /^https:\/\//.test(r.terms_url) ? r.terms_url : null,
+                    // K1 review: the shared link validator (no credentials, no
+                    // private or IP hosts, no control characters), https only
+                    termsUrl: r.status !== 'collecting' ? httpsOnly(utils.safeHttpUrl(r.terms_url)) : null,
                     reason: r.status_reason || '',
                 })),
         })).filter((g) => g.sources.length > 0);
@@ -1222,6 +1223,11 @@
         if (className) node.className = className;
         if (text !== undefined && text !== null) node.textContent = text;
         return node;
+    }
+
+    // httpsOnly: the URL when it is https, else null (a safeHttpUrl result or null).
+    function httpsOnly(url) {
+        return typeof url === 'string' && url.startsWith('https://') ? url : null;
     }
 
     // appendCredit (K1): the credit line + link back under an excerpt;

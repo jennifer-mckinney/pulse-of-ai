@@ -175,13 +175,26 @@ test.describe('phone width (375px)', () => {
     test('header chips all fit; the health drawer is still reachable', async ({ page }) => {
         const errors = consoleErrors(page);
         await gotoAndWaitForData(page);
-        for (const sel of ['#credits-link', '#health-chip', '#insight-chip']) {
+        for (const sel of ['#credits-link', '#health-chip', '#insight-chip', '#about-chip']) {
             const box = await page.locator(sel).boundingBox();
             expect(box, sel + ' is rendered').not.toBeNull();
             expect(box!.x, sel + ' starts on screen').toBeGreaterThanOrEqual(0);
             expect(box!.x + box!.width, sel + ' ends on screen').toBeLessThanOrEqual(375);
         }
         await evidence(page, '23-attribution-mobile-header');
+        // the About panel opens BELOW the wrapped header: it must not cover
+        // its own chip or the health chip (a pointer user could not close it)
+        await page.locator('#about-chip').click();
+        await expect(page.locator('#about-panel')).toBeVisible();
+        const panel = await page.locator('#about-panel').boundingBox();
+        for (const sel of ['#about-chip', '#health-chip', '#credits-link']) {
+            const b = await page.locator(sel).boundingBox();
+            expect(panel!.y, sel + ' stays above the About panel').toBeGreaterThanOrEqual(b!.y + b!.height);
+        }
+        expect(panel!.x).toBeGreaterThanOrEqual(0);
+        expect(panel!.x + panel!.width).toBeLessThanOrEqual(375);
+        await page.locator('#about-chip').click();
+        await expect(page.locator('#about-panel')).toBeHidden();
         await page.locator('#health-chip').click();
         await expect(page.locator('#health-drawer')).toHaveClass(/open/);
         await page.locator('#health-drawer .drawer-x').click();

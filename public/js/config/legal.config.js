@@ -5,8 +5,9 @@
 // the upstream repository, must be preserved in the Appropriate Legal
 // Notices of any covered work, including a user interface reached over a
 // network. main.js renders NOTICE into the header "about" panel
-// (#about-panel) with createElement/textContent only; index.html repeats it
-// as static text inside <noscript>.
+// (#about-panel) with createElement/textContent only; the same lines are
+// repeated as static markup in index.html (the <noscript> block and the
+// About-panel fallback) and in the footer of credits.html.
 //
 // Deployers of a MODIFIED version (AGPL section 13): point SOURCE_URL at
 // the complete corresponding source of the version you run (your fork). The

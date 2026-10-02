@@ -537,6 +537,9 @@ body {
   .hdr-right { gap: 6px; flex-wrap: wrap; }
   .hdr-chip { padding: 5px 9px; gap: 6px; }
   .exp-filters { margin-top: 116px; }
+  /* the wrapped header is about 100px tall: the About panel opens below it
+     (not over its own chip) and spans the viewport width less the gutters */
+  .about-panel { top: 112px; left: 14px; right: 14px; max-width: none; max-height: calc(100% - 128px); }
 }
 
 /* ── Reduced motion: disable decorative CSS loops (cue bob, header

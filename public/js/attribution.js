@@ -201,7 +201,8 @@
         if (m.text) parts.push(node(doc, 'span', 'credit-via', 'via ' + m.text + (m.date ? ' (' + m.date + ')' : '')));
         if (m.url) {
             parts.push(externalLink(doc, 'credit-link', m.host + ' ↗', m.url,
-                'Read the original at ' + m.host + ' (opens in a new tab)'));
+                'Read the original at ' + m.host
+                + (m.url.startsWith('http:') ? ' (not encrypted)' : '') + ' (opens in a new tab)'));
         }
         if (m.license) {
             parts.push(m.licenseUrl
