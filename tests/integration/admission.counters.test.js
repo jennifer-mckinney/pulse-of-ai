@@ -187,14 +187,26 @@ describe('admission_rule_hits refuses anything but counts', () => {
         await expect(dbRun(`UPDATE admission_rule_hits SET admitted_count = -1`)).rejects.toThrow(/check constraint/);
     });
 
-    it('recordRuleHits refuses a route id that is not registry-shaped before touching the database', async () => {
+    it('recordRuleHits writes only an exact registered route of the source, before touching the database', async () => {
+        const { getSource } = require('../../src/config/source-registry');
+        const source = getSource('bbc_news');
+        const tally = { old: { admitted: 0, rejected: 1 } };
+        for (const route of ['https://example.org/feed', 'unknown-route', '6f1c2a54-0d3e-4c53-9a54-6e2b6a1f9b10',
+            'openai-releases-a-model', null, undefined, 'all-news-rss']) {
+            await expect(counters.recordRuleHits({
+                sourceId: await bbcId(), source, route, admissionMvId: await admissionMvId(), tally,
+            })).rejects.toThrow(/not a registered route of this source/);
+        }
         await expect(counters.recordRuleHits({
-            sourceId: await bbcId(), route: 'https://example.org/feed', admissionMvId: await admissionMvId(),
-            tally: { old: { admitted: 0, rejected: 1 } },
-        })).rejects.toThrow(/not a registry route id/);
+            sourceId: await bbcId(), route: 'technology-rss', admissionMvId: await admissionMvId(), tally,
+        })).rejects.toThrow(/not a registered route of this source/);
+        expect((await dbGet('SELECT COUNT(*)::int AS n FROM admission_rule_hits')).n).toBe(0);
         expect(await counters.recordRuleHits({
-            sourceId: await bbcId(), route: 'technology-rss', admissionMvId: await admissionMvId(), tally: {},
+            sourceId: await bbcId(), source, route: 'technology-rss', admissionMvId: await admissionMvId(), tally: {},
         })).toBe(0);
+        expect(await counters.recordRuleHits({
+            sourceId: await bbcId(), source, route: 'technology-rss', admissionMvId: await admissionMvId(), tally,
+        })).toBe(1);
     });
 });
 

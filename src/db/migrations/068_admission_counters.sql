@@ -20,7 +20,9 @@
 --    version and rule: admitted_count and rejected_count, upserted by the
 --    collector. rule_id and route are CHECKed against closed vocabularies
 --    (the same expressions as src/collectors/admission-counters.js RULE_ID_RE
---    and ROUTE_ID_RE), so no free text can be stored. Retention:
+--    and ROUTE_ID_RE), so no free text can be stored. The route CHECK is a
+--    shape backstop only (the registry is code, not data): recordRuleHits
+--    writes a route only if it is an exact registered route of the source. Retention:
 --    ADMISSION_RULE_HITS_DAYS, default 400 days (expireRuleHits, the worker's
 --    daily maintenance).
 --

@@ -369,7 +369,7 @@ async function runCollection(o = {}) {
                 if (!routeStoreFailed) {
                     try {
                         await counters.recordRuleHits({
-                            sourceId, route: c.route.id, admissionMvId: mv.admissionMvId, tally: result.ruleHits,
+                            sourceId, source: src, route: c.route.id, admissionMvId: mv.admissionMvId, tally: result.ruleHits,
                         });
                     } catch (err) {
                         fail(`${c.route.id}: admission counters not recorded: ${err.message}`, err);

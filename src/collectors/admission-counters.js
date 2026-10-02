@@ -53,7 +53,8 @@ const { retentionWindowDays } = require('../config/source-registry');
 
 const RULE_ID_RE = /^(invalid|old|duplicate|no_pattern|any_pattern|pattern:[0-9]{2})$/;
 // Registry route ids (src/config/source-registry.js): lower-case words and
-// hyphens. The table's CHECK uses the same expression.
+// hyphens. The table's CHECK uses the same expression as a shape backstop;
+// recordRuleHits checks exact membership in the source's registered routes.
 const ROUTE_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 const DEFAULT_RULE_HITS_DAYS = 400;   // a year plus a month: same-month year-on-year comparison
@@ -117,8 +118,14 @@ const db = () => require('../db/connection');
  * Add one route's tally to today's (UTC) admission_rule_hits rows.
  * @returns {Promise<number>} rows written
  */
-async function recordRuleHits({ sourceId, route, admissionMvId, tally }) {
-    if (!ROUTE_ID_RE.test(String(route))) throw new Error(`not a registry route id: ${JSON.stringify(route)}`);
+async function recordRuleHits({ sourceId, source, route, admissionMvId, tally }) {
+    // The route must be one of THIS source's registered routes (exact
+    // membership: the registry is code, so it is checked here; the table's
+    // CHECK is only a shape backstop). An item id or a headline slug is not.
+    const registered = source && Array.isArray(source.routes) && source.routes.some(r => r && r.id === route);
+    if (typeof route !== 'string' || !ROUTE_ID_RE.test(route) || !registered) {
+        throw new Error(`not a registered route of this source: ${JSON.stringify(route)}`);
+    }
     const list = rows(tally);
     if (!list.length) return 0;
     await db().dbRun(
