@@ -80,3 +80,13 @@ describe('review fixes: tiered_ai_nonspam and per-edge-case tiered_ai', () => {
         expect(e.formatReport(r).join('\n')).toMatch(/tiered_ai_nonspam/);
     });
 });
+
+describe('review fixes round 2: aligned report columns', () => {
+    it('every report row has the same width as the header (the longest column name fits)', () => {
+        const lines = e.formatReport(e.aggregate([{ category: 'news', storedRelevant: true, text: 'OpenAI model' }]));
+        const head = lines.find(x => x.startsWith('category'));
+        const rows = lines.filter(x => /^(news|TOTAL)\s/.test(x));
+        expect(rows.length).toBe(2);
+        for (const r of rows) expect(r.length).toBe(head.length);
+    });
+});

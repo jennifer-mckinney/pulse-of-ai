@@ -107,8 +107,8 @@ const pct = (x) => `${(x * 100).toFixed(1)}%`;
  */
 function formatReport(report, { versions = VERSIONS } = {}) {
     const cols = ['n', 'stored_relevant', 'current_relevant', 'admission_ai', 'tiered_ai', 'tiered_ai_nonspam', 'both', 'current_only', 'tiered_only', 'spam', 'delta'];
-    const head = ['category'.padEnd(12), ...cols.map(c => c.padStart(16)), 'delta_rate'.padStart(11)].join(' ');
-    const line = (b) => [String(b.category).padEnd(12), ...cols.map(c => String(b[c]).padStart(16)), pct(b.delta_rate).padStart(11)].join(' ');
+    const head = ['category'.padEnd(12), ...cols.map(c => c.padStart(Math.max(16, c.length))), 'delta_rate'.padStart(11)].join(' ');
+    const line = (b) => [String(b.category).padEnd(12), ...cols.map(c => String(b[c]).padStart(Math.max(16, c.length))), pct(b.delta_rate).padStart(11)].join(' ');
     const out = [
         `relevance-eval: relevance@${versions.relevance} and admission_filter@${versions.admission} (released) vs tiers ${versions.tiers} (offline library)`,
         'delta = tiered_ai - current_relevant (negative: the tiered library would count fewer posts as AI)',

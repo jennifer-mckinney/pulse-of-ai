@@ -441,3 +441,13 @@ describe('review fixes: masks never hide real AI text', () => {
         expect(require('../../../src/config/ai-lexicon-tiers').normalizeText('\u0661\u0662\u0663')).toBe('\u0661\u0662\u0663');
     });
 });
+
+describe('review fixes round 2: German ASCII fallbacks and state codes', () => {
+    it.each(['Wir arbeiten fur KI Projekte', 'Wir fuer KI', 'Gedanken uber KI heute', 'Fragen ueber KI', 'Fragen über KI'])('%s', (t) => {
+        expect(classifyTiered(t).ai).toBe(true);
+    });
+
+    it('a sentence-initial state code is not AI', () => {
+        expect(classifyTiered('Cedar Rapids, IA. IA et al said it is cold').ai).toBe(false);
+    });
+});

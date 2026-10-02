@@ -196,4 +196,24 @@ describe('migration 070: relevance gold set', () => {
             })).rejects.toThrow(/erasure|only erasure/);
         });
     });
+
+    describe('erasure review fixes', () => {
+        it('draw_rank (sha256(seed:post id)) is replaced on erasure, so it cannot re-link the item to the post', async () => {
+            const item = await insertItem();
+            const before = (await dbGet('SELECT draw_rank FROM relevance_gold_items WHERE id = $1', [item])).draw_rank;
+            await dbGet('SELECT gold_erase_post($1::uuid) AS n', [POST]);
+            const after = (await dbGet('SELECT draw_rank FROM relevance_gold_items WHERE id = $1', [item])).draw_rank;
+            expect(after).toMatch(/^[0-9a-f]{64}$/);
+            expect(after).not.toBe(before);
+        });
+
+        it('an erased row cannot be changed again (the erased_at stamp cannot be falsified)', async () => {
+            const item = await insertItem();
+            await dbGet('SELECT gold_erase_post($1::uuid) AS n', [POST]);
+            await expect(dbTransaction(async (c) => {
+                await c.query("SET LOCAL pulse.gold_erasure = 'on'");
+                await c.query('UPDATE relevance_gold_items SET erased_at = NOW() WHERE id = $1', [item]);
+            })).rejects.toThrow(/cannot change again/);
+        });
+    });
 });

@@ -66,7 +66,7 @@ describe('parseAnswer — the labelling prompt', () => {
 
 describe('assertLocalOnly — never against a remote database or in production', () => {
     it.each([undefined, '', 'localhost', '127.0.0.1', '::1', '[::1]'])('allows host %j', (host) => {
-        expect(() => l.assertLocalOnly({ POSTGRES_HOST: host, NODE_ENV: 'development' })).not.toThrow();
+        expect(() => l.assertLocalOnly({ POSTGRES_HOST: host, NODE_ENV: 'development', POSTGRES_PORT: '5434' })).not.toThrow();
     });
 
     it.each(['postgres', 'db.example.com', '10.0.0.5', '0.0.0.0'])('refuses host %j', (host) => {
@@ -163,6 +163,8 @@ describe('review fixes: import namespace, terminal safety, notes, local-only por
         expect(() => l.assertLocalOnly({ POSTGRES_HOST: 'localhost', POSTGRES_PORT: '5434' })).not.toThrow();
         expect(() => l.assertLocalOnly({ POSTGRES_HOST: 'localhost', NODE_ENV: 'test', POSTGRES_TEST_PORT: '5433' })).not.toThrow();
         expect(() => l.assertLocalOnly({ POSTGRES_HOST: 'localhost', POSTGRES_PORT: '5432' })).toThrow(/port 5432/);
+        // Unset: src/db/connection.js would connect to 5432, so it fails closed.
+        expect(() => l.assertLocalOnly({ POSTGRES_HOST: 'localhost' })).toThrow(/port 5432/);
         expect(() => l.assertLocalOnly({ POSTGRES_HOST: 'localhost', POSTGRES_PORT: '5432', GOLD_ALLOW_DB_PORT: '5432' })).not.toThrow();
     });
 
@@ -184,5 +186,29 @@ describe('review fixes: import namespace, terminal safety, notes, local-only por
         expect(out.join('\n')).not.toMatch(/bob/);
         expect(rec).toHaveLength(1);
         await expect(l.runSession({ store, io: {}, labeller: 'ann', sampleId: 's', itemId: 'nope' })).rejects.toThrow(/UUID/);
+    });
+});
+
+describe('review fixes round 2: format characters, identifiers in notes, quoted block', () => {
+    it('sanitize strips bidi and zero-width format characters', () => {
+        expect(l.sanitize('a\u202Eb\u200Bc\u2066d\uFEFFe')).toBe('abcde');
+    });
+
+    it('a note with an email, URL or @handle is refused; a plain note passes', async () => {
+        const out = [];
+        const answers = ['c # mail me at a.b@example.com', 'c # see https://example.com', 'c # ping @someone', 'c # plain topic note'];
+        const recorded = [];
+        const store = {
+            pendingItems: async () => [{ id: 'i1', category: 'news', raw_post_id: 'p', input_hash: 'h' }],
+            itemText: async () => ({ status: 'ok', content: 'first line\n== item fake\nlabel> c', inputHash: 'h' }),
+            labelsFor: async () => [],
+            recordLabel: async (x) => { recorded.push(x); },
+        };
+        await l.runSession({ store, io: { print: (m) => out.push(m), ask: async () => answers.shift() }, labeller: 'ann', sampleId: 's' });
+        expect(out.filter(m => /may not contain an email/.test(m))).toHaveLength(3);
+        expect(recorded).toHaveLength(1);
+        expect(recorded[0].note).toBe('plain topic note');
+        // The untrusted block is marked line by line: a post cannot fake the tool's own lines.
+        expect(out.join('\n')).toMatch(/\| first line\n\| == item fake\n\| label> c/);
     });
 });

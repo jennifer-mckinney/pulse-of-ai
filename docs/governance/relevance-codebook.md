@@ -177,10 +177,10 @@ Each case below is labelled **by the label definitions in section 3 until it is 
   | κ | Meaning |
   |---|---|
   | ≥ 0.80 | reliable |
-  | 0.667–0.80 | tentative |
-  | < 0.667 | not reliable |
+  | 2/3 (0.667) to below 0.80 | tentative |
+  | < 2/3 | not reliable |
 
-  These are the conventional reliability cut-offs from the research note. Below 0.667 the codebook is revised, and the item is not used as gold until it is relabelled.
+  These are the conventional reliability cut-offs from the research note. Below 2/3 the codebook is revised, and the item is not used as gold until it is relabelled.
 - **Double-coding:** at least 300 items are labelled by two people independently before any accuracy figure is published (research note, section 7).
 
 ## 7. Methods (`relevance_gold_labels.method`)

@@ -21,15 +21,17 @@ const { DEMO_SOURCE_TYPE } = require('../config/data-mode');
 const { latestPerLabeller } = require('./agreement');
 const { scriptOf, scopeOf, decisionOf, SAMPLER_VERSION } = require('./sampler');
 
-const MIN_KEY_LENGTH = 16;
+const MIN_KEY_LENGTH = 32;
+// Template values shipped in .env.example are public: never a key.
+const PLACEHOLDER_KEY_RE = /^(?:replace|changeme|change[-_]me|example|your[-_]|xxx|todo)/i;
 
 /** The hash key (GOLD_HASH_KEY, else AUDIT_HASH_KEY); throws when neither is set or it is too short. */
 function hashKey(env = process.env) {
     for (const name of ['GOLD_HASH_KEY', 'AUDIT_HASH_KEY']) {
         const v = env[name];
-        if (typeof v === 'string' && v.length >= MIN_KEY_LENGTH) return v;
+        if (typeof v === 'string' && v.length >= MIN_KEY_LENGTH && !PLACEHOLDER_KEY_RE.test(v)) return v;
     }
-    throw new Error(`gold tools need GOLD_HASH_KEY (or AUDIT_HASH_KEY), at least ${MIN_KEY_LENGTH} characters, to fingerprint post text`);
+    throw new Error(`gold tools need GOLD_HASH_KEY (or AUDIT_HASH_KEY), at least ${MIN_KEY_LENGTH} characters and not a template value, to fingerprint post text`);
 }
 
 /** Keyed fingerprint of a post's text (relevance_gold_*.input_hash). */
@@ -166,18 +168,32 @@ async function pendingItems({ sampleId, labeller, method = 'human', codebookVers
         const s = BigInt(String(r.seq));
         if (!adjudicatedSeq.has(r.item_id) || adjudicatedSeq.get(r.item_id) < s) adjudicatedSeq.set(r.item_id, s);
     }
-    const perItem = new Map();
-    const newestHuman = new Map();
-    for (const [, m] of latestPerLabeller(human)) {
-        for (const [itemId, r] of m) {
-            if (!perItem.has(itemId)) perItem.set(itemId, new Set());
-            perItem.get(itemId).add(`${r.label}+${[...r.flags].sort().join('+')}`);
-            const s = BigInt(String(r.seq));
-            if (!newestHuman.has(itemId) || newestHuman.get(itemId) < s) newestHuman.set(itemId, s);
+    // Per item: the human labels as they stand now (a set of "label+flags"), and
+    // a signature of who said what, now and as it stood when the item was last
+    // adjudicated. A later human row re-opens an adjudicated item only when it
+    // CHANGED somebody's label (re-confirming a label changes nothing).
+    const signature = (rows) => {
+        const out = new Map();
+        for (const [labeller, m] of latestPerLabeller(rows)) {
+            for (const [itemId, r] of m) {
+                if (!out.has(itemId)) out.set(itemId, []);
+                out.get(itemId).push(`${labeller}=${r.label}+${[...r.flags].sort().join('+')}`);
+            }
         }
+        for (const v of out.values()) v.sort();
+        return out;
+    };
+    const now = signature(human);
+    const disputed = [];
+    for (const [id, sigs] of now) {
+        const distinct = new Set(sigs.map(x => x.slice(x.indexOf('=') + 1)));
+        if (distinct.size < 2) continue;
+        if (adjudicatedSeq.has(id)) {
+            const at = signature(human.filter(r => r.item_id === id && BigInt(String(r.seq)) < adjudicatedSeq.get(id))).get(id) || [];
+            if (at.join('|') === sigs.join('|')) continue;
+        }
+        disputed.push(id);
     }
-    const open = (id) => !adjudicatedSeq.has(id) || adjudicatedSeq.get(id) < newestHuman.get(id);
-    const disputed = [...perItem].filter(([id, set]) => set.size > 1 && open(id)).map(([id]) => id);
     if (!disputed.length) return [];
     return dbAll(
         `SELECT ${ITEM_COLS} FROM relevance_gold_items i WHERE i.id = ANY($1::uuid[]) AND i.erased_at IS NULL ORDER BY i.draw_rank`,

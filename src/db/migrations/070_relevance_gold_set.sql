@@ -39,6 +39,8 @@
 -- 4. ERASURE (GDPR): an erasure request, or text removal under the retention
 --    rulings, must not leave a permanent link to the person's text.
 --    gold_erase_post(post id) blanks raw_post_id and input_hash on the item,
+--    replaces its draw_rank (sha256(seed:post id), which would re-link the
+--    item to the post) with a random unlinkable value,
 --    and input_hash and note on its labels, and stamps erased_at. Nothing
 --    else changes (stratum, weights, labels and flags are statistics about
 --    the sample, kept). An erased item can no longer be labelled.
@@ -111,7 +113,8 @@ CREATE INDEX IF NOT EXISTS idx_relevance_gold_labels_item ON relevance_gold_labe
 CREATE OR REPLACE FUNCTION relevance_gold_label_check() RETURNS trigger AS $$
 DECLARE item_row relevance_gold_items%ROWTYPE;
 BEGIN
-    SELECT * INTO item_row FROM relevance_gold_items WHERE id = NEW.item_id;
+    -- FOR SHARE: a concurrent gold_erase_post cannot commit between this check and the insert.
+    SELECT * INTO item_row FROM relevance_gold_items WHERE id = NEW.item_id FOR SHARE;
     IF NOT FOUND THEN
         RAISE EXCEPTION 'gold item % does not exist', NEW.item_id USING ERRCODE = 'foreign_key_violation';
     END IF;
@@ -148,9 +151,12 @@ BEGIN
         RAISE EXCEPTION '% is append-only: UPDATE is allowed only through gold_erase_post()', TG_TABLE_NAME USING ERRCODE = 'integrity_constraint_violation';
     END IF;
     IF TG_TABLE_NAME = 'relevance_gold_items' THEN
-        erasable := ARRAY['raw_post_id', 'input_hash', 'erased_at'];
+        erasable := ARRAY['raw_post_id', 'input_hash', 'draw_rank', 'erased_at'];
     ELSE
         erasable := ARRAY['input_hash', 'note', 'erased_at'];
+    END IF;
+    IF OLD.erased_at IS NOT NULL THEN
+        RAISE EXCEPTION '% is append-only: an erased row cannot change again', TG_TABLE_NAME USING ERRCODE = 'integrity_constraint_violation';
     END IF;
     IF (to_jsonb(NEW) - erasable) IS DISTINCT FROM (to_jsonb(OLD) - erasable)
        OR NEW.erased_at IS NULL OR NEW.input_hash IS NOT NULL THEN
@@ -194,7 +200,8 @@ BEGIN
      WHERE erased_at IS NULL
        AND item_id IN (SELECT id FROM relevance_gold_items WHERE raw_post_id = p_raw_post_id);
     UPDATE relevance_gold_items
-       SET raw_post_id = NULL, input_hash = NULL, erased_at = NOW()
+       SET raw_post_id = NULL, input_hash = NULL, erased_at = NOW(),
+           draw_rank = replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', '')
      WHERE raw_post_id = p_raw_post_id;
     GET DIAGNOSTICS n = ROW_COUNT;
     PERFORM set_config('pulse.gold_erasure', 'off', true);

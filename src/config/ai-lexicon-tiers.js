@@ -251,7 +251,7 @@ const MULTILINGUAL = freezeAll([
         ['apprentissage automatique', u(`${L}apprentissage\\s+(?:automatique|profond)${R}`)],
         ['réseau de neurones', u(`${L}r[ée]seaux?\\s+(?:de\\s+neurones|neuronaux|neuronal)${R}`)],
         ['modèle de langage', u(`${L}(?:grands?\\s+)?mod[èe]les?\\s+de\\s+langage${R}`)],
-        ['IA', u(`(?:${L}(?:${caps('une|des|du|sur|par|avec|dans|et|sans|pour')})\\s+|${L}[ldLD]['’])IA${R}|${SENT}IA\\s+(?:est|va|peut|a|ont|et|en)${R}|${L}IA\\s+g[ée]n[ée]rative${R}`, 'mu')],
+        ['IA', u(`(?:${L}(?:${caps('une|des|du|sur|par|avec|dans|et|sans|pour')})\\s+|${L}[ldLD]['’])IA${R}|${SENT}IA\\s+(?:est|va|peut|ont)${R}|${L}IA\\s+g[ée]n[ée]rative${R}`, 'mu')],
         ['traitement du langage naturel', u(`${L}traitement\\s+(?:automatique\\s+)?du\\s+langage(?:\\s+naturel)?${R}`)],
     ]),
     ...rx('de', [
@@ -259,7 +259,7 @@ const MULTILINGUAL = freezeAll([
         ['maschinelles Lernen', u(`${L}maschinell\\p{L}*\\s+Lern\\p{L}*`)],
         ['neuronales Netz', u(`${L}neuronal\\p{L}*\\s+Netz\\p{L}*`)],
         ['Sprachmodell', u(`Sprachmodell\\p{L}*`)],
-        ['KI', u(`${L}(?:${caps('die|der|den|dem|des|mit|durch|für|über|und|von|zur|zum|per|ohne|gegen')}|[Ee]ine[mnrs]?)\\s+KI${R}|${SENT}KI\\s+(?:ist|kann|wird|hat|macht|und|ver[äa]ndert)${R}|${L}KI-\\p{L}|${L}generativ\\p{L}*\\s+KI${R}`, 'mu')],
+        ['KI', u(`${L}(?:${caps('die|der|den|dem|des|mit|durch|und|von|zur|zum|per|ohne|gegen')}|[Ff](?:ü|u|ue)r|(?:[Üü]|[Uu]e?)ber|[Ee]ine[mnrs]?)\\s+KI${R}|${SENT}KI\\s+(?:ist|kann|wird|hat|macht|und|ver[äa]ndert)${R}|${L}KI-\\p{L}|${L}generativ\\p{L}*\\s+KI${R}`, 'mu')],
     ]),
     ...rx('ru', [
         ['искусственный интеллект', u(`${L}искусственн\\p{L}*\\s+интеллект\\p{L}*`)],

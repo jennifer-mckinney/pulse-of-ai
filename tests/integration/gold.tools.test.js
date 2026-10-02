@@ -22,7 +22,7 @@ const store = require('../../src/gold/store');
 
 // The gold tools fingerprint post text with a keyed hash and run only against a
 // local database on the dev/test port (or one acknowledged with GOLD_ALLOW_DB_PORT).
-process.env.GOLD_HASH_KEY = process.env.GOLD_HASH_KEY || 'integration-test-gold-hash-key';
+process.env.GOLD_HASH_KEY = process.env.GOLD_HASH_KEY || 'integration-test-gold-hash-key-0123456789';
 process.env.POSTGRES_HOST = process.env.POSTGRES_HOST || 'localhost';
 const TEST_PORT = String(process.env.POSTGRES_TEST_PORT || '5433');
 if (!['5433', '5434'].includes(TEST_PORT)) process.env.GOLD_ALLOW_DB_PORT = TEST_PORT;
@@ -184,7 +184,10 @@ describe('scripts/gold-label.js', () => {
     it('no key, no gold tools: a missing or short key is an error, never an unkeyed hash', () => {
         expect(() => store.hashKey({})).toThrow(/GOLD_HASH_KEY/);
         expect(() => store.hashKey({ GOLD_HASH_KEY: 'short' })).toThrow(/GOLD_HASH_KEY/);
-        expect(store.hashKey({ AUDIT_HASH_KEY: 'audit-key-0123456789' })).toBe('audit-key-0123456789');
+        const audit = 'audit-key-0123456789-abcdefghijklmnop';
+        expect(store.hashKey({ AUDIT_HASH_KEY: audit })).toBe(audit);
+        // The .env.example template values are public, so never a key.
+        expect(() => store.hashKey({ GOLD_HASH_KEY: '', AUDIT_HASH_KEY: 'replace_with_random_64_hex_chars' })).toThrow(/template value/);
     });
 
     it('prints post text with terminal escapes neutralised', async () => {
@@ -212,6 +215,11 @@ describe('scripts/gold-label.js', () => {
         expect(rows.length).toBe(2);
         const reopened = await store.pendingItems({ sampleId: 'gold-lab', labeller: 'jen', method: 'adjudicated' });
         expect(reopened.map(x => x.id)).toContain(dispute.id);
+        // Adjudicate again, then bob re-confirms the SAME label: nothing changed, so it stays closed.
+        await goldLabel.main(['--sample', 'gold-lab', '--labeller', 'jen', '--method', 'adjudicated'], { env: LOCAL, io: fakeIo(['c']).io });
+        expect(await store.pendingItems({ sampleId: 'gold-lab', labeller: 'jen', method: 'adjudicated' })).toEqual([]);
+        await goldLabel.main(['--sample', 'gold-lab', '--labeller', 'bob', '--relabel', dispute.id], { env: LOCAL, io: fakeIo(['i']).io });
+        expect(await store.pendingItems({ sampleId: 'gold-lab', labeller: 'jen', method: 'adjudicated' })).toEqual([]);
         await expect(goldLabel.main(['--sample', 'gold-lab', '--labeller', 'bob', '--relabel', '33333333-3333-4333-8333-333333333333'], { env: LOCAL, io: fakeIo([]).io }))
             .rejects.toThrow(/not a live item/);
     });

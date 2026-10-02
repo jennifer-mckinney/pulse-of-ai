@@ -43,6 +43,10 @@ const NOTE_MAX = 200;
 const QUOTE_WINDOW = 25;
 // Control characters except \n and \t, plus the Unicode line separators.
 const CONTROL_RE = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u2028\u2029]/g;
+// Invisible format characters (bidi overrides, zero-width marks, BOM) can reorder or hide text on screen.
+const FORMAT_RE = /\p{Cf}/gu;
+// An email, URL or @handle in a note would be a personal identifier in an immutable row.
+const NOTE_IDENTIFIER_RE = /[^\s@]+@[^\s@]+\.[^\s@]+|https?:\/\/|www\.|(?:^|\s)@\w{2,}/i;
 const LLM_PREFIX = 'llm:';
 // Bounds of an --import file (read by scripts/gold-label.js, checked again here).
 const IMPORT_MAX_BYTES = 10 * 1024 * 1024;
@@ -77,15 +81,21 @@ function canonicalFlags(flags) {
  * @returns {string}
  */
 function sanitize(text) {
-    return String(text === null || text === undefined ? '' : text).replace(CONTROL_RE, '�');
+    return String(text === null || text === undefined ? '' : text).replace(CONTROL_RE, '�').replace(FORMAT_RE, '');
 }
 
 const squash = (t) => String(t).normalize('NFKC').toLowerCase().replace(/\s+/g, ' ').trim();
+// One entry: the same post text is checked against every note typed for it.
+let squashed = { text: null, value: '' };
+function squashedPost(text) {
+    if (squashed.text !== text) squashed = { text, value: squash(text) };
+    return squashed.value;
+}
 
 /** True when the note repeats QUOTE_WINDOW or more consecutive characters of the post text. */
 function noteQuotesPost(note, postText) {
     const n = squash(note);
-    const p = squash(postText);
+    const p = squashedPost(postText);
     if (n.length < QUOTE_WINDOW) return false;
     for (let i = 0; i + QUOTE_WINDOW <= n.length; i++) {
         if (p.includes(n.slice(i, i + QUOTE_WINDOW))) return true;
@@ -130,8 +140,9 @@ function assertLocalOnly(env = process.env) {
     if (!LOOPBACK.has(host)) {
         throw new Error(`gold tools are local-only: POSTGRES_HOST "${host}" is not a loopback address (localhost, 127.0.0.1, ::1)`);
     }
-    // The port src/db/connection.js will use.
-    const port = String(env.NODE_ENV === 'test' ? (env.POSTGRES_TEST_PORT || '5433') : (env.POSTGRES_PORT || '5434')).trim();
+    // The port src/db/connection.js uses: its defaults are 5433 (test) and 5432, so an unset
+    // POSTGRES_PORT fails closed (5432 is not a project port) unless acknowledged.
+    const port = String(env.NODE_ENV === 'test' ? (env.POSTGRES_TEST_PORT || '5433') : (env.POSTGRES_PORT || '5432')).trim();
     if (!DEFAULT_DB_PORTS.has(port) && String(env.GOLD_ALLOW_DB_PORT || '').trim() !== port) {
         throw new Error(`gold tools are local-only: database port ${port} is not the development (5434) or test (5433) port; `
             + `if it is a local throwaway database, set GOLD_ALLOW_DB_PORT=${port}`);
@@ -213,7 +224,8 @@ async function runSession({ store, io, labeller, sampleId, method = 'human', lim
                 io.print(`   ${sanitize(l.labeller)} (${l.method}): ${l.label}${l.flags.length ? ` +${l.flags.join(' +')}` : ''}${l.note ? `  # ${sanitize(l.note)}` : ''}`);
             }
         }
-        io.print(sanitize(text.content));
+        // Every line is marked, so a post cannot fake the tool's own output lines.
+        io.print(sanitize(text.content).split('\n').map(l => `| ${l}`).join('\n'));
         for (;;) {
             const answer = await io.ask('label> ');
             const a = answer === null ? { action: 'quit' } : parseAnswer(answer);
@@ -221,6 +233,10 @@ async function runSession({ store, io, labeller, sampleId, method = 'human', lim
             if (a.action === 'invalid') { io.print(a.reason ? `${a.reason}; "?" for help` : 'not understood; "?" for help'); continue; }
             if (a.action === 'quit') { summary.quit = true; return summary; }
             if (a.action === 'skip') { summary.skipped += 1; break; }
+            if (a.note && NOTE_IDENTIFIER_RE.test(a.note)) {
+                io.print('a note may not contain an email address, URL or @handle; reword it');
+                continue;
+            }
             if (a.note && noteQuotesPost(a.note, text.content)) {
                 io.print(`a note may not quote the post (${QUOTE_WINDOW}+ consecutive characters); shorten or reword it`);
                 continue;
