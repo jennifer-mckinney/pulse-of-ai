@@ -42,7 +42,7 @@ flowchart LR
     K4["ingest.worker scores (audited), enqueues embed<br/>embed.worker · correlate.worker refuses every job (DPIA gate)"]:::done
     K5["Reddit maintenance every 5 min<br/>6-hourly deletion re-check, daily discovery<br/>(only while Reddit is collecting)"]:::done
     K6["heartbeat every 15 s"]:::done
-    K7["maintenance.worker: retention every 5 min<br/>(text retention, stale jobs); daily (compaction,<br/>source_runs rollup, bias window bias@1.6.0);<br/>terms snapshots every 7 days"]:::done
+    K7["maintenance.worker: retention every 5 min<br/>(text retention, stale jobs); daily (compaction,<br/>source_runs rollup, admission counts expiry,<br/>bias window bias@1.6.0);<br/>terms snapshots every 7 days"]:::done
   end
 
   subgraph EXT["① External sources · 52-source registry"]
@@ -62,8 +62,8 @@ flowchart LR
 
   subgraph PG["⑦ postgres"]
     direction TB
-    D0["PostgreSQL 16 + pgvector<br/>50 migrations (001-066)"]:::done
-    D1[("data_sources · source_collection_state<br/>source_runs · source_run_daily · processing_jobs")]:::done
+    D0["PostgreSQL 16 + pgvector<br/>54 migrations (001-074)"]:::done
+    D1[("data_sources · source_collection_state<br/>source_runs · source_run_daily · processing_jobs<br/>admission_rule_hits (counts only)")]:::done
     D2[("raw_posts · decision_audit_log · methodology_versions<br/>sentiment / relevance / discourse_results")]:::done
     D3[("post_embeddings VECTOR(384) HNSW<br/>bias_assessments · bias_window_* · alert_events<br/>alert_resolutions")]:::done
     D4[("data_retention_log · monthly rollups · compaction_log<br/>reddit_* · pseudonymous_users")]:::done
@@ -109,7 +109,7 @@ flowchart LR
   Q2 --> K2
   K2 -- "HTTPS via HttpClient: User-Agent with<br/>contact URL, robots.txt, allowed hosts,<br/>SSRF guard, size caps" --> XH
   K2 -- "raw_posts" --> D2
-  K2 -- "source_runs, collection state, processing_jobs" --> D1
+  K2 -- "source_runs (dropped counts), admission_rule_hits, collection state, processing_jobs" --> D1
   K2 -- "ingest jobs" --> Q3
   K2 -- "source_refused alert (collection state)" --> D3
   Q3 --> K4
@@ -124,7 +124,7 @@ flowchart LR
   Q5 --> K7
   K7 -- "blank text, demo purge (raw_posts)" --> D2
   K7 -- "data_retention_log, monthly rollups, compaction_log, demo purge of user_platform_sightings / pseudonymous_users" --> D4
-  K7 -- "source_run_daily rollup, stale processing_jobs" --> D1
+  K7 -- "source_run_daily rollup, expired admission_rule_hits, stale processing_jobs" --> D1
   K7 -- "delete embeddings, bias_window_*, bias and terms_changed alerts" --> D3
   K7 -- "terms snapshots" --> D5
   K7 -- "maintenance_state" --> D6

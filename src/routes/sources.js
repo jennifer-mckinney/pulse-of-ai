@@ -35,6 +35,15 @@
 //           terms_url, terms_note, attribution, license, blocked, ruling,
 //           retention,                        // { max_age_hours, recheck_hours,
 //                                             //   notice } or null (Reddit)
+//           admission,                        // relevance-accuracy R1 (migration
+//                                             // 068): the last 7 UTC days, counts
+//                                             // only — { window_days, evaluated,
+//                                             //   admitted, admitted_without_pattern,
+//                                             //   rejected: { total, out_of_scope,
+//                                             //   old, invalid, duplicate } } or null
+//                                             // (no counts in the window). Counted
+//                                             // per evaluation: an item a feed
+//                                             // serves again is counted again.
 //           selection } ]                     // Reddit only: the subreddit
 //                                             // selection rule, the current
 //                                             // list (basis 'provisional' |
@@ -80,7 +89,7 @@ const router = Router();
 
 router.get('/sources', async (req, res) => {
     try {
-        const rows = await sourceRows({ includeInactive: req.query.include_inactive === 'true' });
+        const rows = await sourceRows({ includeInactive: req.query.include_inactive === 'true', admission: true });
         return res.json(rows);
     /* istanbul ignore start -- Database failure; requires error injection testing infrastructure */
     } catch (err) {

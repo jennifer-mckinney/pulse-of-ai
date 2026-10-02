@@ -885,6 +885,19 @@ describe('demoAuditModel — prototype buildAudit receipt', () => {
         expect(bias.layers[2].status).toBe('n-a');
     });
 
+    test('the relevance views follow audit_narration@1.5.0 and say the demo post counts toward nothing', () => {
+        const post = P.demoPostsForCity(posCity(), NOW)[0];
+        const m = P.demoAuditModel(post);
+        const a = m.steps[2].audiences;
+        // 1.5.0 wording, stated conditionally: no "because it is about AI",
+        // and no claim that this never-stored post is in any total.
+        expect(a.public).toMatch(/matched the AI topic list/);
+        expect(a.public).toMatch(/live post that matches counts toward the AI-discourse totals/);
+        expect(a.public).toMatch(/never stored, so it counts toward nothing/);
+        expect(a.public).not.toMatch(/clearly talking about AI/);
+        expect(a.plain).toMatch(/never stored, so it is in no totals/);
+    });
+
     test('sentiment/relevance pills mirror the post scores', () => {
         const post = P.demoPostsForCity(posCity(), NOW)[0];
         const m = P.demoAuditModel(post);

@@ -18,7 +18,7 @@ flowchart LR
     N1["17 · raw text capped, HTML to text (linear),<br/>identity redaction, ingest@1.8.0: e-mails, @handles,<br/>Reddit u/ names, phones, profile links, cc names,<br/>sign-offs, Wikipedia unsigned notes"]:::done
     N2["18 · allowlisted payload: title, text, link unless an<br/>identity link, published_at, language, city-level<br/>location (basis content or publisher), licence,<br/>attribution; an identity-bearing upstream id is<br/>stored only as route:fp:HMAC (an unkeyed<br/>SHA-256 when no key is set)"]:::done
     N3["19 · provenance_fingerprint = HMAC-SHA256(<br/>PROVENANCE_KEY or AUDIT_HASH_KEY,<br/>slug : upstream id : source URL);<br/>NULL when neither key is set"]:::done
-    N4["20 · drop items older than maxAgeDays (default 7);<br/>admission filter admission_filter@1.0.0<br/>(AI scope, ai-filter.js) on scope 'filter' routes;<br/>dedupe within the batch"]:::done
+    N4["20 · drop items older than maxAgeDays (default 7);<br/>admission filter admission_filter@1.0.0<br/>(AI scope, ai-filter.js) on scope 'filter' routes;<br/>dedupe within the batch; each rejection and<br/>admission is counted by rule (counts only, 068)"]:::done
     N1 --> N2 --> N3 --> N4
   end
 

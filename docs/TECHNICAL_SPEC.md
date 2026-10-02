@@ -57,6 +57,7 @@ PRs #24–#28 and #31–#34 merged after v1.2.0 (`master` @ `7291490`; #29 and #
 - **Audit round 5 corrections, §12–§16 (2026-09-30; no code change behind them):** §12 the model's 22.7M parameters (Hugging Face metadata), the `populate` role's `GET /health` readiness check, the Infinity CLI (`infinity_emb v2 --model-id`); §13 a comma in the PR list; §14 the refresh-interval row (collecting sources only, D4 exceptions), correlation latency **PLANNED**, the per-queue backlog limit, the accuracy targets marked not yet measured; §15 MySQL's native `JSON` type, a RoBERTa upgrade needs a registry entry, migration and inference code; §16 X needs `X_BEARER_TOKEN` and `GATE_APPROVED_BY`, the cold-start rule is ≥ 0.85 confidence only.
 - **Reconciliation with PRs #41 and #43 (2026-10-01; #42 and #44 are still open):** header, §11 and §21 the master SHA 2b5e6c3 and the status line names PR #43; §13 adds PRs #41 and #43 to its PR list; §7 `/api/bias/history` pass summaries carry `latest_insufficient` and word an insufficient-sample latest value as not compared with τ; §11 the health drawer shows such a summary as N/A; §12 the `embed` worker reads the service's `GET /health` before it stamps a vector (registered model, revision and library, else NULL; an unreadable `/health` fails the job), and `python/requirements.txt` pins the registered library stack, torch per platform included; §17 a `SOURCE_<SLUG>_RESET` date in the future is ignored, its accepted forms, and the `last_refused_at` carry for a refusal recorded before migration 062. No methodology version or migration changes.
 - **Reconciliation with PR #44 (2026-10-01; #42 is still open):** header, §11 and §21 the master SHA a17020f and the status line names PR #44; §13 adds PR #44 to its PR list; §3, §4, §6, §16, §17 the HTTP client waits out a `Retry-After` of at most 10 s in a run and holds the host up to 24 h for a longer one (or 5 min for a 429 without one), persisted in `source_collection_state.http_cache`; TLDR polls every 180 s (HTTP 429 at 150 s); §6, §8, §19 the retention-log action `source_reattributed` of the manual `scripts/correct-legacy-seed-attribution.js --apply`. No methodology version or migration changes.
+- **Relevance Stage 0a (PR #85, migrations 067-068; 2026-10-01):** §3, §10, §10 "Why?" by audience: `audit_narration@1.5.0` (migration 067, wording only; errata on audit_narration 1.1.0–1.4.0): the relevance step's public sentences say every stored post counts toward the totals whatever its relevance score, and that only-AI-relevant counting arrives with the next relevance version (decision D1); the page's bundled demo receipt states the same sentence conditionally (a fictional post is never stored, so it counts toward nothing), consistent across its audience views; §6 tables 35–36 (`admission_rule_hits`, 068; `source_route_state`, 073, PR #42) and the migration counts (54 files, 001–074), migration 068's dropped-count columns; §7 `/api/health` `admission` and `/api/sources` per-source `admission` (7-day counts); §19 the daily maintenance step that expires `admission_rule_hits` (`ADMISSION_RULE_HITS_DAYS`). Admission decisions are unchanged: the counters are measurement only.
 
 **v1.1.0 Amendments (historical record; v1.2.0 supersedes the source count and categories, the pseudonym format and the retention schedule where the sections below say so):**
 - Scope: Global (not US-only)
@@ -169,7 +170,7 @@ Every implemented threshold is stored in the `methodology_versions` table with a
 |---|---|---|---|
 | Sentiment accuracy target | ≥ 99% (validated against labeled set) | `sentiment@1.0.0` config `accuracy_target: 0.99` | Registered; benchmark validation PLANNED |
 | Demographic inference accuracy | ≥ 99% (Phase 2, labeled test set required) | — | **PLANNED — not implemented as of v1.2.0** |
-| AI relevance | at least one of 21 lexicon terms (score > 0); embed gate score ≥ 1/21 | `relevance@1.2.0` config | Implemented. The v1.1 "≥ 99% precision" target is not registered: the superseded `relevance@1.0.0` row registers `ai_relevance_threshold` 0.99, a score threshold, not a precision target, and no later relevance row carries either |
+| AI relevance | at least one of 21 lexicon terms (score > 0); embed gate score ≥ 1/21 | `relevance@1.2.0` config | Implemented. The v1.1 "≥ 99% precision" target is not registered: the superseded `relevance@1.0.0` row registers `ai_relevance_threshold` 0.99, a score threshold, not a precision target, and no later relevance row carries either. **What counts:** every stored post counts toward the totals whatever its relevance score (no aggregate query filters on `relevance_results`; the score only gates embedding). Only-AI-relevant counting (decision D1) arrives with the next relevance version, after its gold-set gate; `audit_narration@1.5.0` words the receipt that way |
 | Discourse quality score (DQI) | 0.0–1.0, unweighted mean of 5 dimensions | `discourse@1.1.0-DQI` config | Implemented |
 | Location concentration alert | > 35% of content-located posts in one city (warning); > 80% critical; at least 30 content-located posts | `bias@1.6.0` config `location_concentration_max: 0.35`, `location_min_sample: 30`; critical level in code | Implemented |
 | Source concentration alert | > 40% from single source | — | **PLANNED — not implemented as of v1.2.0** |
@@ -245,7 +246,7 @@ The diagram set in `docs/diagrams/` (entry point `docs/diagrams/architecture.*`)
        ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │  VALKEY 8 — BullMQ queues, job schedulers, worker heartbeat     │
-│  POSTGRESQL 16 + pgvector — 34 tables from 50 migrations (§6)   │
+│  POSTGRESQL 16 + pgvector — 36 tables from 54 migrations (§6)   │
 │   raw_posts · decision_audit_log · *_results · post_embeddings  │
 │   (VECTOR(384), HNSW) · methodology_versions · bias_assessments │
 │   · bias_window_* · alert_events · alert_resolutions ·          │
@@ -327,9 +328,9 @@ The diagram set in `docs/diagrams/` (entry point `docs/diagrams/architecture.*`)
 
 ## 6. Database Design
 
-### Schema Overview (34 tables across 50 migrations)
+### Schema Overview (36 tables across 54 migrations)
 
-`scripts/migrate.js` applies the 50 files of `src/db/migrations/` (001–066; the numbering has gaps) in file-name order and records each in `schema_migrations` (its own bookkeeping table, not counted below). No migration drops a table or a column (056 replaces the event CHECK constraint of `source_gate_events` and adds a named-approval CHECK, NOT VALID). The ERDs in `docs/diagrams/data/` draw every column.
+`scripts/migrate.js` applies the 54 files of `src/db/migrations/` (001–074; the numbering has gaps) in file-name order and records each in `schema_migrations` (its own bookkeeping table, not counted below). No migration drops a table or a column (056 replaces the event CHECK constraint of `source_gate_events` and adds a named-approval CHECK, NOT VALID). The ERDs in `docs/diagrams/data/` draw every column.
 
 | # | Table | Created by | Purpose |
 |---|---|---|---|
@@ -367,8 +368,10 @@ The diagram set in `docs/diagrams/` (entry point `docs/diagrams/architecture.*`)
 | 32 | `correlation_gate_events` | 056 | Every change of the correlation DPIA gate (append-only) |
 | 33 | `bias_window_runs` | 060 | One row per rolling 24 h bias run (introduced by bias@1.5.0; runs the current bias version) |
 | 34 | `bias_window_assessments` | 060 | The rolling window's assessments (append-only) |
+| 35 | `admission_rule_hits` | 068 | Admission counts per UTC day, source, route, admission-filter version and rule: counts only, no text or ids (relevance-accuracy R1) |
+| 36 | `source_route_state` | 073 (+074) | The per-route kill switch (one row per source and route ever switched; PR #42) |
 
-**Migration index.** DDL: 001 core, 002 audit, 003 bias, 004 vectors, 005 retention, 006 correlation, 010 bias lineage column, 012 `post_embeddings.methodology_version` (+ `embedding@1.0.0`), 013 source collection, 016 classified collector errors, 017 provenance fingerprint (+ `ingest@1.3.0`, `audit_narration@1.3.0`), 018 refused state, 019 one refresh in flight (partial unique index), 020 database kill switch, 021 cycle in-flight runs, 022 `raw_posts.ingest_mv_id`, 023 unchanged-run counter, 025 Reddit. Data only: 007 canonical category taxonomy, 008 bias vocabulary conformance, 009 `bias@1.1.0` / `ingest@1.0.0` / `audit_narration@1.1.0`, 011 `audit_narration@1.2.0`, 014 `relevance@1.1.0` / `discourse@1.1.0-DQI` / `ingest@1.1.0` (and the released `sentiment@1.0.0`, `relevance@1.0.0`, `discourse@1.0.0-DQI` rows, ON CONFLICT DO NOTHING, so each 1.0.0 row predates its successor on a fresh database), 015 `ingest@1.2.0`, 024 `ingest@1.4.0`, 026 `ingest@1.5.0`. PR #22 (027–060; DDL and data together unless noted): 027 `bias@1.2.0` (data), 028 `alert_resolutions` + `bias@1.3.0`, 029 `relevance@1.2.0` (data), 030 `methodology_errata` (+ the `relevance@1.0.0` erratum), 031 live-text index + `ingest@1.6.0`, 032 `bias@1.4.0` (+ an idempotent re-add of `alert_resolutions.methodology_version_id`, which 028 creates), 033 source freshness, 034 run retention, 035 source governance, 036 alert supersession and append-only triggers, 037 freshness anchor, 038 one open alert per source and type, 039 `maintenance_state`, 040 job progress, 041 terms text, 042 `raw_posts.admission_mv_id` + `admission_filter@1.0.0`, 050 watchdog, 055 `ingest@1.7.0` (data), 056 named gate approval + `correlation_gate_events`, 060 rolling bias window + `bias@1.5.0`. After PR #22: 061 `bias@1.6.0` + the bias 1.4.0 / 1.5.0 errata (data, PR #24), 062 refusal probation columns (PR #33), 065 `embedding@1.1.0` (data, PR #34), 066 `ingest@1.8.0` / `audit_narration@1.4.0` + the ingest 1.0.0–1.7.0 content-hash errata (data, PR #38). Released migrations are never edited; a new methodology version ships as a new migration, field-for-field equal to `src/config/methodology-registry.js` (`tests/unit/pure/methodologyRegistry.test.js`).
+**Migration index.** DDL: 001 core, 002 audit, 003 bias, 004 vectors, 005 retention, 006 correlation, 010 bias lineage column, 012 `post_embeddings.methodology_version` (+ `embedding@1.0.0`), 013 source collection, 016 classified collector errors, 017 provenance fingerprint (+ `ingest@1.3.0`, `audit_narration@1.3.0`), 018 refused state, 019 one refresh in flight (partial unique index), 020 database kill switch, 021 cycle in-flight runs, 022 `raw_posts.ingest_mv_id`, 023 unchanged-run counter, 025 Reddit. Data only: 007 canonical category taxonomy, 008 bias vocabulary conformance, 009 `bias@1.1.0` / `ingest@1.0.0` / `audit_narration@1.1.0`, 011 `audit_narration@1.2.0`, 014 `relevance@1.1.0` / `discourse@1.1.0-DQI` / `ingest@1.1.0` (and the released `sentiment@1.0.0`, `relevance@1.0.0`, `discourse@1.0.0-DQI` rows, ON CONFLICT DO NOTHING, so each 1.0.0 row predates its successor on a fresh database), 015 `ingest@1.2.0`, 024 `ingest@1.4.0`, 026 `ingest@1.5.0`. PR #22 (027–060; DDL and data together unless noted): 027 `bias@1.2.0` (data), 028 `alert_resolutions` + `bias@1.3.0`, 029 `relevance@1.2.0` (data), 030 `methodology_errata` (+ the `relevance@1.0.0` erratum), 031 live-text index + `ingest@1.6.0`, 032 `bias@1.4.0` (+ an idempotent re-add of `alert_resolutions.methodology_version_id`, which 028 creates), 033 source freshness, 034 run retention, 035 source governance, 036 alert supersession and append-only triggers, 037 freshness anchor, 038 one open alert per source and type, 039 `maintenance_state`, 040 job progress, 041 terms text, 042 `raw_posts.admission_mv_id` + `admission_filter@1.0.0`, 050 watchdog, 055 `ingest@1.7.0` (data), 056 named gate approval + `correlation_gate_events`, 060 rolling bias window + `bias@1.5.0`. After PR #22: 061 `bias@1.6.0` + the bias 1.4.0 / 1.5.0 errata (data, PR #24), 062 refusal probation columns (PR #33), 065 `embedding@1.1.0` (data, PR #34), 066 `ingest@1.8.0` / `audit_narration@1.4.0` + the ingest 1.0.0–1.7.0 content-hash errata (data, PR #38), 067 `audit_narration@1.5.0` + the audit_narration 1.1.0–1.4.0 relevance-wording errata (data), 068 admission rejection counters (`source_runs.dropped_*`, `source_run_daily.dropped_*`, `admission_rule_hits`), 073 and 074 the per-route kill switch (`source_route_state`) and its hardening (PR #42). Released migrations are never edited; a new methodology version ships as a new migration, field-for-field equal to `src/config/methodology-registry.js` (`tests/unit/pure/methodologyRegistry.test.js`).
 
 ```
 data_sources ─┬─ raw_posts ─┬─ decision_audit_log ── methodology_versions
@@ -392,7 +395,7 @@ correlation_gate_events · reddit_subreddit_rankings · reddit_api_budget · red
 
 ### Schema additions of PRs #10 and #22 (migrations 025–060)
 
-Tables 23–34 above, and the columns and indexes later migrations added to earlier tables:
+Tables 23–36 above, and the columns and indexes later migrations added to earlier tables:
 
 | Table / column | Migration | Purpose |
 |---|---|---|
@@ -409,6 +412,7 @@ Tables 23–34 above, and the columns and indexes later migrations added to earl
 | `raw_posts.admission_mv_id` | 042 | The admission-filter version a post was stored under |
 | `watchdog_state`, `watchdog_notifications`; unique partial index `uq_alerts_open_watchdog` | 050 | The watchdog (§14): its last poll and e-mail status (one row), every e-mail decision (append-only), at most one open alert per watchdog condition |
 | `source_gate_events.approved_by`, `routes`, event `refusal_reset`; `correlation_gate_events` | 056 | Decision G5: the named approval (`GATE_APPROVED_BY`, "Name YYYY-MM-DD") behind each gate opening and operator change (a CHECK requires it as the actor of `enabled` / `disabled` / `refusal_reset`); every change of the correlation DPIA gate (principal #19) |
+| `source_runs.dropped_*`, `source_run_daily.dropped_*`, `admission_rule_hits` | 068 | Admission rejection counters (relevance-accuracy R1; Jennifer McKinney 2026-09-30, "Counters only"): per run, the collector's dropped counts (invalid, old, out of scope, in-batch duplicate); per UTC day, source, route, admission_filter version and rule, admitted and rejected counts. Counts only: a CHECK restricts `rule_id` to a closed vocabulary and `route` to a route-id shape, and the collector writes a route only if it is an exact registered route of the source (checked in code, as the registry is code), so no text or item id is stored. `src/collectors/admission-counters.js` |
 | `bias_window_runs`, `bias_window_assessments` | 060 | The rolling 24 h bias checks (introduced by bias@1.5.0, G2; they run the current bias version): one run row per window, its assessments append-only |
 
 `alert_resolutions`, `alert_resolution_approvals`, `source_gate_events`, `source_terms_snapshots` and `methodology_errata` are append-only: a trigger rejects UPDATE and DELETE (migration 036); so are `watchdog_notifications` (050), `correlation_gate_events` (056) and `bias_window_assessments` (060). Migrations are numbered uniquely and applied in file-name order; gaps in the numbering are allowed (043–049, 051–054, 057–059 and 063–064 are unused).
@@ -719,7 +723,7 @@ Twelve endpoints are mounted (`src/server.js`). `POST /api/refresh` is mounted f
 **Response cache.** `GET /api/posts/aggregated-by-location`, `GET /api/sources/timeseries` and `GET /api/themes` are served from a 10 s in-process cache keyed per query string (`src/middleware/response-cache.js`).
 
 ### `GET /api/health`
-System status for the header chip and the health drawer (`src/routes/health.js`). The response is cached in process for 5 s, keyed on the path alone (it fans out to the queue store and the database; PR #22 security L2).
+System status for the header chip and the health drawer (`src/routes/health.js`). The response is cached in process for 5 s, keyed on the path alone (it fans out to the queue store and the database; PR #22 security L2). The response is cached in process for 5 s, keyed on the path alone (it fans out to the queue store and the database; PR #22 security L2). It also carries `bias_sample` (the insufficient-sample share per bias check, §9), `correlation` (§20) and `admission` (migration 068): over the last 7 UTC days and all sources together, items evaluated, admitted (and admitted on AI-specific feeds although no admission pattern matched) and rejected by reason (out of scope, too old, invalid, duplicate), plus admissions per admission-filter pattern. Counts are per evaluation: an item a feed serves again is counted again; a route whose store failed is counted only by the run that completes it. `admission` is `null` (the endpoint still answers) if its query fails, and `retention_invalid` is true when `ADMISSION_RULE_HITS_DAYS` is malformed.
 
 **Response 200:**
 ```json
@@ -860,7 +864,7 @@ Requests a collection + processing run over the source registry (an operator act
 ---
 
 ### `GET /api/audit/:post_id`
-The explainability endpoint (`src/routes/audit.js`): the receipt for one post. The four audience representations of every step are rendered at read time by the versioned templates of `audit_narration@1.4.0` (`src/config/audit-narration.js`); no per-post prose is stored.
+The explainability endpoint (`src/routes/audit.js`): the receipt for one post. The four audience representations of every step are rendered at read time by the versioned templates of `audit_narration@1.5.0` (`src/config/audit-narration.js`); no per-post prose is stored.
 
 **Path param:** `post_id`, checked against the strict 8-4-4-4-12 UUID pattern before any query.
 
@@ -886,7 +890,7 @@ The explainability endpoint (`src/routes/audit.js`): the receipt for one post. T
     "data_origin": "live",
     "collected_at": "2026-09-29T09:58:12Z"
   },
-  "narration": { "component": "audit_narration", "version": "1.3.0" },
+  "narration": { "component": "audit_narration", "version": "1.5.0" },
   "ingest": { "…": "the synthetic ingestion step rendered from the ingest methodology row", "lineage": "recorded" },
   "decisions": [
     {
@@ -990,7 +994,7 @@ The health drawer's "alert history · last 12 h" (`src/routes/bias.js`). Every q
 ---
 
 ### `GET /api/methodology`
-Every non-deprecated methodology version, ordered by `component` and then `effective_from` descending (`src/routes/methodology.js`). The rows are those of `src/config/methodology-registry.js`; the version each pipeline stage runs is `CURRENT_VERSIONS` there (sentiment 1.0.0, relevance 1.2.0, discourse 1.1.0-DQI, bias 1.6.0, ingest 1.8.0, audit_narration 1.4.0, embedding 1.1.0, admission_filter 1.0.0), never "latest by timestamp". Each row carries its `errata` (`methodology_errata`, migration 030: `[{ erratum, corrected_by, recorded_at }]`, empty for most rows).
+Every non-deprecated methodology version, ordered by `component` and then `effective_from` descending (`src/routes/methodology.js`). The rows are those of `src/config/methodology-registry.js`; the version each pipeline stage runs is `CURRENT_VERSIONS` there (sentiment 1.0.0, relevance 1.2.0, discourse 1.1.0-DQI, bias 1.6.0, ingest 1.8.0, audit_narration 1.5.0, embedding 1.1.0, admission_filter 1.0.0), never "latest by timestamp". Each row carries its `errata` (`methodology_errata`, migration 030: `[{ erratum, corrected_by, recorded_at }]`, empty for most rows).
 
 **Response 200** (two of the rows):
 ```json
@@ -1039,7 +1043,7 @@ The first example is the released `relevance@1.1.0` row, still served next to th
 ---
 
 ### `GET /api/sources`
-The source registry of record with each source's runtime status (`src/routes/sources.js`, `src/collectors/status.js`), in registry-rank order.
+The source registry of record with each source's runtime status (`src/routes/sources.js`, `src/collectors/status.js`), in registry-rank order. Each registry source also carries `admission` (migration 068): its 7-day admission counts, `{ window_days, evaluated, admitted, admitted_without_pattern, rejected: { total, out_of_scope, old, invalid, duplicate } }`, or `null` when it has none in the window.
 
 **Query params:** `?include_inactive=true` also returns demo feeds (`registry: false`) and retired pre-registry rows (`retired: true`).
 
@@ -1374,11 +1378,11 @@ raw_posts.id
 
 ### Responding to "Why?" by Audience
 
-The receipt renders every step in four audience views (`audit_narration@1.4.0`, `src/config/audit-narration.js`; the drawer's segmented control in `public/js/ui.js`):
+The receipt renders every step in four audience views (`audit_narration@1.5.0`, `src/config/audit-narration.js`; the drawer's segmented control in `public/js/ui.js`):
 
 | View (payload key) | Who | What they get from `GET /api/audit/:post_id` |
 |---|---|---|
-| Public (`public`) | General public | A jargon-free sentence per step |
+| Public (`public`) | General public | A jargon-free sentence per step. The relevance step says what counts today: a post that matched the AI topic list "counts toward the AI-discourse totals"; one that did not "still counts toward the AI-discourse totals" today, and from the next relevance version only AI-relevant posts will count (`audit_narration@1.5.0`, `RELEVANCE_PUBLIC`). The page's bundled demo receipt states the same step conditionally: a fictional post is never stored, so it counts toward nothing |
 | Journalist (`plain`) | Journalist: "Why does this city score negative?" | A plain-English explanation with the cue phrases and scores |
 | Regulator (`config`) | Regulator: "What algorithm made this decision?" | A key/value table: thresholds, versions, legal basis |
 | Researcher (`researcher`) | Researcher: "Can I reproduce this score?" | Cue weights and the reproduce command (`npm run replay -- --post <id>`), next to the keyed input fingerprint, model_name, config and output. The API exposes `input_hash` as HMAC-SHA256(`AUDIT_HASH_KEY`, stored hash), never the raw content hash (prevents offline hash-confirmation of post content); consumers verify content in their own systems. The ingestion step states that the content hash is an integrity check recorded as `input_hash`, not a join key (`audit_narration@1.4.0`) |
@@ -1390,7 +1394,7 @@ The v1.1 "Internal audit" question ("Did methodology change between runs?") is a
 The collection admission filter (`src/collectors/ai-filter.js`) decides which items of a site-wide or technology feed are stored at all, so it is the versioned component `admission_filter` (1.0.0, migration 042). Its registered config is exactly the code's patterns, search terms and scope rule (a unit test fails on any difference); a change is a new version. Every collected post records the version it was admitted under (`raw_posts.admission_mv_id`), shown on the audit receipt as `provenance.admission`.
 
 ### Methodology Registration and Seeding
-`src/config/methodology-registry.js` is the single source of truth for every `methodology_versions` row. `scripts/seed.js` inserts every row (`ON CONFLICT (component, version) DO NOTHING`); migrations 009, 011, 012, 014, 015, 017, 024, 026, 027, 028, 029, 031, 032, 042, 055, 060, 061, 065 and 066 insert the same rows so a database that is only migrated serves identical receipts, and `tests/unit/pure/methodologyRegistry.test.js` asserts field-for-field equality. A released row is never edited: a config or wording change ships as a new version row and a new migration, and a correction to a released row is recorded as an erratum (`methodology_errata`, migration 030).
+`src/config/methodology-registry.js` is the single source of truth for every `methodology_versions` row. `scripts/seed.js` inserts every row (`ON CONFLICT (component, version) DO NOTHING`); migrations 009, 011, 012, 014, 015, 017, 024, 026, 027, 028, 029, 031, 032, 042, 055, 060, 061, 065, 066 and 067 insert the same rows so a database that is only migrated serves identical receipts, and `tests/unit/pure/methodologyRegistry.test.js` asserts field-for-field equality. A released row is never edited: a config or wording change ships as a new version row and a new migration, and a correction to a released row is recorded as an erratum (`methodology_errata`, migration 030).
 
 ```javascript
 // src/config/methodology-registry.js — the first row
@@ -1408,7 +1412,7 @@ The collection admission filter (`src/collectors/ai-filter.js`) decides which it
 }
 ```
 
-Registered components on `master` (28 rows): sentiment (**1.0.0**), relevance (1.0.0, 1.1.0, **1.2.0**), discourse (1.0.0-DQI, **1.1.0-DQI**), bias (1.1.0 to **1.6.0**), ingest (1.0.0 to **1.8.0**), audit_narration (1.1.0 to **1.4.0**), embedding (1.0.0, **1.1.0**), admission_filter (**1.0.0**); bold = the version the code runs (`CURRENT_VERSIONS`). 11 errata (`METHODOLOGY_ERRATA`): relevance 1.0.0; bias 1.4.0, 1.5.0; ingest 1.0.0–1.7.0 (corrected by ingest@1.8.0). A `demographic` component is **PLANNED — not implemented as of v1.2.0**.
+Registered components on `master` (29 rows): sentiment (**1.0.0**), relevance (1.0.0, 1.1.0, **1.2.0**), discourse (1.0.0-DQI, **1.1.0-DQI**), bias (1.1.0 to **1.6.0**), ingest (1.0.0 to **1.8.0**), audit_narration (1.1.0 to **1.5.0**), embedding (1.0.0, **1.1.0**), admission_filter (**1.0.0**); bold = the version the code runs (`CURRENT_VERSIONS`). 15 errata (`METHODOLOGY_ERRATA`): relevance 1.0.0; bias 1.4.0, 1.5.0; ingest 1.0.0–1.7.0 (corrected by ingest@1.8.0); audit_narration 1.1.0–1.4.0 (relevance wording, corrected by audit_narration@1.5.0, migration 067). A `demographic` component is **PLANNED — not implemented as of v1.2.0**.
 
 ---
 
@@ -1580,7 +1584,7 @@ All of these must be complete before writing a single feature:
 2. `.env.example` + `.env` + `.gitignore` entries
 3. `package.json` — add `pg`, `pgvector` (the plan named `@pgvector/pg`), `jest`, `supertest`; remove `sqlite3`
 4. `jest.config.js` + `tests/setup.js` (test DB connection + migration + truncate)
-5. `src/db/migrations/001–004.sql` — the first four migration files (50 today, 001–066, §6)
+5. `src/db/migrations/001–004.sql` — the first four migration files (54 today, 001–074, §6)
 6. `scripts/migrate.js` — runs migrations in order, idempotent
 7. `scripts/seed.js` — inserts data_sources rows + initial methodology_versions
 8. `src/db/connection.js` — pg Pool, `dbAll()`, `dbGet()`, `dbRun()` Promise helpers
@@ -2047,6 +2051,8 @@ TIER 3: Permanent Archival (automatic — no expiry)
           GET /api/bias/history
 ```
 
+**Admission counters (migration 068).** `source_runs.dropped_*` is NULL for a run that evaluated no item (gate closed, skipped, failed, or every route returned nothing; not a fake 0) and for rows from before the migration; `dropped_*` describe that run, like `items_fetched`: a route retried after a store failure appears in both runs (`admission_rule_hits` counts it once). The `source_run_daily` roll-up sums the recorded runs only, so a day that mixes both is a partial total. `admission_rule_hits` holds counts only (no text, no ids, no personal data). It is kept `ADMISSION_RULE_HITS_DAYS` days, default 400 (a year plus a month, so a month can be compared with the same month a year earlier), then removed by the `daily` maintenance task with a `data_retention_log` summary row (`expired_admission_rule_hits`). A bad value (not a whole number of days from 35 to 3650) fails that step and removes nothing. The per-source daily rejection totals are not lost with it: they are rolled up from `source_runs` into `source_run_daily` (Tier 3, kept permanently).
+
 ### Migration 005 — Retention & Compaction Tables (as migrated)
 
 ```sql
@@ -2113,7 +2119,7 @@ The worker registers three BullMQ job schedulers on the `maintenance` queue (sha
 | Scheduler | Cadence | Steps |
 |---|---|---|
 | `retention` | `MAINTENANCE_EVERY_MS`, default 5 min | text retention for every source (below); stale one-shot jobs (no progress for `STALE_JOB_MINUTES`) marked failed |
-| `daily` | `MAINTENANCE_DAILY_EVERY_MS`, default 24 h | compaction (below); `source_runs` older than `SOURCE_RUNS_RAW_DAYS` (30) rolled into `source_run_daily`; the rolling 24 h bias checks (introduced by bias@1.5.0; they run under the current bias version, bias@1.6.0, §9) |
+| `daily` | `MAINTENANCE_DAILY_EVERY_MS`, default 24 h | compaction (below); `source_runs` older than `SOURCE_RUNS_RAW_DAYS` (30) rolled into `source_run_daily`, dropped counts included; `admission_rule_hits` older than `ADMISSION_RULE_HITS_DAYS` (400) removed; the rolling 24 h bias checks (introduced by bias@1.5.0; they run under the current bias version, bias@1.6.0, §9) |
 | `terms` | `MAINTENANCE_TERMS_EVERY_MS`, default 7 days | a polite snapshot of every source's terms page; a changed normalised-text hash opens a `terms_changed` alert (skipped, and recorded, while `COLLECTOR_CONTACT_URL` is unset) |
 
 `processing_jobs` rows are never removed (Tier 3, decision G4). A failing step does not stop the others, but it fails the job (BullMQ failed count) and is logged at error level. Every run writes its outcome to `maintenance_state`; `GET /api/health` reports `maintenance.tasks` (last run, last success, last error per task) and `maintenance.retention_overdue` (posts still holding text past their window), and the watchdog (§14) alerts when a task is failing or overdue. While any post of a source holds text more than `RETENTION_OVERDUE_GRACE_MINUTES` (60) past its window, the worker keeps one critical `retention_overdue` alert open for that source. The schedulers are re-registered on every reschedule, so a queue-store outage at boot is retried. A bad `RETENTION_DETAIL_DAYS` (not a whole number of days from 30 to 3650) fails the retention and compaction steps and changes nothing.

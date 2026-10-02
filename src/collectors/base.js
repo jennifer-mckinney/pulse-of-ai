@@ -25,7 +25,8 @@ const fs = require('fs');
 const path = require('path');
 const Parser = require('rss-parser');
 const { toPayload } = require('./normalize');
-const { isAiRelated } = require('./ai-filter');
+const { matchingRules } = require('./ai-filter');
+const counters = require('./admission-counters');
 const { GateClosedError, ParseError } = require('./errors');
 const { routeAllowedHosts } = require('../config/source-registry');
 const { ResponseTooLargeError } = require('./transport');
@@ -144,26 +145,43 @@ class Collector {
     }
 
     /**
-     * @returns {Promise<{ payloads: object[], fetched: number, dropped: object }>}
+     * ruleHits (relevance-accuracy Stage 0, R1): per admission rule, how many
+     * items it admitted or rejected — counts only, closed-vocabulary rule ids
+     * (src/collectors/admission-counters.js). Exactly one outcome rule per
+     * item (invalid / old / no_pattern / duplicate / any_pattern), plus one
+     * 'pattern:NN' count per matching pattern of an admitted item. The
+     * admission decision itself is unchanged: an item on a 'filter' route is
+     * stored when ANY pattern matches (isAiRelated ≡ matchingRules non-empty).
+     * @returns {Promise<{ payloads: object[], fetched: number, dropped: object, ruleHits: object }>}
      */
     async collect() {
         const items = await this.fetchItems();
         const maxAgeDays = this.params.maxAgeDays || DEFAULT_MAX_AGE_DAYS;
         const cutoff = this.now() - maxAgeDays * 86400000;
         const dropped = { invalid: 0, old: 0, outOfScope: 0, duplicate: 0 };
+        const ruleHits = counters.newTally();
         const seen = new Set();
         const payloads = [];
         const key = provenanceKey(this.env);   // D2 provenance / F10-14 id fingerprints
         for (const item of items) {
             const p = toPayload(item, this.source, this.route, { key });
-            if (!p) { dropped.invalid++; continue; }
-            if (p.published_at && Date.parse(p.published_at) < cutoff) { dropped.old++; continue; }
-            if (this.route.scope === 'filter' && !isAiRelated(p.text)) { dropped.outOfScope++; continue; }
-            if (seen.has(p.id)) { dropped.duplicate++; continue; }
+            if (!p) { dropped.invalid++; counters.count(ruleHits, 'invalid', false); continue; }
+            if (p.published_at && Date.parse(p.published_at) < cutoff) {
+                dropped.old++; counters.count(ruleHits, 'old', false); continue;
+            }
+            // Pattern hits are measured on every route; they decide admission
+            // only on 'filter' routes ('ai' routes are stored whole).
+            const hits = matchingRules(p.text);
+            if (this.route.scope === 'filter' && hits.length === 0) {
+                dropped.outOfScope++; counters.count(ruleHits, 'no_pattern', false); continue;
+            }
+            if (seen.has(p.id)) { dropped.duplicate++; counters.count(ruleHits, 'duplicate', false); continue; }
             seen.add(p.id);
             payloads.push(p);
+            counters.count(ruleHits, hits.length ? 'any_pattern' : 'no_pattern', true);
+            for (const i of hits) counters.count(ruleHits, counters.patternRuleId(i), true);
         }
-        return { payloads, fetched: items.length, dropped, warnings: this.warnings.slice() };
+        return { payloads, fetched: items.length, dropped, ruleHits, warnings: this.warnings.slice() };
     }
 }
 

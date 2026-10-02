@@ -180,7 +180,7 @@ classDiagram
   class maintenanceWorker {
     &lt;&lt;workers/maintenance.worker.js&gt;&gt;
     retention every 5 min: text retention, stale jobs
-    daily every 24 h: compaction, source_runs rollup, bias_window
+    daily every 24 h: compaction, source_runs rollup, admission_rule_hits expiry, bias_window
     terms every 7 days: terms snapshots
     +processMaintenanceJob(job, o) steps
     +scheduleMaintenance(queue, env)

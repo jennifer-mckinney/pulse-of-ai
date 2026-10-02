@@ -247,7 +247,7 @@ describe('the repeatable maintenance job', () => {
         const { defaultSteps, taskOf } = require('../../src/workers/maintenance.worker');
         const names = (task) => defaultSteps({ log: () => {}, task }).map(([n]) => n);
         expect(names('retention')).toEqual(['retention', 'stale_jobs']);
-        expect(names('daily')).toEqual(['compaction', 'source_runs', 'bias_window']);
+        expect(names('daily')).toEqual(['compaction', 'source_runs', 'admission_rule_hits', 'bias_window']);
         expect(names('terms')).toEqual(['terms_snapshot']);
         expect(taskOf({ data: {} })).toBe('retention');           // a job from before the split
         expect(taskOf({ data: { task: 'daily' } })).toBe('daily');
