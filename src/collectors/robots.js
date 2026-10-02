@@ -24,8 +24,10 @@
 //                        Exceptions, decided by the owner 2026-10-02 and thrown
 //                        by http.js before the policy sees them: 401 and 451
 //                        are refusals; a 403 or 429 with rate-limit evidence is
-//                        a rate limit; a bot-wall challenge at any status is a
-//                        refusal.
+//                        a rate limit; a 403 naming a bare Retry-After (no
+//                        rate-limit evidence) is read as unreachable, not "no
+//                        rules" (grumpy re-review); a bot-wall challenge at any
+//                        status is a refusal.
 //   429 / 5xx / error    "unreachable" → complete disallow (§2.3.1.4)
 
 'use strict';
@@ -125,7 +127,11 @@ class RobotsPolicy {
         this.fetchRobots = fetchRobots;
         this.now = now;
         this.ttlMs = ttlMs;
-        this.cache = cache;   // origin → { groups | null, allowAll, denyAll, unreachable, at }
+        this.cache = cache;   // origin → { groups | null, allowAll, denyAll, unreachable, soft, at }
+        // `soft`: an allowAll from a plain 403 (RFC 9309 "no rules"), kept only
+        // UNREACHABLE_TTL_MS so a transient WAF block is re-checked soon
+        // instead of pinning "allow everything" for a full day (principal-
+        // engineer re-review, PR #45 follow-up).
     }
 
     async policyFor(origin) {
