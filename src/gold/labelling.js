@@ -175,7 +175,7 @@ function validateProposal(row) {
     if (!LABELS.includes(row.label)) throw new Error(`label must be one of ${LABELS.join(', ')}`);
     const flags = row.flags === undefined ? [] : row.flags;
     if (!Array.isArray(flags)) throw new Error('flags must be an array');
-    for (const f of flags) if (!FLAGS.includes(f)) throw new Error(`unknown flag "${f}"`);
+    for (const f of flags) if (!FLAGS.includes(f)) throw new Error(`unknown flag "${oneLine(String(f)).slice(0, 40)}"`);
     if (typeof row.input_hash !== 'string' || !HASH_RE.test(row.input_hash)) throw new Error('input_hash must be the item\'s sha256 (64 hex)');
     if (row.note !== undefined && row.note !== null && typeof row.note !== 'string') throw new Error('note must be a string');
     return {

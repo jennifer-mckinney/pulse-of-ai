@@ -282,6 +282,8 @@ const MULTILINGUAL = freezeAll([
 
 // ─── EDGE CASES (codebook v1 OPEN questions; tags only) ──────────────────────
 const CRYPTO = /\b(?:crypto(?:currenc(?:y|ies))?|memecoins?|altcoins?|airdrops?|pre-?sales?|DeFi|blockchain|Solana|Ethereum|Bitcoin|BNB Chain|token (?:sale|launch|price)|market cap)\b/i;
+const AI_PACKAGE = /(?<![\w-])(?:openai|anthropic|langchain\w*|llama[-_]?index|transformers|sentence-transformers|diffusers|huggingface[-_]hub|pytorch|torch|tensorflow|keras|vllm|ollama|litellm|google-generativeai|mistralai|cohere|onnxruntime|scikit-learn)(?!\w)/i;
+
 const EDGE_CASES = freezeAll([
     { id: 'game_ai', test: (t) => /\b(?:[Gg]ame|[Ee]nemy|NPC|[Oo]pponent|[Cc]ompanion|[Ss]quad)\s+AI\b|\bAI\s+(?:opponents?|enemies|difficulty|director|companions?|teammates?|pathfinding)\b/.test(t) },
     { id: 'robotics_without_learning', test: (t, r) => r.unresolved.includes('robot') },
@@ -291,8 +293,10 @@ const EDGE_CASES = freezeAll([
         test: (t, r) => CRYPTO.test(t) && (r.strong.length + r.multilingual.length + r.context.length > 0 || /\bAI[\s-](?:tokens?|coins?)\b/.test(t)) },
     { id: 'bot_generated', flag: 'BOT_GENERATED',
         test: (t) => /\[bot\]|\b(?:dependabot|renovate bot|automated (?:digest|summary|report|newsletter)|auto-?generated|(?:automatically|auto-) ?generated)\b/i.test(t) },
+    // A dependency bump is this case only when it names an AI package: "update lodash" is unrelated maintenance.
     { id: 'sdk_dependency_bump',
-        test: (t) => /\b(?:bump|bumps|bumped|upgrade|update)\s+(?:the\s+)?[@\w./-]+\s+from\s+v?\d[\w.+-]*\s+to\s+v?\d/i.test(t) || /\bchore\(deps\)/i.test(t) },
+        test: (t) => AI_PACKAGE.test(t)
+            && (/\b(?:bump|bumps|bumped|upgrade|update)\s+(?:the\s+)?[@\w./-]+\s+from\s+v?\d[\w.+-]*\s+to\s+v?\d/i.test(t) || /\bchore\(deps\)/i.test(t)) },
 ]);
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

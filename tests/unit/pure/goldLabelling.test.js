@@ -192,6 +192,12 @@ describe('review fixes: import namespace, terminal safety, notes, local-only por
 });
 
 describe('review fixes round 5: single-line identifiers', () => {
+    it('an invalid imported flag is sanitised in the error', () => {
+        const row = { item_id: '22222222-2222-4222-8222-222222222222', label: 'NOT_AI', flags: ['\u001b]52;c;QQ==\u0007x'], input_hash: 'a'.repeat(64) };
+        expect(() => l.validateProposal(row)).toThrow(/unknown flag/);
+        try { l.validateProposal(row); } catch (e) { expect(e.message).not.toMatch(/[\u0000-\u001f]/); }
+    });
+
     it('a note with a control or zero-width character is refused (it could hide a quotation)', () => {
         expect(l.parseAnswer('c # ok\u200Bnote')).toMatchObject({ action: 'invalid' });
         expect(l.parseAnswer('c # tab\there')).toMatchObject({ action: 'invalid' });
