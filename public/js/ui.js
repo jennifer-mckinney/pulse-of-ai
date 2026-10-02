@@ -1057,7 +1057,8 @@
                 version: '1.1.2', status: 'pass',
                 score: relevance, scoreKind: 'percent',
                 audiences: {
-                    public: 'It counts toward the map because it’s clearly talking about AI.',
+                    // audit_narration@1.5.0 wording (src/config/audit-narration.js RELEVANCE_PUBLIC.matched)
+                    public: 'This post matched the AI topic list, and it counts toward the AI-discourse totals.',
                     plain: 'Rated ' + Math.round(relevance * 100) + '% relevant to AI discourse via keyword and phrase matching.',
                     config: {
                         matched_terms: ['AI', 'model', 'automated'],

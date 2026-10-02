@@ -882,6 +882,13 @@ describe('demoAuditModel — prototype buildAudit receipt', () => {
         expect(bias.layers[2].status).toBe('n-a');
     });
 
+    test('the relevance sentence is the audit_narration@1.5.0 wording (no "because it is about AI")', () => {
+        const post = P.demoPostsForCity(posCity(), NOW)[0];
+        const m = P.demoAuditModel(post);
+        expect(m.steps[2].audiences.public)
+            .toBe('This post matched the AI topic list, and it counts toward the AI-discourse totals.');
+    });
+
     test('sentiment/relevance pills mirror the post scores', () => {
         const post = P.demoPostsForCity(posCity(), NOW)[0];
         const m = P.demoAuditModel(post);
