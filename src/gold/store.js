@@ -24,7 +24,7 @@ const { scriptOf, scopeOf, decisionOf, SAMPLER_VERSION } = require('./sampler');
 const { MIN_KEY_LENGTH, isStrongKey, isProductionEnv } = require('../config/key-strength');
 
 // Other deployment secrets GOLD_HASH_KEY must never equal (owner decision 2026-10-02). Compared trimmed, because
-// src/provenance.js trims its keys, so "key\n" and "key" are the same secret.
+// src/collectors/provenance.js trims its keys, so "key\n" and "key" are the same secret.
 const OTHER_SECRETS = ['AUDIT_HASH_KEY', 'PROVENANCE_KEY', 'CORRELATION_SALT'];
 
 let noticePrinted = false;
@@ -71,9 +71,11 @@ function hashKey(env = process.env, warn = defaultWarn) {
     if (production) {
         throw new Error('GOLD_HASH_KEY is required in production and must be a separate secret from AUDIT_HASH_KEY (generate one with openssl rand -hex 32)');
     }
-    if (isStrongKey(typeof env.AUDIT_HASH_KEY === 'string' ? env.AUDIT_HASH_KEY.trim() : env.AUDIT_HASH_KEY)) {
+    const raw = env.AUDIT_HASH_KEY;
+    const audit = typeof raw === 'string' ? raw.trim() : '';   // trimmed like src/collectors/provenance.js; the validated key is the returned key
+    if (isStrongKey(audit)) {
         warn('notice: GOLD_HASH_KEY is not set; using AUDIT_HASH_KEY (dev/test only). Setting a separate GOLD_HASH_KEY later changes every fingerprint, so existing dev gold items would read as changed');
-        return env.AUDIT_HASH_KEY.trim();   // trimmed like src/collectors/provenance.js, so both read the same secret
+        return audit;
     }
     throw new Error(`gold tools need GOLD_HASH_KEY (or, outside production, AUDIT_HASH_KEY), at least ${MIN_KEY_LENGTH} characters, enough character variety (generate one with openssl rand -hex 32) and not a template value, to fingerprint post text`);
 }

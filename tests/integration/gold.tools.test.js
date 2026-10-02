@@ -265,7 +265,7 @@ describe('scripts/gold-label.js', () => {
 
         it('a GOLD_HASH_KEY with leading or trailing whitespace is refused (GOLD carries the whitespace)', () => {
             const v = k();
-            for (const g of [`${v} `, `${v}\n`, ` ${v}`, '   ']) {
+            for (const g of [`${v} `, `${v}\n`, ` ${v}`, `\u00a0${v}`, `${v}\ufeff`, '   ']) {
                 expect(() => store.hashKey({ NODE_ENV: 'test', GOLD_HASH_KEY: g, AUDIT_HASH_KEY: v }, jest.fn())).toThrow(/whitespace/);
                 expect(() => store.hashKey({ NODE_ENV: 'production', GOLD_HASH_KEY: g, AUDIT_HASH_KEY: v }, jest.fn())).toThrow(/whitespace/);
             }
