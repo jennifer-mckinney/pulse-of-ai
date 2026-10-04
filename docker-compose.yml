@@ -226,7 +226,7 @@ services:
   postgres:
     logging: *logging
     # pgvector/pgvector:pg16, pinned by digest (F9-6); bump deliberately.
-    image: pgvector/pgvector:pg16@sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b
+    image: pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-pulse_of_ai}
       POSTGRES_USER: ${POSTGRES_USER:-pulse_user}
@@ -248,7 +248,7 @@ services:
   postgres_test:
     logging: *logging
     # pgvector/pgvector:pg16, pinned by digest (F9-6); bump deliberately.
-    image: pgvector/pgvector:pg16@sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b
+    image: pgvector/pgvector:pg16@sha256:7b822b0aac60967beb1ea5e576b8602c94c300a157d187f385ae3e0da199b90a
     environment:
       POSTGRES_DB: ${POSTGRES_TEST_DB:-pulse_of_ai_test}
       POSTGRES_USER: ${POSTGRES_USER:-pulse_user}
