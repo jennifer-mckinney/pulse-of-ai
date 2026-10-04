@@ -37,7 +37,7 @@ psycopg2-binary>=2.9.13
 # lock (requirements-service.txt) pins: embeddingLibraryPins.test.js fails
 # when a floor here excludes the locked version, so a bump lands together
 # with a manual lock refresh (requirements-service.in has the command).
-fastapi>=0.141.1
+fastapi>=0.142.2
 uvicorn>=0.54.0
 
 # Testing
