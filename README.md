@@ -1,8 +1,15 @@
 # Pulse of AI
-
 **How the world talks about AI, city by city, with every score traceable to the model that made it.**
-
 Pulse of AI collects public, AI-related posts from a registry of 52 global online sources in 8 categories (social, news, academic, policy, non-profit, developer, forums, blogs). It scores each post for sentiment, AI relevance and discourse quality, checks the results for bias, and shows the trailing hour on a scroll-driven dot globe: an eleven-part guided story, then a free-explore mode. Every score has an audit receipt ("why?") that names the model, its registered methodology version and settings, and explains the decision for four audiences.
+
+
+<img width="1389" height="779" alt="Screenshot 2026-10-16 at 3 09 28 PM" src="https://github.com/user-attachments/assets/6c0af360-a0ea-49ea-ab09-0adfa0666721" />
+
+<img width="1384" height="765" alt="Screenshot 2026-10-16 at 3 10 23 PM" src="https://github.com/user-attachments/assets/04d4a2d4-99be-4197-b49e-f3063c594617" />
+
+
+
+
 
 ---
 
@@ -372,6 +379,12 @@ Accepted risks are recorded in ADR 0001: the 8 permission-gated feeds (opened on
 ---
 
 ## Responsible-AI audit trail
+
+<img width="1380" height="772" alt="Screenshot 2026-10-16 at 3 18 21 PM" src="https://github.com/user-attachments/assets/351a63bf-67bc-47cc-b68f-c6e8e72b0375" />
+
+
+<img width="1395" height="793" alt="Screenshot 2026-10-16 at 3 15 14 PM" src="https://github.com/user-attachments/assets/11b30e73-e561-4cb6-85c1-cee8c7d2f6a5" />
+
 
 - **Every inference is logged.** Sentiment, relevance and discourse each write a `decision_audit_log` row with the model name, the methodology version, a hash of the input, the full output and the processing job.
 - **Methodology is versioned, never edited.** Each configuration (thresholds, keywords, weights, legal basis) is a row in `methodology_versions` with a plain-English justification, served by `GET /api/methodology`. A change ships as a new version and a new migration.
