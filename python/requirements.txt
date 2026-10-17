@@ -12,7 +12,7 @@ sentence-transformers==6.1.0
 # whatever resolves today. Same drift test, same rule: a bump is a new
 # embedding version.
 transformers==5.18.0
-huggingface_hub==1.33.0
+huggingface_hub==2.2.0
 tokenizers==0.23.2
 # torch, the fourth registered dependency (2.12.1+cpu). The +cpu build exists
 # only on the PyTorch CPU index (the same index as the image lock), for Linux
