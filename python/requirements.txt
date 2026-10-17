@@ -22,7 +22,7 @@ tokenizers==0.23.2
 # evidence covers the Linux image builds). CI's Python 3.11 job installs the
 # +cpu build before this file (.github/workflows/ci.yml TORCH_VERSION).
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.12.1+cpu ; sys_platform != "darwin"
+torch==2.14.1+cpu ; sys_platform != "darwin"
 torch==2.12.1 ; sys_platform == "darwin"
 # Infinity (PyPI package: infinity-emb) is the planned Phase-2 embedding server
 # per docs/TECHNICAL_SPEC.md §5 — add the dependency when actually adopted.
